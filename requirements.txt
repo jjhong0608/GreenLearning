@@ -1,0 +1,10 @@
+black
+joblib
+kaleido
+numpy
+plotly
+rich
+safetensors
+safetensors
+scipy
+torch
