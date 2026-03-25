@@ -283,7 +283,7 @@ class CouplingEvaluator(LoggingMixin):
         b_vals = b_vals.to(self.device)
         c_vals = c_vals.to(self.device)
 
-        pred_flux = self.model(
+        _raw_flux, pred_flux = self.model(
             coords=coords.to(self.device),
             a_vals=a_vals,
             b_vals=b_vals,

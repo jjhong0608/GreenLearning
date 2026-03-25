@@ -97,6 +97,7 @@ class CouplingTrainingConfig:
     lambda_consistency: float = 1.0
     flux_consistency_enabled: bool = False
     lambda_flux_consistency: float = 0.0
+    lambda_raw_balance: float = 0.0
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
     min_lr: float = 1e-6

@@ -1,0 +1,11 @@
+.venv/
+.idea/
+__pycache__/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache
+*.py[cod]
+*.zip
+data/
+checkpoints/
+

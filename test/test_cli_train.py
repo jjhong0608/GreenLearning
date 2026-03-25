@@ -106,6 +106,7 @@ class TestTrainCLIDatasetConfig:
                 "integration_rule": "trapezoid",
                 "flux_consistency_enabled": True,
                 "lambda_flux_consistency": 0.25,
+                "lambda_raw_balance": 0.5,
                 "learning_rate": 5e-4,
                 "epochs": 11,
                 "use_lr_schedule": True,
@@ -140,6 +141,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.integration_rule == "trapezoid"
         assert coupling_training_cfg.flux_consistency_enabled is True
         assert coupling_training_cfg.lambda_flux_consistency == 0.25
+        assert coupling_training_cfg.lambda_raw_balance == 0.5
         assert coupling_training_cfg.learning_rate == 5e-4
         assert coupling_training_cfg.epochs == 11
         assert coupling_training_cfg.use_lr_schedule is True

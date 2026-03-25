@@ -32,6 +32,7 @@
     "lambda_consistency": 1.0,
     "flux_consistency_enabled": true,
     "lambda_flux_consistency": 0.01,
+    "lambda_raw_balance": 0.0,
     "integration_rule": "trapezoid",
     "epochs": 3000,
     "learning_rate": 0.001,

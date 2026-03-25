@@ -30,8 +30,15 @@ def _make_npz(tmp_path, name: str = "sample.npz"):
 
 
 class _DummyFluxModel(nn.Module):
-    def __init__(self, projected_flux: torch.Tensor) -> None:
+    def __init__(
+        self,
+        projected_flux: torch.Tensor,
+        raw_flux: torch.Tensor | None = None,
+    ) -> None:
         super().__init__()
+        if raw_flux is None:
+            raw_flux = torch.zeros_like(projected_flux)
+        self.register_buffer("_raw_flux", raw_flux)
         self.register_buffer("_projected_flux", projected_flux)
 
     def forward(
@@ -43,14 +50,25 @@ class _DummyFluxModel(nn.Module):
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
-        return self._projected_flux.clone()
+        return self._raw_flux.clone(), self._projected_flux.clone()
 
 
 class _TrainableFluxModel(nn.Module):
-    def __init__(self, projected_flux: torch.Tensor) -> None:
+    def __init__(
+        self,
+        projected_flux: torch.Tensor,
+        raw_flux: torch.Tensor | None = None,
+        train_raw_flux: bool = False,
+    ) -> None:
         super().__init__()
+        if raw_flux is None:
+            raw_flux = torch.zeros_like(projected_flux)
+        if train_raw_flux:
+            self.raw_flux = nn.Parameter(raw_flux.clone())
+        else:
+            self.register_buffer("raw_flux", raw_flux.clone())
         self.projected_flux = nn.Parameter(projected_flux.clone())
 
     def forward(
@@ -62,9 +80,9 @@ class _TrainableFluxModel(nn.Module):
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
-        return self.projected_flux
+        return self.raw_flux, self.projected_flux
 
 
 class _RawSumFromRhsModel(nn.Module):
@@ -81,15 +99,15 @@ class _RawSumFromRhsModel(nn.Module):
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         del coords, a_vals, b_vals, c_vals, rhs_tilde, rhs_norm
-        projected_flux = torch.zeros_like(rhs_raw)
+        raw_flux = torch.zeros_like(rhs_raw)
         rhs_inner = rhs_raw[:, 0, :, 1:-1]
-        projected_flux[:, 0, :, 1:-1] = 0.25 * rhs_inner + 0.0 * self.anchor
-        projected_flux[:, 1, :, 1:-1] = (
+        raw_flux[:, 0, :, 1:-1] = 0.25 * rhs_inner + 0.0 * self.anchor
+        raw_flux[:, 1, :, 1:-1] = (
             0.75 * rhs_inner
         ).transpose(-1, -2) + 0.0 * self.anchor
-        return projected_flux
+        return raw_flux, raw_flux
 
 
 def _flux_from_q_common(q: torch.Tensor, common: torch.Tensor | None = None) -> torch.Tensor:
@@ -223,7 +241,7 @@ def test_coupling_model_forward():
     rhs_raw = torch.randn(1, 2, 1, 3)
     rhs_norm = torch.linalg.norm(rhs_raw, dim=-1, keepdim=False).clamp_min(1e-6)
     rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
-    projected_flux = model(
+    raw_flux, projected_flux = model(
         coords=coords,
         a_vals=kappa,
         b_vals=b_vals,
@@ -232,6 +250,7 @@ def test_coupling_model_forward():
         rhs_tilde=rhs_tilde,
         rhs_norm=rhs_norm,
     )
+    assert raw_flux.shape == (1, 2, 1, 3)
     assert projected_flux.shape == (1, 2, 1, 3)
     phi_x = projected_flux[:, 0]
     psi_y = projected_flux[:, 1]
@@ -255,7 +274,7 @@ def test_coupling_model_backprop_through_shared_encoder():
     rhs_norm = torch.linalg.norm(rhs_raw, dim=-1, keepdim=False).clamp_min(1e-6)
     rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
 
-    projected_flux = model(
+    raw_flux, projected_flux = model(
         coords=coords,
         a_vals=a_vals,
         b_vals=b_vals,
@@ -264,7 +283,7 @@ def test_coupling_model_backprop_through_shared_encoder():
         rhs_tilde=rhs_tilde,
         rhs_norm=rhs_norm,
     )
-    loss = projected_flux.square().sum()
+    loss = raw_flux.square().sum() + projected_flux.square().sum()
     loss.backward()
 
     def _has_grad(module: nn.Module) -> bool:
@@ -274,6 +293,7 @@ def test_coupling_model_backprop_through_shared_encoder():
             for parameter in module.parameters()
         )
 
+    assert raw_flux.shape == (1, 2, 1, 3)
     assert projected_flux.shape == (1, 2, 1, 3)
     assert _has_grad(model.branch_a)
     assert _has_grad(model.branch_rhs)
@@ -309,7 +329,7 @@ def test_coupling_balance_projection_uses_fixed_half_split():
     rhs_raw[:, 0, :, 1:-1] = rhs_x_int
     rhs_norm = torch.ones((1, 2, 3), dtype=torch.float64)
 
-    projected_flux = model(
+    raw_flux, projected_flux = model(
         coords=coords,
         a_vals=zeros,
         b_vals=zeros,
@@ -319,6 +339,7 @@ def test_coupling_balance_projection_uses_fixed_half_split():
         rhs_norm=rhs_norm,
     )
 
+    assert torch.count_nonzero(raw_flux).item() == 0
     expected_phi = 0.5 * rhs_x_int
     expected_psi = 0.5 * rhs_x_int.transpose(-1, -2)
     assert torch.allclose(
@@ -652,6 +673,101 @@ def test_step_loss_ignores_raw_split_sum_without_balance_loss(tmp_path):
     )
 
     assert abs(loss.item()) < 1e-12
+    assert metrics["loss_raw_balance"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_raw_balance_loss_zero_when_raw_flux_matches_rhs(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    rhs_inner = torch.tensor(
+        [[[1.0, 0.5, 2.0], [0.25, 1.5, 0.75], [2.0, 1.0, 0.5]]],
+        dtype=torch.float64,
+    )
+    rhs_raw[:, 0, :, 1:-1] = rhs_inner
+    raw_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    raw_flux[:, 0, :, 1:-1] = 0.25 * rhs_inner
+    raw_flux[:, 1, :, 1:-1] = (0.75 * rhs_inner).transpose(-1, -2)
+    projected_flux = torch.zeros_like(raw_flux)
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(projected_flux=projected_flux, raw_flux=raw_flux),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            lambda_consistency=0.0,
+            lambda_raw_balance=1.0,
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    assert metrics["loss_raw_balance"] == pytest.approx(0.0, abs=1e-12)
+    assert loss.item() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_step_loss_includes_weighted_raw_balance_term(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    rhs_raw[:, 0, :, 1:-1] = 2.0
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    raw_flux = torch.zeros_like(projected_flux)
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(projected_flux=projected_flux, raw_flux=raw_flux),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            lambda_consistency=0.0,
+            lambda_raw_balance=2.5,
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    assert metrics["loss_raw_balance"] > 0.0
+    assert loss.item() == pytest.approx(
+        2.5 * metrics["loss_raw_balance"], rel=1e-12, abs=1e-12
+    )
 
 
 def test_single_stage_optimization_resolution_uses_shared_config(tmp_path):
@@ -741,7 +857,7 @@ def test_step_loss_ignores_flux_consistency_when_disabled(tmp_path):
         c_vals,
     )
 
-    assert metrics["loss_flux_consistency"] > 0.0
+    assert metrics["loss_flux_consistency"] == pytest.approx(0.0, abs=1e-12)
     assert abs(loss.item()) < 1e-12
 
 

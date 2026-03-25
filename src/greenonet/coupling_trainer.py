@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import cos, pi
 from pathlib import Path
-from typing import List
+from typing import List, cast
 
 import torch
 from torch import optim
@@ -56,11 +56,14 @@ class CouplingTrainer(LoggingMixin):
         super().__init__(logger_name="CouplingTrainer", work_dir=self.work_dir)
         self.device = torch.device(config.device)
         self.model.to(self.device)
-        self.model = maybe_compile_model(
-            self.model,
-            self.config.compile,
-            logger=self.logger,
-            model_name="CouplingNet",
+        self.model = cast(
+            CouplingNet,
+            maybe_compile_model(
+                self.model,
+                self.config.compile,
+                logger=self.logger,
+                model_name="CouplingNet",
+            ),
         )
         self.green_kernel = green_kernel.to(self.device)  # (2, n, m, m)
         self.loss_history: List[float] = []
@@ -130,6 +133,34 @@ class CouplingTrainer(LoggingMixin):
         ).mean()
         return loss_jx + loss_jy
 
+    def _raw_balance_loss(
+        self,
+        raw_flux: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+    ) -> torch.Tensor:
+        if raw_flux.dim() != 4 or raw_flux.shape[1] != 2:
+            raise ValueError("raw_flux must have shape (B, 2, n_lines, m_points).")
+
+        raw_phi = raw_flux[:, 0, :, 1:-1]
+        raw_psi_t = raw_flux[:, 1, :, 1:-1].transpose(-1, -2)
+        rhs_x_int = rhs_raw[:, 0, :, 1:-1]
+        if raw_phi.shape != raw_psi_t.shape or raw_phi.shape != rhs_x_int.shape:
+            raise ValueError(
+                "Raw balance residual terms must share the same common interior grid."
+            )
+
+        x_inner = x_axis[1:-1]
+        y_inner = y_axis[1:-1]
+        res = raw_phi + raw_psi_t - rhs_x_int
+        res_sq_int = integrate(
+            res.pow(2), x=x_inner, dim=-1, rule=self.config.integration_rule
+        )
+        return integrate(
+            res_sq_int, x=y_inner, dim=-1, rule=self.config.integration_rule
+        ).mean()
+
     def _relative_l2_integral(
         self,
         pred: torch.Tensor,
@@ -180,7 +211,7 @@ class CouplingTrainer(LoggingMixin):
         c_vals = c_vals.to(self.device)
         coords = coords.to(self.device)
 
-        pred_flux = self.model(
+        raw_flux, pred_flux = self.model(
             coords=coords,
             a_vals=a_vals,
             b_vals=b_vals,
@@ -225,25 +256,37 @@ class CouplingTrainer(LoggingMixin):
         loss_cons = integrate(
             loss_cons, x=x_axis, dim=-1, rule=self.config.integration_rule
         ).mean()
-        loss_flux_consistency = self._flux_consistency_loss(
-            u_phi_x=u_phi_x,
-            u_psi_y=u_psi_y,
-            a_vals=a_vals,
-            x_axis=x_axis,
-            y_axis=y_axis,
-        )
-        flux_weight = (
-            self.config.lambda_flux_consistency
-            if self.config.flux_consistency_enabled
-            else 0.0
-        )
+        if self.config.flux_consistency_enabled:
+            loss_flux_consistency = self._flux_consistency_loss(
+                u_phi_x=u_phi_x,
+                u_psi_y=u_psi_y,
+                a_vals=a_vals,
+                x_axis=x_axis,
+                y_axis=y_axis,
+            )
+            flux_weight = self.config.lambda_flux_consistency
+        else:
+            loss_flux_consistency = torch.zeros((), dtype=loss_cons.dtype, device=self.device)
+            flux_weight = 0.0
+
+        if self.config.lambda_raw_balance > 0.0:
+            loss_raw_balance = self._raw_balance_loss(
+                raw_flux=raw_flux,
+                rhs_raw=rhs_raw,
+                x_axis=x_axis,
+                y_axis=y_axis,
+            )
+        else:
+            loss_raw_balance = torch.zeros((), dtype=loss_cons.dtype, device=self.device)
 
         loss = self.config.lambda_consistency * loss_cons
         loss = loss + flux_weight * loss_flux_consistency
+        loss = loss + self.config.lambda_raw_balance * loss_raw_balance
 
         metrics = {
             "loss_cons": float(loss_cons.detach().item()),
             "loss_flux_consistency": float(loss_flux_consistency.detach().item()),
+            "loss_raw_balance": float(loss_raw_balance.detach().item()),
             "rel_flux": self._relative_l2_integral(
                 pred_flux_target.detach(), flux_target, x_axis
             ),
@@ -353,6 +396,7 @@ class CouplingTrainer(LoggingMixin):
             accum = {
                 "loss_cons": 0.0,
                 "loss_flux_consistency": 0.0,
+                "loss_raw_balance": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
             }
@@ -411,6 +455,7 @@ class CouplingTrainer(LoggingMixin):
             accum = {
                 "loss_cons": 0.0,
                 "loss_flux_consistency": 0.0,
+                "loss_raw_balance": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
             }
@@ -457,6 +502,7 @@ class CouplingTrainer(LoggingMixin):
             val_metrics = {
                 "loss_cons": float("nan"),
                 "loss_flux_consistency": float("nan"),
+                "loss_raw_balance": float("nan"),
                 "rel_flux": float("nan"),
                 "rel_sol": float("nan"),
             }
@@ -471,23 +517,28 @@ class CouplingTrainer(LoggingMixin):
                 self.logger.info(
                     (
                         "epoch %s | train loss=%.4e cons=%.4e flux_cons=%.4e "
-                        "rel_flux=%.4e rel_sol=%.4e | lam_flux=%.4e flux_on=%s | "
-                        "lr=%.4e | val cons=%.4e flux_cons=%.4e rel_flux=%.4e rel_sol=%.4e"
+                        "raw_bal=%.4e rel_flux=%.4e rel_sol=%.4e | "
+                        "lam_flux=%.4e flux_on=%s lam_raw=%.4e | "
+                        "lr=%.4e | val cons=%.4e flux_cons=%.4e raw_bal=%.4e "
+                        "rel_flux=%.4e rel_sol=%.4e"
                     ),
                     epoch,
                     mean_loss,
                     train_metrics["loss_cons"],
                     train_metrics["loss_flux_consistency"],
+                    train_metrics["loss_raw_balance"],
                     train_metrics["rel_flux"],
                     train_metrics["rel_sol"],
                     self.config.lambda_flux_consistency,
                     self.config.flux_consistency_enabled,
+                    self.config.lambda_raw_balance,
                     current_lr,
                     val_metrics["loss_cons"],
                     val_metrics["loss_flux_consistency"],
-                        val_metrics["rel_flux"],
-                        val_metrics["rel_sol"],
-                    )
+                    val_metrics["loss_raw_balance"],
+                    val_metrics["rel_flux"],
+                    val_metrics["rel_sol"],
+                )
             self._maybe_save_periodic_checkpoint(epoch)
             if scheduler is not None:
                 scheduler.step()
@@ -528,6 +579,7 @@ class CouplingTrainer(LoggingMixin):
         loader = self._make_loader(dataset, shuffle=False)
         losses: List[float] = []
         loss_flux_consistency: List[float] = []
+        loss_raw_balance: List[float] = []
         rel_flux: List[float] = []
         rel_sol: List[float] = []
         with torch.no_grad():
@@ -556,12 +608,16 @@ class CouplingTrainer(LoggingMixin):
                 )
                 losses.append(loss.item())
                 loss_flux_consistency.append(metrics["loss_flux_consistency"])
+                loss_raw_balance.append(metrics["loss_raw_balance"])
                 rel_flux.append(metrics["rel_flux"])
                 rel_sol.append(metrics["rel_sol"])
         return {
             "loss": float(sum(losses) / max(len(losses), 1)),
             "loss_flux_consistency": float(
                 sum(loss_flux_consistency) / max(len(loss_flux_consistency), 1)
+            ),
+            "loss_raw_balance": float(
+                sum(loss_raw_balance) / max(len(loss_raw_balance), 1)
             ),
             "rel_flux": float(sum(rel_flux) / max(len(rel_flux), 1)),
             "rel_sol": float(sum(rel_sol) / max(len(rel_sol), 1)),

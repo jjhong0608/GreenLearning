@@ -1,0 +1,12 @@
+torch>=2.2.0
+numpy>=1.26.0
+scipy>=1.11.0
+plotly>=5.23.0
+safetensors>=0.4.4
+rich>=13.7.0
+kaleido>=1.2.0
+
+[dev]
+pytest>=8.3.0
+ruff>=0.6.0
+mypy>=1.11.0

@@ -1,3 +1,21 @@
+Metadata-Version: 2.4
+Name: modified-greenonet
+Version: 0.1.0
+Summary: Axial-inspired GreenONet solver for 2D Poisson problems.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: torch>=2.2.0
+Requires-Dist: numpy>=1.26.0
+Requires-Dist: scipy>=1.11.0
+Requires-Dist: plotly>=5.23.0
+Requires-Dist: safetensors>=0.4.4
+Requires-Dist: rich>=13.7.0
+Requires-Dist: kaleido>=1.2.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.0; extra == "dev"
+Requires-Dist: ruff>=0.6.0; extra == "dev"
+Requires-Dist: mypy>=1.11.0; extra == "dev"
+
 # Modified GreenONet
 
 Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundaries. The project follows the AGENTS guidelines: class-first design, rich logging mirrored to disk, Plotly visualizations, and TDD.
@@ -18,9 +36,9 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Integration rule: set `training.integration_rule` and `coupling_training.integration_rule` to `"simpson"` or `"trapezoid"` to control sampled-data quadrature in Green/Coupling training, evaluation metrics, and coupling RHS normalization. Green synthetic samplers reuse `training.integration_rule` for sample normalization.
 - Optimizers: GreenONet uses Adam by default with optional multi-epoch LBFGS fine-tuning (see `TrainingConfig.lbfgs_*`). CouplingNet training is Adam-only.
 - Torch compile: set `training.compile.enabled=true` to wrap GreenONet with `torch.compile`, and set `coupling_training.compile.enabled=true` to do the same for CouplingNet. The flags are independent, optional, and checkpoint saving still unwraps compiled models to keep load/save compatibility.
-- CouplingNet: a shared branch/trunk MIONet consumes axial-line inputs `(a, b, c, f)` together with interior coordinates and predicts raw axial flux-divergences `(tilde_phi, tilde_psi)` through a single shared DeepONet-style readout before applying balance projection.
+- CouplingNet: a shared branch/trunk MIONet consumes axial-line inputs `(a, b, c, f)` together with interior coordinates and predicts axial flux-divergences `(phi_x, psi_y)` through a single shared DeepONet-style readout followed by balance projection.
 - Balance projection: CouplingNet applies a fixed symmetric interior balance projection, splitting the residual evenly with a `0.5/0.5` correction between the x- and y-axis flux components.
-- Coupling losses: the model returns both raw and projected axial flux-divergences. Coupling training uses projected solution consistency, optional flux consistency when `coupling_training.flux_consistency_enabled=true`, and an optional raw balance loss `tilde_phi + tilde_psi^T - f` weighted by `coupling_training.lambda_raw_balance`.
+- Coupling losses: the model returns projected axial flux-divergences after the fixed balance projection. Coupling training uses projected solution consistency, plus optional flux consistency when `coupling_training.flux_consistency_enabled=true`.
 - Coupling optimizer config: use the flat shared optimizer fields in `coupling_training` (`learning_rate`, `epochs`, `use_lr_schedule`, `warmup_epochs`, `min_lr`) for the single-stage Coupling trainer.
 - Coupling periodic checkpoints: set `coupling_training.periodic_checkpoint.enabled=true` and `coupling_training.periodic_checkpoint.every_epochs=<int>` to save additional Adam-phase checkpoints as `coupling_model_epoch_XXXX.safetensors`.
 - Coupling best-validation checkpoint: set `coupling_training.best_rel_sol_checkpoint.enabled=true` to save `coupling_model_adam_best_rel_sol.safetensors` whenever Adam training achieves a new best validation `rel_sol`. This requires a validation dataset.
@@ -39,7 +57,7 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 
 - Plotting GreenONet logs: `python plot_green_logs.py --logs checkpoints/run_green_net/training.log --outdir plots_green` (supports multiple logs and `--labels`; outputs HTML plus PNG/PDF if available).
 - Plotting CouplingNet logs with separate error figures: `python plot_coupling_logs.py --logs checkpoints/coupling_run/training.log checkpoints/coupling_run_2/training.log --labels run1 run2 --outdir plots_coupling`.
-- Plotting recent Adam-only Coupling logs from the current `_run_training_phase - epoch ...` format: `python plot_logs.py --logs checkpoints/test_diffusion/coupling/single_unknown/backward/training.log --outdir plots_coupling_recent`. This plots total loss, consistency, flux consistency, raw balance, `rel_flux`, and `rel_sol` from the current Coupling trainer log lines and ignores compile/checkpoint noise lines.
+- Plotting recent Adam-only Coupling logs from the current `_run_training_phase - epoch ...` format: `python plot_logs.py --logs checkpoints/test_diffusion/coupling/single_unknown/backward/training.log --outdir plots_coupling_recent`. This plots total loss, consistency, flux consistency, `rel_flux`, and `rel_sol` from the current Coupling trainer log lines and ignores compile/checkpoint noise lines.
 - CouplingNet evaluation on test data (per-sample metrics and plots):
   1. Set `dataset.test_path` in your config.
   2. Run:

@@ -26,7 +26,7 @@ class ActivationFactoryMixin:
         raise ValueError(f"Unsupported activation: {name}")
 
 
-class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+class MLP(nn.Module, ActivationFactoryMixin):
     def __init__(
         self,
         input_dim: int,
@@ -55,7 +55,7 @@ class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         return cast(torch.Tensor, self.net(x))
 
 
-class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+class CouplingNet(nn.Module, ActivationFactoryMixin):
     """MIONet-style model: four branches (a, b, c, rhs) and one trunk (coords).
 
     The network ingests the full stack of axial lines per batch (both x- and y-lines)
@@ -121,9 +121,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         psi_t = flux_int[:, 1].transpose(-1, -2)
         res = rhs_x_int - (phi + psi_t)
 
-        psi_t = psi_t + res
-        # phi = phi + 0.5 * res
-        # psi_t = psi_t + 0.5 * res
+        phi = phi + 0.5 * res
+        psi_t = psi_t + 0.5 * res
         projected = flux_int.clone()
         projected[:, 0] = phi
         projected[:, 1] = psi_t.transpose(-1, -2)
@@ -138,7 +137,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             coords: (2, n_lines, m_points, 2) (interior trunk uses coords[:, :, 1:-1])
@@ -149,6 +148,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_tilde: (B, 2, n_lines, m_points) normalized source
             rhs_norm: (B, 2, n_lines) line-wise L2 norms
         Returns:
+            raw_flux: (B, 2, n_lines, m_points) axial flux-divergence per axis
+                before the cross-axis balance projection with zero-padded
+                boundaries.
             projected_flux: (B, 2, n_lines, m_points) axial flux-divergence per
                 axis after the cross-axis balance projection with zero-padded
                 boundaries.
@@ -191,6 +193,14 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         raw_int = flux_tilde * norm_exp
         projected_int = self._apply_balance_projection(raw_int, rhs_raw)
 
+        raw_flux = torch.zeros(
+            b,
+            axis,
+            n_lines,
+            m_points,
+            dtype=raw_int.dtype,
+            device=raw_int.device,
+        )
         projected_flux = torch.zeros(
             b,
             axis,
@@ -199,5 +209,6 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dtype=raw_int.dtype,
             device=raw_int.device,
         )
+        raw_flux[:, :, :, 1:-1] = raw_int
         projected_flux[:, :, :, 1:-1] = projected_int
-        return projected_flux
+        return raw_flux, projected_flux
