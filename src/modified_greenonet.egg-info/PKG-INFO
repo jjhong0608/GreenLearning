@@ -1,3 +1,22 @@
+Metadata-Version: 2.4
+Name: modified-greenonet
+Version: 0.1.0
+Summary: Axial-inspired GreenONet solver for 2D Poisson problems.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: torch @ https://download.pytorch.org/whl/cu126/torch-2.11.0%2Bcu126-cp314-cp314-manylinux_2_28_x86_64.whl ; python_version == "3.14" and platform_system == "Linux" and platform_machine == "x86_64"
+Requires-Dist: torch>=2.11.0; python_version != "3.14" or platform_system != "Linux" or platform_machine != "x86_64"
+Requires-Dist: numpy>=1.26.0
+Requires-Dist: scipy>=1.11.0
+Requires-Dist: plotly>=5.23.0
+Requires-Dist: safetensors>=0.4.4
+Requires-Dist: rich>=13.7.0
+Requires-Dist: kaleido>=1.2.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.0; extra == "dev"
+Requires-Dist: ruff>=0.6.0; extra == "dev"
+Requires-Dist: mypy>=1.11.0; extra == "dev"
+
 # Modified GreenONet
 
 Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundaries. The project follows the AGENTS guidelines: class-first design, rich logging mirrored to disk, Plotly visualizations, and TDD.
@@ -16,8 +35,6 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Config: the CLI copies the input JSON to `config_used.json` in the `work-dir`.
 - Checkpoints: `*.safetensors` include JSON-encoded model config metadata; use `greenonet.io.load_model_with_config` to restore model+config.
 - Loss: Green's-function reconstruction — integrates the learned Green kernel against the source and matches the recovered solution (no direct output MSE).
-- GreenNet structure: the analytic Green wrapping remains active when `model.use_green=true`, while the learned correction now uses fused line encoders for `a`, `a'`, `b`, and `c` plus a hybrid trunk with smooth `(x, xi)` features.
-- Green analytic coefficients: under the conservative operator `-d_x(a(x) d_x u) + b(x) d_x u + c(x) u = f`, the implemented wrapping uses `A(x, xi) = 1 / a(x)` and `B(x, xi) = (a'(x) + b(x)) / a(x)^2`, so both coefficients depend on the evaluation-side `x` values.
 - Integration rule: set `training.integration_rule` and `coupling_training.integration_rule` to `"simpson"` or `"trapezoid"` to control sampled-data quadrature in Green/Coupling training, evaluation metrics, and coupling RHS normalization. Green synthetic samplers reuse `training.integration_rule` for sample normalization.
 - Optimizers: GreenONet uses Adam by default with optional multi-epoch LBFGS fine-tuning (see `TrainingConfig.lbfgs_*`). CouplingNet training is Adam-only.
 - Torch compile: set `training.compile.enabled=true` to wrap GreenONet with `torch.compile`, and set `coupling_training.compile.enabled=true` to do the same for CouplingNet. The flags are independent, optional, and checkpoint saving still unwraps compiled models to keep load/save compatibility.
@@ -28,7 +45,7 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Coupling periodic checkpoints: set `coupling_training.periodic_checkpoint.enabled=true` and `coupling_training.periodic_checkpoint.every_epochs=<int>` to save additional Adam-phase checkpoints as `coupling_model_epoch_XXXX.safetensors`.
 - Coupling best-validation checkpoint: set `coupling_training.best_rel_sol_checkpoint.enabled=true` to save `coupling_model_adam_best_rel_sol.safetensors` whenever Adam training achieves a new best validation `rel_sol`. This requires a validation dataset.
 - Flux consistency auxiliary loss: set `coupling_training.flux_consistency_enabled=true` and `coupling_training.lambda_flux_consistency>0` to penalize mismatch between `a * D_x u^(x)` vs `a * D_x u^(y)` and `a * D_y u^(x)` vs `a * D_y u^(y)` on the interior, using the same centered finite-difference convention as the existing numerics helpers.
-- Green hybrid trunk: the learned Green correction always sees smooth handcrafted features `x`, `xi`, `x*xi`, `x^2`, `xi^2`, `x-xi`, `(x-xi)^2`, and `sqrt((x-xi)^2 + eps)`. If `model.use_fourier=true`, the Fourier embedding is appended to that structured trunk basis instead of replacing it.
+- Fourier embedding: set `model.use_fourier=true` with `fourier_dim`, `fourier_scale`, and `fourier_include_input` to apply Fourier features to trunk coordinates.
 - Coupling LR schedule: set `coupling_training.use_lr_schedule=true` with `warmup_epochs` and `min_lr` to enable linear warmup + cosine annealing during Adam only.
 - Coefficients: the training CLI defines `a_fun`, `apx_fun`, `apy_fun`, plus `b_fun` and `c_fun`, and forwards them into the axial sampler.
 - Sampler mode: set `dataset.sampler_mode` to `"forward"` (sample `u`, derive `f`) or `"backward"` (sample `f`, solve `-d/dx(a u') + b u' + c u = f` with `scipy.integrate.solve_bvp` to recover `u`).

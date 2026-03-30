@@ -83,11 +83,57 @@ class FourierFeatures(nn.Module):  # type: ignore[misc]
         return embedded
 
 
-class GreenONetModel(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+class StructuredGreenKernelMixin:
+    """Helpers for the structured branch/trunk Green kernel parameterization."""
+
+    DIAGONAL_SMOOTH_EPS = 1e-12
+
+    def _structured_trunk_features(self, coords: torch.Tensor) -> torch.Tensor:
+        if coords.shape[-1] != 2:
+            raise ValueError("GreenONetModel expects trunk coordinates shaped as (x, xi).")
+
+        x = coords[..., 0:1]
+        xi = coords[..., 1:2]
+        delta = x - xi
+        smooth_abs_delta = torch.sqrt(delta.pow(2) + self.DIAGONAL_SMOOTH_EPS)
+        return torch.cat(
+            [
+                x,
+                xi,
+                x * xi,
+                x.pow(2),
+                xi.pow(2),
+                delta,
+                delta.pow(2),
+                smooth_abs_delta,
+            ],
+            dim=-1,
+        )
+
+    @staticmethod
+    def _broadcast_x_side(samples: torch.Tensor) -> torch.Tensor:
+        """
+        Broadcast line coefficients over the xi-axis so values depend on x only.
+
+        Inputs:
+            samples: (2, n_lines, m_points) or (B, 2, n_lines, m_points)
+        Returns:
+            tensor shaped (..., m_points, m_points) where the first grid axis is x
+        """
+        if samples.dim() == 4:
+            _, axis, n_lines, m_points = samples.shape
+            return samples.unsqueeze(-1).expand(-1, axis, n_lines, m_points, m_points)
+        if samples.dim() == 3:
+            axis, n_lines, m_points = samples.shape
+            return samples.unsqueeze(-1).expand(axis, n_lines, m_points, m_points)
+        raise ValueError(f"Samples must be 3D or 4D, got {samples.dim()}D")
+
+
+class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMixin):  # type: ignore[misc]
     """DeepONet-style branch/trunk model with analytic Green wrapping."""
 
-    # EPS = 1e-8
-    EPS = 0.0
+    EPS = 1e-12
+    STRUCTURED_TRUNK_DIM = 8
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -102,15 +148,24 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=False,
         )
-        # self.branch_b = MLP(
-        #     input_dim=config.branch_input_dim,
-        #     hidden_dim=config.hidden_dim,
-        #     depth=config.depth,
-        #     activation=config.activation,
-        #     use_bias=config.use_bias,
-        #     dropout=config.dropout,
-        #     last_activation=False,
-        # )
+        self.branch_ap = MLP(
+            input_dim=config.branch_input_dim,
+            hidden_dim=config.hidden_dim,
+            depth=config.depth,
+            activation=config.activation,
+            use_bias=config.use_bias,
+            dropout=config.dropout,
+            last_activation=False,
+        )
+        self.branch_b = MLP(
+            input_dim=config.branch_input_dim,
+            hidden_dim=config.hidden_dim,
+            depth=config.depth,
+            activation=config.activation,
+            use_bias=config.use_bias,
+            dropout=config.dropout,
+            last_activation=False,
+        )
         self.branch_c = MLP(
             input_dim=config.branch_input_dim,
             hidden_dim=config.hidden_dim,
@@ -120,8 +175,17 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=False,
         )
+        self.branch_fuser = nn.Linear(
+            4 * config.hidden_dim,
+            config.hidden_dim,
+            bias=config.use_bias,
+        )
+        self.branch_fuser_activation = self.build_activation(config.activation)
+        self.branch_fuser_dropout = (
+            nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()
+        )
         self.fourier: Optional[FourierFeatures] = None
-        trunk_input_dim = config.input_dim
+        trunk_input_dim = self.STRUCTURED_TRUNK_DIM
         if config.use_fourier:
             self.fourier = FourierFeatures(
                 input_dim=config.input_dim,
@@ -130,7 +194,7 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 include_input=config.fourier_include_input,
                 dtype=config.dtype,
             )
-            trunk_input_dim = 2 * config.fourier_dim + (
+            trunk_input_dim += 2 * config.fourier_dim + (
                 config.input_dim if config.fourier_include_input else 0
             )
         self.trunk = MLP(
@@ -161,33 +225,76 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         x = coords[..., 0:1]
         return torch.full_like(x, -0.5)
 
-    @staticmethod
-    def _refactor_x0(samples: torch.Tensor) -> torch.Tensor:
-        """
-        Broadcast along x0 axis to shape (..., 2, n_lines, m_points, m_points).
-        Accepts either 3D (2, n, m) or 4D (B, 2, n, m).
-        """
-        if samples.dim() == 4:
-            _, axis, n_lines, m = samples.shape
-            return samples.unsqueeze(-2).expand(-1, axis, n_lines, m, m)
-        if samples.dim() == 3:
-            axis, n_lines, m = samples.shape
-            return samples.unsqueeze(-2).expand(axis, n_lines, m, m)
-        raise ValueError(f"Samples must be 3D or 4D, got {samples.dim()}D")
+    def _build_trunk_inputs(self, coords: torch.Tensor) -> torch.Tensor:
+        trunk_inputs = [self._structured_trunk_features(coords)]
+        if self.fourier is not None:
+            trunk_inputs.append(self.fourier(coords))
+        return torch.cat(trunk_inputs, dim=-1)
 
-    @staticmethod
-    def _refactor_x1(samples: torch.Tensor) -> torch.Tensor:
-        """
-        Broadcast along x1 axis to shape (..., 2, n_lines, m_points, m_points).
-        Accepts either 3D (2, n, m) or 4D (B, 2, n, m).
-        """
-        if samples.dim() == 4:
-            _, axis, n_lines, m = samples.shape
-            return samples.unsqueeze(-1).expand(-1, axis, n_lines, m, m)
-        if samples.dim() == 3:
-            axis, n_lines, m = samples.shape
-            return samples.unsqueeze(-1).expand(axis, n_lines, m, m)
-        raise ValueError(f"Samples must be 3D or 4D, got {samples.dim()}D")
+    def _fuse_branch_features(
+        self,
+        a_used: torch.Tensor,
+        ap_used: torch.Tensor,
+        b_used: torch.Tensor,
+        c_used: torch.Tensor,
+    ) -> torch.Tensor:
+        n_axis, n_lines, m_points = a_used.shape
+        branch_a_flat = a_used.reshape(n_axis * n_lines, m_points)
+        branch_ap_flat = ap_used.reshape(n_axis * n_lines, m_points)
+        branch_b_flat = b_used.reshape(n_axis * n_lines, m_points)
+        branch_c_flat = c_used.reshape(n_axis * n_lines, m_points)
+
+        branch_parts = [
+            cast(torch.Tensor, self.branch_a(branch_a_flat)),
+            cast(torch.Tensor, self.branch_ap(branch_ap_flat)),
+            cast(torch.Tensor, self.branch_b(branch_b_flat)),
+            cast(torch.Tensor, self.branch_c(branch_c_flat)),
+        ]
+        fused = self.branch_fuser(torch.cat(branch_parts, dim=-1))
+        fused = cast(torch.Tensor, self.branch_fuser_activation(fused))
+        fused = cast(torch.Tensor, self.branch_fuser_dropout(fused))
+        return fused
+
+    def _apply_analytic_green_wrap(
+        self,
+        trunk_grid: torch.Tensor,
+        learned_output: torch.Tensor,
+        a_used: torch.Tensor,
+        ap_used: torch.Tensor,
+        b_used: torch.Tensor,
+    ) -> torch.Tensor:
+        ap_used = torch.where(ap_used.abs() < 1e-15, torch.zeros_like(ap_used), ap_used)
+
+        a_x = self._broadcast_x_side(a_used)
+        ap_x = self._broadcast_x_side(ap_used)
+        b_x = self._broadcast_x_side(b_used)
+
+        envelope = self._envelope(trunk_grid).squeeze(-1)
+        remain = self._remain(trunk_grid).squeeze(-1)
+        bias_term = self._bias_term(trunk_grid).squeeze(-1)
+        green_term = cast(torch.Tensor, self.green(trunk_grid)).squeeze(-1)
+        igreen_term = cast(torch.Tensor, self.igreen(trunk_grid)).squeeze(-1)
+
+        envelope_b = envelope.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        remain_b = remain.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        bias_term_b = bias_term.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        green_b = green_term.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        igreen_b = igreen_term.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+
+        # GreenNet follows the conservative one-dimensional operator
+        #   -d_x(a(x) d_x u) + b(x) d_x u + c(x) u = f.
+        # Under this sign convention the analytic wrapping coefficients are
+        #   A(x, xi) = 1 / a(x),
+        #   B(x, xi) = (a'(x) + b(x)) / a(x)^2,
+        # so both coefficients depend on the evaluation-side x values only.
+        a_recip = 1.0 / (a_x + self.EPS)
+        b_coeff = (ap_x + b_x) * a_recip.pow(2)
+
+        return (
+            envelope_b * remain_b * learned_output
+            + b_coeff * (igreen_b + envelope_b * bias_term_b)
+            + a_recip * green_b
+        )
 
     def forward(
         self,
@@ -212,62 +319,31 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             a_used = a_vals[0]
             ap_used = ap_vals[0]
             b_used = b_vals[0]
+            c_used = c_vals[0]
         elif a_vals.dim() == 3:
             n_axis, n_lines, _ = a_vals.shape
             a_used = a_vals
             ap_used = ap_vals
             b_used = b_vals
+            c_used = c_vals
         else:
             raise ValueError("a_vals must be 3D or 4D")
 
         trunk_flat = trunk_grid.reshape(m_points * m_points, 2)
-        if self.fourier is not None:
-            trunk_flat = self.fourier(trunk_flat)
+        trunk_flat = self._build_trunk_inputs(trunk_flat)
         trunk_out = cast(torch.Tensor, self.trunk(trunk_flat))  # (m*m, hidden)
 
-        branch_a_flat = a_used.reshape(n_axis * n_lines, m_points)
-        # branch_b_flat = b_used.reshape(n_axis * n_lines, m_points)
-        # branch_c_flat = c_used.reshape(n_axis * n_lines, m_points)
-        branch_a_out = cast(torch.Tensor, self.branch_a(branch_a_flat))  # (2*n, hidden)
-        # branch_b_out = cast(torch.Tensor, self.branch_b(branch_b_flat))  # (2*n, hidden)
-        # branch_c_out = cast(torch.Tensor, self.branch_c(branch_c_flat))  # (2*n, hidden)
-        # branch_feat = branch_a_out * branch_b_out * branch_c_out
-        # branch_feat = branch_a_out * branch_c_out
-        branch_feat = branch_a_out
+        branch_feat = self._fuse_branch_features(a_used, ap_used, b_used, c_used)
         core = branch_feat @ trunk_out.T  # (2*n, m*m)
-        output = core.view(n_axis, n_lines, m_points, m_points)
+        output = core.view(n_axis, n_lines, m_points, m_points) + self.output_bias
 
         if not self.use_green:
             return output
 
-        ap_used = torch.where(ap_used < 1e-15, torch.zeros_like(ap_used), ap_used)
-        # ap_used = ap_used.abs()
-
-        a0_val_t = self._refactor_x0(a_used)  # (2,n,m,m)
-        a1_val_t = self._refactor_x1(a_used)  # (2,n,m,m)
-        ap1_val_t = self._refactor_x1(ap_used)  # (2,n,m,m)
-        b1_val_t = self._refactor_x1(b_used)  # (2,n,m,m)
-
-        envelope = self._envelope(trunk_grid).squeeze(-1)  # (m, m)
-        remain = self._remain(trunk_grid).squeeze(-1)  # (m, m)
-        bias_term = self._bias_term(trunk_grid).squeeze(-1)  # (m, m)
-        green_term = cast(torch.Tensor, self.green(trunk_grid)).squeeze(-1)  # (m, m)
-        igreen_term = cast(torch.Tensor, self.igreen(trunk_grid)).squeeze(-1)  # (m, m)
-
-        envelope_b = envelope.unsqueeze(0).unsqueeze(0).expand(n_axis, n_lines, -1, -1)
-        remain_b = remain.unsqueeze(0).unsqueeze(0).expand(n_axis, n_lines, -1, -1)
-        bias_term_b = (
-            bias_term.unsqueeze(0).unsqueeze(0).expand(n_axis, n_lines, -1, -1)
+        return self._apply_analytic_green_wrap(
+            trunk_grid=trunk_grid,
+            learned_output=output,
+            a_used=a_used,
+            ap_used=ap_used,
+            b_used=b_used,
         )
-        green_b = green_term.unsqueeze(0).unsqueeze(0).expand(n_axis, n_lines, -1, -1)
-        igreen_b = igreen_term.unsqueeze(0).unsqueeze(0).expand(n_axis, n_lines, -1, -1)
-
-        inv_a0 = 1.0 / (a0_val_t + self.EPS)
-        coeff_common = (ap1_val_t + b1_val_t) / (a1_val_t + self.EPS)
-
-        full_fn = (
-            envelope_b * remain_b * output
-            + (igreen_b + envelope_b * bias_term_b) * coeff_common * inv_a0
-            + inv_a0 * green_b
-        )
-        return full_fn

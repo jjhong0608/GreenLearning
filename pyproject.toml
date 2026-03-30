@@ -9,7 +9,8 @@ description = "Axial-inspired GreenONet solver for 2D Poisson problems."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "torch>=2.2.0",
+  "torch @ https://download.pytorch.org/whl/cu126/torch-2.11.0%2Bcu126-cp314-cp314-manylinux_2_28_x86_64.whl ; python_version == '3.14' and platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torch>=2.11.0 ; python_version != '3.14' or platform_system != 'Linux' or platform_machine != 'x86_64'",
   "numpy>=1.26.0",
   "scipy>=1.11.0",
   "plotly>=5.23.0",

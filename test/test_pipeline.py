@@ -11,6 +11,17 @@ from greenonet.model import GreenONetModel
 from greenonet.trainer import Trainer
 
 
+def _build_trunk_grid(m_points: int, dtype: torch.dtype = torch.float64) -> torch.Tensor:
+    axis = torch.linspace(0, 1, m_points, dtype=dtype)
+    return torch.stack(torch.meshgrid(axis, axis, indexing="ij"), dim=-1)
+
+
+def _zero_model_parameters(model: GreenONetModel) -> None:
+    with torch.no_grad():
+        for param in model.parameters():
+            param.zero_()
+
+
 class TestGreenONetModel:
     def test_forward_and_backprop(self) -> None:
         torch.manual_seed(0)
@@ -25,16 +36,11 @@ class TestGreenONetModel:
         model = GreenONetModel(model_config)
         # Build coords grid (2 axes, 1 line, 4 points)
         a_vals = torch.rand(1, 2, 1, 4)
-        ap_vals = torch.zeros_like(a_vals)
-        b_vals = torch.zeros_like(a_vals)
-        c_vals = torch.zeros_like(a_vals)
+        ap_vals = torch.rand_like(a_vals)
+        b_vals = torch.rand_like(a_vals)
+        c_vals = torch.rand_like(a_vals)
         output = model(
-            trunk_grid=torch.stack(
-                torch.meshgrid(
-                    torch.linspace(0, 1, 4), torch.linspace(0, 1, 4), indexing="ij"
-                ),
-                dim=-1,
-            ),
+            trunk_grid=_build_trunk_grid(4),
             a_vals=a_vals,
             ap_vals=ap_vals,
             b_vals=b_vals,
@@ -44,7 +50,10 @@ class TestGreenONetModel:
         loss = output.sum()
         loss.backward()
         assert model.branch_a.net[0].weight.grad is not None
+        assert model.branch_ap.net[0].weight.grad is not None
+        assert model.branch_b.net[0].weight.grad is not None
         assert model.branch_c.net[0].weight.grad is not None
+        assert model.branch_fuser.weight.grad is not None
         assert model.trunk.net[0].weight.grad is not None
 
     def test_rational_activation(self) -> None:
@@ -61,12 +70,7 @@ class TestGreenONetModel:
         model = GreenONetModel(model_config)
         zeros = torch.zeros((1, 2, 1, 3), dtype=torch.float64)
         output = model(
-            trunk_grid=torch.stack(
-                torch.meshgrid(
-                    torch.linspace(0, 1, 3), torch.linspace(0, 1, 3), indexing="ij"
-                ),
-                dim=-1,
-            ),
+            trunk_grid=_build_trunk_grid(3),
             a_vals=zeros,
             ap_vals=zeros,
             b_vals=zeros,
@@ -76,8 +80,42 @@ class TestGreenONetModel:
         loss = (output**2).mean()
         loss.backward()
         assert model.branch_a.net[0].weight.grad is not None
+        assert model.branch_ap.net[0].weight.grad is not None
+        assert model.branch_b.net[0].weight.grad is not None
         assert model.branch_c.net[0].weight.grad is not None
+        assert model.branch_fuser.weight.grad is not None
         assert model.trunk.net[0].weight.grad is not None
+
+    def test_hybrid_trunk_features(self) -> None:
+        model = GreenONetModel(
+            ModelConfig(
+                input_dim=2,
+                hidden_dim=8,
+                depth=2,
+                activation="tanh",
+                use_bias=True,
+                use_green=False,
+                branch_input_dim=3,
+            )
+        )
+        coords = torch.tensor([[0.25, 0.75]], dtype=torch.float64)
+        features = model._structured_trunk_features(coords)
+        delta = coords[:, :1] - coords[:, 1:2]
+        expected = torch.cat(
+            [
+                coords[:, :1],
+                coords[:, 1:2],
+                coords[:, :1] * coords[:, 1:2],
+                coords[:, :1].pow(2),
+                coords[:, 1:2].pow(2),
+                delta,
+                delta.pow(2),
+                torch.sqrt(delta.pow(2) + model.DIAGONAL_SMOOTH_EPS),
+            ],
+            dim=-1,
+        )
+        assert torch.allclose(features, expected)
+        assert model.trunk.net[0].in_features == expected.shape[-1]
 
     def test_fourier_embedding(self) -> None:
         torch.manual_seed(0)
@@ -96,12 +134,7 @@ class TestGreenONetModel:
                 fourier_include_input=True,
             )
         )
-        trunk = torch.stack(
-            torch.meshgrid(
-                torch.linspace(0, 1, 3), torch.linspace(0, 1, 3), indexing="ij"
-            ),
-            dim=-1,
-        )
+        trunk = _build_trunk_grid(3)
         vals = torch.ones((1, 2, 1, 3))
         out = model(
             trunk_grid=trunk,
@@ -111,6 +144,7 @@ class TestGreenONetModel:
             c_vals=torch.zeros_like(vals),
         )
         assert out.shape == (2, 1, 3, 3)
+        assert model.trunk.net[0].in_features == 8 + 2 * 6 + 2
 
     def test_green_terms_change_output(self) -> None:
         torch.manual_seed(0)
@@ -137,24 +171,14 @@ class TestGreenONetModel:
         branch = torch.rand(1, 2, 1, 2)
         zeros = torch.zeros_like(branch)
         base_out = base_model(
-            trunk_grid=torch.stack(
-                torch.meshgrid(
-                    torch.linspace(0, 1, 2), torch.linspace(0, 1, 2), indexing="ij"
-                ),
-                dim=-1,
-            ),
+            trunk_grid=_build_trunk_grid(2),
             a_vals=branch,
             ap_vals=zeros,
             b_vals=zeros,
             c_vals=zeros,
         )
         green_out = green_model(
-            trunk_grid=torch.stack(
-                torch.meshgrid(
-                    torch.linspace(0, 1, 2), torch.linspace(0, 1, 2), indexing="ij"
-                ),
-                dim=-1,
-            ),
+            trunk_grid=_build_trunk_grid(2),
             a_vals=branch,
             ap_vals=zeros,
             b_vals=zeros,
@@ -162,7 +186,7 @@ class TestGreenONetModel:
         )
         assert not torch.allclose(base_out, green_out)
 
-    def test_coefficients_affect_output(self) -> None:
+    def test_all_operator_coefficients_affect_output(self) -> None:
         torch.manual_seed(0)
         model = GreenONetModel(
             ModelConfig(
@@ -175,32 +199,95 @@ class TestGreenONetModel:
                 branch_input_dim=3,
             )
         )
-        trunk = torch.stack(
-            torch.meshgrid(
-                torch.linspace(0, 1, 3), torch.linspace(0, 1, 3), indexing="ij"
-            ),
-            dim=-1,
+        trunk = _build_trunk_grid(3)
+        a_base = torch.ones((1, 2, 1, 3))
+        ap_base = torch.zeros_like(a_base)
+        b_base = torch.zeros_like(a_base)
+        c_base = torch.zeros_like(a_base)
+        out_base = model(
+            trunk_grid=trunk,
+            a_vals=a_base,
+            ap_vals=ap_base,
+            b_vals=b_base,
+            c_vals=c_base,
         )
-        a_vals = torch.ones((1, 2, 1, 3))
-        ap_vals = torch.zeros_like(a_vals)
-        b_vals = torch.ones_like(a_vals)
-        c_zeros = torch.zeros_like(a_vals)
-        c_ones = torch.ones_like(a_vals)
-        out_zero = model(
+        out_a = model(
+            trunk_grid=trunk,
+            a_vals=2.0 * a_base,
+            ap_vals=ap_base,
+            b_vals=b_base,
+            c_vals=c_base,
+        )
+        out_ap = model(
+            trunk_grid=trunk,
+            a_vals=a_base,
+            ap_vals=torch.ones_like(ap_base),
+            b_vals=b_base,
+            c_vals=c_base,
+        )
+        out_b = model(
+            trunk_grid=trunk,
+            a_vals=a_base,
+            ap_vals=ap_base,
+            b_vals=torch.ones_like(b_base),
+            c_vals=c_base,
+        )
+        out_c = model(
+            trunk_grid=trunk,
+            a_vals=a_base,
+            ap_vals=ap_base,
+            b_vals=b_base,
+            c_vals=torch.ones_like(c_base),
+        )
+        assert not torch.allclose(out_base, out_a)
+        assert not torch.allclose(out_base, out_ap)
+        assert not torch.allclose(out_base, out_b)
+        assert not torch.allclose(out_base, out_c)
+
+    def test_green_wrap_uses_x_side_b_coefficient(self) -> None:
+        model = GreenONetModel(
+            ModelConfig(
+                input_dim=2,
+                hidden_dim=8,
+                depth=2,
+                activation="tanh",
+                use_bias=True,
+                use_green=True,
+                branch_input_dim=4,
+            )
+        )
+        _zero_model_parameters(model)
+
+        trunk = _build_trunk_grid(4)
+        a_vals = torch.ones((1, 2, 1, 4), dtype=torch.float64)
+        ap_line = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
+        b_line = torch.tensor([1.0, -1.0, 0.5, 2.0], dtype=torch.float64)
+        ap_vals = ap_line.view(1, 1, 1, 4).expand(1, 2, 1, 4).clone()
+        b_vals = b_line.view(1, 1, 1, 4).expand(1, 2, 1, 4).clone()
+        zeros = torch.zeros_like(a_vals)
+
+        output = model(
             trunk_grid=trunk,
             a_vals=a_vals,
             ap_vals=ap_vals,
             b_vals=b_vals,
-            c_vals=c_zeros,
+            c_vals=zeros,
         )
-        out_one = model(
-            trunk_grid=trunk,
-            a_vals=a_vals,
-            ap_vals=ap_vals,
-            b_vals=b_vals,
-            c_vals=c_ones,
-        )
-        assert not torch.allclose(out_zero, out_one)
+
+        envelope = model._envelope(trunk).squeeze(-1).unsqueeze(0).unsqueeze(0)
+        bias_term = model._bias_term(trunk).squeeze(-1).unsqueeze(0).unsqueeze(0)
+        green_term = model.green(trunk).squeeze(-1).unsqueeze(0).unsqueeze(0)
+        igreen_term = model.igreen(trunk).squeeze(-1).unsqueeze(0).unsqueeze(0)
+        wrapped_aux = igreen_term + envelope * bias_term
+
+        coeff_line = ap_vals[0] + b_vals[0]
+        coeff_x = coeff_line.unsqueeze(-1)
+        coeff_xi = coeff_line.unsqueeze(-2)
+        expected_x = green_term + coeff_x * wrapped_aux
+        expected_xi = green_term + coeff_xi * wrapped_aux
+
+        assert torch.allclose(output, expected_x)
+        assert not torch.allclose(output, expected_xi)
 
     def test_coupling_predicts_flux_divergence(self) -> None:
         torch.manual_seed(0)
