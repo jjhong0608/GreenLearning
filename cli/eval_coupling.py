@@ -173,12 +173,12 @@ class EvalCouplingCLI:
                 b_vals=b_vals.to(device),
                 c_vals=c_vals.to(device),
             )  # (2,n,m,m)
-        # from greenonet.greens import ExactGreenFunction
-        #
-        # kernel_class = ExactGreenFunction(
-        #     torch.linspace(0, 1, m_points, device=device), a=a_vals.to(device)
-        # )
-        # kernel = kernel_class().squeeze(0)
+        from greenonet.greens import ExactGreenFunction
+
+        kernel_class = ExactGreenFunction(
+            torch.linspace(0, 1, m_points, device=device), a=a_vals.to(device)
+        )
+        kernel = kernel_class().squeeze(0)
         return kernel.cpu()
 
     def run(self) -> None:

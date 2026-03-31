@@ -121,9 +121,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         psi_t = flux_int[:, 1].transpose(-1, -2)
         res = rhs_x_int - (phi + psi_t)
 
-        psi_t = psi_t + res
-        # phi = phi + 0.5 * res
-        # psi_t = psi_t + 0.5 * res
+        phi = phi + 0.5 * res
+        psi_t = psi_t + 0.5 * res
         projected = flux_int.clone()
         projected[:, 0] = phi
         projected[:, 1] = psi_t.transpose(-1, -2)
