@@ -4,6 +4,6 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
-chedckpoints/
+checkpoints/
 .venv/
 data/
