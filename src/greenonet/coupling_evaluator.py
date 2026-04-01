@@ -12,6 +12,7 @@ from torch.nn.functional import pad
 from greenonet.numerics import IntegrationRule, integrate, line_operator_fd
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.coupling_data import coupling_collate_fn, CouplingDataset
+from greenonet.coupling_model import CouplingNet
 
 
 def _render_heatmap_task(task: dict[str, Any]) -> None:
@@ -54,6 +55,11 @@ class CouplingEvaluator(LoggingMixin):
         work_dir: Path | str,
         integration_rule: IntegrationRule = "simpson",
     ) -> None:
+        if isinstance(model, CouplingNet):
+            model.set_structured_baseline_context(
+                green_kernel=green_kernel.to(device),
+                integration_rule=integration_rule,
+            )
         self.model = model.to(device)
         self.green_kernel = green_kernel.to(device)
         self.device = device

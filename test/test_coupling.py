@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import MethodType
 
 import numpy as np
 import pytest
@@ -27,6 +28,25 @@ def _make_npz(tmp_path, name: str = "sample.npz"):
     path = tmp_path / name
     np.savez(path, sol=sol, rhs=rhs, uxx=uxx, uyy=uyy)
     return path
+
+
+def _set_structured_baseline_context(
+    model: CouplingNet,
+    *,
+    n_lines: int,
+    m_points: int,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    integration_rule: str = "simpson",
+) -> torch.Tensor:
+    green_kernel = torch.ones((2, n_lines, m_points, m_points), dtype=torch.float64)
+    green_kernel[0] *= scale_x
+    green_kernel[1] *= scale_y
+    model.set_structured_baseline_context(
+        green_kernel=green_kernel,
+        integration_rule=integration_rule,
+    )
+    return green_kernel
 
 
 class _DummyFluxModel(nn.Module):
@@ -216,6 +236,7 @@ def test_coupling_dataset_trapezoid_rhs_norm(tmp_path):
 def test_coupling_model_forward():
     cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
+    _set_structured_baseline_context(model, n_lines=1, m_points=3)
     coords = torch.zeros((2, 1, 3, 2))
     kappa = torch.randn(1, 2, 1, 3)
     b_vals = torch.randn(1, 2, 1, 3)
@@ -246,6 +267,7 @@ def test_coupling_model_backprop_through_shared_encoder():
         depth=2,
     )
     model = CouplingNet(cfg)
+    _set_structured_baseline_context(model, n_lines=1, m_points=3)
 
     coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
     a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
@@ -276,11 +298,53 @@ def test_coupling_model_backprop_through_shared_encoder():
 
     assert projected_flux.shape == (1, 2, 1, 3)
     assert _has_grad(model.branch_a)
+    assert _has_grad(model.branch_b)
+    assert _has_grad(model.branch_c)
     assert _has_grad(model.branch_rhs)
+    assert _has_grad(model.branch_fuser)
     assert _has_grad(model.trunk)
 
 
-def test_coupling_balance_projection_uses_fixed_half_split():
+def test_coupling_structured_baseline_uses_green_response_weights():
+    cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    green_kernel = _set_structured_baseline_context(
+        model,
+        n_lines=1,
+        m_points=3,
+        scale_x=1.0,
+        scale_y=2.0,
+        integration_rule="trapezoid",
+    )
+
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    axis = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    coords[0, 0, :, 0] = axis
+    coords[0, 0, :, 1] = 0.5
+    coords[1, 0, :, 0] = 0.5
+    coords[1, 0, :, 1] = axis
+
+    rhs_raw = torch.zeros((1, 2, 1, 3), dtype=torch.float64)
+    rhs_raw[:, 0, 0, :] = torch.tensor([0.0, 2.0, 0.0], dtype=torch.float64)
+    rhs_raw[:, 1, 0, :] = torch.tensor([0.0, 2.0, 0.0], dtype=torch.float64)
+
+    rx, ry = model._compute_green_response_norms(coords, rhs_raw)
+    baseline_int = model._build_structured_baseline(coords, rhs_raw)
+
+    expected_rx = torch.tensor([[1.0]], dtype=torch.float64)
+    expected_ry = torch.tensor([[2.0]], dtype=torch.float64)
+    expected_weight = expected_rx / (expected_rx + expected_ry + model.BASELINE_EPS)
+    expected_phi = expected_weight.unsqueeze(-1) * rhs_raw[:, 0, :, 1:-1]
+    expected_psi = (1.0 - expected_weight).unsqueeze(-1) * rhs_raw[:, 0, :, 1:-1]
+
+    assert green_kernel.shape == (2, 1, 3, 3)
+    assert torch.allclose(rx, expected_rx)
+    assert torch.allclose(ry, expected_ry)
+    assert torch.allclose(baseline_int[:, 0], expected_phi)
+    assert torch.allclose(baseline_int[:, 1], expected_psi.transpose(-1, -2))
+
+
+def test_coupling_zero_correction_reduces_to_projected_structured_baseline():
     class _ZeroBranch(nn.Module):
         def __init__(self, hidden_dim: int) -> None:
             super().__init__()
@@ -293,13 +357,28 @@ def test_coupling_balance_projection_uses_fixed_half_split():
 
     cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
+    _set_structured_baseline_context(
+        model,
+        n_lines=3,
+        m_points=5,
+        scale_x=1.0,
+        scale_y=2.0,
+    )
     model.branch_a = _ZeroBranch(cfg.hidden_dim)
     model.branch_b = _ZeroBranch(cfg.hidden_dim)
     model.branch_c = _ZeroBranch(cfg.hidden_dim)
     model.branch_rhs = _ZeroBranch(cfg.hidden_dim)
     model.trunk = _ZeroBranch(cfg.hidden_dim)
+    with torch.no_grad():
+        model.branch_fuser.weight.zero_()
+        model.branch_fuser.bias.zero_()
 
     coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    axis = torch.linspace(0.0, 1.0, 5, dtype=torch.float64)
+    coords[0, :, :, 0] = axis.unsqueeze(0).expand(3, -1)
+    coords[0, :, :, 1] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 0] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 1] = axis.unsqueeze(0).expand(3, -1)
     zeros = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
     rhs_raw = zeros.clone()
     rhs_x_int = torch.tensor(
@@ -319,14 +398,124 @@ def test_coupling_balance_projection_uses_fixed_half_split():
         rhs_norm=rhs_norm,
     )
 
-    expected_phi = 0.5 * rhs_x_int
-    expected_psi = 0.5 * rhs_x_int.transpose(-1, -2)
+    baseline_int = model._build_structured_baseline(coords, rhs_raw)
+    expected_phi = baseline_int[:, 0]
+    expected_psi = baseline_int[:, 1]
     assert torch.allclose(
         projected_flux[:, 0, :, 1:-1], expected_phi, atol=1e-12, rtol=1e-12
     )
     assert torch.allclose(
         projected_flux[:, 1, :, 1:-1], expected_psi, atol=1e-12, rtol=1e-12
     )
+
+
+def test_coupling_learned_branch_uses_a_b_c_and_f():
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    _set_structured_baseline_context(
+        model,
+        n_lines=1,
+        m_points=3,
+        scale_x=0.0,
+        scale_y=0.0,
+    )
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    coords[0, 0, :, 0] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    coords[1, 0, :, 1] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    rhs_raw = torch.zeros((1, 2, 1, 3), dtype=torch.float64)
+    rhs_norm = torch.ones((1, 2, 1), dtype=torch.float64)
+
+    a_base = torch.ones((1, 2, 1, 3), dtype=torch.float64)
+    b_base = torch.zeros_like(a_base)
+    c_base = torch.zeros_like(a_base)
+    rhs_tilde_base = torch.zeros_like(a_base)
+    rhs_tilde_alt = rhs_tilde_base.clone()
+    rhs_tilde_alt[:, :, :, 1] = 1.0
+
+    out_base = model(
+        coords=coords,
+        a_vals=a_base,
+        b_vals=b_base,
+        c_vals=c_base,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde_base,
+        rhs_norm=rhs_norm,
+    )
+    out_a = model(
+        coords=coords,
+        a_vals=2.0 * a_base,
+        b_vals=b_base,
+        c_vals=c_base,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde_base,
+        rhs_norm=rhs_norm,
+    )
+    out_b = model(
+        coords=coords,
+        a_vals=a_base,
+        b_vals=torch.ones_like(b_base),
+        c_vals=c_base,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde_base,
+        rhs_norm=rhs_norm,
+    )
+    out_c = model(
+        coords=coords,
+        a_vals=a_base,
+        b_vals=b_base,
+        c_vals=torch.ones_like(c_base),
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde_base,
+        rhs_norm=rhs_norm,
+    )
+    out_f = model(
+        coords=coords,
+        a_vals=a_base,
+        b_vals=b_base,
+        c_vals=c_base,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde_alt,
+        rhs_norm=rhs_norm,
+    )
+
+    assert not torch.allclose(out_base, out_a)
+    assert not torch.allclose(out_base, out_b)
+    assert not torch.allclose(out_base, out_c)
+    assert not torch.allclose(out_base, out_f)
+
+
+def test_coupling_forward_calls_balance_projection():
+    cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    _set_structured_baseline_context(model, n_lines=1, m_points=3)
+    called = {"count": 0}
+
+    def _fake_projection(
+        self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
+    ) -> torch.Tensor:
+        called["count"] += 1
+        del rhs_raw
+        return flux_int
+
+    model._apply_balance_projection = MethodType(_fake_projection, model)
+
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    vals = torch.ones((1, 2, 1, 3), dtype=torch.float64)
+    rhs_norm = torch.ones((1, 2, 1), dtype=torch.float64)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=vals,
+        b_vals=vals,
+        c_vals=vals,
+        rhs_raw=vals,
+        rhs_tilde=vals,
+        rhs_norm=rhs_norm,
+    )
+
+    assert called["count"] == 1
+    assert projected_flux.shape == (1, 2, 1, 3)
 
 
 def test_coupling_trainer_runs(tmp_path):

@@ -56,6 +56,11 @@ class CouplingTrainer(LoggingMixin):
         super().__init__(logger_name="CouplingTrainer", work_dir=self.work_dir)
         self.device = torch.device(config.device)
         self.model.to(self.device)
+        if isinstance(self.model, CouplingNet):
+            self.model.set_structured_baseline_context(
+                green_kernel=green_kernel.to(self.device),
+                integration_rule=self.config.integration_rule,
+            )
         self.model = maybe_compile_model(
             self.model,
             self.config.compile,

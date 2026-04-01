@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import List, cast
+from typing import List, cast, Optional
 
 import torch
 from torch import nn
 
 from greenonet.activations import RationalActivation
 from greenonet.config import CouplingModelConfig
+from greenonet.numerics import IntegrationRule, integrate
 
 
 class ActivationFactoryMixin:
@@ -56,16 +57,20 @@ class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
 
 class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
-    """MIONet-style model: four branches (a, b, c, rhs) and one trunk (coords).
+    """Axial branch/trunk model with structured baseline plus learned correction.
 
-    The network ingests the full stack of axial lines per batch (both x- and y-lines)
-    and predicts axial flux-divergences per axis on interior points, then zero-pads
-    the boundaries.
+    The network ingests the full stack of axial lines per batch (both x- and y-lines),
+    builds a structured baseline from Green-response L2 norms, predicts interior
+    correction terms, and applies the existing balance projection to the assembled
+    flux-divergence fields.
     """
+
+    BASELINE_EPS = 1e-12
 
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
         torch.set_default_dtype(config.dtype)
+        self.config = config
         self.branch_a = MLP(
             input_dim=config.branch_input_dim,
             hidden_dim=config.hidden_dim,
@@ -102,6 +107,15 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=False,
         )
+        self.branch_fuser = nn.Linear(
+            4 * config.hidden_dim,
+            config.hidden_dim,
+            bias=config.use_bias,
+        )
+        self.branch_fuser_activation = self.build_activation(config.activation)
+        self.branch_fuser_dropout = (
+            nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()
+        )
         self.trunk = MLP(
             input_dim=config.trunk_input_dim,
             hidden_dim=config.hidden_dim,
@@ -111,6 +125,110 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=True,
         )
+        self.green_kernel: Optional[torch.Tensor] = None
+        self.integration_rule: IntegrationRule = "simpson"
+
+    def set_structured_baseline_context(
+        self,
+        green_kernel: torch.Tensor,
+        integration_rule: IntegrationRule = "simpson",
+    ) -> None:
+        param = next(self.parameters())
+        self.green_kernel = green_kernel.to(device=param.device, dtype=param.dtype)
+        self.integration_rule = integration_rule
+
+    def _require_structured_context(self) -> torch.Tensor:
+        if self.green_kernel is None:
+            raise ValueError(
+                "Structured baseline context is not set. Call "
+                "CouplingNet.set_structured_baseline_context(...) before forward()."
+            )
+        return self.green_kernel
+
+    def _integrate_green_lines(
+        self,
+        green: torch.Tensor,
+        values: torch.Tensor,
+        axis_coords: torch.Tensor,
+    ) -> torch.Tensor:
+        weighted = values.unsqueeze(-2) * green.unsqueeze(0)
+        return integrate(
+            weighted,
+            x=axis_coords,
+            dim=-1,
+            rule=self.integration_rule,
+        )
+
+    def _compute_green_response_norms(
+        self,
+        coords: torch.Tensor,
+        rhs_raw: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        green_kernel = self._require_structured_context()
+        _, _, n_lines, m_points = rhs_raw.shape
+        if green_kernel.shape != (2, n_lines, m_points, m_points):
+            raise ValueError(
+                "green_kernel shape must match the current CouplingNet sample geometry: "
+                f"expected (2, {n_lines}, {m_points}, {m_points}), got {tuple(green_kernel.shape)}."
+            )
+        x_axis = coords[0, 0, :, 0].to(rhs_raw.device)
+        y_axis = coords[1, 0, :, 1].to(rhs_raw.device)
+
+        response_x = self._integrate_green_lines(green_kernel[0], rhs_raw[:, 0], x_axis)
+        response_y = self._integrate_green_lines(green_kernel[1], rhs_raw[:, 1], y_axis)
+
+        rx = integrate(
+            response_x.pow(2),
+            x=x_axis,
+            dim=-1,
+            rule=self.integration_rule,
+        ).sqrt()
+        ry = integrate(
+            response_y.pow(2),
+            x=y_axis,
+            dim=-1,
+            rule=self.integration_rule,
+        ).sqrt()
+        return rx, ry
+
+    def _build_structured_baseline(
+        self,
+        coords: torch.Tensor,
+        rhs_raw: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Build the structured interior baseline
+            phi_str = w * f,  psi_str = (1 - w) * f
+        on the common interior intersection grid, then pack it back into the
+        current x-line / y-line tensor layout.
+        """
+        rx, ry = self._compute_green_response_norms(coords, rhs_raw)
+        rhs_common = rhs_raw[:, 0, :, 1:-1]
+        weights = rx.unsqueeze(-1) / (
+            rx.unsqueeze(-1) + ry.unsqueeze(-2) + self.BASELINE_EPS
+        )
+        phi_str = weights * rhs_common
+        psi_str = (1.0 - weights) * rhs_common
+        return torch.stack((phi_str, psi_str.transpose(-1, -2)), dim=1)
+
+    def _fuse_branch_features(
+        self,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+    ) -> torch.Tensor:
+        bsz, axis, n_lines, m_points = a_vals.shape
+        flat_size = bsz * axis * n_lines
+        branch_parts = [
+            self.branch_a(a_vals.reshape(flat_size, m_points)),
+            self.branch_b(b_vals.reshape(flat_size, m_points)),
+            self.branch_c(c_vals.reshape(flat_size, m_points)),
+            self.branch_rhs(rhs_tilde.reshape(flat_size, m_points)),
+        ]
+        fused = self.branch_fuser(torch.cat(branch_parts, dim=-1))
+        fused = self.branch_fuser_activation(fused)
+        return cast(torch.Tensor, self.branch_fuser_dropout(fused))
 
     def _apply_balance_projection(
         self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
@@ -149,7 +267,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_norm: (B, 2, n_lines) line-wise L2 norms
         Returns:
             projected_flux: (B, 2, n_lines, m_points) axial flux-divergence per
-                axis after the cross-axis balance projection with zero-padded
+                axis after assembling structured baseline plus learned correction
+                and applying the cross-axis balance projection with zero-padded
                 boundaries.
         """
         if (
@@ -170,11 +289,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 f"Expected n_lines + 2 == m_points (got n_lines={n_lines}, m_points={m_points})."
             )
 
-        branch_a_in = a_vals.reshape(b * axis * n_lines, m_points)
-        branch_r_in = rhs_tilde.reshape(b * axis * n_lines, m_points)
-        branch_a_out = self.branch_a(branch_a_in)
-        branch_r_out = self.branch_rhs(branch_r_in)
-        branch_feat = branch_a_out * branch_r_out
+        structured_int = self._build_structured_baseline(coords, rhs_raw)
+
+        branch_feat = self._fuse_branch_features(a_vals, b_vals, c_vals, rhs_tilde)
         branch_feat = branch_feat.unsqueeze(-1)
 
         coords_int = coords[:, :, 1:-1, :]
@@ -184,10 +301,11 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         trunk_expanded = trunk_out.unsqueeze(0).expand(b, -1, -1, -1)
         trunk_expanded = trunk_expanded.reshape(b * axis * n_lines, m_points - 2, -1)
         combined = torch.bmm(trunk_expanded, branch_feat)
-        flux_tilde = combined.reshape(b, axis, n_lines, m_points - 2)
+        delta_tilde = combined.reshape(b, axis, n_lines, m_points - 2)
 
         norm_exp = rhs_norm.unsqueeze(-1)
-        raw_int = flux_tilde * norm_exp
+        delta_int = delta_tilde * norm_exp
+        raw_int = structured_int + delta_int
         projected_int = self._apply_balance_projection(raw_int, rhs_raw)
 
         projected_flux = torch.zeros(

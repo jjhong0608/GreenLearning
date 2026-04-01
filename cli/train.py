@@ -92,11 +92,6 @@ class TrainCLI:
             dataset_kwargs["test_path"] = Path(dataset_kwargs["test_path"])
         dataset_cfg = DatasetConfig(**dataset_kwargs)
 
-        # model_kwargs = dict(raw["model"])
-        # model_dtype = model_kwargs.pop("dtype", "float64")
-        # model_kwargs["dtype"] = getattr(torch, model_dtype)
-        # model_cfg = ModelConfig(**model_kwargs)
-        # training_cfg = TrainingConfig(**raw["training"])
         model_kwargs = dict(raw.get("model", {}))
         model_dtype = model_kwargs.pop("dtype", "float64")
         model_kwargs["dtype"] = getattr(torch, model_dtype)
