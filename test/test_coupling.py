@@ -305,7 +305,7 @@ def test_coupling_model_backprop_through_shared_encoder():
     assert _has_grad(model.trunk)
 
 
-def test_coupling_structured_baseline_uses_green_response_weights():
+def test_coupling_structured_baseline_uses_opposite_side_green_response_weight():
     cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
     green_kernel = _set_structured_baseline_context(
@@ -333,7 +333,7 @@ def test_coupling_structured_baseline_uses_green_response_weights():
 
     expected_rx = torch.tensor([[1.0]], dtype=torch.float64)
     expected_ry = torch.tensor([[2.0]], dtype=torch.float64)
-    expected_weight = expected_rx / (expected_rx + expected_ry + model.BASELINE_EPS)
+    expected_weight = expected_ry / (expected_rx + expected_ry + model.BASELINE_EPS)
     expected_phi = expected_weight.unsqueeze(-1) * rhs_raw[:, 0, :, 1:-1]
     expected_psi = (1.0 - expected_weight).unsqueeze(-1) * rhs_raw[:, 0, :, 1:-1]
 

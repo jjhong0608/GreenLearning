@@ -200,11 +200,13 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         Build the structured interior baseline
             phi_str = w * f,  psi_str = (1 - w) * f
         on the common interior intersection grid, then pack it back into the
-        current x-line / y-line tensor layout.
+        current x-line / y-line tensor layout. The split uses the opposite-side
+        Green-response weighting rule, so the x-flux baseline is weighted by the
+        y-line response norm and vice versa.
         """
         rx, ry = self._compute_green_response_norms(coords, rhs_raw)
         rhs_common = rhs_raw[:, 0, :, 1:-1]
-        weights = rx.unsqueeze(-1) / (
+        weights = ry.unsqueeze(-2) / (
             rx.unsqueeze(-1) + ry.unsqueeze(-2) + self.BASELINE_EPS
         )
         phi_str = weights * rhs_common
