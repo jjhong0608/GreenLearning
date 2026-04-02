@@ -61,8 +61,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
     The network ingests the full stack of axial lines per batch (both x- and y-lines),
     builds a structured baseline from Green-response L2 norms, predicts interior
-    correction terms, and applies the existing balance projection to the assembled
-    flux-divergence fields.
+    correction terms, projects only the residual `(1 - lambda)f` balance target,
+    and then re-injects the `lambda`-scaled structured baseline.
     """
 
     BASELINE_EPS = 1e-12
@@ -127,6 +127,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         )
         self.green_kernel: Optional[torch.Tensor] = None
         self.integration_rule: IntegrationRule = "simpson"
+        self.lambda_logit = nn.Parameter(torch.zeros((), dtype=config.dtype))
 
     def set_structured_baseline_context(
         self,
@@ -144,6 +145,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 "CouplingNet.set_structured_baseline_context(...) before forward()."
             )
         return self.green_kernel
+
+    def baseline_lambda(self) -> torch.Tensor:
+        return torch.sigmoid(self.lambda_logit)
 
     def _integrate_green_lines(
         self,
@@ -233,13 +237,12 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         return cast(torch.Tensor, self.branch_fuser_dropout(fused))
 
     def _apply_balance_projection(
-        self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
+        self, flux_int: torch.Tensor, rhs_target_int: torch.Tensor
     ) -> torch.Tensor:
         """Apply interior balance projection with a fixed 1/2 residual split."""
-        rhs_x_int = rhs_raw[:, 0, :, 1:-1]
         phi = flux_int[:, 0]
         psi_t = flux_int[:, 1].transpose(-1, -2)
-        res = rhs_x_int - (phi + psi_t)
+        res = rhs_target_int - (phi + psi_t)
 
         phi = phi + 0.5 * res
         psi_t = psi_t + 0.5 * res
@@ -269,8 +272,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_norm: (B, 2, n_lines) line-wise L2 norms
         Returns:
             projected_flux: (B, 2, n_lines, m_points) axial flux-divergence per
-                axis after assembling structured baseline plus learned correction
-                and applying the cross-axis balance projection with zero-padded
+                axis after projecting the residual `(1-lambda)f` contribution and
+                re-injecting the `lambda`-scaled structured baseline, with zero-padded
                 boundaries.
         """
         if (
@@ -307,16 +310,18 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
         norm_exp = rhs_norm.unsqueeze(-1)
         delta_int = delta_tilde * norm_exp
-        raw_int = structured_int + delta_int
-        projected_int = self._apply_balance_projection(raw_int, rhs_raw)
+        lambda_value = self.baseline_lambda()
+        rhs_target_int = (1.0 - lambda_value) * rhs_raw[:, 0, :, 1:-1]
+        projected_int = self._apply_balance_projection(delta_int, rhs_target_int)
+        final_int = projected_int + lambda_value * structured_int
 
         projected_flux = torch.zeros(
             b,
             axis,
             n_lines,
             m_points,
-            dtype=raw_int.dtype,
-            device=raw_int.device,
+            dtype=delta_int.dtype,
+            device=delta_int.device,
         )
-        projected_flux[:, :, :, 1:-1] = projected_int
+        projected_flux[:, :, :, 1:-1] = final_int
         return projected_flux

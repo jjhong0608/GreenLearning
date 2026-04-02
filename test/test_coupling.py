@@ -49,6 +49,13 @@ def _set_structured_baseline_context(
     return green_kernel
 
 
+def _set_baseline_lambda(model: CouplingNet, value: float) -> None:
+    with torch.no_grad():
+        model.lambda_logit.copy_(
+            torch.logit(torch.tensor(value, dtype=model.lambda_logit.dtype))
+        )
+
+
 class _DummyFluxModel(nn.Module):
     def __init__(self, projected_flux: torch.Tensor) -> None:
         super().__init__()
@@ -305,6 +312,21 @@ def test_coupling_model_backprop_through_shared_encoder():
     assert _has_grad(model.trunk)
 
 
+def test_coupling_has_bounded_global_baseline_lambda():
+    model = CouplingNet(CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2))
+
+    assert isinstance(model.lambda_logit, nn.Parameter)
+
+    _set_baseline_lambda(model, 0.2)
+    assert model.baseline_lambda().item() == pytest.approx(0.2)
+
+    _set_baseline_lambda(model, 0.8)
+    assert model.baseline_lambda().item() == pytest.approx(0.8)
+
+    lambda_value = model.baseline_lambda().item()
+    assert 0.0 < lambda_value < 1.0
+
+
 def test_coupling_structured_baseline_uses_opposite_side_green_response_weight():
     cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
@@ -364,6 +386,7 @@ def test_coupling_zero_correction_reduces_to_projected_structured_baseline():
         scale_x=1.0,
         scale_y=2.0,
     )
+    _set_baseline_lambda(model, 0.25)
     model.branch_a = _ZeroBranch(cfg.hidden_dim)
     model.branch_b = _ZeroBranch(cfg.hidden_dim)
     model.branch_c = _ZeroBranch(cfg.hidden_dim)
@@ -399,8 +422,11 @@ def test_coupling_zero_correction_reduces_to_projected_structured_baseline():
     )
 
     baseline_int = model._build_structured_baseline(coords, rhs_raw)
-    expected_phi = baseline_int[:, 0]
-    expected_psi = baseline_int[:, 1]
+    lambda_value = model.baseline_lambda()
+    projected_phi = 0.5 * (1.0 - lambda_value) * rhs_x_int
+    projected_psi = 0.5 * (1.0 - lambda_value) * rhs_x_int.transpose(-1, -2)
+    expected_phi = projected_phi + lambda_value * baseline_int[:, 0]
+    expected_psi = projected_psi + lambda_value * baseline_int[:, 1]
     assert torch.allclose(
         projected_flux[:, 0, :, 1:-1], expected_phi, atol=1e-12, rtol=1e-12
     )
@@ -489,13 +515,15 @@ def test_coupling_forward_calls_balance_projection():
     cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
     _set_structured_baseline_context(model, n_lines=1, m_points=3)
+    _set_baseline_lambda(model, 0.2)
     called = {"count": 0}
+    captured_target = {"value": None}
 
     def _fake_projection(
-        self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
+        self, flux_int: torch.Tensor, rhs_target_int: torch.Tensor
     ) -> torch.Tensor:
         called["count"] += 1
-        del rhs_raw
+        captured_target["value"] = rhs_target_int.clone()
         return flux_int
 
     model._apply_balance_projection = MethodType(_fake_projection, model)
@@ -515,7 +543,37 @@ def test_coupling_forward_calls_balance_projection():
     )
 
     assert called["count"] == 1
+    assert captured_target["value"] is not None
+    expected_target = (1.0 - model.baseline_lambda()) * vals[:, 0, :, 1:-1]
+    assert torch.allclose(captured_target["value"], expected_target)
     assert projected_flux.shape == (1, 2, 1, 3)
+
+
+def test_coupling_baseline_lambda_receives_gradients():
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    _set_structured_baseline_context(model, n_lines=1, m_points=3)
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    coords[0, 0, :, 0] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    coords[1, 0, :, 1] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    vals = torch.ones((1, 2, 1, 3), dtype=torch.float64)
+    rhs_norm = torch.ones((1, 2, 1), dtype=torch.float64)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=vals,
+        b_vals=vals,
+        c_vals=vals,
+        rhs_raw=vals,
+        rhs_tilde=vals,
+        rhs_norm=rhs_norm,
+    )
+    loss = projected_flux.square().sum()
+    loss.backward()
+
+    assert model.lambda_logit.grad is not None
+    assert torch.linalg.norm(model.lambda_logit.grad).item() > 0.0
 
 
 def test_coupling_trainer_runs(tmp_path):
