@@ -7,3 +7,5 @@ build/
 checkpoints/
 .venv/
 data/
+.idea/
+plots/
