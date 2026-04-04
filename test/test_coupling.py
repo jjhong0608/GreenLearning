@@ -327,43 +327,126 @@ def test_coupling_has_bounded_global_baseline_lambda():
     assert 0.0 < lambda_value < 1.0
 
 
-def test_coupling_structured_baseline_uses_opposite_side_green_response_weight():
+def test_coupling_computes_local_pointwise_green_responses_on_common_grid():
     cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
-    green_kernel = _set_structured_baseline_context(
+    _set_structured_baseline_context(
         model,
-        n_lines=1,
-        m_points=3,
+        n_lines=3,
+        m_points=5,
         scale_x=1.0,
         scale_y=2.0,
         integration_rule="trapezoid",
     )
 
-    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
-    axis = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
-    coords[0, 0, :, 0] = axis
-    coords[0, 0, :, 1] = 0.5
-    coords[1, 0, :, 0] = 0.5
-    coords[1, 0, :, 1] = axis
+    coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    axis = torch.linspace(0.0, 1.0, 5, dtype=torch.float64)
+    coords[0, :, :, 0] = axis.unsqueeze(0).expand(3, -1)
+    coords[0, :, :, 1] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 0] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 1] = axis.unsqueeze(0).expand(3, -1)
+    rhs_raw = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
 
-    rhs_raw = torch.zeros((1, 2, 1, 3), dtype=torch.float64)
-    rhs_raw[:, 0, 0, :] = torch.tensor([0.0, 2.0, 0.0], dtype=torch.float64)
-    rhs_raw[:, 1, 0, :] = torch.tensor([0.0, 2.0, 0.0], dtype=torch.float64)
+    response_x_lines = torch.tensor(
+        [
+            [
+                [10.0, 1.0, 2.0, 3.0, 20.0],
+                [11.0, 4.0, 5.0, 6.0, 21.0],
+                [12.0, 7.0, 8.0, 9.0, 22.0],
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    response_y_lines = torch.tensor(
+        [
+            [
+                [30.0, 13.0, 14.0, 15.0, 31.0],
+                [32.0, 16.0, 17.0, 18.0, 33.0],
+                [34.0, 19.0, 20.0, 21.0, 35.0],
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    integrate_seq = _sequential_integrator([response_x_lines, response_y_lines])
 
-    rx, ry = model._compute_green_response_norms(coords, rhs_raw)
+    def _fake_integrate_green_lines(
+        self,
+        green: torch.Tensor,
+        values: torch.Tensor,
+        axis_coords: torch.Tensor,
+    ) -> torch.Tensor:
+        return integrate_seq(green, values, axis_coords)
+
+    model._integrate_green_lines = MethodType(_fake_integrate_green_lines, model)
+
+    response_x_local, response_y_local = model._compute_local_green_response_fields(
+        coords, rhs_raw
+    )
+
+    assert torch.allclose(response_x_local, response_x_lines[:, :, 1:-1])
+    assert torch.allclose(
+        response_y_local, response_y_lines[:, :, 1:-1].transpose(-1, -2)
+    )
+
+
+def test_coupling_structured_baseline_uses_local_pointwise_smoothed_inverse_weight():
+    cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    _set_structured_baseline_context(model, n_lines=3, m_points=5, integration_rule="trapezoid")
+
+    coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    axis = torch.linspace(0.0, 1.0, 5, dtype=torch.float64)
+    coords[0, :, :, 0] = axis.unsqueeze(0).expand(3, -1)
+    coords[0, :, :, 1] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 0] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 1] = axis.unsqueeze(0).expand(3, -1)
+    rhs_raw = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    rhs_common = torch.tensor(
+        [[[2.0, 4.0, 6.0], [3.0, 5.0, 7.0], [1.0, 8.0, 9.0]]],
+        dtype=torch.float64,
+    )
+    rhs_raw[:, 0, :, 1:-1] = rhs_common
+    rhs_raw[:, 1, :, 1:-1] = rhs_common.transpose(-1, -2)
+
+    response_x_local = torch.tensor(
+        [[[0.0, 1.0, 2.0], [3.0, 4.0, 0.0], [1.5, 0.5, 2.5]]],
+        dtype=torch.float64,
+    )
+    response_y_local = torch.tensor(
+        [[[0.0, 5.0, 1.0], [2.0, 1.0, 4.0], [3.0, 2.5, 0.5]]],
+        dtype=torch.float64,
+    )
+
+    def _fake_local_responses(
+        self, coords: torch.Tensor, rhs_raw: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        del coords, rhs_raw
+        return response_x_local, response_y_local
+
+    model._compute_local_green_response_fields = MethodType(
+        _fake_local_responses, model
+    )
+
     baseline_int = model._build_structured_baseline(coords, rhs_raw)
 
-    expected_rx = torch.tensor([[1.0]], dtype=torch.float64)
-    expected_ry = torch.tensor([[2.0]], dtype=torch.float64)
-    expected_weight = expected_ry / (expected_rx + expected_ry + model.BASELINE_EPS)
-    expected_phi = expected_weight.unsqueeze(-1) * rhs_raw[:, 0, :, 1:-1]
-    expected_psi = (1.0 - expected_weight).unsqueeze(-1) * rhs_raw[:, 0, :, 1:-1]
+    assert model.BASELINE_EPS == pytest.approx(1e-12)
+    expected_mag_x = torch.sqrt(response_x_local.pow(2) + model.BASELINE_EPS**2)
+    expected_mag_y = torch.sqrt(response_y_local.pow(2) + model.BASELINE_EPS**2)
+    expected_weight = expected_mag_y / (expected_mag_x + expected_mag_y)
+    weight_with_old_denominator_eps = expected_mag_y / (
+        expected_mag_x + expected_mag_y + model.BASELINE_EPS
+    )
+    expected_phi = expected_weight * rhs_common
+    expected_psi_common = (1.0 - expected_weight) * rhs_common
 
-    assert green_kernel.shape == (2, 1, 3, 3)
-    assert torch.allclose(rx, expected_rx)
-    assert torch.allclose(ry, expected_ry)
+    assert expected_weight[0, 0, 0].item() == pytest.approx(0.5)
+    assert weight_with_old_denominator_eps[0, 0, 0].item() == pytest.approx(1.0 / 3.0)
+    assert not torch.allclose(expected_weight, weight_with_old_denominator_eps)
     assert torch.allclose(baseline_int[:, 0], expected_phi)
-    assert torch.allclose(baseline_int[:, 1], expected_psi.transpose(-1, -2))
+    assert torch.allclose(baseline_int[:, 1], expected_psi_common.transpose(-1, -2))
+    assert torch.allclose(
+        baseline_int[:, 0] + baseline_int[:, 1].transpose(-1, -2), rhs_common
+    )
 
 
 def test_coupling_zero_correction_reduces_to_projected_structured_baseline():
@@ -551,14 +634,29 @@ def test_coupling_forward_calls_balance_projection():
 
 def test_coupling_baseline_lambda_receives_gradients():
     torch.manual_seed(0)
-    cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
+    cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
-    _set_structured_baseline_context(model, n_lines=1, m_points=3)
-    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
-    coords[0, 0, :, 0] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
-    coords[1, 0, :, 1] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
-    vals = torch.ones((1, 2, 1, 3), dtype=torch.float64)
-    rhs_norm = torch.ones((1, 2, 1), dtype=torch.float64)
+    _set_structured_baseline_context(
+        model,
+        n_lines=3,
+        m_points=5,
+        scale_x=1.0,
+        scale_y=2.0,
+        integration_rule="trapezoid",
+    )
+    coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    axis = torch.linspace(0.0, 1.0, 5, dtype=torch.float64)
+    coords[0, :, :, 0] = axis.unsqueeze(0).expand(3, -1)
+    coords[0, :, :, 1] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 0] = torch.linspace(0.25, 0.75, 3, dtype=torch.float64).unsqueeze(-1)
+    coords[1, :, :, 1] = axis.unsqueeze(0).expand(3, -1)
+    vals = torch.ones((1, 2, 3, 5), dtype=torch.float64)
+    vals[:, 0, :, 1:-1] = torch.tensor(
+        [[[1.0, 2.0, 3.0], [0.5, 1.5, 2.5], [2.0, 0.25, 1.25]]],
+        dtype=torch.float64,
+    )
+    vals[:, 1, :, 1:-1] = vals[:, 0, :, 1:-1].transpose(-1, -2)
+    rhs_norm = torch.ones((1, 2, 3), dtype=torch.float64)
 
     projected_flux = model(
         coords=coords,

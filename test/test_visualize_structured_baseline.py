@@ -88,30 +88,72 @@ def test_visualizer_builds_inverse_structured_baseline_with_exact_green(
         dim=-1,
         rule=bundle.integration_rule,
     )
-    expected_rx = integrate(
-        response_x.pow(2),
-        x=bundle.x_axis,
-        dim=-1,
-        rule=bundle.integration_rule,
-    ).sqrt()
-    expected_ry = integrate(
-        response_y.pow(2),
-        x=bundle.y_axis,
-        dim=-1,
-        rule=bundle.integration_rule,
-    ).sqrt()
-    expected_weight = expected_ry.unsqueeze(0) / (
-        expected_rx.unsqueeze(1) + expected_ry.unsqueeze(0) + visualizer.BASELINE_EPS
+    expected_response_x_local = response_x[:, 1:-1]
+    expected_response_y_local = response_y[:, 1:-1].transpose(-1, -2)
+    expected_mag_x = torch.sqrt(
+        expected_response_x_local.pow(2) + visualizer.BASELINE_EPS**2
     )
+    expected_mag_y = torch.sqrt(
+        expected_response_y_local.pow(2) + visualizer.BASELINE_EPS**2
+    )
+    expected_weight = expected_mag_y / (expected_mag_x + expected_mag_y)
     rhs_common = bundle.rhs_x_lines[:, 1:-1]
     expected_phi = expected_weight * rhs_common
     expected_psi_y = ((1.0 - expected_weight) * rhs_common).transpose(-1, -2)
 
-    assert torch.allclose(bundle.response_norm_x, expected_rx)
-    assert torch.allclose(bundle.response_norm_y, expected_ry)
+    assert torch.allclose(bundle.response_x_local, expected_response_x_local)
+    assert torch.allclose(bundle.response_y_local, expected_response_y_local)
+    assert torch.allclose(bundle.magnitude_x, expected_mag_x)
+    assert torch.allclose(bundle.magnitude_y, expected_mag_y)
     assert torch.allclose(bundle.weight_grid, expected_weight)
     assert torch.allclose(bundle.phi_baseline_lines[:, 1:-1], expected_phi)
     assert torch.allclose(bundle.psi_baseline_lines[:, 1:-1], expected_psi_y)
+
+
+def test_visualizer_weight_omits_old_denominator_epsilon(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from visualize_structured_baseline import (
+        BaselineVisualizationConfig,
+        StructuredBaselineVisualizer,
+    )
+
+    monkeypatch.setattr(
+        "visualize_structured_baseline.TrainCLI.a_fun",
+        staticmethod(lambda x, y: torch.ones_like(x)),
+    )
+    npz_path = _write_sample_npz(tmp_path / "sample.npz")
+    visualizer = StructuredBaselineVisualizer(
+        BaselineVisualizationConfig(
+            npz_path=npz_path,
+            outdir=tmp_path / "out",
+            step_size=0.5,
+            n_points_per_line=3,
+            integration_rule="trapezoid",
+        )
+    )
+
+    response_x_local = torch.zeros((1, 1), dtype=torch.float64)
+    response_y_local = torch.zeros((1, 1), dtype=torch.float64)
+
+    expected_mag_x = torch.sqrt(response_x_local.pow(2) + visualizer.BASELINE_EPS**2)
+    expected_mag_y = torch.sqrt(response_y_local.pow(2) + visualizer.BASELINE_EPS**2)
+    expected_weight = expected_mag_y / (expected_mag_x + expected_mag_y)
+    weight_with_old_denominator_eps = expected_mag_y / (
+        expected_mag_x + expected_mag_y + visualizer.BASELINE_EPS
+    )
+
+    magnitude_x, magnitude_y = visualizer._compute_smoothed_response_magnitudes(
+        response_x_local, response_y_local
+    )
+    actual_weight = magnitude_y / (magnitude_x + magnitude_y)
+
+    assert torch.allclose(actual_weight, expected_weight)
+    assert actual_weight[0, 0] == torch.tensor(0.5, dtype=torch.float64)
+    assert weight_with_old_denominator_eps[0, 0] == torch.tensor(
+        1.0 / 3.0, dtype=torch.float64
+    )
+    assert not torch.allclose(actual_weight, weight_with_old_denominator_eps)
 
 
 def test_visualizer_run_writes_outputs(tmp_path: Path, monkeypatch) -> None:

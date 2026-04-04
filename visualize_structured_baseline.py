@@ -42,8 +42,10 @@ class StructuredBaselineBundle:
     a_y_lines: torch.Tensor
     response_x_lines: torch.Tensor
     response_y_lines: torch.Tensor
-    response_norm_x: torch.Tensor
-    response_norm_y: torch.Tensor
+    response_x_local: torch.Tensor
+    response_y_local: torch.Tensor
+    magnitude_x: torch.Tensor
+    magnitude_y: torch.Tensor
     weight_grid: torch.Tensor
     phi_baseline_grid: torch.Tensor
     psi_baseline_grid: torch.Tensor
@@ -130,6 +132,25 @@ class StructuredBaselineComputationMixin:
         padded[:, 1:-1] = interior
         return padded
 
+    def _compute_local_green_response_fields(
+        self,
+        response_x_lines: torch.Tensor,
+        response_y_lines: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        response_x_local = response_x_lines[:, 1:-1]
+        response_y_local = response_y_lines[:, 1:-1].transpose(-1, -2)
+        return response_x_local, response_y_local
+
+    def _compute_smoothed_response_magnitudes(
+        self,
+        response_x_local: torch.Tensor,
+        response_y_local: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        delta = self.BASELINE_EPS
+        magnitude_x = torch.sqrt(response_x_local.pow(2) + delta**2)
+        magnitude_y = torch.sqrt(response_y_local.pow(2) + delta**2)
+        return magnitude_x, magnitude_y
+
     def _build_bundle(self) -> StructuredBaselineBundle:
         dataset = self._build_dataset()
         sample_index = self._resolve_sample_index(dataset)
@@ -164,25 +185,15 @@ class StructuredBaselineComputationMixin:
         response_y_lines = self._integrate_green_lines(
             green_y, rhs_y_lines, y_axis, self.config.integration_rule
         )
-        response_norm_x = integrate(
-            response_x_lines.pow(2),
-            x=x_axis,
-            dim=-1,
-            rule=self.config.integration_rule,
-        ).sqrt()
-        response_norm_y = integrate(
-            response_y_lines.pow(2),
-            x=y_axis,
-            dim=-1,
-            rule=self.config.integration_rule,
-        ).sqrt()
+        response_x_local, response_y_local = self._compute_local_green_response_fields(
+            response_x_lines, response_y_lines
+        )
+        magnitude_x, magnitude_y = self._compute_smoothed_response_magnitudes(
+            response_x_local, response_y_local
+        )
 
         rhs_common = rhs_x_lines[:, 1:-1]
-        weight_grid = response_norm_y.unsqueeze(0) / (
-            response_norm_x.unsqueeze(1)
-            + response_norm_y.unsqueeze(0)
-            + self.BASELINE_EPS
-        )
+        weight_grid = magnitude_y / (magnitude_x + magnitude_y)
         phi_baseline_grid = weight_grid * rhs_common
         psi_baseline_grid = (1.0 - weight_grid) * rhs_common
 
@@ -205,8 +216,10 @@ class StructuredBaselineComputationMixin:
             a_y_lines=a_y_lines,
             response_x_lines=response_x_lines,
             response_y_lines=response_y_lines,
-            response_norm_x=response_norm_x,
-            response_norm_y=response_norm_y,
+            response_x_local=response_x_local,
+            response_y_local=response_y_local,
+            magnitude_x=magnitude_x,
+            magnitude_y=magnitude_y,
             weight_grid=weight_grid,
             phi_baseline_grid=phi_baseline_grid,
             psi_baseline_grid=psi_baseline_grid,
@@ -375,7 +388,8 @@ class StructuredBaselineVisualizer(
             bundle.rhs_y_lines.shape[0],
         )
         self.logger.info(
-            "Using inverse structured baseline weighting with exact Green responses and TrainCLI.a_fun coefficients."
+            "Using local pointwise smoothed inverse structured baseline weighting with exact Green responses, fixed delta=%s, and TrainCLI.a_fun coefficients.",
+            self.BASELINE_EPS,
         )
         correction_x_lines = bundle.flux_x_lines[:, 1:-1] - bundle.phi_baseline_lines[:, 1:-1]
         correction_y_lines = bundle.flux_y_lines[:, 1:-1] - bundle.psi_baseline_lines[:, 1:-1]
@@ -432,8 +446,9 @@ class StructuredBaselineVisualizationCLI:
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(
             description=(
-                "Visualize CouplingNet's inverse structured baseline on axial lines "
-                "using ExactGreenFunction and the current coefficient in cli/train.py."
+                "Visualize CouplingNet's local pointwise smoothed inverse structured "
+                "baseline on axial lines using ExactGreenFunction and the current "
+                "coefficient in cli/train.py."
             )
         )
         parser.add_argument("--npz-path", type=Path, required=True, help="Input .npz file.")
@@ -459,7 +474,7 @@ class StructuredBaselineVisualizationCLI:
             "--integration-rule",
             choices=("simpson", "trapezoid"),
             default="simpson",
-            help="Quadrature rule used for Green responses and response L2 norms.",
+            help="Quadrature rule used for exact Green responses.",
         )
         self.parser = parser
 

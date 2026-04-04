@@ -60,11 +60,13 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
     """Axial branch/trunk model with structured baseline plus learned correction.
 
     The network ingests the full stack of axial lines per batch (both x- and y-lines),
-    builds a structured baseline from Green-response L2 norms, predicts interior
-    correction terms, projects only the residual `(1 - lambda)f` balance target,
-    and then re-injects the `lambda`-scaled structured baseline.
+    builds a structured baseline from local pointwise Green responses with fixed
+    delta smoothing, predicts interior correction terms, projects only the residual
+    `(1 - lambda)f` balance target, and then re-injects the `lambda`-scaled
+    structured baseline.
     """
 
+    # Reuse the previous baseline epsilon value as the fixed smoothing delta.
     BASELINE_EPS = 1e-12
 
     def __init__(self, config: CouplingModelConfig) -> None:
@@ -163,7 +165,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rule=self.integration_rule,
         )
 
-    def _compute_green_response_norms(
+    def _compute_local_green_response_fields(
         self,
         coords: torch.Tensor,
         rhs_raw: torch.Tensor,
@@ -180,20 +182,19 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
         response_x = self._integrate_green_lines(green_kernel[0], rhs_raw[:, 0], x_axis)
         response_y = self._integrate_green_lines(green_kernel[1], rhs_raw[:, 1], y_axis)
+        response_x_local = response_x[:, :, 1:-1]
+        response_y_local = response_y[:, :, 1:-1].transpose(-1, -2)
+        return response_x_local, response_y_local
 
-        rx = integrate(
-            response_x.pow(2),
-            x=x_axis,
-            dim=-1,
-            rule=self.integration_rule,
-        ).sqrt()
-        ry = integrate(
-            response_y.pow(2),
-            x=y_axis,
-            dim=-1,
-            rule=self.integration_rule,
-        ).sqrt()
-        return rx, ry
+    def _compute_smoothed_response_magnitudes(
+        self,
+        response_x_local: torch.Tensor,
+        response_y_local: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        delta = self.BASELINE_EPS
+        magnitude_x = torch.sqrt(response_x_local.pow(2) + delta**2)
+        magnitude_y = torch.sqrt(response_y_local.pow(2) + delta**2)
+        return magnitude_x, magnitude_y
 
     def _build_structured_baseline(
         self,
@@ -204,15 +205,18 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         Build the structured interior baseline
             phi_str = w * f,  psi_str = (1 - w) * f
         on the common interior intersection grid, then pack it back into the
-        current x-line / y-line tensor layout. The split uses the opposite-side
-        Green-response weighting rule, so the x-flux baseline is weighted by the
-        y-line response norm and vice versa.
+        current x-line / y-line tensor layout. The split uses local pointwise
+        Green responses with fixed delta smoothing, so the x-flux baseline is
+        weighted by the opposite-side y-response magnitude and vice versa.
         """
-        rx, ry = self._compute_green_response_norms(coords, rhs_raw)
-        rhs_common = rhs_raw[:, 0, :, 1:-1]
-        weights = ry.unsqueeze(-2) / (
-            rx.unsqueeze(-1) + ry.unsqueeze(-2) + self.BASELINE_EPS
+        response_x_local, response_y_local = self._compute_local_green_response_fields(
+            coords, rhs_raw
         )
+        magnitude_x, magnitude_y = self._compute_smoothed_response_magnitudes(
+            response_x_local, response_y_local
+        )
+        rhs_common = rhs_raw[:, 0, :, 1:-1]
+        weights = magnitude_y / (magnitude_x + magnitude_y)
         phi_str = weights * rhs_common
         psi_str = (1.0 - weights) * rhs_common
         return torch.stack((phi_str, psi_str.transpose(-1, -2)), dim=1)
