@@ -194,8 +194,9 @@ class StructuredBaselineComputationMixin:
 
         rhs_common = rhs_x_lines[:, 1:-1]
         weight_grid = magnitude_y / (magnitude_x + magnitude_y)
-        phi_baseline_grid = weight_grid * rhs_common
-        psi_baseline_grid = (1.0 - weight_grid) * rhs_common
+        centered = (weight_grid - 0.5) * rhs_common
+        phi_baseline_grid = centered
+        psi_baseline_grid = -centered
 
         phi_baseline_lines = self._pad_interior_lines(phi_baseline_grid, x_axis.numel())
         psi_baseline_lines = self._pad_interior_lines(
@@ -307,7 +308,7 @@ class StructuredBaselinePlotMixin:
                     x=coords_np,
                     y=baseline_lines_int[idx].cpu().numpy(),
                     mode="lines",
-                    name="structured baseline",
+                    name="centered structured baseline",
                     line=dict(color="#2ca02c", width=2, dash="dash"),
                     showlegend=idx == 0,
                 ),
@@ -335,7 +336,7 @@ class StructuredBaselinePlotMixin:
             height=max(420 * n_rows, 500),
             title=(
                 f"{axis_name.upper()}-axial lines: interior rhs, exact flux-divergence, "
-                "structured baseline, and correction"
+                "centered structured baseline, and correction"
             ),
             font=self._font(),
             legend=dict(orientation="h"),
@@ -388,7 +389,7 @@ class StructuredBaselineVisualizer(
             bundle.rhs_y_lines.shape[0],
         )
         self.logger.info(
-            "Using local pointwise smoothed inverse structured baseline weighting with exact Green responses, fixed delta=%s, and TrainCLI.a_fun coefficients.",
+            "Using local pointwise smoothed inverse weighting with exact Green responses, fixed delta=%s, and centered structured baseline fields from TrainCLI.a_fun coefficients.",
             self.BASELINE_EPS,
         )
         correction_x_lines = bundle.flux_x_lines[:, 1:-1] - bundle.phi_baseline_lines[:, 1:-1]
@@ -425,7 +426,7 @@ class StructuredBaselineVisualizer(
         self._save_figure(weight_fig, self.config.outdir / "structured_baseline_weight")
 
         phi_fig = self._build_heatmap_figure(
-            title="Structured baseline phi_str on the interior grid",
+            title="Centered structured baseline Delta_phi_str on the interior grid",
             grid=bundle.phi_baseline_grid,
             x_positions=bundle.y_line_positions,
             y_positions=bundle.x_line_positions,
@@ -433,7 +434,7 @@ class StructuredBaselineVisualizer(
         self._save_figure(phi_fig, self.config.outdir / "structured_baseline_phi")
 
         psi_fig = self._build_heatmap_figure(
-            title="Structured baseline psi_str on the interior grid",
+            title="Centered structured baseline Delta_psi_str on the interior grid",
             grid=bundle.psi_baseline_grid,
             x_positions=bundle.y_line_positions,
             y_positions=bundle.x_line_positions,
@@ -446,9 +447,9 @@ class StructuredBaselineVisualizationCLI:
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(
             description=(
-                "Visualize CouplingNet's local pointwise smoothed inverse structured "
-                "baseline on axial lines using ExactGreenFunction and the current "
-                "coefficient in cli/train.py."
+                "Visualize CouplingNet's centered local pointwise smoothed inverse "
+                "structured baseline on axial lines using ExactGreenFunction and the "
+                "current coefficient in cli/train.py."
             )
         )
         parser.add_argument("--npz-path", type=Path, required=True, help="Input .npz file.")

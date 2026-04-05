@@ -12,7 +12,6 @@ from torch.nn.functional import pad
 from greenonet.compile_utils import (
     maybe_compile_model,
     model_state_dict_for_save,
-    unwrap_compiled_model,
 )
 from greenonet.coupling_model import CouplingNet
 from greenonet.config import (
@@ -327,12 +326,6 @@ class CouplingTrainer(LoggingMixin):
     def _build_optimizer(self, optimization_cfg: CouplingTrainingConfig) -> optim.Adam:
         return optim.Adam(self.model.parameters(), lr=optimization_cfg.learning_rate)
 
-    def _current_baseline_lambda(self) -> float:
-        base_model = unwrap_compiled_model(self.model)
-        if isinstance(base_model, CouplingNet):
-            return float(base_model.baseline_lambda().detach().item())
-        return float("nan")
-
     def _build_scheduler(
         self,
         optimization_cfg: CouplingTrainingConfig,
@@ -487,7 +480,7 @@ class CouplingTrainer(LoggingMixin):
                     (
                         "epoch %s | train loss=%.4e cons=%.4e flux_cons=%.4e "
                         "rel_flux=%.4e rel_sol=%.4e | lam_flux=%.4e flux_on=%s "
-                        "lam_base=%.4e | lr=%.4e | val cons=%.4e flux_cons=%.4e "
+                        "| lr=%.4e | val cons=%.4e flux_cons=%.4e "
                         "rel_flux=%.4e rel_sol=%.4e"
                     ),
                     epoch,
@@ -498,7 +491,6 @@ class CouplingTrainer(LoggingMixin):
                     train_metrics["rel_sol"],
                     self.config.lambda_flux_consistency,
                     self.config.flux_consistency_enabled,
-                    self._current_baseline_lambda(),
                     current_lr,
                     val_metrics["loss_cons"],
                     val_metrics["loss_flux_consistency"],

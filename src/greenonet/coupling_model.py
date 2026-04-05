@@ -60,10 +60,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
     """Axial branch/trunk model with structured baseline plus learned correction.
 
     The network ingests the full stack of axial lines per batch (both x- and y-lines),
-    builds a structured baseline from local pointwise Green responses with fixed
-    delta smoothing, predicts interior correction terms, projects only the residual
-    `(1 - lambda)f` balance target, and then re-injects the `lambda`-scaled
-    structured baseline.
+    builds a centered structured baseline from local pointwise Green responses with
+    fixed delta smoothing, predicts interior correction terms, projects them to the
+    full `f` balance target, and then adds the zero-sum centered structured term.
     """
 
     # Reuse the previous baseline epsilon value as the fixed smoothing delta.
@@ -129,7 +128,6 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         )
         self.green_kernel: Optional[torch.Tensor] = None
         self.integration_rule: IntegrationRule = "simpson"
-        self.lambda_logit = nn.Parameter(torch.zeros((), dtype=config.dtype))
 
     def set_structured_baseline_context(
         self,
@@ -147,9 +145,6 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 "CouplingNet.set_structured_baseline_context(...) before forward()."
             )
         return self.green_kernel
-
-    def baseline_lambda(self) -> torch.Tensor:
-        return torch.sigmoid(self.lambda_logit)
 
     def _integrate_green_lines(
         self,
@@ -202,12 +197,13 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         rhs_raw: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Build the structured interior baseline
-            phi_str = w * f,  psi_str = (1 - w) * f
+        Build the centered structured interior baseline
+            Delta_phi_str = (w - 1/2) * f
+            Delta_psi_str = -(w - 1/2) * f
         on the common interior intersection grid, then pack it back into the
-        current x-line / y-line tensor layout. The split uses local pointwise
-        Green responses with fixed delta smoothing, so the x-flux baseline is
-        weighted by the opposite-side y-response magnitude and vice versa.
+        current x-line / y-line tensor layout. The split asymmetry uses local
+        pointwise Green responses with fixed delta smoothing, while the centered
+        baseline itself sums to zero so projection still handles the full balance.
         """
         response_x_local, response_y_local = self._compute_local_green_response_fields(
             coords, rhs_raw
@@ -217,9 +213,12 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         )
         rhs_common = rhs_raw[:, 0, :, 1:-1]
         weights = magnitude_y / (magnitude_x + magnitude_y)
-        phi_str = weights * rhs_common
-        psi_str = (1.0 - weights) * rhs_common
-        return torch.stack((phi_str, psi_str.transpose(-1, -2)), dim=1)
+        centered = (weights - 0.5) * rhs_common
+        delta_phi_str = centered
+        delta_psi_str = -centered
+        return torch.stack(
+            (delta_phi_str, delta_psi_str.transpose(-1, -2)), dim=1
+        )
 
     def _fuse_branch_features(
         self,
@@ -276,9 +275,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_norm: (B, 2, n_lines) line-wise L2 norms
         Returns:
             projected_flux: (B, 2, n_lines, m_points) axial flux-divergence per
-                axis after projecting the residual `(1-lambda)f` contribution and
-                re-injecting the `lambda`-scaled structured baseline, with zero-padded
-                boundaries.
+                axis after projecting the raw learned correction to the full `f`
+                balance target and then adding the centered zero-sum structured
+                baseline, with zero-padded boundaries.
         """
         if (
             coords.dim() != 4
@@ -314,10 +313,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
         norm_exp = rhs_norm.unsqueeze(-1)
         delta_int = delta_tilde * norm_exp
-        lambda_value = self.baseline_lambda()
-        rhs_target_int = (1.0 - lambda_value) * rhs_raw[:, 0, :, 1:-1]
+        rhs_target_int = rhs_raw[:, 0, :, 1:-1]
         projected_int = self._apply_balance_projection(delta_int, rhs_target_int)
-        final_int = projected_int + lambda_value * structured_int
+        final_int = projected_int + structured_int
 
         projected_flux = torch.zeros(
             b,

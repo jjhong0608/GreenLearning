@@ -49,7 +49,7 @@ def test_visualizer_uses_train_cli_coefficient_function(
     assert torch.allclose(bundle.a_y_lines, torch.full_like(bundle.a_y_lines, 2.0))
 
 
-def test_visualizer_builds_inverse_structured_baseline_with_exact_green(
+def test_visualizer_builds_centered_structured_baseline_with_exact_green(
     tmp_path: Path, monkeypatch
 ) -> None:
     from visualize_structured_baseline import (
@@ -98,8 +98,8 @@ def test_visualizer_builds_inverse_structured_baseline_with_exact_green(
     )
     expected_weight = expected_mag_y / (expected_mag_x + expected_mag_y)
     rhs_common = bundle.rhs_x_lines[:, 1:-1]
-    expected_phi = expected_weight * rhs_common
-    expected_psi_y = ((1.0 - expected_weight) * rhs_common).transpose(-1, -2)
+    expected_phi = (expected_weight - 0.5) * rhs_common
+    expected_psi_y = (-expected_phi).transpose(-1, -2)
 
     assert torch.allclose(bundle.response_x_local, expected_response_x_local)
     assert torch.allclose(bundle.response_y_local, expected_response_y_local)
@@ -108,6 +108,11 @@ def test_visualizer_builds_inverse_structured_baseline_with_exact_green(
     assert torch.allclose(bundle.weight_grid, expected_weight)
     assert torch.allclose(bundle.phi_baseline_lines[:, 1:-1], expected_phi)
     assert torch.allclose(bundle.psi_baseline_lines[:, 1:-1], expected_psi_y)
+    assert torch.allclose(
+        bundle.phi_baseline_lines[:, 1:-1]
+        + bundle.psi_baseline_lines[:, 1:-1].transpose(-1, -2),
+        torch.zeros_like(rhs_common),
+    )
 
 
 def test_visualizer_weight_omits_old_denominator_epsilon(
@@ -200,7 +205,7 @@ def test_visualizer_run_writes_outputs(tmp_path: Path, monkeypatch) -> None:
     assert (outdir / "visualize_structured_baseline.log").exists()
 
 
-def test_visualizer_line_figure_uses_interior_points_and_correction_trace(
+def test_visualizer_line_figure_uses_interior_points_and_centered_baseline_trace(
     tmp_path: Path, monkeypatch
 ) -> None:
     from visualize_structured_baseline import (
@@ -238,7 +243,7 @@ def test_visualizer_line_figure_uses_interior_points_and_correction_trace(
     assert len(fig.data) == 4
     assert fig.data[0].name == "rhs"
     assert fig.data[1].name == "exact flux-div"
-    assert fig.data[2].name == "structured baseline"
+    assert fig.data[2].name == "centered structured baseline"
     assert fig.data[3].name == "correction"
     assert np.allclose(fig.data[0].x, bundle.x_axis[1:-1].cpu().numpy())
     assert np.allclose(fig.data[0].y, bundle.rhs_x_lines[0, 1:-1].cpu().numpy())
