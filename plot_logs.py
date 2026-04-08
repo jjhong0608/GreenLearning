@@ -23,38 +23,23 @@ def _parse_bool(value: str | None) -> float:
     return 1.0 if value.lower() == "true" else 0.0
 
 
-def _compute_val_loss(cons_val: float, flux_cons_val: float, lam_flux: float, flux_on: float) -> float:
-    if cons_val != cons_val:
-        return float("nan")
-    if flux_on == 1.0 and lam_flux == lam_flux and flux_cons_val == flux_cons_val:
-        return cons_val + lam_flux * flux_cons_val
-    return cons_val
-
-
 def parse_log(path: Path) -> Dict[str, List[float]]:
     """Parse current CouplingNet training logs into epoch-aligned metric series."""
     pattern_epoch = re.compile(
         rf"epoch\s+(?P<epoch>\d+).*?\|\s*train\s+loss=(?P<loss_tr>{VALUE_RE})"
-        rf"\s+cons=(?P<cons_tr>{VALUE_RE})"
-        rf"(?:\s+flux_cons=(?P<flux_cons_tr>{VALUE_RE}))?"
+        rf"\s+l2_cons=(?P<l2_cons_tr>{VALUE_RE})"
+        rf"\s+flux_cons=(?P<flux_cons_tr>{VALUE_RE})"
+        rf"\s+cross_cons=(?P<cross_cons_tr>{VALUE_RE})"
         rf"\s+rel_flux=(?P<rflux_tr>{VALUE_RE})"
         rf"\s+rel_sol=(?P<rsol_tr>{VALUE_RE})"
-        rf"(?:\s*\|\s*lam_flux=(?P<lam_flux>{VALUE_RE})\s+flux_on=(?P<flux_on>True|False))?"
+        rf"\s*\|\s*w_l2=(?P<w_l2>{VALUE_RE})\s+on_l2=(?P<on_l2>True|False)"
+        rf"\s+w_flux=(?P<w_flux>{VALUE_RE})\s+on_flux=(?P<on_flux>True|False)"
+        rf"\s+w_cross=(?P<w_cross>{VALUE_RE})\s+on_cross=(?P<on_cross>True|False)"
         rf"(?:\s*\|\s*lr=(?P<lr>{VALUE_RE}))?"
-        rf"(?:\s*\|\s*val\s+cons=(?P<cons_val>{VALUE_RE})"
-        rf"(?:\s+flux_cons=(?P<flux_cons_val>{VALUE_RE}))?"
-        rf"\s+rel_flux=(?P<rflux_val>{VALUE_RE})"
-        rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE}))?",
-        re.IGNORECASE,
-    )
-    pattern_lbfgs = re.compile(
-        rf"(?:coupling\s+)?lbfgs\s+epoch\s+(?P<epoch>\d+).*?loss:\s*(?P<loss_tr>{VALUE_RE})"
-        rf".*?cons=(?P<cons_tr>{VALUE_RE})"
-        rf"(?:\s+flux_cons=(?P<flux_cons_tr>{VALUE_RE}))?"
-        rf".*?rel_flux=(?P<rflux_tr>{VALUE_RE})"
-        rf".*?rel_sol=(?P<rsol_tr>{VALUE_RE})"
-        rf"(?:.*?\|\s*val\s+cons=(?P<cons_val>{VALUE_RE})"
-        rf"(?:\s+flux_cons=(?P<flux_cons_val>{VALUE_RE}))?"
+        rf"(?:\s*\|\s*val\s+loss=(?P<loss_val>{VALUE_RE})"
+        rf"\s+l2_cons=(?P<l2_cons_val>{VALUE_RE})"
+        rf"\s+flux_cons=(?P<flux_cons_val>{VALUE_RE})"
+        rf"\s+cross_cons=(?P<cross_cons_val>{VALUE_RE})"
         rf"\s+rel_flux=(?P<rflux_val>{VALUE_RE})"
         rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE}))?",
         re.IGNORECASE,
@@ -64,48 +49,54 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
     for line in path.read_text().splitlines():
         match = pattern_epoch.search(line)
         if match is None:
-            match = pattern_lbfgs.search(line)
-        if match is None:
             continue
 
-        cons_val = _parse_float(match.group("cons_val"))
-        flux_cons_val = _parse_float(match.group("flux_cons_val"))
-        lam_flux = _parse_float(match.group("lam_flux"), default=0.0)
-        flux_on = _parse_bool(match.group("flux_on"))
         entries.append(
             {
                 "raw_epoch": float(match.group("epoch")),
                 "loss_train": _parse_float(match.group("loss_tr")),
-                "cons_train": _parse_float(match.group("cons_tr")),
-                "flux_cons_train": _parse_float(match.group("flux_cons_tr"), default=0.0),
+                "l2_cons_train": _parse_float(match.group("l2_cons_tr")),
+                "flux_cons_train": _parse_float(match.group("flux_cons_tr")),
+                "cross_cons_train": _parse_float(match.group("cross_cons_tr")),
                 "rel_flux_train": _parse_float(match.group("rflux_tr")),
                 "rel_sol_train": _parse_float(match.group("rsol_tr")),
-                "loss_val": _compute_val_loss(cons_val, flux_cons_val, lam_flux, flux_on),
-                "cons_val": cons_val,
-                "flux_cons_val": flux_cons_val,
+                "loss_val": _parse_float(match.group("loss_val")),
+                "l2_cons_val": _parse_float(match.group("l2_cons_val")),
+                "flux_cons_val": _parse_float(match.group("flux_cons_val")),
+                "cross_cons_val": _parse_float(match.group("cross_cons_val")),
                 "rel_flux_val": _parse_float(match.group("rflux_val")),
                 "rel_sol_val": _parse_float(match.group("rsol_val")),
                 "lr": _parse_float(match.group("lr")),
-                "lam_flux": lam_flux,
-                "flux_on": flux_on,
+                "w_l2": _parse_float(match.group("w_l2")),
+                "on_l2": _parse_bool(match.group("on_l2")),
+                "w_flux": _parse_float(match.group("w_flux")),
+                "on_flux": _parse_bool(match.group("on_flux")),
+                "w_cross": _parse_float(match.group("w_cross")),
+                "on_cross": _parse_bool(match.group("on_cross")),
             }
         )
 
     metrics: Dict[str, List[float]] = {
         "epoch": [],
         "loss_train": [],
-        "cons_train": [],
+        "l2_cons_train": [],
         "flux_cons_train": [],
+        "cross_cons_train": [],
         "rel_flux_train": [],
         "rel_sol_train": [],
         "loss_val": [],
-        "cons_val": [],
+        "l2_cons_val": [],
         "flux_cons_val": [],
+        "cross_cons_val": [],
         "rel_flux_val": [],
         "rel_sol_val": [],
         "lr": [],
-        "lam_flux": [],
-        "flux_on": [],
+        "w_l2": [],
+        "on_l2": [],
+        "w_flux": [],
+        "on_flux": [],
+        "w_cross": [],
+        "on_cross": [],
     }
 
     offset = 0.0
@@ -145,18 +136,20 @@ def make_fig_losses(data_by_log: Dict[str, Dict[str, List[float]]], font: Dict) 
     fig = go.Figure()
     colors = {
         "loss": "#1f77b4",
-        "cons": "#d62728",
+        "l2_cons": "#d62728",
         "flux_cons": "#2ca02c",
+        "cross_cons": "#ff7f0e",
     }
     labels = {
         "loss": "Total Loss",
-        "cons": "Consistency",
+        "l2_cons": "L2 Consistency",
         "flux_cons": "Flux Consistency",
+        "cross_cons": "Cross Consistency",
     }
 
     for log_name, metrics in data_by_log.items():
         epochs = metrics["epoch"]
-        for key in ("loss", "cons", "flux_cons"):
+        for key in ("loss", "l2_cons", "flux_cons", "cross_cons"):
             for split, dash in (("train", "solid"), ("val", "dot")):
                 metric_key = f"{key}_{split}"
                 if metric_key not in metrics:

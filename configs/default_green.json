@@ -1,6 +1,6 @@
 {
   "dataset": {
-    "step_size": 0.0625,
+    "step_size": 0.00390625,
     "n_points_per_line": 129,
     "samples_per_line": 50,
     "validation_samples_per_line": 10,
@@ -31,7 +31,7 @@
     "use_green": true,
     "branch_input_dim": 129,
     "use_fourier": true,
-    "fourier_dim": 64,
+    "fourier_dim": 32,
     "dtype": "float64"
   },
   "training": {

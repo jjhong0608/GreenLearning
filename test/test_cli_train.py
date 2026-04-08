@@ -2,6 +2,8 @@ import json
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from greenonet.model import GreenONetModel
 from cli.train import TrainCLI
 
@@ -104,8 +106,20 @@ class TestTrainCLIDatasetConfig:
             "coupling_model": {},
             "coupling_training": {
                 "integration_rule": "trapezoid",
-                "flux_consistency_enabled": True,
-                "lambda_flux_consistency": 0.25,
+                "losses": {
+                    "l2_consistency": {
+                        "enabled": True,
+                        "weight": 1.5,
+                    },
+                    "flux_consistency": {
+                        "enabled": True,
+                        "weight": 0.25,
+                    },
+                    "cross_consistency": {
+                        "enabled": False,
+                        "weight": 2.0,
+                    },
+                },
                 "learning_rate": 5e-4,
                 "epochs": 11,
                 "use_lr_schedule": True,
@@ -138,8 +152,12 @@ class TestTrainCLIDatasetConfig:
         assert training_cfg.integration_rule == "trapezoid"
         assert training_cfg.compile.enabled is True
         assert coupling_training_cfg.integration_rule == "trapezoid"
-        assert coupling_training_cfg.flux_consistency_enabled is True
-        assert coupling_training_cfg.lambda_flux_consistency == 0.25
+        assert coupling_training_cfg.losses.l2_consistency.enabled is True
+        assert coupling_training_cfg.losses.l2_consistency.weight == 1.5
+        assert coupling_training_cfg.losses.flux_consistency.enabled is True
+        assert coupling_training_cfg.losses.flux_consistency.weight == 0.25
+        assert coupling_training_cfg.losses.cross_consistency.enabled is False
+        assert coupling_training_cfg.losses.cross_consistency.weight == 2.0
         assert coupling_training_cfg.learning_rate == 5e-4
         assert coupling_training_cfg.epochs == 11
         assert coupling_training_cfg.use_lr_schedule is True
@@ -153,3 +171,21 @@ class TestTrainCLIDatasetConfig:
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
         assert not hasattr(coupling_model_cfg, "fourier_include_input")
+
+    def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {},
+            "coupling_training": {
+                "lambda_consistency": 1.0,
+                "lambda_flux_consistency": 0.25,
+            },
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="deprecated flat coupling loss"):
+            TrainCLI()._build_configs(config_path)

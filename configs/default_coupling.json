@@ -16,7 +16,7 @@
     "dtype": "float64"
   },
   "coupling_model": {
-    "hidden_dim": 128,
+    "hidden_dim": 256,
     "depth": 4,
     "activation": "rational",
     "use_bias": true,
@@ -29,9 +29,20 @@
     "batch_size": 200,
     "log_interval": 1,
     "device": "cuda:1",
-    "lambda_consistency": 1.0,
-    "flux_consistency_enabled": true,
-    "lambda_flux_consistency": 0.01,
+    "losses": {
+      "l2_consistency": {
+        "enabled": true,
+        "weight": 1.0
+      },
+      "flux_consistency": {
+        "enabled": true,
+        "weight": 1.0
+      },
+      "cross_consistency": {
+        "enabled": true,
+        "weight": 1.0
+      }
+    },
     "integration_rule": "trapezoid",
     "epochs": 3000,
     "learning_rate": 0.001,

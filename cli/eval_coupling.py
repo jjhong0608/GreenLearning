@@ -12,6 +12,8 @@ from torch import Tensor
 from greenonet.config import (
     CompileConfig,
     CouplingBestRelSolCheckpointConfig,
+    CouplingLossesConfig,
+    CouplingLossTermConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
     CouplingTrainingConfig,
@@ -98,9 +100,27 @@ class EvalCouplingCLI:
         raw_training: dict[str, object],
     ) -> CouplingTrainingConfig:
         coupling_training_kwargs = dict(raw_training)
+        deprecated_loss_keys = {
+            "lambda_consistency",
+            "flux_consistency_enabled",
+            "lambda_flux_consistency",
+        }
+        found_deprecated = sorted(
+            key for key in deprecated_loss_keys if key in coupling_training_kwargs
+        )
+        if found_deprecated:
+            raise TypeError(
+                "deprecated flat coupling loss config is not supported; use "
+                "coupling_training.losses.* instead "
+                f"({', '.join(found_deprecated)})."
+            )
+        losses_raw = coupling_training_kwargs.pop("losses", None)
         compile_raw = coupling_training_kwargs.pop("compile", None)
         periodic_raw = coupling_training_kwargs.pop("periodic_checkpoint", None)
         best_rel_sol_raw = coupling_training_kwargs.pop("best_rel_sol_checkpoint", None)
+        losses_cfg = EvalCouplingCLI._build_coupling_losses_config(
+            losses_raw, "coupling_training"
+        )
         compile_cfg = EvalCouplingCLI._build_compile_config(compile_raw, "coupling_training")
         if periodic_raw is None:
             periodic_cfg = CouplingPeriodicCheckpointConfig()
@@ -117,11 +137,36 @@ class EvalCouplingCLI:
                 "coupling_training.best_rel_sol_checkpoint must be an object."
             )
         return CouplingTrainingConfig(
+            losses=losses_cfg,
             compile=compile_cfg,
             periodic_checkpoint=periodic_cfg,
             best_rel_sol_checkpoint=best_rel_sol_cfg,
             **coupling_training_kwargs,
         )
+
+    @staticmethod
+    def _build_coupling_losses_config(
+        raw_losses: object | None, section_name: str
+    ) -> CouplingLossesConfig:
+        if raw_losses is None:
+            return CouplingLossesConfig()
+        if not isinstance(raw_losses, dict):
+            raise TypeError(f"{section_name}.losses must be an object.")
+
+        loss_kwargs = dict(raw_losses)
+        parsed: dict[str, CouplingLossTermConfig] = {}
+        for key in ("l2_consistency", "flux_consistency", "cross_consistency"):
+            raw_term = loss_kwargs.pop(key, None)
+            if raw_term is None:
+                parsed[key] = CouplingLossTermConfig()
+            elif isinstance(raw_term, dict):
+                parsed[key] = CouplingLossTermConfig(**raw_term)
+            else:
+                raise TypeError(f"{section_name}.losses.{key} must be an object.")
+        if loss_kwargs:
+            unknown = ", ".join(sorted(loss_kwargs))
+            raise TypeError(f"{section_name}.losses has unknown keys: {unknown}.")
+        return CouplingLossesConfig(**parsed)
 
     @staticmethod
     def _coeff_from_coords(

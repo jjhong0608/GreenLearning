@@ -70,6 +70,30 @@ class CompileConfig:
 
     enabled: bool = False
 
+
+@dataclass
+class CouplingLossTermConfig:
+    """Single CouplingNet loss toggle and weight."""
+
+    enabled: bool = True
+    weight: float = 1.0
+
+
+@dataclass
+class CouplingLossesConfig:
+    """Nested CouplingNet loss settings."""
+
+    l2_consistency: CouplingLossTermConfig = field(
+        default_factory=CouplingLossTermConfig
+    )
+    flux_consistency: CouplingLossTermConfig = field(
+        default_factory=CouplingLossTermConfig
+    )
+    cross_consistency: CouplingLossTermConfig = field(
+        default_factory=CouplingLossTermConfig
+    )
+
+
 @dataclass
 class CouplingPeriodicCheckpointConfig:
     """Periodic checkpoint settings for CouplingNet Adam training."""
@@ -94,9 +118,7 @@ class CouplingTrainingConfig:
     batch_size: int = 4
     log_interval: int = 1
     device: str = "cpu"
-    lambda_consistency: float = 1.0
-    flux_consistency_enabled: bool = False
-    lambda_flux_consistency: float = 0.0
+    losses: CouplingLossesConfig = field(default_factory=CouplingLossesConfig)
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
     min_lr: float = 1e-6
