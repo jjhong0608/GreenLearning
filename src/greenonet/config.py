@@ -59,7 +59,22 @@ class CouplingModelConfig:
     activation: Literal["tanh", "relu", "gelu", "rational"] = "tanh"
     use_bias: bool = True
     dropout: float = 0.0
+    q_head: "CouplingQHeadConfig" = field(default_factory=lambda: CouplingQHeadConfig())
     dtype: torch.dtype = torch.float64
+
+
+@dataclass
+class CouplingQHeadConfig:
+    """Auxiliary q-head settings for CouplingNet."""
+
+    enabled: bool = True
+    s_branch_hidden_dim: int | None = None
+    s_branch_depth: int | None = None
+    m_branch_hidden_dim: int | None = None
+    m_branch_depth: int | None = None
+    latent_dim: int | None = None
+    share_trunk: bool = True
+    fusion: Literal["add_transpose"] = "add_transpose"
 
 
 
@@ -92,6 +107,7 @@ class CouplingLossesConfig:
     cross_consistency: CouplingLossTermConfig = field(
         default_factory=CouplingLossTermConfig
     )
+    q_split: CouplingLossTermConfig = field(default_factory=CouplingLossTermConfig)
 
 
 @dataclass
@@ -129,6 +145,23 @@ class CouplingTrainingConfig:
     )
     best_rel_sol_checkpoint: CouplingBestRelSolCheckpointConfig = field(
         default_factory=CouplingBestRelSolCheckpointConfig
+    )
+
+
+@dataclass
+class PosthocQCorrectionConfig:
+    """Evaluation-only q-based correction settings."""
+
+    enabled: bool = False
+    report_corrected_metrics: bool = True
+
+
+@dataclass
+class EvaluationConfig:
+    """Evaluation settings shared by CouplingNet CLI workflows."""
+
+    posthoc_q_correction: PosthocQCorrectionConfig = field(
+        default_factory=PosthocQCorrectionConfig
     )
 
 

@@ -103,7 +103,18 @@ class TestTrainCLIDatasetConfig:
                     "enabled": True,
                 },
             },
-            "coupling_model": {},
+            "coupling_model": {
+                "q_head": {
+                    "enabled": True,
+                    "s_branch_hidden_dim": 9,
+                    "s_branch_depth": 2,
+                    "m_branch_hidden_dim": 10,
+                    "m_branch_depth": 3,
+                    "latent_dim": 64,
+                    "share_trunk": True,
+                    "fusion": "add_transpose"
+                }
+            },
             "coupling_training": {
                 "integration_rule": "trapezoid",
                 "losses": {
@@ -118,6 +129,10 @@ class TestTrainCLIDatasetConfig:
                     "cross_consistency": {
                         "enabled": False,
                         "weight": 2.0,
+                    },
+                    "q_split": {
+                        "enabled": True,
+                        "weight": 0.75,
                     },
                 },
                 "learning_rate": 5e-4,
@@ -158,6 +173,8 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.losses.flux_consistency.weight == 0.25
         assert coupling_training_cfg.losses.cross_consistency.enabled is False
         assert coupling_training_cfg.losses.cross_consistency.weight == 2.0
+        assert coupling_training_cfg.losses.q_split.enabled is True
+        assert coupling_training_cfg.losses.q_split.weight == 0.75
         assert coupling_training_cfg.learning_rate == 5e-4
         assert coupling_training_cfg.epochs == 11
         assert coupling_training_cfg.use_lr_schedule is True
@@ -167,6 +184,14 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.periodic_checkpoint.every_epochs == 4
         assert coupling_training_cfg.best_rel_sol_checkpoint.enabled is True
         assert coupling_training_cfg.compile.enabled is True
+        assert coupling_model_cfg.q_head.enabled is True
+        assert coupling_model_cfg.q_head.s_branch_hidden_dim == 9
+        assert coupling_model_cfg.q_head.s_branch_depth == 2
+        assert coupling_model_cfg.q_head.m_branch_hidden_dim == 10
+        assert coupling_model_cfg.q_head.m_branch_depth == 3
+        assert coupling_model_cfg.q_head.latent_dim == 64
+        assert coupling_model_cfg.q_head.share_trunk is True
+        assert coupling_model_cfg.q_head.fusion == "add_transpose"
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
@@ -188,4 +213,33 @@ class TestTrainCLIDatasetConfig:
         config_path.write_text(json.dumps(payload))
 
         with pytest.raises(TypeError, match="deprecated flat coupling loss"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_invalid_q_head_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "q_head": {
+                    "share_trunk": False,
+                    "fusion": "add_transpose",
+                }
+            },
+            "coupling_training": {"losses": {}},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="share_trunk"):
+            TrainCLI()._build_configs(config_path)
+
+        payload["coupling_model"]["q_head"] = {
+            "share_trunk": True,
+            "fusion": "invalid",
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="fusion"):
             TrainCLI()._build_configs(config_path)

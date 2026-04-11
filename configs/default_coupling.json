@@ -23,6 +23,16 @@
     "dropout": 0.0,
     "branch_input_dim": 129,
     "trunk_input_dim": 2,
+    "q_head": {
+      "enabled": true,
+      "s_branch_hidden_dim": 256,
+      "s_branch_depth": 4,
+      "m_branch_hidden_dim": 256,
+      "m_branch_depth": 4,
+      "latent_dim": 256,
+      "share_trunk": true,
+      "fusion": "add_transpose"
+    },
     "dtype": "float64"
   },
   "coupling_training": {
@@ -39,6 +49,10 @@
         "weight": 1.0
       },
       "cross_consistency": {
+        "enabled": true,
+        "weight": 1.0
+      },
+      "q_split": {
         "enabled": true,
         "weight": 1.0
       }
@@ -58,6 +72,12 @@
     },
     "compile": {
       "enabled": true
+    }
+  },
+  "evaluation": {
+    "posthoc_q_correction": {
+      "enabled": false,
+      "report_corrected_metrics": true
     }
   },
   "pipeline": {

@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from math import cos, pi
 from pathlib import Path
-from typing import List
+from typing import Callable, List, cast
 
 import torch
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.nn.functional import pad
 
-from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
-from greenonet.coupling_model import CouplingNet
+from greenonet.compile_utils import (
+    maybe_compile_model,
+    model_state_dict_for_save,
+    unwrap_compiled_model,
+)
+from greenonet.coupling_model import CouplingForwardOutputs, CouplingNet
 from greenonet.config import (
     CouplingModelConfig,
     CouplingTrainingConfig,
@@ -65,6 +69,47 @@ class CouplingTrainer(LoggingMixin):
         self.green_kernel = green_kernel.to(self.device)  # (2, n, m, m)
         self.loss_history: List[float] = []
         self.stage_loss_history: dict[str, List[float]] = {}
+
+    def _base_model(self) -> torch.nn.Module:
+        return unwrap_compiled_model(self.model)
+
+    def _forward_model_with_aux(
+        self,
+        coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+    ) -> CouplingForwardOutputs:
+        forward_with_aux = getattr(self.model, "forward_with_aux", None)
+        if callable(forward_with_aux):
+            outputs = forward_with_aux(
+                coords=coords,
+                a_vals=a_vals,
+                b_vals=b_vals,
+                c_vals=c_vals,
+                rhs_raw=rhs_raw,
+                rhs_tilde=rhs_tilde,
+                rhs_norm=rhs_norm,
+            )
+            if not isinstance(outputs, CouplingForwardOutputs):
+                raise TypeError("forward_with_aux must return CouplingForwardOutputs.")
+            return outputs
+        projected_flux = self.model(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+        )
+        return CouplingForwardOutputs(
+            raw_flux=projected_flux,
+            projected_flux=projected_flux,
+        )
 
     def _integrate(
         self, green: torch.Tensor, values: torch.Tensor, x_axis: torch.Tensor
@@ -233,6 +278,136 @@ class CouplingTrainer(LoggingMixin):
         )
         return float(torch.sqrt(num / den).item())
 
+    def _integrated_square_norm(
+        self,
+        field: torch.Tensor,
+        primary_axis: torch.Tensor,
+        secondary_axis: torch.Tensor,
+    ) -> torch.Tensor:
+        primary = integrate(
+            field.pow(2),
+            x=primary_axis,
+            dim=-1,
+            rule=self.config.integration_rule,
+        )
+        return integrate(
+            primary,
+            x=secondary_axis,
+            dim=-1,
+            rule=self.config.integration_rule,
+        ).mean()
+
+    def _l2_integral_norm(
+        self,
+        field: torch.Tensor,
+        primary_axis: torch.Tensor,
+        secondary_axis: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._integrated_square_norm(field, primary_axis, secondary_axis).sqrt()
+
+    @staticmethod
+    def _build_x_view_coords(x_axis: torch.Tensor, y_axis: torch.Tensor) -> torch.Tensor:
+        x_grid = x_axis.unsqueeze(0).expand(y_axis.numel(), -1)
+        y_grid = y_axis.unsqueeze(1).expand(-1, x_axis.numel())
+        return torch.stack((x_grid, y_grid), dim=-1)
+
+    @staticmethod
+    def _build_y_view_coords(x_axis: torch.Tensor, y_axis: torch.Tensor) -> torch.Tensor:
+        x_grid = x_axis.unsqueeze(1).expand(-1, y_axis.numel())
+        y_grid = y_axis.unsqueeze(0).expand(x_axis.numel(), -1)
+        return torch.stack((x_grid, y_grid), dim=-1)
+
+    def _compute_q_metrics(
+        self,
+        raw_flux: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        u_phi_x: torch.Tensor,
+        u_psi_y: torch.Tensor,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+    ) -> dict[str, torch.Tensor | float]:
+        base_model = self._base_model()
+        q_loss_cfg = self.config.losses.q_split
+        forward_q_head = getattr(base_model, "forward_q_head", None)
+        q_head_enabled = getattr(base_model, "q_head", None) is not None and callable(
+            forward_q_head
+        )
+        if q_loss_cfg.enabled and not q_head_enabled:
+            raise ValueError(
+                "coupling_training.losses.q_split.enabled requires coupling_model.q_head.enabled."
+            )
+        if not q_head_enabled:
+            nan_value = float("nan")
+            zero = torch.zeros((), dtype=raw_flux.dtype, device=raw_flux.device)
+            return {
+                "loss_q_split": zero,
+                "loss_q_x": nan_value,
+                "loss_q_y": nan_value,
+                "q_norm": nan_value,
+                "q_minus_qstar_norm": nan_value,
+            }
+        q_forward = cast(
+            Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
+            forward_q_head,
+        )
+
+        phi_raw_common = raw_flux[:, 0, :, 1:-1]
+        psi_raw_common = raw_flux[:, 1, :, 1:-1].transpose(-1, -2)
+        rhs_common = rhs_raw[:, 0, :, 1:-1]
+        s_common = phi_raw_common + psi_raw_common - rhs_common
+
+        batch_size, n_lines, n_inner = s_common.shape
+        m_points = n_inner + 2
+        s_x_lines = torch.zeros(
+            (batch_size, n_lines, m_points),
+            dtype=s_common.dtype,
+            device=s_common.device,
+        )
+        s_y_lines = torch.zeros_like(s_x_lines)
+        s_x_lines[:, :, 1:-1] = s_common
+        s_y_lines[:, :, 1:-1] = s_common.transpose(-1, -2)
+
+        s_x_raw = self._integrate(self.green_kernel[0], s_x_lines, x_axis)
+        s_y_raw = self._integrate(self.green_kernel[1], s_y_lines, y_axis)
+        s_x_view = pad(
+            s_x_raw[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
+        )
+        s_y_view = pad(
+            s_y_raw[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
+        )
+        s_x_common = s_x_view
+        s_y_common = s_y_view.transpose(-1, -2)
+
+        u_x_common = u_phi_x
+        u_y_common = u_psi_y.transpose(-1, -2)
+        residual_common = u_x_common - u_y_common
+        m_common = residual_common + 0.5 * (s_x_common + s_y_common)
+        m_x = m_common
+        m_y = m_common.transpose(-1, -2)
+
+        x_view_coords = self._build_x_view_coords(x_axis, y_axis)
+        y_view_coords = self._build_y_view_coords(x_axis, y_axis)
+        q_x = q_forward(x_view_coords, s_x_view, m_x)
+        q_y = q_forward(y_view_coords, s_y_view, m_y)
+        q_common = q_x + q_y.transpose(-1, -2)
+        q_star = 0.25 * (s_x_common - s_y_common)
+
+        q_res_x = m_x - s_x_view + 2.0 * q_x
+        q_res_y = m_y - s_y_view - 2.0 * q_y
+        loss_q_x = self._integrated_square_norm(q_res_x, x_axis, y_axis)
+        loss_q_y = self._integrated_square_norm(q_res_y, y_axis, x_axis)
+        loss_q_split = loss_q_x + loss_q_y
+        q_norm = self._l2_integral_norm(q_common, x_axis, y_axis)
+        q_minus_qstar_norm = self._l2_integral_norm(q_common - q_star, x_axis, y_axis)
+
+        return {
+            "loss_q_split": loss_q_split,
+            "loss_q_x": float(loss_q_x.detach().item()),
+            "loss_q_y": float(loss_q_y.detach().item()),
+            "q_norm": float(q_norm.detach().item()),
+            "q_minus_qstar_norm": float(q_minus_qstar_norm.detach().item()),
+        }
+
     def _step_loss(
         self,
         coords: torch.Tensor,
@@ -259,7 +434,7 @@ class CouplingTrainer(LoggingMixin):
         c_vals = c_vals.to(self.device)
         coords = coords.to(self.device)
 
-        pred_flux = self.model(
+        forward_outputs = self._forward_model_with_aux(
             coords=coords,
             a_vals=a_vals,
             b_vals=b_vals,
@@ -267,7 +442,9 @@ class CouplingTrainer(LoggingMixin):
             rhs_raw=rhs_raw,
             rhs_tilde=rhs_tilde,
             rhs_norm=rhs_norm,
-        )  # (B,2,n,m)
+        )
+        raw_flux = forward_outputs.raw_flux
+        pred_flux = forward_outputs.projected_flux
 
         gx = self.green_kernel[0]  # (n,m,m)
         gy = self.green_kernel[1]
@@ -322,12 +499,22 @@ class CouplingTrainer(LoggingMixin):
             x_axis=x_axis,
             y_axis=y_axis,
         )
+        q_metrics = self._compute_q_metrics(
+            raw_flux=raw_flux,
+            rhs_raw=rhs_raw,
+            u_phi_x=u_phi_x,
+            u_psi_y=u_psi_y,
+            x_axis=x_axis,
+            y_axis=y_axis,
+        )
         l2_cfg = self.config.losses.l2_consistency
         flux_cfg = self.config.losses.flux_consistency
         cross_cfg = self.config.losses.cross_consistency
+        q_cfg = self.config.losses.q_split
         w_l2 = self._effective_weight(l2_cfg.enabled, l2_cfg.weight)
         w_flux = self._effective_weight(flux_cfg.enabled, flux_cfg.weight)
         w_cross = self._effective_weight(cross_cfg.enabled, cross_cfg.weight)
+        w_q = self._effective_weight(q_cfg.enabled, q_cfg.weight)
 
         loss = torch.zeros((), dtype=loss_cons.dtype, device=loss_cons.device)
         if w_l2 != 0.0:
@@ -336,12 +523,22 @@ class CouplingTrainer(LoggingMixin):
             loss = loss + w_flux * loss_flux_consistency
         if w_cross != 0.0:
             loss = loss + w_cross * loss_cross_consistency
+        loss_q_split = q_metrics["loss_q_split"]
+        if not isinstance(loss_q_split, torch.Tensor):
+            raise TypeError("loss_q_split must be returned as a tensor.")
+        if w_q != 0.0:
+            loss = loss + w_q * loss_q_split
 
         metrics = {
             "loss": float(loss.detach().item()),
             "loss_l2_consistency": float(loss_cons.detach().item()),
             "loss_flux_consistency": float(loss_flux_consistency.detach().item()),
             "loss_cross_consistency": float(loss_cross_consistency.detach().item()),
+            "loss_q_split": float(loss_q_split.detach().item()),
+            "loss_q_x": float(q_metrics["loss_q_x"]),
+            "loss_q_y": float(q_metrics["loss_q_y"]),
+            "q_norm": float(q_metrics["q_norm"]),
+            "q_minus_qstar_norm": float(q_metrics["q_minus_qstar_norm"]),
             "rel_flux": self._relative_l2_integral(
                 pred_flux_target.detach(), flux_target, x_axis
             ),
@@ -453,6 +650,11 @@ class CouplingTrainer(LoggingMixin):
                 "loss_l2_consistency": 0.0,
                 "loss_flux_consistency": 0.0,
                 "loss_cross_consistency": 0.0,
+                "loss_q_split": 0.0,
+                "loss_q_x": 0.0,
+                "loss_q_y": 0.0,
+                "q_norm": 0.0,
+                "q_minus_qstar_norm": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
             }
@@ -513,6 +715,11 @@ class CouplingTrainer(LoggingMixin):
                 "loss_l2_consistency": 0.0,
                 "loss_flux_consistency": 0.0,
                 "loss_cross_consistency": 0.0,
+                "loss_q_split": 0.0,
+                "loss_q_x": 0.0,
+                "loss_q_y": 0.0,
+                "q_norm": 0.0,
+                "q_minus_qstar_norm": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
             }
@@ -561,6 +768,11 @@ class CouplingTrainer(LoggingMixin):
                 "loss_l2_consistency": float("nan"),
                 "loss_flux_consistency": float("nan"),
                 "loss_cross_consistency": float("nan"),
+                "loss_q_split": float("nan"),
+                "loss_q_x": float("nan"),
+                "loss_q_y": float("nan"),
+                "q_norm": float("nan"),
+                "q_minus_qstar_norm": float("nan"),
                 "rel_flux": float("nan"),
                 "rel_sol": float("nan"),
             }
@@ -575,14 +787,17 @@ class CouplingTrainer(LoggingMixin):
                 l2_cfg = self.config.losses.l2_consistency
                 flux_cfg = self.config.losses.flux_consistency
                 cross_cfg = self.config.losses.cross_consistency
+                q_cfg = self.config.losses.q_split
                 self.logger.info(
                     (
                         "epoch %s | train loss=%.4e l2_cons=%.4e flux_cons=%.4e "
-                        "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
+                        "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e "
+                        "q_norm=%.4e q_minus_qstar=%.4e loss_q_x=%.4e loss_q_y=%.4e | "
                         "w_l2=%.4e on_l2=%s w_flux=%.4e on_flux=%s "
-                        "w_cross=%.4e on_cross=%s | lr=%.4e | val loss=%.4e "
-                        "l2_cons=%.4e flux_cons=%.4e cross_cons=%.4e "
-                        "rel_flux=%.4e rel_sol=%.4e"
+                        "w_cross=%.4e on_cross=%s w_q=%.4e on_q=%s | lr=%.4e | "
+                        "val loss=%.4e l2_cons=%.4e flux_cons=%.4e cross_cons=%.4e "
+                        "rel_flux=%.4e rel_sol=%.4e q_norm=%.4e q_minus_qstar=%.4e "
+                        "loss_q_x=%.4e loss_q_y=%.4e"
                     ),
                     epoch,
                     train_metrics["loss"],
@@ -591,12 +806,18 @@ class CouplingTrainer(LoggingMixin):
                     train_metrics["loss_cross_consistency"],
                     train_metrics["rel_flux"],
                     train_metrics["rel_sol"],
+                    train_metrics["q_norm"],
+                    train_metrics["q_minus_qstar_norm"],
+                    train_metrics["loss_q_x"],
+                    train_metrics["loss_q_y"],
                     l2_cfg.weight,
                     l2_cfg.enabled,
                     flux_cfg.weight,
                     flux_cfg.enabled,
                     cross_cfg.weight,
                     cross_cfg.enabled,
+                    q_cfg.weight,
+                    q_cfg.enabled,
                     current_lr,
                     val_metrics["loss"],
                     val_metrics["loss_l2_consistency"],
@@ -604,6 +825,10 @@ class CouplingTrainer(LoggingMixin):
                     val_metrics["loss_cross_consistency"],
                     val_metrics["rel_flux"],
                     val_metrics["rel_sol"],
+                    val_metrics["q_norm"],
+                    val_metrics["q_minus_qstar_norm"],
+                    val_metrics["loss_q_x"],
+                    val_metrics["loss_q_y"],
                 )
             self._maybe_save_periodic_checkpoint(epoch)
             if scheduler is not None:
@@ -647,6 +872,11 @@ class CouplingTrainer(LoggingMixin):
         loss_l2_consistency: List[float] = []
         loss_flux_consistency: List[float] = []
         loss_cross_consistency: List[float] = []
+        loss_q_split: List[float] = []
+        loss_q_x: List[float] = []
+        loss_q_y: List[float] = []
+        q_norm: List[float] = []
+        q_minus_qstar_norm: List[float] = []
         rel_flux: List[float] = []
         rel_sol: List[float] = []
         with torch.no_grad():
@@ -677,6 +907,11 @@ class CouplingTrainer(LoggingMixin):
                 loss_l2_consistency.append(metrics["loss_l2_consistency"])
                 loss_flux_consistency.append(metrics["loss_flux_consistency"])
                 loss_cross_consistency.append(metrics["loss_cross_consistency"])
+                loss_q_split.append(metrics["loss_q_split"])
+                loss_q_x.append(metrics["loss_q_x"])
+                loss_q_y.append(metrics["loss_q_y"])
+                q_norm.append(metrics["q_norm"])
+                q_minus_qstar_norm.append(metrics["q_minus_qstar_norm"])
                 rel_flux.append(metrics["rel_flux"])
                 rel_sol.append(metrics["rel_sol"])
         return {
@@ -689,6 +924,13 @@ class CouplingTrainer(LoggingMixin):
             ),
             "loss_cross_consistency": float(
                 sum(loss_cross_consistency) / max(len(loss_cross_consistency), 1)
+            ),
+            "loss_q_split": float(sum(loss_q_split) / max(len(loss_q_split), 1)),
+            "loss_q_x": float(sum(loss_q_x) / max(len(loss_q_x), 1)),
+            "loss_q_y": float(sum(loss_q_y) / max(len(loss_q_y), 1)),
+            "q_norm": float(sum(q_norm) / max(len(q_norm), 1)),
+            "q_minus_qstar_norm": float(
+                sum(q_minus_qstar_norm) / max(len(q_minus_qstar_norm), 1)
             ),
             "rel_flux": float(sum(rel_flux) / max(len(rel_flux), 1)),
             "rel_sol": float(sum(rel_sol) / max(len(rel_sol), 1)),

@@ -32,16 +32,25 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         rf"\s+cross_cons=(?P<cross_cons_tr>{VALUE_RE})"
         rf"\s+rel_flux=(?P<rflux_tr>{VALUE_RE})"
         rf"\s+rel_sol=(?P<rsol_tr>{VALUE_RE})"
+        rf"\s+q_norm=(?P<q_norm_tr>{VALUE_RE})"
+        rf"\s+q_minus_qstar=(?P<q_minus_qstar_tr>{VALUE_RE})"
+        rf"\s+loss_q_x=(?P<loss_q_x_tr>{VALUE_RE})"
+        rf"\s+loss_q_y=(?P<loss_q_y_tr>{VALUE_RE})"
         rf"\s*\|\s*w_l2=(?P<w_l2>{VALUE_RE})\s+on_l2=(?P<on_l2>True|False)"
         rf"\s+w_flux=(?P<w_flux>{VALUE_RE})\s+on_flux=(?P<on_flux>True|False)"
         rf"\s+w_cross=(?P<w_cross>{VALUE_RE})\s+on_cross=(?P<on_cross>True|False)"
+        rf"\s+w_q=(?P<w_q>{VALUE_RE})\s+on_q=(?P<on_q>True|False)"
         rf"(?:\s*\|\s*lr=(?P<lr>{VALUE_RE}))?"
         rf"(?:\s*\|\s*val\s+loss=(?P<loss_val>{VALUE_RE})"
         rf"\s+l2_cons=(?P<l2_cons_val>{VALUE_RE})"
         rf"\s+flux_cons=(?P<flux_cons_val>{VALUE_RE})"
         rf"\s+cross_cons=(?P<cross_cons_val>{VALUE_RE})"
         rf"\s+rel_flux=(?P<rflux_val>{VALUE_RE})"
-        rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE}))?",
+        rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE})"
+        rf"\s+q_norm=(?P<q_norm_val>{VALUE_RE})"
+        rf"\s+q_minus_qstar=(?P<q_minus_qstar_val>{VALUE_RE})"
+        rf"\s+loss_q_x=(?P<loss_q_x_val>{VALUE_RE})"
+        rf"\s+loss_q_y=(?P<loss_q_y_val>{VALUE_RE}))?",
         re.IGNORECASE,
     )
 
@@ -60,12 +69,20 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
                 "cross_cons_train": _parse_float(match.group("cross_cons_tr")),
                 "rel_flux_train": _parse_float(match.group("rflux_tr")),
                 "rel_sol_train": _parse_float(match.group("rsol_tr")),
+                "q_norm_train": _parse_float(match.group("q_norm_tr")),
+                "q_minus_qstar_train": _parse_float(match.group("q_minus_qstar_tr")),
+                "loss_q_x_train": _parse_float(match.group("loss_q_x_tr")),
+                "loss_q_y_train": _parse_float(match.group("loss_q_y_tr")),
                 "loss_val": _parse_float(match.group("loss_val")),
                 "l2_cons_val": _parse_float(match.group("l2_cons_val")),
                 "flux_cons_val": _parse_float(match.group("flux_cons_val")),
                 "cross_cons_val": _parse_float(match.group("cross_cons_val")),
                 "rel_flux_val": _parse_float(match.group("rflux_val")),
                 "rel_sol_val": _parse_float(match.group("rsol_val")),
+                "q_norm_val": _parse_float(match.group("q_norm_val")),
+                "q_minus_qstar_val": _parse_float(match.group("q_minus_qstar_val")),
+                "loss_q_x_val": _parse_float(match.group("loss_q_x_val")),
+                "loss_q_y_val": _parse_float(match.group("loss_q_y_val")),
                 "lr": _parse_float(match.group("lr")),
                 "w_l2": _parse_float(match.group("w_l2")),
                 "on_l2": _parse_bool(match.group("on_l2")),
@@ -73,6 +90,8 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
                 "on_flux": _parse_bool(match.group("on_flux")),
                 "w_cross": _parse_float(match.group("w_cross")),
                 "on_cross": _parse_bool(match.group("on_cross")),
+                "w_q": _parse_float(match.group("w_q")),
+                "on_q": _parse_bool(match.group("on_q")),
             }
         )
 
@@ -84,12 +103,20 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         "cross_cons_train": [],
         "rel_flux_train": [],
         "rel_sol_train": [],
+        "q_norm_train": [],
+        "q_minus_qstar_train": [],
+        "loss_q_x_train": [],
+        "loss_q_y_train": [],
         "loss_val": [],
         "l2_cons_val": [],
         "flux_cons_val": [],
         "cross_cons_val": [],
         "rel_flux_val": [],
         "rel_sol_val": [],
+        "q_norm_val": [],
+        "q_minus_qstar_val": [],
+        "loss_q_x_val": [],
+        "loss_q_y_val": [],
         "lr": [],
         "w_l2": [],
         "on_l2": [],
@@ -97,6 +124,8 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         "on_flux": [],
         "w_cross": [],
         "on_cross": [],
+        "w_q": [],
+        "on_q": [],
     }
 
     offset = 0.0

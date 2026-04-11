@@ -15,7 +15,10 @@ from greenonet.config import (
     CouplingLossesConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
+    CouplingQHeadConfig,
     CouplingTrainingConfig,
+    EvaluationConfig,
+    PosthocQCorrectionConfig,
 )
 from greenonet.numerics import line_operator_fd
 
@@ -49,6 +52,28 @@ class _DummyFluxModel(nn.Module):
     ) -> torch.Tensor:
         del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
         return self._projected_flux.clone()
+
+
+class _DummyFluxWithQModel(_DummyFluxModel):
+    def __init__(self, projected_flux: torch.Tensor, q_value: float = 0.0) -> None:
+        super().__init__(projected_flux)
+        self.q_head = object()
+        self.register_buffer("_q_value", torch.tensor(q_value, dtype=projected_flux.dtype))
+
+    def forward_q_head(
+        self,
+        coords_view: torch.Tensor,
+        s_view: torch.Tensor,
+        m_view: torch.Tensor,
+    ) -> torch.Tensor:
+        del coords_view, m_view
+        batch_size, n_lines, m_points = s_view.shape
+        return torch.full(
+            (batch_size, n_lines, m_points),
+            fill_value=float(self._q_value.item()),
+            dtype=self._q_value.dtype,
+            device=s_view.device,
+        )
 
 
 class _TrainableFluxModel(nn.Module):
@@ -182,6 +207,8 @@ def _losses_config(
     flux_weight: float = 1.0,
     cross_enabled: bool = True,
     cross_weight: float = 1.0,
+    q_enabled: bool = True,
+    q_weight: float = 1.0,
 ) -> CouplingLossesConfig:
     return CouplingLossesConfig(
         l2_consistency=CouplingLossTermConfig(
@@ -195,6 +222,10 @@ def _losses_config(
         cross_consistency=CouplingLossTermConfig(
             enabled=cross_enabled,
             weight=cross_weight,
+        ),
+        q_split=CouplingLossTermConfig(
+            enabled=q_enabled,
+            weight=q_weight,
         ),
     )
 
@@ -261,10 +292,111 @@ def test_coupling_model_forward():
         rhs_norm=rhs_norm,
     )
     assert projected_flux.shape == (1, 2, 1, 3)
+    forward_outputs = model.forward_with_aux(
+        coords=coords,
+        a_vals=kappa,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+    assert forward_outputs.raw_flux.shape == (1, 2, 1, 3)
+    assert forward_outputs.projected_flux.shape == (1, 2, 1, 3)
     phi_x = projected_flux[:, 0]
     psi_y = projected_flux[:, 1]
     assert phi_x.shape == rhs_raw[:, 0].shape
     assert psi_y.shape == rhs_raw[:, 1].shape
+
+
+def test_coupling_q_head_reuses_shared_trunk_and_returns_axis_views():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        q_head=CouplingQHeadConfig(
+            enabled=True,
+            s_branch_hidden_dim=6,
+            s_branch_depth=1,
+            m_branch_hidden_dim=7,
+            m_branch_depth=1,
+            latent_dim=8,
+            share_trunk=True,
+            fusion="add_transpose",
+        ),
+    )
+    model = CouplingNet(cfg)
+    axis = torch.linspace(0.0, 1.0, 5, dtype=torch.float64)
+    x_view_coords = torch.stack(
+        (
+            axis.unsqueeze(0).expand(5, -1),
+            axis.unsqueeze(1).expand(-1, 5),
+        ),
+        dim=-1,
+    )
+    y_view_coords = torch.stack(
+        (
+            axis.unsqueeze(1).expand(-1, 5),
+            axis.unsqueeze(0).expand(5, -1),
+        ),
+        dim=-1,
+    )
+    s_x = torch.randn(2, 5, 5, dtype=torch.float64)
+    m_x = torch.randn(2, 5, 5, dtype=torch.float64)
+    s_y = torch.randn(2, 5, 5, dtype=torch.float64)
+    m_y = torch.randn(2, 5, 5, dtype=torch.float64)
+
+    q_x = model.forward_q_head(x_view_coords, s_x, m_x)
+    q_y = model.forward_q_head(y_view_coords, s_y, m_y)
+    q_common = q_x + q_y.transpose(-1, -2)
+
+    assert model.q_head is not None
+    assert model.q_head.trunk is model.trunk
+    assert hasattr(model.q_head, "branch_s")
+    assert hasattr(model.q_head, "branch_m")
+    assert not hasattr(model.q_head, "trunk_q")
+    assert q_x.shape == (2, 5, 5)
+    assert q_y.shape == (2, 5, 5)
+    assert q_common.shape == (2, 5, 5)
+
+
+def test_q_head_does_not_change_main_coupling_forward_path():
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    baseline = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+    assert model.q_head is not None
+    for parameter in model.q_head.branch_s.parameters():
+        torch.nn.init.constant_(parameter, 0.5)
+    for parameter in model.q_head.branch_m.parameters():
+        torch.nn.init.constant_(parameter, 0.5)
+    updated = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert torch.allclose(updated, baseline)
 
 
 def test_coupling_model_backprop_through_shared_encoder():
@@ -387,6 +519,11 @@ def test_coupling_trainer_runs(tmp_path):
     assert "loss_l2_consistency" in metrics
     assert "loss_flux_consistency" in metrics
     assert "loss_cross_consistency" in metrics
+    assert "loss_q_split" in metrics
+    assert "loss_q_x" in metrics
+    assert "loss_q_y" in metrics
+    assert "q_norm" in metrics
+    assert "q_minus_qstar_norm" in metrics
 
 
 
@@ -645,6 +782,48 @@ def test_coupling_evaluator_batched(tmp_path, monkeypatch):
     assert (tmp_path / "test" / "sample0_closure_psi_residual.png").exists()
 
 
+def test_coupling_evaluator_reports_posthoc_q_corrected_metrics(tmp_path, monkeypatch):
+    _make_npz(tmp_path, "sample0.npz")
+    ds = CouplingDataset(
+        data_dir=tmp_path,
+        step_size=0.5,
+        n_points_per_line=3,
+    )
+    green_kernel = torch.ones((2, 1, 3, 3), dtype=torch.float64)
+    model_cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
+    model = CouplingNet(model_cfg)
+    evaluator = CouplingEvaluator(
+        model=model,
+        green_kernel=green_kernel,
+        device=torch.device("cpu"),
+        work_dir=tmp_path,
+        evaluation_config=EvaluationConfig(
+            posthoc_q_correction=PosthocQCorrectionConfig(
+                enabled=True,
+                report_corrected_metrics=True,
+            )
+        ),
+    )
+
+    def _fake_render(task):
+        base_path = Path(task["base_path"])
+        base_path.parent.mkdir(parents=True, exist_ok=True)
+        base_path.with_suffix(".png").write_text("stub")
+
+    monkeypatch.setattr(
+        "greenonet.coupling_evaluator._render_heatmap_task", _fake_render
+    )
+
+    evaluator.evaluate(ds, dataset_name="test_q", batch_size=1, plot_workers=1)
+    csv_path = tmp_path / "test_q" / "metrics.csv"
+    header = csv_path.read_text().splitlines()[0]
+
+    assert "rel_sol_corrected" in header
+    assert "consistency_gap_corrected" in header
+    assert "rel_sol_x_corrected" in header
+    assert "rel_sol_y_corrected" in header
+
+
 def test_step_loss_ignores_raw_split_sum_without_balance_loss(tmp_path):
     (
         coords,
@@ -662,6 +841,7 @@ def test_step_loss_ignores_raw_split_sum_without_balance_loss(tmp_path):
     trainer = CouplingTrainer(
         model=_DummyFluxModel(projected_flux=projected_flux),  # type: ignore[arg-type]
         config=CouplingTrainingConfig(
+            losses=_losses_config(q_enabled=False),
             epochs=1,
             batch_size=1,
         ),
@@ -823,6 +1003,7 @@ def test_step_loss_ignores_flux_consistency_when_disabled(tmp_path):
                 flux_enabled=False,
                 flux_weight=1.0,
                 cross_enabled=False,
+                q_enabled=False,
             ),
             epochs=1,
             batch_size=1,
@@ -872,6 +1053,7 @@ def test_flux_consistency_loss_backpropagates_to_projected_flux(tmp_path):
                 flux_enabled=True,
                 flux_weight=1.0,
                 cross_enabled=False,
+                q_enabled=False,
             ),
             epochs=1,
             batch_size=1,
@@ -915,7 +1097,7 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
     projected_flux[:, 0, :, 1:-1] = 1.0
     projected_flux[:, 1, :, 1:-1] = 0.25
     trainer = CouplingTrainer(
-        model=_DummyFluxModel(projected_flux=projected_flux),  # type: ignore[arg-type]
+        model=_DummyFluxWithQModel(projected_flux=projected_flux, q_value=0.0),  # type: ignore[arg-type]
         config=CouplingTrainingConfig(
             losses=_losses_config(
                 l2_enabled=True,
@@ -924,6 +1106,8 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
                 flux_weight=2.0,
                 cross_enabled=True,
                 cross_weight=3.0,
+                q_enabled=True,
+                q_weight=4.0,
             ),
             epochs=1,
             batch_size=1,
@@ -948,11 +1132,50 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
         0.5 * metrics["loss_l2_consistency"]
         + 2.0 * metrics["loss_flux_consistency"]
         + 3.0 * metrics["loss_cross_consistency"]
+        + 4.0 * metrics["loss_q_split"]
     )
     assert loss.item() == pytest.approx(expected)
 
 
-def test_evaluate_reports_all_three_loss_components(tmp_path):
+def test_step_loss_rejects_enabled_q_loss_without_q_head(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(projected_flux=projected_flux),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(q_enabled=True),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="q_split.enabled"):
+        trainer._step_loss(
+            coords,
+            rhs_raw,
+            rhs_tilde,
+            rhs_norm,
+            sol,
+            flux_target,
+            a_vals,
+            b_vals,
+            c_vals,
+        )
+
+
+def test_evaluate_reports_all_four_loss_components_and_q_metrics(tmp_path):
     (
         coords,
         rhs_raw,
@@ -969,7 +1192,7 @@ def test_evaluate_reports_all_three_loss_components(tmp_path):
     projected_flux[:, 0, :, 1:-1] = 1.0
     projected_flux[:, 1, :, 1:-1] = 0.25
     trainer = CouplingTrainer(
-        model=_DummyFluxModel(projected_flux=projected_flux),  # type: ignore[arg-type]
+        model=_DummyFluxWithQModel(projected_flux=projected_flux, q_value=0.0),  # type: ignore[arg-type]
         config=CouplingTrainingConfig(
             losses=_losses_config(),
             epochs=1,
@@ -999,3 +1222,8 @@ def test_evaluate_reports_all_three_loss_components(tmp_path):
     assert "loss_l2_consistency" in metrics
     assert "loss_flux_consistency" in metrics
     assert "loss_cross_consistency" in metrics
+    assert "loss_q_split" in metrics
+    assert "loss_q_x" in metrics
+    assert "loss_q_y" in metrics
+    assert "q_norm" in metrics
+    assert "q_minus_qstar_norm" in metrics

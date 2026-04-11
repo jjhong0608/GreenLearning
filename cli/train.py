@@ -16,6 +16,7 @@ from greenonet.config import (
     CouplingLossTermConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
+    CouplingQHeadConfig,
     CouplingTrainingConfig,
     DatasetConfig,
     ModelConfig,
@@ -105,10 +106,9 @@ class TrainCLI:
         model_cfg = ModelConfig(**model_kwargs)
         training_cfg = self._build_training_config(raw.get("training", {}))
 
-        coupling_model_kwargs = dict(raw.get("coupling_model", {}))
-        cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
-        coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
-        coupling_model_cfg = CouplingModelConfig(**coupling_model_kwargs)
+        coupling_model_cfg = self._build_coupling_model_config(
+            raw.get("coupling_model", {})
+        )
 
         coupling_training_cfg = self._build_coupling_training_config(
             raw.get("coupling_training", {})
@@ -122,6 +122,61 @@ class TrainCLI:
             coupling_training_cfg,
             pipeline_cfg,
         )
+
+    @staticmethod
+    def _build_coupling_q_head_config(
+        raw_q_head: object | None,
+        section_name: str,
+        hidden_dim: int,
+        depth: int,
+    ) -> CouplingQHeadConfig:
+        if raw_q_head is None:
+            q_head_cfg = CouplingQHeadConfig()
+        elif isinstance(raw_q_head, dict):
+            q_head_cfg = CouplingQHeadConfig(**raw_q_head)
+        else:
+            raise TypeError(f"{section_name}.q_head must be an object.")
+        if not q_head_cfg.share_trunk:
+            raise TypeError(f"{section_name}.q_head.share_trunk must be true.")
+        if q_head_cfg.fusion != "add_transpose":
+            raise TypeError(
+                f"{section_name}.q_head.fusion must be 'add_transpose'."
+            )
+        latent_dim = hidden_dim if q_head_cfg.latent_dim is None else q_head_cfg.latent_dim
+        if latent_dim != hidden_dim:
+            raise TypeError(
+                f"{section_name}.q_head.latent_dim must match coupling_model.hidden_dim ({hidden_dim})."
+            )
+        if q_head_cfg.s_branch_hidden_dim is None:
+            q_head_cfg.s_branch_hidden_dim = hidden_dim
+        if q_head_cfg.s_branch_depth is None:
+            q_head_cfg.s_branch_depth = depth
+        if q_head_cfg.m_branch_hidden_dim is None:
+            q_head_cfg.m_branch_hidden_dim = hidden_dim
+        if q_head_cfg.m_branch_depth is None:
+            q_head_cfg.m_branch_depth = depth
+        if q_head_cfg.latent_dim is None:
+            q_head_cfg.latent_dim = hidden_dim
+        return q_head_cfg
+
+    @classmethod
+    def _build_coupling_model_config(
+        cls,
+        raw_model: dict[str, object],
+    ) -> CouplingModelConfig:
+        coupling_model_kwargs = dict(raw_model)
+        raw_q_head = coupling_model_kwargs.pop("q_head", None)
+        cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
+        coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
+        hidden_dim = int(coupling_model_kwargs.get("hidden_dim", CouplingModelConfig.hidden_dim))
+        depth = int(coupling_model_kwargs.get("depth", CouplingModelConfig.depth))
+        q_head_cfg = cls._build_coupling_q_head_config(
+            raw_q_head,
+            "coupling_model",
+            hidden_dim=hidden_dim,
+            depth=depth,
+        )
+        return CouplingModelConfig(q_head=q_head_cfg, **coupling_model_kwargs)
 
     @staticmethod
     def _build_compile_config(
@@ -203,7 +258,12 @@ class TrainCLI:
 
         loss_kwargs = dict(raw_losses)
         parsed: dict[str, CouplingLossTermConfig] = {}
-        for key in ("l2_consistency", "flux_consistency", "cross_consistency"):
+        for key in (
+            "l2_consistency",
+            "flux_consistency",
+            "cross_consistency",
+            "q_split",
+        ):
             raw_term = loss_kwargs.pop(key, None)
             if raw_term is None:
                 parsed[key] = CouplingLossTermConfig()

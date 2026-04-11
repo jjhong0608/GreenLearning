@@ -1,6 +1,6 @@
 import torch
 
-from greenonet.config import CouplingModelConfig, ModelConfig
+from greenonet.config import CouplingModelConfig, CouplingQHeadConfig, ModelConfig
 from greenonet.coupling_model import CouplingNet
 from greenonet.model import GreenONetModel
 
@@ -113,6 +113,7 @@ def test_save_load_coupling_compiled_model_with_config(tmp_path):
         activation="tanh",
         use_bias=True,
         dropout=0.0,
+        q_head=CouplingQHeadConfig(enabled=False),
         dtype=torch.float64,
     )
     model = torch.compile(CouplingNet(cfg))
@@ -141,6 +142,7 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
         activation="tanh",
         use_bias=True,
         dropout=0.0,
+        q_head=CouplingQHeadConfig(enabled=False),
         dtype=torch.float64,
     )
     model = CouplingNet(cfg)

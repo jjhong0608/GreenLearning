@@ -16,9 +16,12 @@ from greenonet.config import (
     CouplingLossTermConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
+    CouplingQHeadConfig,
     CouplingTrainingConfig,
     DatasetConfig,
+    EvaluationConfig,
     ModelConfig,
+    PosthocQCorrectionConfig,
     TrainingConfig,
 )
 from greenonet.compile_utils import maybe_compile_model
@@ -74,6 +77,61 @@ class EvalCouplingCLI:
             if key in dataset_kwargs and dataset_kwargs[key] is not None:
                 dataset_kwargs[key] = Path(dataset_kwargs[key])
         return DatasetConfig(**dataset_kwargs)
+
+    @staticmethod
+    def _build_coupling_q_head_config(
+        raw_q_head: object | None,
+        section_name: str,
+        hidden_dim: int,
+        depth: int,
+    ) -> CouplingQHeadConfig:
+        if raw_q_head is None:
+            q_head_cfg = CouplingQHeadConfig()
+        elif isinstance(raw_q_head, dict):
+            q_head_cfg = CouplingQHeadConfig(**raw_q_head)
+        else:
+            raise TypeError(f"{section_name}.q_head must be an object.")
+        if not q_head_cfg.share_trunk:
+            raise TypeError(f"{section_name}.q_head.share_trunk must be true.")
+        if q_head_cfg.fusion != "add_transpose":
+            raise TypeError(
+                f"{section_name}.q_head.fusion must be 'add_transpose'."
+            )
+        latent_dim = hidden_dim if q_head_cfg.latent_dim is None else q_head_cfg.latent_dim
+        if latent_dim != hidden_dim:
+            raise TypeError(
+                f"{section_name}.q_head.latent_dim must match coupling_model.hidden_dim ({hidden_dim})."
+            )
+        if q_head_cfg.s_branch_hidden_dim is None:
+            q_head_cfg.s_branch_hidden_dim = hidden_dim
+        if q_head_cfg.s_branch_depth is None:
+            q_head_cfg.s_branch_depth = depth
+        if q_head_cfg.m_branch_hidden_dim is None:
+            q_head_cfg.m_branch_hidden_dim = hidden_dim
+        if q_head_cfg.m_branch_depth is None:
+            q_head_cfg.m_branch_depth = depth
+        if q_head_cfg.latent_dim is None:
+            q_head_cfg.latent_dim = hidden_dim
+        return q_head_cfg
+
+    @classmethod
+    def _build_coupling_model_config(
+        cls,
+        raw_model: dict[str, object],
+    ) -> CouplingModelConfig:
+        coupling_model_kwargs = dict(raw_model)
+        raw_q_head = coupling_model_kwargs.pop("q_head", None)
+        cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
+        coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
+        hidden_dim = int(coupling_model_kwargs.get("hidden_dim", CouplingModelConfig.hidden_dim))
+        depth = int(coupling_model_kwargs.get("depth", CouplingModelConfig.depth))
+        q_head_cfg = cls._build_coupling_q_head_config(
+            raw_q_head,
+            "coupling_model",
+            hidden_dim=hidden_dim,
+            depth=depth,
+        )
+        return CouplingModelConfig(q_head=q_head_cfg, **coupling_model_kwargs)
 
     @staticmethod
     def _build_compile_config(
@@ -155,7 +213,12 @@ class EvalCouplingCLI:
 
         loss_kwargs = dict(raw_losses)
         parsed: dict[str, CouplingLossTermConfig] = {}
-        for key in ("l2_consistency", "flux_consistency", "cross_consistency"):
+        for key in (
+            "l2_consistency",
+            "flux_consistency",
+            "cross_consistency",
+            "q_split",
+        ):
             raw_term = loss_kwargs.pop(key, None)
             if raw_term is None:
                 parsed[key] = CouplingLossTermConfig()
@@ -167,6 +230,23 @@ class EvalCouplingCLI:
             unknown = ", ".join(sorted(loss_kwargs))
             raise TypeError(f"{section_name}.losses has unknown keys: {unknown}.")
         return CouplingLossesConfig(**parsed)
+
+    @staticmethod
+    def _build_evaluation_config(
+        raw_evaluation: dict[str, object],
+    ) -> EvaluationConfig:
+        evaluation_kwargs = dict(raw_evaluation)
+        raw_posthoc = evaluation_kwargs.pop("posthoc_q_correction", None)
+        if evaluation_kwargs:
+            unknown = ", ".join(sorted(evaluation_kwargs))
+            raise TypeError(f"evaluation has unknown keys: {unknown}.")
+        if raw_posthoc is None:
+            posthoc_cfg = PosthocQCorrectionConfig()
+        elif isinstance(raw_posthoc, dict):
+            posthoc_cfg = PosthocQCorrectionConfig(**raw_posthoc)
+        else:
+            raise TypeError("evaluation.posthoc_q_correction must be an object.")
+        return EvaluationConfig(posthoc_q_correction=posthoc_cfg)
 
     @staticmethod
     def _coeff_from_coords(
@@ -232,14 +312,14 @@ class EvalCouplingCLI:
             raw = json.load(fp)
 
         dataset_cfg = self._build_dataset_config(raw["dataset"])
-        coupling_model_kwargs = dict(raw.get("coupling_model", {}))
-        cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
-        coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
-        coupling_model_cfg = CouplingModelConfig(**coupling_model_kwargs)
+        coupling_model_cfg = self._build_coupling_model_config(
+            raw.get("coupling_model", {})
+        )
         training_cfg = self._build_training_config(raw.get("training", {}))
         coupling_training_cfg = self._build_coupling_training_config(
             raw.get("coupling_training", {})
         )
+        evaluation_cfg = self._build_evaluation_config(raw.get("evaluation", {}))
 
         if dataset_cfg.test_path is None:
             raise ValueError("test_path must be set in dataset config for evaluation.")
@@ -369,6 +449,7 @@ class EvalCouplingCLI:
             device=torch.device(coupling_training_cfg.device),
             work_dir=work_dir,
             integration_rule=coupling_training_cfg.integration_rule,
+            evaluation_config=evaluation_cfg,
         )
         evaluator.evaluate(
             test_dataset,

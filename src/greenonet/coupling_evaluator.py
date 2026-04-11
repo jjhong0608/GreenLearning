@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Callable, List, cast
 from concurrent.futures import ProcessPoolExecutor
 
 import torch
@@ -9,9 +9,12 @@ from torch.utils.data import DataLoader, Dataset
 import plotly.graph_objs as go
 from torch.nn.functional import pad
 
+from greenonet.compile_utils import unwrap_compiled_model
+from greenonet.config import EvaluationConfig
 from greenonet.numerics import IntegrationRule, integrate, line_operator_fd
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.coupling_data import coupling_collate_fn, CouplingDataset
+from greenonet.coupling_model import CouplingForwardOutputs
 
 
 def _render_heatmap_task(task: dict[str, Any]) -> None:
@@ -53,6 +56,7 @@ class CouplingEvaluator(LoggingMixin):
         device: torch.device,
         work_dir: Path | str,
         integration_rule: IntegrationRule = "simpson",
+        evaluation_config: EvaluationConfig | None = None,
     ) -> None:
         self.model = model.to(device)
         self.green_kernel = green_kernel.to(device)
@@ -60,7 +64,51 @@ class CouplingEvaluator(LoggingMixin):
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.integration_rule = integration_rule
+        self.evaluation_config = (
+            EvaluationConfig() if evaluation_config is None else evaluation_config
+        )
         super().__init__(logger_name="CouplingEvaluator", work_dir=self.work_dir)
+
+    def _base_model(self) -> torch.nn.Module:
+        return unwrap_compiled_model(self.model)
+
+    def _forward_model_with_aux(
+        self,
+        coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+    ) -> CouplingForwardOutputs:
+        forward_with_aux = getattr(self.model, "forward_with_aux", None)
+        if callable(forward_with_aux):
+            outputs = forward_with_aux(
+                coords=coords,
+                a_vals=a_vals,
+                b_vals=b_vals,
+                c_vals=c_vals,
+                rhs_raw=rhs_raw,
+                rhs_tilde=rhs_tilde,
+                rhs_norm=rhs_norm,
+            )
+            if not isinstance(outputs, CouplingForwardOutputs):
+                raise TypeError("forward_with_aux must return CouplingForwardOutputs.")
+            return outputs
+        projected_flux = self.model(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+        )
+        return CouplingForwardOutputs(
+            raw_flux=projected_flux,
+            projected_flux=projected_flux,
+        )
 
     def _integrate(
         self, green: torch.Tensor, values: torch.Tensor, x_axis: torch.Tensor
@@ -93,6 +141,123 @@ class CouplingEvaluator(LoggingMixin):
             .clamp_min(eps)
         )
         return float(torch.sqrt(num / den).item())
+
+    def _integrated_square_norm(
+        self,
+        field: torch.Tensor,
+        primary_axis: torch.Tensor,
+        secondary_axis: torch.Tensor,
+    ) -> torch.Tensor:
+        primary = integrate(
+            field.pow(2),
+            x=primary_axis,
+            dim=-1,
+            rule=self.integration_rule,
+        )
+        return integrate(
+            primary,
+            x=secondary_axis,
+            dim=-1,
+            rule=self.integration_rule,
+        ).mean()
+
+    def _l2_integral_norm(
+        self,
+        field: torch.Tensor,
+        primary_axis: torch.Tensor,
+        secondary_axis: torch.Tensor,
+    ) -> float:
+        return float(
+            self._integrated_square_norm(field, primary_axis, secondary_axis).sqrt().item()
+        )
+
+    @staticmethod
+    def _build_x_view_coords(x_axis: torch.Tensor, y_axis: torch.Tensor) -> torch.Tensor:
+        x_grid = x_axis.unsqueeze(0).expand(y_axis.numel(), -1)
+        y_grid = y_axis.unsqueeze(1).expand(-1, x_axis.numel())
+        return torch.stack((x_grid, y_grid), dim=-1)
+
+    @staticmethod
+    def _build_y_view_coords(x_axis: torch.Tensor, y_axis: torch.Tensor) -> torch.Tensor:
+        x_grid = x_axis.unsqueeze(1).expand(-1, y_axis.numel())
+        y_grid = y_axis.unsqueeze(0).expand(x_axis.numel(), -1)
+        return torch.stack((x_grid, y_grid), dim=-1)
+
+    def _compute_posthoc_q_correction(
+        self,
+        raw_flux: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        u_phi_x: torch.Tensor,
+        u_psi_y: torch.Tensor,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        if not self.evaluation_config.posthoc_q_correction.enabled:
+            return {}
+        base_model = self._base_model()
+        forward_q_head = getattr(base_model, "forward_q_head", None)
+        q_head_enabled = getattr(base_model, "q_head", None) is not None and callable(
+            forward_q_head
+        )
+        if not q_head_enabled:
+            raise ValueError(
+                "evaluation.posthoc_q_correction.enabled requires coupling_model.q_head.enabled."
+            )
+        q_forward = cast(
+            Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
+            forward_q_head,
+        )
+
+        phi_raw_common = raw_flux[:, 0, :, 1:-1]
+        psi_raw_common = raw_flux[:, 1, :, 1:-1].transpose(-1, -2)
+        rhs_common = rhs_raw[:, 0, :, 1:-1]
+        s_common = phi_raw_common + psi_raw_common - rhs_common
+
+        batch_size, n_lines, n_inner = s_common.shape
+        m_points = n_inner + 2
+        s_x_lines = torch.zeros(
+            (batch_size, n_lines, m_points),
+            dtype=s_common.dtype,
+            device=s_common.device,
+        )
+        s_y_lines = torch.zeros_like(s_x_lines)
+        s_x_lines[:, :, 1:-1] = s_common
+        s_y_lines[:, :, 1:-1] = s_common.transpose(-1, -2)
+
+        s_x_raw = self._integrate(self.green_kernel[0], s_x_lines, x_axis)
+        s_y_raw = self._integrate(self.green_kernel[1], s_y_lines, y_axis)
+        s_x_view = pad(
+            s_x_raw[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
+        )
+        s_y_view = pad(
+            s_y_raw[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
+        )
+        s_x_common = s_x_view
+        s_y_common = s_y_view.transpose(-1, -2)
+
+        u_x_common = u_phi_x
+        u_y_common = u_psi_y.transpose(-1, -2)
+        m_common = u_x_common - u_y_common + 0.5 * (s_x_common + s_y_common)
+        m_x = m_common
+        m_y = m_common.transpose(-1, -2)
+
+        x_view_coords = self._build_x_view_coords(x_axis, y_axis)
+        y_view_coords = self._build_y_view_coords(x_axis, y_axis)
+        q_x = q_forward(x_view_coords, s_x_view, m_x)
+        q_y = q_forward(y_view_coords, s_y_view, m_y)
+        q_common = q_x + q_y.transpose(-1, -2)
+
+        a_common = 0.5 * m_common + q_common
+        b_common = s_x_common - 0.5 * m_common - q_common
+        c_common = 0.5 * m_common - q_common
+        d_common = s_y_common - 0.5 * m_common + q_common
+        u_x_corrected = u_x_common - 0.5 * (a_common - b_common)
+        u_y_corrected = u_y_common + 0.5 * (c_common - d_common)
+
+        return {
+            "u_x_corrected": u_x_corrected,
+            "u_y_corrected": u_y_corrected,
+        }
 
     @staticmethod
     def _grid_from_axial(x_data: torch.Tensor, y_data: torch.Tensor) -> torch.Tensor:
@@ -283,7 +448,7 @@ class CouplingEvaluator(LoggingMixin):
         b_vals = b_vals.to(self.device)
         c_vals = c_vals.to(self.device)
 
-        pred_flux = self.model(
+        forward_outputs = self._forward_model_with_aux(
             coords=coords.to(self.device),
             a_vals=a_vals,
             b_vals=b_vals,
@@ -291,7 +456,9 @@ class CouplingEvaluator(LoggingMixin):
             rhs_raw=rhs_raw.to(self.device),
             rhs_tilde=rhs_tilde.to(self.device),
             rhs_norm=rhs_norm.to(self.device),
-        )  # (B,2,n,m)
+        )
+        raw_flux = forward_outputs.raw_flux
+        pred_flux = forward_outputs.projected_flux  # (B,2,n,m)
 
         # pred_flux = flux.clone().to(self.device)
 
@@ -318,6 +485,15 @@ class CouplingEvaluator(LoggingMixin):
         flux = pad(flux[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0)
         sol = pad(sol[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0)
 
+        corrected = self._compute_posthoc_q_correction(
+            raw_flux=raw_flux,
+            rhs_raw=rhs_raw,
+            u_phi_x=u_phi_x,
+            u_psi_y=u_psi_y,
+            x_axis=x_axis,
+            y_axis=y_axis,
+        )
+
         tensors = {
             "pred_flux": pred_flux_target.detach().cpu(),
             "flux": flux.cpu(),
@@ -325,6 +501,9 @@ class CouplingEvaluator(LoggingMixin):
             "pred_sol_y": u_psi_y.detach().cpu(),
             "sol": sol.cpu(),
         }
+        if corrected:
+            tensors["pred_sol_x_corrected"] = corrected["u_x_corrected"].detach().cpu()
+            tensors["pred_sol_y_corrected"] = corrected["u_y_corrected"].detach().cpu()
         return tensors
 
     def evaluate(
@@ -410,6 +589,60 @@ class CouplingEvaluator(LoggingMixin):
                             pred_sol.to(self.device), sol_i.to(self.device), x_axis
                         ),
                     }
+                    if self.evaluation_config.posthoc_q_correction.enabled:
+                        pred_sol_x_corr = tensors["pred_sol_x_corrected"][i : i + 1].to(
+                            self.device
+                        )
+                        pred_sol_y_corr = tensors["pred_sol_y_corrected"][i : i + 1].to(
+                            self.device
+                        )
+                        sol_x_common = tensors["sol"][i : i + 1, 0].to(self.device)
+                        sol_y_common = (
+                            tensors["sol"][i : i + 1, 1].transpose(-1, -2).to(self.device)
+                        )
+                        sol_common = 0.5 * (sol_x_common + sol_y_common)
+                        pred_sol_common_corr = 0.5 * (pred_sol_x_corr + pred_sol_y_corr)
+                        metrics["consistency_gap"] = self._l2_integral_norm(
+                            tensors["pred_sol_x"][i : i + 1].to(self.device)
+                            - tensors["pred_sol_y"][i : i + 1]
+                            .transpose(-1, -2)
+                            .to(self.device),
+                            x_axis,
+                            y_axis,
+                        )
+                        metrics["rel_sol_x"] = self._relative_l2_integral(
+                            tensors["pred_sol_x"][i : i + 1].to(self.device),
+                            sol_x_common,
+                            x_axis,
+                        )
+                        metrics["rel_sol_y"] = self._relative_l2_integral(
+                            tensors["pred_sol_y"][i : i + 1]
+                            .transpose(-1, -2)
+                            .to(self.device),
+                            sol_y_common,
+                            x_axis,
+                        )
+                        if self.evaluation_config.posthoc_q_correction.report_corrected_metrics:
+                            metrics["rel_sol_corrected"] = self._relative_l2_integral(
+                                pred_sol_common_corr,
+                                sol_common,
+                                x_axis,
+                            )
+                            metrics["consistency_gap_corrected"] = self._l2_integral_norm(
+                                pred_sol_x_corr - pred_sol_y_corr,
+                                x_axis,
+                                y_axis,
+                            )
+                            metrics["rel_sol_x_corrected"] = self._relative_l2_integral(
+                                pred_sol_x_corr,
+                                sol_x_common,
+                                x_axis,
+                            )
+                            metrics["rel_sol_y_corrected"] = self._relative_l2_integral(
+                                pred_sol_y_corr,
+                                sol_y_common,
+                                x_axis,
+                            )
                     rows.append({"file": file_stem, **metrics})
 
                     # Build grids for plotting
@@ -714,8 +947,13 @@ class CouplingEvaluator(LoggingMixin):
 
         csv_path = self.work_dir / dataset_name / "metrics.csv"
         csv_path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames: List[str] = []
+        for row in rows:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
         with csv_path.open("w", newline="") as fp:
-            writer = csv.DictWriter(fp, fieldnames=["file", "rel_flux", "rel_sol"])
+            writer = csv.DictWriter(fp, fieldnames=fieldnames)
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)

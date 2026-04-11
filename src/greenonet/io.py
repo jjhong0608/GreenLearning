@@ -9,7 +9,7 @@ from typing import Any, cast
 import torch
 
 from greenonet.compile_utils import model_state_dict_for_save
-from greenonet.config import CouplingModelConfig, ModelConfig
+from greenonet.config import CouplingModelConfig, CouplingQHeadConfig, ModelConfig
 
 
 def save_state_dict_safetensors(
@@ -68,6 +68,8 @@ def _deserialize_config(
     data = dict(payload)
     if "dtype" in data and isinstance(data["dtype"], str):
         data["dtype"] = _parse_dtype(data["dtype"])
+    if config_cls is CouplingModelConfig and isinstance(data.get("q_head"), dict):
+        data["q_head"] = CouplingQHeadConfig(**data["q_head"])
     allowed_keys = {field.name for field in fields(config_cls)}
     filtered = {key: value for key, value in data.items() if key in allowed_keys}
     return config_cls(**filtered)
@@ -175,6 +177,11 @@ def load_model_with_config(
         model.load_state_dict(state)
         return model, green_config
     if model_type == "coupling":
+        if "q_head" not in config_payload and not any(
+            key.startswith("q_head.") for key in state
+        ):
+            config_payload = dict(config_payload)
+            config_payload["q_head"] = {"enabled": False}
         coupling_config = cast(
             CouplingModelConfig,
             _deserialize_config(config_payload, CouplingModelConfig),
