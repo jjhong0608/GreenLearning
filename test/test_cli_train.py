@@ -110,14 +110,17 @@ class TestTrainCLIDatasetConfig:
                     "l2_consistency": {
                         "enabled": True,
                         "weight": 1.5,
+                        "weight_mode": "manual",
                     },
                     "flux_consistency": {
                         "enabled": True,
                         "weight": 0.25,
+                        "weight_mode": "auto_operator",
                     },
                     "cross_consistency": {
                         "enabled": False,
                         "weight": 2.0,
+                        "weight_mode": "manual",
                     },
                 },
                 "learning_rate": 5e-4,
@@ -154,10 +157,16 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.integration_rule == "trapezoid"
         assert coupling_training_cfg.losses.l2_consistency.enabled is True
         assert coupling_training_cfg.losses.l2_consistency.weight == 1.5
+        assert coupling_training_cfg.losses.l2_consistency.weight_mode == "manual"
         assert coupling_training_cfg.losses.flux_consistency.enabled is True
         assert coupling_training_cfg.losses.flux_consistency.weight == 0.25
+        assert (
+            coupling_training_cfg.losses.flux_consistency.weight_mode
+            == "auto_operator"
+        )
         assert coupling_training_cfg.losses.cross_consistency.enabled is False
         assert coupling_training_cfg.losses.cross_consistency.weight == 2.0
+        assert coupling_training_cfg.losses.cross_consistency.weight_mode == "manual"
         assert coupling_training_cfg.learning_rate == 5e-4
         assert coupling_training_cfg.epochs == 11
         assert coupling_training_cfg.use_lr_schedule is True
@@ -188,4 +197,50 @@ class TestTrainCLIDatasetConfig:
         config_path.write_text(json.dumps(payload))
 
         with pytest.raises(TypeError, match="deprecated flat coupling loss"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_invalid_coupling_loss_weight_mode(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {},
+            "coupling_training": {
+                "losses": {
+                    "flux_consistency": {
+                        "enabled": True,
+                        "weight": 1.0,
+                        "weight_mode": "bad_mode",
+                    }
+                }
+            },
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="weight_mode must be one of"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_auto_operator_mode_for_l2_loss(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {},
+            "coupling_training": {
+                "losses": {
+                    "l2_consistency": {
+                        "enabled": True,
+                        "weight": 1.0,
+                        "weight_mode": "auto_operator",
+                    }
+                }
+            },
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="l2_consistency.weight_mode must be 'manual'"):
             TrainCLI()._build_configs(config_path)

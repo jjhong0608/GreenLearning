@@ -33,15 +33,21 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         rf"\s+rel_flux=(?P<rflux_tr>{VALUE_RE})"
         rf"\s+rel_sol=(?P<rsol_tr>{VALUE_RE})"
         rf"\s*\|\s*w_l2=(?P<w_l2>{VALUE_RE})\s+on_l2=(?P<on_l2>True|False)"
+        rf"(?:\s+mode_l2=(?P<mode_l2>manual|auto_operator))?"
         rf"\s+w_flux=(?P<w_flux>{VALUE_RE})\s+on_flux=(?P<on_flux>True|False)"
+        rf"(?:\s+mode_flux=(?P<mode_flux>manual|auto_operator))?"
         rf"\s+w_cross=(?P<w_cross>{VALUE_RE})\s+on_cross=(?P<on_cross>True|False)"
+        rf"(?:\s+mode_cross=(?P<mode_cross>manual|auto_operator))?"
         rf"(?:\s*\|\s*lr=(?P<lr>{VALUE_RE}))?"
         rf"(?:\s*\|\s*val\s+loss=(?P<loss_val>{VALUE_RE})"
         rf"\s+l2_cons=(?P<l2_cons_val>{VALUE_RE})"
         rf"\s+flux_cons=(?P<flux_cons_val>{VALUE_RE})"
         rf"\s+cross_cons=(?P<cross_cons_val>{VALUE_RE})"
         rf"\s+rel_flux=(?P<rflux_val>{VALUE_RE})"
-        rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE}))?",
+        rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE})"
+        rf"(?:\s*\|\s*val_w_l2=(?P<val_w_l2>{VALUE_RE})"
+        rf"\s+val_w_flux=(?P<val_w_flux>{VALUE_RE})"
+        rf"\s+val_w_cross=(?P<val_w_cross>{VALUE_RE}))?)?",
         re.IGNORECASE,
     )
 
@@ -73,6 +79,9 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
                 "on_flux": _parse_bool(match.group("on_flux")),
                 "w_cross": _parse_float(match.group("w_cross")),
                 "on_cross": _parse_bool(match.group("on_cross")),
+                "val_w_l2": _parse_float(match.group("val_w_l2")),
+                "val_w_flux": _parse_float(match.group("val_w_flux")),
+                "val_w_cross": _parse_float(match.group("val_w_cross")),
             }
         )
 
@@ -97,6 +106,9 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         "on_flux": [],
         "w_cross": [],
         "on_cross": [],
+        "val_w_l2": [],
+        "val_w_flux": [],
+        "val_w_cross": [],
     }
 
     offset = 0.0

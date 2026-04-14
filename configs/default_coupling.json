@@ -32,15 +32,18 @@
     "losses": {
       "l2_consistency": {
         "enabled": true,
-        "weight": 1.0
+        "weight": 1.0,
+        "weight_mode": "manual"
       },
       "flux_consistency": {
         "enabled": true,
-        "weight": 1.0
+        "weight": 1.0,
+        "weight_mode": "auto_operator"
       },
       "cross_consistency": {
         "enabled": true,
-        "weight": 1.0
+        "weight": 1.0,
+        "weight_mode": "auto_operator"
       }
     },
     "integration_rule": "trapezoid",

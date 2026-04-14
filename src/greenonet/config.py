@@ -77,6 +77,7 @@ class CouplingLossTermConfig:
 
     enabled: bool = True
     weight: float = 1.0
+    weight_mode: Literal["manual", "auto_operator"] = "manual"
 
 
 @dataclass

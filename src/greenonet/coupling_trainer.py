@@ -16,7 +16,12 @@ from greenonet.config import (
     CouplingTrainingConfig,
 )
 from greenonet.logging_mixin import LoggingMixin
-from greenonet.numerics import integrate, line_first_derivative_fd, line_operator_fd
+from greenonet.numerics import (
+    integrate,
+    line_first_derivative_fd,
+    line_operator_fd,
+    uniform_spacing,
+)
 from greenonet.visualizer import LossVisualizer
 from greenonet.io import (
     save_model_with_config,
@@ -63,6 +68,7 @@ class CouplingTrainer(LoggingMixin):
             model_name="CouplingNet",
         )
         self.green_kernel = green_kernel.to(self.device)  # (2, n, m, m)
+        self._validate_loss_weight_config()
         self.loss_history: List[float] = []
         self.stage_loss_history: dict[str, List[float]] = {}
 
@@ -203,6 +209,89 @@ class CouplingTrainer(LoggingMixin):
     def _effective_weight(enabled: bool, weight: float) -> float:
         return weight if enabled else 0.0
 
+    @staticmethod
+    def _mean_square(values: torch.Tensor) -> torch.Tensor:
+        if values.numel() == 0:
+            return torch.zeros((), dtype=values.dtype, device=values.device)
+        return values.pow(2).mean()
+
+    def _validate_loss_weight_config(self) -> None:
+        l2_cfg = self.config.losses.l2_consistency
+        flux_cfg = self.config.losses.flux_consistency
+        cross_cfg = self.config.losses.cross_consistency
+        if l2_cfg.weight_mode != "manual":
+            raise ValueError(
+                "coupling_training.losses.l2_consistency.weight_mode must be 'manual'."
+            )
+        auto_requested = (
+            flux_cfg.weight_mode == "auto_operator"
+            or cross_cfg.weight_mode == "auto_operator"
+        )
+        if auto_requested and l2_cfg.weight <= 0.0:
+            raise ValueError(
+                "coupling_training.losses.l2_consistency.weight must be > 0 when "
+                "any Coupling auxiliary loss uses weight_mode='auto_operator'."
+            )
+
+    def _compute_effective_loss_weights(
+        self,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+    ) -> tuple[float, float, float]:
+        l2_cfg = self.config.losses.l2_consistency
+        flux_cfg = self.config.losses.flux_consistency
+        cross_cfg = self.config.losses.cross_consistency
+        base_l2 = float(l2_cfg.weight)
+        w_l2 = self._effective_weight(l2_cfg.enabled, base_l2)
+
+        hx = uniform_spacing(x_axis)
+        hy = uniform_spacing(y_axis)
+        eps = torch.tensor(1e-12, dtype=a_vals.dtype, device=a_vals.device)
+
+        a_x_inner = a_vals[:, 0, :, 1:-1]
+        a_y_inner = a_vals[:, 1, :, 1:-1]
+        gain_flux_x = self._mean_square(a_x_inner) / (2.0 * hx.pow(2))
+        gain_flux_y = self._mean_square(a_y_inner) / (2.0 * hy.pow(2))
+        gain_flux = 0.5 * (gain_flux_x + gain_flux_y)
+
+        face_a_x = 0.5 * (a_vals[:, 0, :, 1:] + a_vals[:, 0, :, :-1])
+        face_a_y = 0.5 * (a_vals[:, 1, :, 1:] + a_vals[:, 1, :, :-1])
+        b_x_inner = b_vals[:, 0, :, 1:-1]
+        b_y_inner = b_vals[:, 1, :, 1:-1]
+        c_x_inner = c_vals[:, 0, :, 1:-1]
+        c_y_inner = c_vals[:, 1, :, 1:-1]
+        gain_cross_x = (
+            6.0 * self._mean_square(face_a_x) / hx.pow(4)
+            + self._mean_square(b_x_inner) / (2.0 * hx.pow(2))
+            + self._mean_square(c_x_inner)
+        )
+        gain_cross_y = (
+            6.0 * self._mean_square(face_a_y) / hy.pow(4)
+            + self._mean_square(b_y_inner) / (2.0 * hy.pow(2))
+            + self._mean_square(c_y_inner)
+        )
+        gain_cross = 0.5 * (gain_cross_x + gain_cross_y)
+
+        if flux_cfg.weight_mode == "auto_operator":
+            w_flux = self._effective_weight(
+                flux_cfg.enabled,
+                base_l2 / float(gain_flux.clamp_min(eps).item()),
+            )
+        else:
+            w_flux = self._effective_weight(flux_cfg.enabled, flux_cfg.weight)
+
+        if cross_cfg.weight_mode == "auto_operator":
+            w_cross = self._effective_weight(
+                cross_cfg.enabled,
+                base_l2 / float(gain_cross.clamp_min(eps).item()),
+            )
+        else:
+            w_cross = self._effective_weight(cross_cfg.enabled, cross_cfg.weight)
+        return w_l2, w_flux, w_cross
+
     def _supports_auxiliary_quadrature(self, axis_coords: torch.Tensor) -> bool:
         samples = int(axis_coords.numel())
         if self.config.integration_rule == "simpson":
@@ -322,12 +411,13 @@ class CouplingTrainer(LoggingMixin):
             x_axis=x_axis,
             y_axis=y_axis,
         )
-        l2_cfg = self.config.losses.l2_consistency
-        flux_cfg = self.config.losses.flux_consistency
-        cross_cfg = self.config.losses.cross_consistency
-        w_l2 = self._effective_weight(l2_cfg.enabled, l2_cfg.weight)
-        w_flux = self._effective_weight(flux_cfg.enabled, flux_cfg.weight)
-        w_cross = self._effective_weight(cross_cfg.enabled, cross_cfg.weight)
+        w_l2, w_flux, w_cross = self._compute_effective_loss_weights(
+            x_axis=x_axis,
+            y_axis=y_axis,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+        )
 
         loss = torch.zeros((), dtype=loss_cons.dtype, device=loss_cons.device)
         if w_l2 != 0.0:
@@ -342,6 +432,9 @@ class CouplingTrainer(LoggingMixin):
             "loss_l2_consistency": float(loss_cons.detach().item()),
             "loss_flux_consistency": float(loss_flux_consistency.detach().item()),
             "loss_cross_consistency": float(loss_cross_consistency.detach().item()),
+            "weight_l2_effective": w_l2,
+            "weight_flux_effective": w_flux,
+            "weight_cross_effective": w_cross,
             "rel_flux": self._relative_l2_integral(
                 pred_flux_target.detach(), flux_target, x_axis
             ),
@@ -453,6 +546,9 @@ class CouplingTrainer(LoggingMixin):
                 "loss_l2_consistency": 0.0,
                 "loss_flux_consistency": 0.0,
                 "loss_cross_consistency": 0.0,
+                "weight_l2_effective": 0.0,
+                "weight_flux_effective": 0.0,
+                "weight_cross_effective": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
             }
@@ -513,6 +609,9 @@ class CouplingTrainer(LoggingMixin):
                 "loss_l2_consistency": 0.0,
                 "loss_flux_consistency": 0.0,
                 "loss_cross_consistency": 0.0,
+                "weight_l2_effective": 0.0,
+                "weight_flux_effective": 0.0,
+                "weight_cross_effective": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
             }
@@ -561,6 +660,9 @@ class CouplingTrainer(LoggingMixin):
                 "loss_l2_consistency": float("nan"),
                 "loss_flux_consistency": float("nan"),
                 "loss_cross_consistency": float("nan"),
+                "weight_l2_effective": float("nan"),
+                "weight_flux_effective": float("nan"),
+                "weight_cross_effective": float("nan"),
                 "rel_flux": float("nan"),
                 "rel_sol": float("nan"),
             }
@@ -579,10 +681,12 @@ class CouplingTrainer(LoggingMixin):
                     (
                         "epoch %s | train loss=%.4e l2_cons=%.4e flux_cons=%.4e "
                         "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
-                        "w_l2=%.4e on_l2=%s w_flux=%.4e on_flux=%s "
-                        "w_cross=%.4e on_cross=%s | lr=%.4e | val loss=%.4e "
+                        "w_l2=%.4e on_l2=%s mode_l2=%s w_flux=%.4e on_flux=%s "
+                        "mode_flux=%s w_cross=%.4e on_cross=%s mode_cross=%s | "
+                        "lr=%.4e | val loss=%.4e "
                         "l2_cons=%.4e flux_cons=%.4e cross_cons=%.4e "
-                        "rel_flux=%.4e rel_sol=%.4e"
+                        "rel_flux=%.4e rel_sol=%.4e | val_w_l2=%.4e "
+                        "val_w_flux=%.4e val_w_cross=%.4e"
                     ),
                     epoch,
                     train_metrics["loss"],
@@ -591,12 +695,15 @@ class CouplingTrainer(LoggingMixin):
                     train_metrics["loss_cross_consistency"],
                     train_metrics["rel_flux"],
                     train_metrics["rel_sol"],
-                    l2_cfg.weight,
+                    train_metrics["weight_l2_effective"],
                     l2_cfg.enabled,
-                    flux_cfg.weight,
+                    l2_cfg.weight_mode,
+                    train_metrics["weight_flux_effective"],
                     flux_cfg.enabled,
-                    cross_cfg.weight,
+                    flux_cfg.weight_mode,
+                    train_metrics["weight_cross_effective"],
                     cross_cfg.enabled,
+                    cross_cfg.weight_mode,
                     current_lr,
                     val_metrics["loss"],
                     val_metrics["loss_l2_consistency"],
@@ -604,6 +711,9 @@ class CouplingTrainer(LoggingMixin):
                     val_metrics["loss_cross_consistency"],
                     val_metrics["rel_flux"],
                     val_metrics["rel_sol"],
+                    val_metrics["weight_l2_effective"],
+                    val_metrics["weight_flux_effective"],
+                    val_metrics["weight_cross_effective"],
                 )
             self._maybe_save_periodic_checkpoint(epoch)
             if scheduler is not None:
@@ -647,6 +757,9 @@ class CouplingTrainer(LoggingMixin):
         loss_l2_consistency: List[float] = []
         loss_flux_consistency: List[float] = []
         loss_cross_consistency: List[float] = []
+        weight_l2_effective: List[float] = []
+        weight_flux_effective: List[float] = []
+        weight_cross_effective: List[float] = []
         rel_flux: List[float] = []
         rel_sol: List[float] = []
         with torch.no_grad():
@@ -677,6 +790,9 @@ class CouplingTrainer(LoggingMixin):
                 loss_l2_consistency.append(metrics["loss_l2_consistency"])
                 loss_flux_consistency.append(metrics["loss_flux_consistency"])
                 loss_cross_consistency.append(metrics["loss_cross_consistency"])
+                weight_l2_effective.append(metrics["weight_l2_effective"])
+                weight_flux_effective.append(metrics["weight_flux_effective"])
+                weight_cross_effective.append(metrics["weight_cross_effective"])
                 rel_flux.append(metrics["rel_flux"])
                 rel_sol.append(metrics["rel_sol"])
         return {
@@ -689,6 +805,15 @@ class CouplingTrainer(LoggingMixin):
             ),
             "loss_cross_consistency": float(
                 sum(loss_cross_consistency) / max(len(loss_cross_consistency), 1)
+            ),
+            "weight_l2_effective": float(
+                sum(weight_l2_effective) / max(len(weight_l2_effective), 1)
+            ),
+            "weight_flux_effective": float(
+                sum(weight_flux_effective) / max(len(weight_flux_effective), 1)
+            ),
+            "weight_cross_effective": float(
+                sum(weight_cross_effective) / max(len(weight_cross_effective), 1)
             ),
             "rel_flux": float(sum(rel_flux) / max(len(rel_flux), 1)),
             "rel_sol": float(sum(rel_sol) / max(len(rel_sol), 1)),

@@ -178,23 +178,29 @@ def _losses_config(
     *,
     l2_enabled: bool = True,
     l2_weight: float = 1.0,
+    l2_weight_mode: str = "manual",
     flux_enabled: bool = True,
     flux_weight: float = 1.0,
+    flux_weight_mode: str = "manual",
     cross_enabled: bool = True,
     cross_weight: float = 1.0,
+    cross_weight_mode: str = "manual",
 ) -> CouplingLossesConfig:
     return CouplingLossesConfig(
         l2_consistency=CouplingLossTermConfig(
             enabled=l2_enabled,
             weight=l2_weight,
+            weight_mode=l2_weight_mode,
         ),
         flux_consistency=CouplingLossTermConfig(
             enabled=flux_enabled,
             weight=flux_weight,
+            weight_mode=flux_weight_mode,
         ),
         cross_consistency=CouplingLossTermConfig(
             enabled=cross_enabled,
             weight=cross_weight,
+            weight_mode=cross_weight_mode,
         ),
     )
 
@@ -950,6 +956,163 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
         + 3.0 * metrics["loss_cross_consistency"]
     )
     assert loss.item() == pytest.approx(expected)
+    assert metrics["weight_l2_effective"] == pytest.approx(0.5)
+    assert metrics["weight_flux_effective"] == pytest.approx(2.0)
+    assert metrics["weight_cross_effective"] == pytest.approx(3.0)
+
+
+def test_auto_operator_flux_weight_uses_base_l2_weight(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    a_vals[:] = 1.0
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    projected_flux[:, 0, :, 1:-1] = 1.0
+    projected_flux[:, 1, :, 1:-1] = 0.25
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(projected_flux),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_weight=2.0,
+                flux_weight=99.0,
+                flux_weight_mode="auto_operator",
+                cross_enabled=False,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    w_l2, w_flux, w_cross = trainer._compute_effective_loss_weights(
+        x_axis=coords[0, 0, :, 0],
+        y_axis=coords[1, 0, :, 1],
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+    )
+
+    assert w_l2 == pytest.approx(2.0)
+    assert w_flux == pytest.approx(0.25)
+    assert w_cross == pytest.approx(0.0)
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+    expected = 2.0 * metrics["loss_l2_consistency"] + 0.25 * metrics["loss_flux_consistency"]
+    assert loss.item() == pytest.approx(expected)
+
+
+def test_auto_operator_cross_weight_includes_diffusion_advection_and_reaction(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    a_vals[:] = 1.0
+    b_vals[:] = 2.0
+    c_vals[:] = 3.0
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    projected_flux[:, 0, :, 1:-1] = 1.0
+    projected_flux[:, 1, :, 1:-1] = 0.25
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(projected_flux),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_weight=2.0,
+                flux_enabled=False,
+                cross_weight=77.0,
+                cross_weight_mode="auto_operator",
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    _w_l2, w_flux, w_cross = trainer._compute_effective_loss_weights(
+        x_axis=coords[0, 0, :, 0],
+        y_axis=coords[1, 0, :, 1],
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+    )
+    expected_gain = 6.0 / (0.25**4) + 4.0 / (2.0 * 0.25**2) + 9.0
+
+    assert w_flux == pytest.approx(0.0)
+    assert w_cross == pytest.approx(2.0 / expected_gain)
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+    expected = 2.0 * metrics["loss_l2_consistency"] + (2.0 / expected_gain) * metrics[
+        "loss_cross_consistency"
+    ]
+    assert loss.item() == pytest.approx(expected)
+
+
+def test_trainer_rejects_auto_operator_mode_for_l2_weight(tmp_path):
+    with pytest.raises(ValueError, match="l2_consistency.weight_mode"):
+        CouplingTrainer(
+            model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+            config=CouplingTrainingConfig(
+                losses=_losses_config(l2_weight_mode="auto_operator"),
+                epochs=1,
+                batch_size=1,
+            ),
+            work_dir=tmp_path,
+            green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        )
+
+
+def test_trainer_requires_positive_l2_base_weight_for_auto_operator_losses(tmp_path):
+    with pytest.raises(ValueError, match="l2_consistency.weight must be > 0"):
+        CouplingTrainer(
+            model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+            config=CouplingTrainingConfig(
+                losses=_losses_config(
+                    l2_weight=0.0,
+                    flux_weight_mode="auto_operator",
+                    cross_enabled=False,
+                ),
+                epochs=1,
+                batch_size=1,
+            ),
+            work_dir=tmp_path,
+            green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        )
 
 
 def test_evaluate_reports_all_three_loss_components(tmp_path):
@@ -999,3 +1162,6 @@ def test_evaluate_reports_all_three_loss_components(tmp_path):
     assert "loss_l2_consistency" in metrics
     assert "loss_flux_consistency" in metrics
     assert "loss_cross_consistency" in metrics
+    assert "weight_l2_effective" in metrics
+    assert "weight_flux_effective" in metrics
+    assert "weight_cross_effective" in metrics

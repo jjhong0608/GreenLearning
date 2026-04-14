@@ -35,6 +35,8 @@ from greenonet.runner import run_green_o_net
 class TrainCLI:
     """Command-line entrypoint for model training."""
 
+    _COUPLING_WEIGHT_MODES = {"manual", "auto_operator"}
+
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(description="Train GreenONet and CouplingNet.")
         parser.add_argument(
@@ -208,13 +210,31 @@ class TrainCLI:
             if raw_term is None:
                 parsed[key] = CouplingLossTermConfig()
             elif isinstance(raw_term, dict):
-                parsed[key] = CouplingLossTermConfig(**raw_term)
+                parsed[key] = TrainCLI._build_coupling_loss_term_config(
+                    raw_term, f"{section_name}.losses.{key}"
+                )
             else:
                 raise TypeError(f"{section_name}.losses.{key} must be an object.")
+            if key == "l2_consistency" and parsed[key].weight_mode != "manual":
+                raise TypeError(
+                    f"{section_name}.losses.l2_consistency.weight_mode must be 'manual'."
+                )
         if loss_kwargs:
             unknown = ", ".join(sorted(loss_kwargs))
             raise TypeError(f"{section_name}.losses has unknown keys: {unknown}.")
         return CouplingLossesConfig(**parsed)
+
+    @staticmethod
+    def _build_coupling_loss_term_config(
+        raw_term: dict[str, object], section_name: str
+    ) -> CouplingLossTermConfig:
+        term_cfg = CouplingLossTermConfig(**raw_term)
+        if term_cfg.weight_mode not in TrainCLI._COUPLING_WEIGHT_MODES:
+            raise TypeError(
+                f"{section_name}.weight_mode must be one of "
+                f"{sorted(TrainCLI._COUPLING_WEIGHT_MODES)}."
+            )
+        return term_cfg
 
     @staticmethod
     def a_fun(x: Tensor, y: Tensor) -> Tensor:
