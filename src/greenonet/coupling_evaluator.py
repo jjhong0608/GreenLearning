@@ -269,6 +269,7 @@ class CouplingEvaluator(LoggingMixin):
         a_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         b, _, n_lines, m_points = rhs_raw.shape
         x_axis = coords[0, 0, :, 0].to(self.device)
@@ -282,10 +283,12 @@ class CouplingEvaluator(LoggingMixin):
         a_vals = a_vals.to(self.device)
         b_vals = b_vals.to(self.device)
         c_vals = c_vals.to(self.device)
+        ap_vals = ap_vals.to(self.device)
 
         pred_flux = self.model(
             coords=coords.to(self.device),
             a_vals=a_vals,
+            ap_vals=ap_vals,
             b_vals=b_vals,
             c_vals=c_vals,
             rhs_raw=rhs_raw.to(self.device),
@@ -369,6 +372,7 @@ class CouplingEvaluator(LoggingMixin):
                     a_vals,
                     b_vals,
                     c_vals,
+                    ap,
                 )
                 batch_size_actual = rhs_raw.shape[0]
                 for i in range(batch_size_actual):

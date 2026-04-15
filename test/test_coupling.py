@@ -7,10 +7,12 @@ from torch import nn
 
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_evaluator import CouplingEvaluator
-from greenonet.coupling_model import CouplingNet
+from greenonet.coupling_model import CouplingLineEncoder, CouplingNet
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
     CouplingBestRelSolCheckpointConfig,
+    CouplingLineEncoderConfig,
+    CouplingLineEncoderHeadConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
     CouplingModelConfig,
@@ -41,13 +43,14 @@ class _DummyFluxModel(nn.Module):
         self,
         coords: torch.Tensor,
         a_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
     ) -> torch.Tensor:
-        del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
+        del coords, a_vals, ap_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
         return self._projected_flux.clone()
 
 
@@ -60,13 +63,14 @@ class _TrainableFluxModel(nn.Module):
         self,
         coords: torch.Tensor,
         a_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
     ) -> torch.Tensor:
-        del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
+        del coords, a_vals, ap_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
         return self.projected_flux
 
 
@@ -79,13 +83,14 @@ class _RawSumFromRhsModel(nn.Module):
         self,
         coords: torch.Tensor,
         a_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
     ) -> torch.Tensor:
-        del coords, a_vals, b_vals, c_vals, rhs_tilde, rhs_norm
+        del coords, a_vals, ap_vals, b_vals, c_vals, rhs_tilde, rhs_norm
         projected_flux = torch.zeros_like(rhs_raw)
         rhs_inner = rhs_raw[:, 0, :, 1:-1]
         projected_flux[:, 0, :, 1:-1] = 0.25 * rhs_inner + 0.0 * self.anchor
@@ -161,6 +166,7 @@ def _make_step_loss_inputs(
     a_vals = torch.zeros((batch, 2, n_lines, m_points), dtype=torch.float64)
     b_vals = torch.zeros((batch, 2, n_lines, m_points), dtype=torch.float64)
     c_vals = torch.zeros((batch, 2, n_lines, m_points), dtype=torch.float64)
+    ap_vals = torch.zeros((batch, 2, n_lines, m_points), dtype=torch.float64)
     return (
         coords,
         rhs_raw,
@@ -171,6 +177,7 @@ def _make_step_loss_inputs(
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     )
 
 
@@ -247,11 +254,71 @@ def test_coupling_dataset_trapezoid_rhs_norm(tmp_path):
     assert rhs_norm[0, 0].item() == pytest.approx(np.sqrt(0.28125), rel=1e-6)
 
 
+def test_coupling_line_encoder_shape_matches_hidden_dim():
+    encoder = CouplingLineEncoder(
+        config=CouplingLineEncoderConfig(
+            conv_channels=[32, 64, 64],
+            dilations=[1, 2, 4],
+            mlp_head=CouplingLineEncoderHeadConfig(
+                depth=2,
+                hidden_dim=16,
+                activation="rational",
+            ),
+        ),
+        output_dim=8,
+        fallback_hidden_dim=8,
+        fallback_depth=2,
+        fallback_activation="rational",
+        fallback_use_bias=True,
+        fallback_dropout=0.0,
+    ).to(dtype=torch.float64)
+    line = torch.randn(6, 9, dtype=torch.float64)
+    pos = torch.linspace(0.0, 1.0, steps=9, dtype=torch.float64).view(1, 1, 9)
+    db = torch.minimum(pos, 1.0 - pos)
+
+    latent = encoder(line, pos, db)
+
+    assert latent.shape == (6, 8)
+
+
+def test_coupling_model_construction_from_nested_line_encoder_config():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        line_encoder=CouplingLineEncoderConfig(
+            type="cnn1d",
+            in_channels=3,
+            include_position=True,
+            include_boundary_distance=True,
+            conv_channels=[32, 64, 64],
+            kernel_size=5,
+            dilations=[1, 2, 4],
+            pooling="meanmax",
+            activation="rational",
+            mlp_head=CouplingLineEncoderHeadConfig(
+                depth=1,
+                hidden_dim=16,
+                activation="rational",
+                use_bias=True,
+                dropout=0.0,
+            ),
+        ),
+    )
+
+    model = CouplingNet(cfg)
+
+    assert isinstance(model.branch_a, CouplingLineEncoder)
+    assert isinstance(model.branch_ap, CouplingLineEncoder)
+    assert model.branch_fuser.in_features == 5 * cfg.hidden_dim
+
+
 def test_coupling_model_forward():
     cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
     coords = torch.zeros((2, 1, 3, 2))
     kappa = torch.randn(1, 2, 1, 3)
+    ap_vals = torch.randn(1, 2, 1, 3)
     b_vals = torch.randn(1, 2, 1, 3)
     c_vals = torch.randn(1, 2, 1, 3)
     rhs_raw = torch.randn(1, 2, 1, 3)
@@ -260,6 +327,7 @@ def test_coupling_model_forward():
     projected_flux = model(
         coords=coords,
         a_vals=kappa,
+        ap_vals=ap_vals,
         b_vals=b_vals,
         c_vals=c_vals,
         rhs_raw=rhs_raw,
@@ -273,7 +341,7 @@ def test_coupling_model_forward():
     assert psi_y.shape == rhs_raw[:, 1].shape
 
 
-def test_coupling_model_backprop_through_shared_encoder():
+def test_coupling_model_backprop_through_all_branch_encoders():
     cfg = CouplingModelConfig(
         branch_input_dim=3,
         hidden_dim=8,
@@ -283,6 +351,7 @@ def test_coupling_model_backprop_through_shared_encoder():
 
     coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
     a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    ap_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
     b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
     c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
     rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
@@ -292,6 +361,7 @@ def test_coupling_model_backprop_through_shared_encoder():
     projected_flux = model(
         coords=coords,
         a_vals=a_vals,
+        ap_vals=ap_vals,
         b_vals=b_vals,
         c_vals=c_vals,
         rhs_raw=rhs_raw,
@@ -310,7 +380,11 @@ def test_coupling_model_backprop_through_shared_encoder():
 
     assert projected_flux.shape == (1, 2, 1, 3)
     assert _has_grad(model.branch_a)
+    assert _has_grad(model.branch_ap)
+    assert _has_grad(model.branch_b)
+    assert _has_grad(model.branch_c)
     assert _has_grad(model.branch_rhs)
+    assert _has_grad(model.branch_fuser)
     assert _has_grad(model.trunk)
 
 
@@ -320,7 +394,7 @@ def test_coupling_balance_projection_uses_fixed_half_split():
             super().__init__()
             self.hidden_dim = hidden_dim
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
+        def forward(self, x: torch.Tensor, *args: torch.Tensor) -> torch.Tensor:
             return torch.zeros(
                 (x.shape[0], self.hidden_dim), dtype=x.dtype, device=x.device
             )
@@ -328,9 +402,12 @@ def test_coupling_balance_projection_uses_fixed_half_split():
     cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
     model.branch_a = _ZeroBranch(cfg.hidden_dim)
+    model.branch_ap = _ZeroBranch(cfg.hidden_dim)
     model.branch_b = _ZeroBranch(cfg.hidden_dim)
     model.branch_c = _ZeroBranch(cfg.hidden_dim)
     model.branch_rhs = _ZeroBranch(cfg.hidden_dim)
+    model.branch_fuser = nn.Linear(5 * cfg.hidden_dim, cfg.hidden_dim, bias=False)
+    nn.init.zeros_(model.branch_fuser.weight)
     model.trunk = _ZeroBranch(cfg.hidden_dim)
 
     coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
@@ -346,6 +423,7 @@ def test_coupling_balance_projection_uses_fixed_half_split():
     projected_flux = model(
         coords=coords,
         a_vals=zeros,
+        ap_vals=zeros,
         b_vals=zeros,
         c_vals=zeros,
         rhs_raw=rhs_raw,
@@ -361,6 +439,34 @@ def test_coupling_balance_projection_uses_fixed_half_split():
     assert torch.allclose(
         projected_flux[:, 1, :, 1:-1], expected_psi, atol=1e-12, rtol=1e-12
     )
+
+
+def test_coupling_model_forward_accepts_zero_b_and_c():
+    cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    coords[0, :, :, 0] = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    coords[1, :, :, 1] = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    ap_vals = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    b_vals = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    c_vals = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        ap_vals=ap_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert projected_flux.shape == (1, 2, 3, 5)
 
 
 def test_coupling_trainer_runs(tmp_path):
@@ -662,6 +768,7 @@ def test_step_loss_ignores_raw_split_sum_without_balance_loss(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
     rhs_raw[:, 0, :, 1:-1] = 3.0
     projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
@@ -685,6 +792,7 @@ def test_step_loss_ignores_raw_split_sum_without_balance_loss(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     )
 
     assert abs(loss.item()) < 1e-12
@@ -815,6 +923,7 @@ def test_step_loss_ignores_flux_consistency_when_disabled(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
     a_vals[:] = 1.0
     projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
@@ -847,6 +956,7 @@ def test_step_loss_ignores_flux_consistency_when_disabled(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     )
 
     assert metrics["loss_flux_consistency"] > 0.0
@@ -864,6 +974,7 @@ def test_flux_consistency_loss_backpropagates_to_projected_flux(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
     a_vals[:] = 1.0
     projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
@@ -896,6 +1007,7 @@ def test_flux_consistency_loss_backpropagates_to_projected_flux(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     )
     loss.backward()
 
@@ -915,6 +1027,7 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
     a_vals[:] = 1.0
     projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
@@ -948,6 +1061,7 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     )
 
     expected = (
@@ -972,6 +1086,7 @@ def test_auto_operator_flux_weight_uses_base_l2_weight(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
     a_vals[:] = 1.0
     projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
@@ -1015,6 +1130,7 @@ def test_auto_operator_flux_weight_uses_base_l2_weight(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     )
     expected = 2.0 * metrics["loss_l2_consistency"] + 0.25 * metrics["loss_flux_consistency"]
     assert loss.item() == pytest.approx(expected)
@@ -1031,6 +1147,7 @@ def test_auto_operator_cross_weight_includes_diffusion_advection_and_reaction(tm
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
     a_vals[:] = 1.0
     b_vals[:] = 2.0
@@ -1076,6 +1193,7 @@ def test_auto_operator_cross_weight_includes_diffusion_advection_and_reaction(tm
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     )
     expected = 2.0 * metrics["loss_l2_consistency"] + (2.0 / expected_gain) * metrics[
         "loss_cross_consistency"
@@ -1126,6 +1244,7 @@ def test_evaluate_reports_all_three_loss_components(tmp_path):
         a_vals,
         b_vals,
         c_vals,
+        ap_vals,
     ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
     a_vals[:] = 1.0
     projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
@@ -1152,7 +1271,7 @@ def test_evaluate_reports_all_three_loss_components(tmp_path):
             a_vals[0],
             b_vals[0],
             c_vals[0],
-            torch.zeros_like(a_vals[0]),
+            ap_vals[0],
         )
     ]
 

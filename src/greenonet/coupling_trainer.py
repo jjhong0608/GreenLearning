@@ -333,6 +333,7 @@ class CouplingTrainer(LoggingMixin):
         a_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         # coords: (2, n, m, 2), rhs/sol/flux_target: (B,2,n,m)
         x_axis = coords[0, 0, :, 0].to(self.device)
@@ -346,11 +347,13 @@ class CouplingTrainer(LoggingMixin):
         a_vals = a_vals.to(self.device)
         b_vals = b_vals.to(self.device)
         c_vals = c_vals.to(self.device)
+        ap_vals = ap_vals.to(self.device)
         coords = coords.to(self.device)
 
         pred_flux = self.model(
             coords=coords,
             a_vals=a_vals,
+            ap_vals=ap_vals,
             b_vals=b_vals,
             c_vals=c_vals,
             rhs_raw=rhs_raw,
@@ -565,7 +568,6 @@ class CouplingTrainer(LoggingMixin):
                 c_vals,
                 ap,
             ) in loader:
-                del ap
                 _, metrics = self._step_loss(
                     coords,
                     rhs_raw,
@@ -576,6 +578,7 @@ class CouplingTrainer(LoggingMixin):
                     a_vals,
                     b_vals,
                     c_vals,
+                    ap,
                 )
                 for key in accum:
                     accum[key] += metrics.get(key, 0.0)
@@ -628,7 +631,6 @@ class CouplingTrainer(LoggingMixin):
                 c_vals,
                 ap,
             ) in train_loader:
-                del ap
                 optimizer.zero_grad()
                 loss, metrics = self._step_loss(
                     coords,
@@ -640,6 +642,7 @@ class CouplingTrainer(LoggingMixin):
                     a_vals,
                     b_vals,
                     c_vals,
+                    ap,
                 )
                 loss.backward()
                 optimizer.step()
@@ -785,6 +788,7 @@ class CouplingTrainer(LoggingMixin):
                     a_vals,
                     b_vals,
                     c_vals,
+                    ap,
                 )
                 loss_total.append(loss.item())
                 loss_l2_consistency.append(metrics["loss_l2_consistency"])

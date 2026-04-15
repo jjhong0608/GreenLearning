@@ -1,6 +1,11 @@
 import torch
 
-from greenonet.config import CouplingModelConfig, ModelConfig
+from greenonet.config import (
+    CouplingLineEncoderConfig,
+    CouplingLineEncoderHeadConfig,
+    CouplingModelConfig,
+    ModelConfig,
+)
 from greenonet.coupling_model import CouplingNet
 from greenonet.model import GreenONetModel
 
@@ -11,6 +16,27 @@ def _assert_state_dict_equal(
     assert left.keys() == right.keys()
     for key in left:
         assert torch.equal(left[key], right[key])
+
+
+def _nested_line_encoder_config() -> CouplingLineEncoderConfig:
+    return CouplingLineEncoderConfig(
+        type="cnn1d",
+        in_channels=3,
+        include_position=True,
+        include_boundary_distance=True,
+        conv_channels=[32, 64, 64],
+        kernel_size=5,
+        dilations=[1, 2, 4],
+        pooling="meanmax",
+        activation="rational",
+        mlp_head=CouplingLineEncoderHeadConfig(
+            depth=2,
+            hidden_dim=16,
+            activation="rational",
+            use_bias=True,
+            dropout=0.0,
+        ),
+    )
 
 
 def test_save_load_green_model_with_config(tmp_path):
@@ -77,9 +103,10 @@ def test_save_load_coupling_model_with_config(tmp_path):
         trunk_input_dim=2,
         hidden_dim=8,
         depth=2,
-        activation="tanh",
+        activation="rational",
         use_bias=True,
         dropout=0.0,
+        line_encoder=_nested_line_encoder_config(),
         dtype=torch.float64,
     )
     model = CouplingNet(cfg)
@@ -110,9 +137,10 @@ def test_save_load_coupling_compiled_model_with_config(tmp_path):
         trunk_input_dim=2,
         hidden_dim=8,
         depth=2,
-        activation="tanh",
+        activation="rational",
         use_bias=True,
         dropout=0.0,
+        line_encoder=_nested_line_encoder_config(),
         dtype=torch.float64,
     )
     model = torch.compile(CouplingNet(cfg))

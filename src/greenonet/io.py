@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, get_args, get_origin, get_type_hints
 
 import torch
 
@@ -62,15 +62,45 @@ def _parse_dtype(value: str) -> torch.dtype:
     return getattr(torch, name)
 
 
+def _nested_dataclass_type(annotation: Any) -> type[Any] | None:
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        return annotation
+    origin = get_origin(annotation)
+    if origin is None:
+        return None
+    for arg in get_args(annotation):
+        nested = _nested_dataclass_type(arg)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _deserialize_dataclass(payload: dict[str, Any], config_cls: type[Any]) -> Any:
+    data = dict(payload)
+    type_hints = get_type_hints(config_cls)
+    filtered: dict[str, Any] = {}
+    for field in fields(config_cls):
+        if field.name not in data:
+            continue
+        value = data[field.name]
+        field_type = type_hints.get(field.name, field.type)
+        nested_cls = _nested_dataclass_type(field_type)
+        if field.name == "dtype" and isinstance(value, str):
+            filtered[field.name] = _parse_dtype(value)
+        elif nested_cls is not None and isinstance(value, dict):
+            filtered[field.name] = _deserialize_dataclass(value, nested_cls)
+        else:
+            filtered[field.name] = value
+    return config_cls(**filtered)
+
+
 def _deserialize_config(
     payload: dict[str, Any], config_cls: type[ModelConfig] | type[CouplingModelConfig]
 ) -> ModelConfig | CouplingModelConfig:
-    data = dict(payload)
-    if "dtype" in data and isinstance(data["dtype"], str):
-        data["dtype"] = _parse_dtype(data["dtype"])
-    allowed_keys = {field.name for field in fields(config_cls)}
-    filtered = {key: value for key, value in data.items() if key in allowed_keys}
-    return config_cls(**filtered)
+    return cast(
+        ModelConfig | CouplingModelConfig,
+        _deserialize_dataclass(payload, config_cls),
+    )
 
 
 def _model_type_from_config(config: ModelConfig | CouplingModelConfig) -> str:

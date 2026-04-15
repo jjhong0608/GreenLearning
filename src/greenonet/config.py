@@ -9,6 +9,9 @@ import torch
 from greenonet.numerics import IntegrationRule
 
 
+ActivationName = Literal["tanh", "relu", "gelu", "rational"]
+
+
 @dataclass
 class DatasetConfig:
     """Sampling settings for synthetic Poisson data."""
@@ -36,7 +39,7 @@ class ModelConfig:
     input_dim: int = 2
     hidden_dim: int = 64
     depth: int = 4
-    activation: Literal["tanh", "relu", "gelu", "rational"] = "tanh"
+    activation: ActivationName = "tanh"
     use_bias: bool = True
     dropout: float = 0.0
     use_green: bool = True
@@ -49,6 +52,35 @@ class ModelConfig:
 
 
 @dataclass
+class CouplingLineEncoderHeadConfig:
+    """Config for the MLP head applied after pooled Conv1d features."""
+
+    depth: int | None = None
+    hidden_dim: int | None = None
+    activation: ActivationName | None = None
+    use_bias: bool | None = None
+    dropout: float | None = None
+
+
+@dataclass
+class CouplingLineEncoderConfig:
+    """Nested settings for CouplingNet 1D CNN line encoders."""
+
+    type: Literal["cnn1d"] = "cnn1d"
+    in_channels: int = 3
+    include_position: bool = True
+    include_boundary_distance: bool = True
+    conv_channels: list[int] = field(default_factory=lambda: [32, 64, 64])
+    kernel_size: int = 5
+    dilations: list[int] = field(default_factory=lambda: [1, 2, 4])
+    pooling: Literal["meanmax"] = "meanmax"
+    activation: ActivationName | None = None
+    mlp_head: CouplingLineEncoderHeadConfig = field(
+        default_factory=CouplingLineEncoderHeadConfig
+    )
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -56,9 +88,12 @@ class CouplingModelConfig:
     trunk_input_dim: int = 2  # full (x, y) coordinates
     hidden_dim: int = 64
     depth: int = 4
-    activation: Literal["tanh", "relu", "gelu", "rational"] = "tanh"
+    activation: ActivationName = "rational"
     use_bias: bool = True
     dropout: float = 0.0
+    line_encoder: CouplingLineEncoderConfig = field(
+        default_factory=CouplingLineEncoderConfig
+    )
     dtype: torch.dtype = torch.float64
 
 

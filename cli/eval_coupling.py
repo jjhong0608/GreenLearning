@@ -12,6 +12,8 @@ from torch import Tensor
 from greenonet.config import (
     CompileConfig,
     CouplingBestRelSolCheckpointConfig,
+    CouplingLineEncoderConfig,
+    CouplingLineEncoderHeadConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
     CouplingModelConfig,
@@ -76,6 +78,36 @@ class EvalCouplingCLI:
             if key in dataset_kwargs and dataset_kwargs[key] is not None:
                 dataset_kwargs[key] = Path(dataset_kwargs[key])
         return DatasetConfig(**dataset_kwargs)
+
+    @staticmethod
+    def _build_coupling_model_config(
+        raw_model: dict[str, object],
+    ) -> CouplingModelConfig:
+        coupling_model_kwargs = dict(raw_model)
+        cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
+        coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
+        line_encoder_raw = coupling_model_kwargs.pop("line_encoder", None)
+        if line_encoder_raw is None:
+            line_encoder_cfg = CouplingLineEncoderConfig()
+        elif isinstance(line_encoder_raw, dict):
+            line_encoder_kwargs = dict(line_encoder_raw)
+            mlp_head_raw = line_encoder_kwargs.pop("mlp_head", None)
+            if mlp_head_raw is None:
+                mlp_head_cfg = CouplingLineEncoderHeadConfig()
+            elif isinstance(mlp_head_raw, dict):
+                mlp_head_cfg = CouplingLineEncoderHeadConfig(**mlp_head_raw)
+            else:
+                raise TypeError("coupling_model.line_encoder.mlp_head must be an object.")
+            line_encoder_cfg = CouplingLineEncoderConfig(
+                mlp_head=mlp_head_cfg,
+                **line_encoder_kwargs,
+            )
+        else:
+            raise TypeError("coupling_model.line_encoder must be an object.")
+        return CouplingModelConfig(
+            line_encoder=line_encoder_cfg,
+            **coupling_model_kwargs,
+        )
 
     @staticmethod
     def _build_compile_config(
@@ -253,9 +285,7 @@ class EvalCouplingCLI:
 
         dataset_cfg = self._build_dataset_config(raw["dataset"])
         coupling_model_kwargs = dict(raw.get("coupling_model", {}))
-        cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
-        coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
-        coupling_model_cfg = CouplingModelConfig(**coupling_model_kwargs)
+        coupling_model_cfg = self._build_coupling_model_config(coupling_model_kwargs)
         training_cfg = self._build_training_config(raw.get("training", {}))
         coupling_training_cfg = self._build_coupling_training_config(
             raw.get("coupling_training", {})

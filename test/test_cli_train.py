@@ -103,7 +103,28 @@ class TestTrainCLIDatasetConfig:
                     "enabled": True,
                 },
             },
-            "coupling_model": {},
+            "coupling_model": {
+                "hidden_dim": 128,
+                "activation": "rational",
+                "line_encoder": {
+                    "type": "cnn1d",
+                    "in_channels": 3,
+                    "include_position": True,
+                    "include_boundary_distance": True,
+                    "conv_channels": [32, 64, 64],
+                    "kernel_size": 5,
+                    "dilations": [1, 2, 4],
+                    "pooling": "meanmax",
+                    "activation": "rational",
+                    "mlp_head": {
+                        "depth": 2,
+                        "hidden_dim": 32,
+                        "activation": "rational",
+                        "use_bias": True,
+                        "dropout": 0.0
+                    }
+                }
+            },
             "coupling_training": {
                 "integration_rule": "trapezoid",
                 "losses": {
@@ -176,6 +197,17 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.periodic_checkpoint.every_epochs == 4
         assert coupling_training_cfg.best_rel_sol_checkpoint.enabled is True
         assert coupling_training_cfg.compile.enabled is True
+        assert coupling_model_cfg.hidden_dim == 128
+        assert coupling_model_cfg.activation == "rational"
+        assert coupling_model_cfg.line_encoder.type == "cnn1d"
+        assert coupling_model_cfg.line_encoder.in_channels == 3
+        assert coupling_model_cfg.line_encoder.conv_channels == [32, 64, 64]
+        assert coupling_model_cfg.line_encoder.kernel_size == 5
+        assert coupling_model_cfg.line_encoder.dilations == [1, 2, 4]
+        assert coupling_model_cfg.line_encoder.pooling == "meanmax"
+        assert coupling_model_cfg.line_encoder.activation == "rational"
+        assert coupling_model_cfg.line_encoder.mlp_head.depth == 2
+        assert coupling_model_cfg.line_encoder.mlp_head.hidden_dim == 32
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
@@ -220,6 +252,23 @@ class TestTrainCLIDatasetConfig:
         config_path.write_text(json.dumps(payload))
 
         with pytest.raises(TypeError, match="weight_mode must be one of"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_non_object_coupling_line_encoder_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "line_encoder": "cnn1d",
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.line_encoder must be an object"):
             TrainCLI()._build_configs(config_path)
 
     def test_rejects_auto_operator_mode_for_l2_loss(self, tmp_path):
