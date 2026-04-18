@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
@@ -81,6 +82,35 @@ class CouplingLineEncoderConfig:
 
 
 @dataclass
+class CouplingTrunkFourierConfig:
+    """Optional fixed-frequency Fourier embedding for the Coupling trunk."""
+
+    enabled: bool = False
+    frequencies: list[float] = field(
+        default_factory=lambda: [math.pi, 2.0 * math.pi, 4.0 * math.pi, 8.0 * math.pi]
+    )
+
+
+@dataclass
+class CouplingGatedAttentionFusionConfig:
+    """Optional overrides for Coupling gated-attention fusion."""
+
+    activation: ActivationName | None = None
+    use_bias: bool | None = None
+    dropout: float | None = None
+
+
+@dataclass
+class CouplingFusionConfig:
+    """Nested settings for Coupling branch fusion."""
+
+    type: Literal["linear", "gated_attention"] = "linear"
+    gated_attention: CouplingGatedAttentionFusionConfig = field(
+        default_factory=CouplingGatedAttentionFusionConfig
+    )
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -94,6 +124,10 @@ class CouplingModelConfig:
     line_encoder: CouplingLineEncoderConfig = field(
         default_factory=CouplingLineEncoderConfig
     )
+    trunk_fourier: CouplingTrunkFourierConfig = field(
+        default_factory=CouplingTrunkFourierConfig
+    )
+    fusion: CouplingFusionConfig = field(default_factory=CouplingFusionConfig)
     dtype: torch.dtype = torch.float64
 
 

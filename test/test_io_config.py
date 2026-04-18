@@ -1,9 +1,12 @@
 import torch
 
 from greenonet.config import (
+    CouplingFusionConfig,
+    CouplingGatedAttentionFusionConfig,
     CouplingLineEncoderConfig,
     CouplingLineEncoderHeadConfig,
     CouplingModelConfig,
+    CouplingTrunkFourierConfig,
     ModelConfig,
 )
 from greenonet.coupling_model import CouplingNet
@@ -107,6 +110,18 @@ def test_save_load_coupling_model_with_config(tmp_path):
         use_bias=True,
         dropout=0.0,
         line_encoder=_nested_line_encoder_config(),
+        trunk_fourier=CouplingTrunkFourierConfig(
+            enabled=True,
+            frequencies=[1.0, 2.0, 4.0],
+        ),
+        fusion=CouplingFusionConfig(
+            type="gated_attention",
+            gated_attention=CouplingGatedAttentionFusionConfig(
+                activation="gelu",
+                use_bias=False,
+                dropout=0.1,
+            ),
+        ),
         dtype=torch.float64,
     )
     model = CouplingNet(cfg)
@@ -123,6 +138,12 @@ def test_save_load_coupling_model_with_config(tmp_path):
     assert not hasattr(loaded_cfg, "fourier_dim")
     assert not hasattr(loaded_cfg, "fourier_scale")
     assert not hasattr(loaded_cfg, "fourier_include_input")
+    assert loaded_cfg.trunk_fourier.enabled is True
+    assert loaded_cfg.trunk_fourier.frequencies == [1.0, 2.0, 4.0]
+    assert loaded_cfg.fusion.type == "gated_attention"
+    assert loaded_cfg.fusion.gated_attention.activation == "gelu"
+    assert loaded_cfg.fusion.gated_attention.use_bias is False
+    assert loaded_cfg.fusion.gated_attention.dropout == 0.1
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -141,6 +162,18 @@ def test_save_load_coupling_compiled_model_with_config(tmp_path):
         use_bias=True,
         dropout=0.0,
         line_encoder=_nested_line_encoder_config(),
+        trunk_fourier=CouplingTrunkFourierConfig(
+            enabled=True,
+            frequencies=[1.0, 2.0],
+        ),
+        fusion=CouplingFusionConfig(
+            type="gated_attention",
+            gated_attention=CouplingGatedAttentionFusionConfig(
+                activation="gelu",
+                use_bias=False,
+                dropout=0.1,
+            ),
+        ),
         dtype=torch.float64,
     )
     model = torch.compile(CouplingNet(cfg))

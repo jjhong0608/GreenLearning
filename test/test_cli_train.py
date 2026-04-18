@@ -1,3 +1,4 @@
+import math
 import json
 import sys
 from types import SimpleNamespace
@@ -106,6 +107,18 @@ class TestTrainCLIDatasetConfig:
             "coupling_model": {
                 "hidden_dim": 128,
                 "activation": "rational",
+                "fusion": {
+                    "type": "gated_attention",
+                    "gated_attention": {
+                        "activation": "gelu",
+                        "use_bias": False,
+                        "dropout": 0.1
+                    }
+                },
+                "trunk_fourier": {
+                    "enabled": True,
+                    "frequencies": [math.pi, 2.0 * math.pi],
+                },
                 "line_encoder": {
                     "type": "cnn1d",
                     "in_channels": 3,
@@ -199,6 +212,10 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.compile.enabled is True
         assert coupling_model_cfg.hidden_dim == 128
         assert coupling_model_cfg.activation == "rational"
+        assert coupling_model_cfg.fusion.type == "gated_attention"
+        assert coupling_model_cfg.fusion.gated_attention.activation == "gelu"
+        assert coupling_model_cfg.fusion.gated_attention.use_bias is False
+        assert coupling_model_cfg.fusion.gated_attention.dropout == 0.1
         assert coupling_model_cfg.line_encoder.type == "cnn1d"
         assert coupling_model_cfg.line_encoder.in_channels == 3
         assert coupling_model_cfg.line_encoder.conv_channels == [32, 64, 64]
@@ -208,6 +225,11 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.line_encoder.activation == "rational"
         assert coupling_model_cfg.line_encoder.mlp_head.depth == 2
         assert coupling_model_cfg.line_encoder.mlp_head.hidden_dim == 32
+        assert coupling_model_cfg.trunk_fourier.enabled is True
+        assert coupling_model_cfg.trunk_fourier.frequencies == [
+            math.pi,
+            2.0 * math.pi,
+        ]
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
@@ -269,6 +291,59 @@ class TestTrainCLIDatasetConfig:
         config_path.write_text(json.dumps(payload))
 
         with pytest.raises(TypeError, match="coupling_model.line_encoder must be an object"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_non_object_coupling_trunk_fourier_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "trunk_fourier": True,
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.trunk_fourier must be an object"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_non_object_coupling_fusion_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "fusion": "gated_attention",
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.fusion must be an object"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_invalid_coupling_fusion_type(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "fusion": {
+                    "type": "bad_fusion",
+                }
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.fusion.type must be one of"):
             TrainCLI()._build_configs(config_path)
 
     def test_rejects_auto_operator_mode_for_l2_loss(self, tmp_path):

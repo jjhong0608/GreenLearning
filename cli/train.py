@@ -12,12 +12,15 @@ from torch import Tensor
 from greenonet.config import (
     CompileConfig,
     CouplingBestRelSolCheckpointConfig,
+    CouplingFusionConfig,
+    CouplingGatedAttentionFusionConfig,
     CouplingLineEncoderConfig,
     CouplingLineEncoderHeadConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
+    CouplingTrunkFourierConfig,
     CouplingTrainingConfig,
     DatasetConfig,
     ModelConfig,
@@ -37,6 +40,7 @@ from greenonet.runner import run_green_o_net
 class TrainCLI:
     """Command-line entrypoint for model training."""
 
+    _COUPLING_FUSION_TYPES = {"linear", "gated_attention"}
     _COUPLING_WEIGHT_MODES = {"manual", "auto_operator"}
 
     def __init__(self) -> None:
@@ -133,6 +137,8 @@ class TrainCLI:
         cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
         coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
         line_encoder_raw = coupling_model_kwargs.pop("line_encoder", None)
+        trunk_fourier_raw = coupling_model_kwargs.pop("trunk_fourier", None)
+        fusion_raw = coupling_model_kwargs.pop("fusion", None)
         if line_encoder_raw is None:
             line_encoder_cfg = CouplingLineEncoderConfig()
         elif isinstance(line_encoder_raw, dict):
@@ -150,8 +156,42 @@ class TrainCLI:
             )
         else:
             raise TypeError("coupling_model.line_encoder must be an object.")
+        if trunk_fourier_raw is None:
+            trunk_fourier_cfg = CouplingTrunkFourierConfig()
+        elif isinstance(trunk_fourier_raw, dict):
+            trunk_fourier_cfg = CouplingTrunkFourierConfig(**trunk_fourier_raw)
+        else:
+            raise TypeError("coupling_model.trunk_fourier must be an object.")
+        if fusion_raw is None:
+            fusion_cfg = CouplingFusionConfig()
+        elif isinstance(fusion_raw, dict):
+            fusion_kwargs = dict(fusion_raw)
+            gated_attention_raw = fusion_kwargs.pop("gated_attention", None)
+            if gated_attention_raw is None:
+                gated_attention_cfg = CouplingGatedAttentionFusionConfig()
+            elif isinstance(gated_attention_raw, dict):
+                gated_attention_cfg = CouplingGatedAttentionFusionConfig(
+                    **gated_attention_raw
+                )
+            else:
+                raise TypeError(
+                    "coupling_model.fusion.gated_attention must be an object."
+                )
+            fusion_cfg = CouplingFusionConfig(
+                gated_attention=gated_attention_cfg,
+                **fusion_kwargs,
+            )
+            if fusion_cfg.type not in TrainCLI._COUPLING_FUSION_TYPES:
+                raise TypeError(
+                    "coupling_model.fusion.type must be one of "
+                    f"{sorted(TrainCLI._COUPLING_FUSION_TYPES)}."
+                )
+        else:
+            raise TypeError("coupling_model.fusion must be an object.")
         return CouplingModelConfig(
             line_encoder=line_encoder_cfg,
+            trunk_fourier=trunk_fourier_cfg,
+            fusion=fusion_cfg,
             **coupling_model_kwargs,
         )
 

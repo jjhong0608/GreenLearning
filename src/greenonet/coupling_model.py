@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import math
 from typing import List, cast
 
 import torch
 from torch import nn
 
 from greenonet.activations import RationalActivation
-from greenonet.config import CouplingLineEncoderConfig, CouplingModelConfig
+from greenonet.config import (
+    CouplingGatedAttentionFusionConfig,
+    CouplingLineEncoderConfig,
+    CouplingModelConfig,
+    CouplingTrunkFourierConfig,
+)
 
 
 class ActivationFactoryMixin:
@@ -240,6 +246,110 @@ class CouplingLineEncoder(nn.Module, ActivationFactoryMixin, LineGeometryMixin):
         return self.mlp_head(pooled)
 
 
+class CouplingFixedFourierFeatures(nn.Module):  # type: ignore[misc]
+    """Fixed-frequency Fourier embedding for trunk coordinates only."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        config: CouplingTrunkFourierConfig,
+        include_input: bool = True,
+    ) -> None:
+        super().__init__()
+        if input_dim <= 0:
+            raise ValueError("trunk_input_dim must be positive.")
+        if len(config.frequencies) == 0:
+            raise ValueError(
+                "coupling_model.trunk_fourier.frequencies must be non-empty when enabled."
+            )
+        for freq in config.frequencies:
+            if not math.isfinite(freq) or freq <= 0.0:
+                raise ValueError(
+                    "coupling_model.trunk_fourier.frequencies must contain positive finite values."
+                )
+        self.input_dim = input_dim
+        self.include_input = include_input
+        self.register_buffer(
+            "frequencies",
+            torch.tensor(config.frequencies, dtype=torch.float64),
+            persistent=False,
+        )
+
+    @property
+    def output_dim(self) -> int:
+        base_dim = self.input_dim if self.include_input else 0
+        return base_dim + 2 * self.input_dim * int(self.frequencies.numel())
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        if coords.shape[-1] != self.input_dim:
+            raise ValueError(
+                f"Expected trunk coordinates with trailing dim {self.input_dim}, got {coords.shape[-1]}."
+            )
+        frequencies = self.frequencies.to(dtype=coords.dtype, device=coords.device)
+        embedded: List[torch.Tensor] = [coords] if self.include_input else []
+        for freq in frequencies:
+            scaled = coords * freq
+            embedded.append(torch.sin(scaled))
+            embedded.append(torch.cos(scaled))
+        return torch.cat(embedded, dim=-1)
+
+
+class CouplingGatedAttentionFusion(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+    """Single-head self-attention plus gated pooling over branch tokens."""
+
+    GATE_EPS = 1e-12
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        config: CouplingGatedAttentionFusionConfig,
+        fallback_activation: str,
+        fallback_use_bias: bool,
+        fallback_dropout: float,
+    ) -> None:
+        super().__init__()
+        activation_name = config.activation or fallback_activation
+        use_bias = fallback_use_bias if config.use_bias is None else config.use_bias
+        dropout = fallback_dropout if config.dropout is None else config.dropout
+
+        self.query_proj = nn.Linear(hidden_dim, hidden_dim, bias=use_bias)
+        self.key_proj = nn.Linear(hidden_dim, hidden_dim, bias=use_bias)
+        self.value_proj = nn.Linear(hidden_dim, hidden_dim, bias=use_bias)
+        self.gate_proj = nn.Linear(hidden_dim, 1, bias=use_bias)
+        self.pool_proj = nn.Linear(hidden_dim, 1, bias=use_bias)
+        self.output_proj = nn.Linear(hidden_dim, hidden_dim, bias=use_bias)
+        self.output_activation = self.build_activation(activation_name)
+        self.output_dropout: nn.Module
+        if dropout > 0:
+            self.output_dropout = nn.Dropout(dropout)
+        else:
+            self.output_dropout = nn.Identity()
+        self.scale = float(hidden_dim) ** -0.5
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        query = self.query_proj(tokens)
+        key = self.key_proj(tokens)
+        value = self.value_proj(tokens)
+
+        attn_logits = torch.matmul(query, key.transpose(-1, -2)) * self.scale
+        attn_weights = torch.softmax(attn_logits, dim=-1)
+        attended = torch.matmul(attn_weights, value)
+        updated = tokens + attended
+
+        gate = torch.sigmoid(self.gate_proj(updated)).squeeze(-1)
+        pool_logits = self.pool_proj(updated).squeeze(-1)
+        pool_weights = torch.softmax(pool_logits, dim=-1)
+        combined_weights = gate * pool_weights
+        combined_weights = combined_weights / combined_weights.sum(
+            dim=-1, keepdim=True
+        ).clamp_min(self.GATE_EPS)
+
+        pooled = (updated * combined_weights.unsqueeze(-1)).sum(dim=1)
+        fused = self.output_proj(pooled)
+        fused = cast(torch.Tensor, self.output_activation(fused))
+        return cast(torch.Tensor, self.output_dropout(fused))
+
+
 class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
     """MIONet-style model with CNN line encoders and one trunk over coordinates."""
 
@@ -292,19 +402,45 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             fallback_use_bias=config.use_bias,
             fallback_dropout=config.dropout,
         )
-        self.branch_fuser = nn.Linear(
-            5 * config.hidden_dim,
-            config.hidden_dim,
-            bias=config.use_bias,
-        )
-        self.branch_activation = self.build_activation(config.activation)
-        self.branch_dropout: nn.Module
-        if config.dropout > 0:
-            self.branch_dropout = nn.Dropout(config.dropout)
+        if config.fusion.type not in {"linear", "gated_attention"}:
+            raise ValueError(f"Unsupported coupling_model.fusion.type: {config.fusion.type}")
+        self.branch_fusion_type = config.fusion.type
+        self.branch_fuser: nn.Linear | None = None
+        self.branch_activation: nn.Module | None = None
+        self.branch_dropout: nn.Module | None = None
+        self.branch_gated_attention: CouplingGatedAttentionFusion | None = None
+        if self.branch_fusion_type == "linear":
+            self.branch_fuser = nn.Linear(
+                5 * config.hidden_dim,
+                config.hidden_dim,
+                bias=config.use_bias,
+            )
+            self.branch_activation = self.build_activation(config.activation)
+            if config.dropout > 0:
+                self.branch_dropout = nn.Dropout(config.dropout)
+            else:
+                self.branch_dropout = nn.Identity()
         else:
-            self.branch_dropout = nn.Identity()
+            self.branch_gated_attention = CouplingGatedAttentionFusion(
+                hidden_dim=config.hidden_dim,
+                config=config.fusion.gated_attention,
+                fallback_activation=config.activation,
+                fallback_use_bias=config.use_bias,
+                fallback_dropout=config.dropout,
+            )
+        self.trunk_fourier: CouplingFixedFourierFeatures | None
+        trunk_input_dim = config.trunk_input_dim
+        if config.trunk_fourier.enabled:
+            self.trunk_fourier = CouplingFixedFourierFeatures(
+                input_dim=config.trunk_input_dim,
+                config=config.trunk_fourier,
+                include_input=True,
+            )
+            trunk_input_dim = self.trunk_fourier.output_dim
+        else:
+            self.trunk_fourier = None
         self.trunk = MLP(
-            input_dim=config.trunk_input_dim,
+            input_dim=trunk_input_dim,
             hidden_dim=config.hidden_dim,
             depth=config.depth,
             activation=config.activation,
@@ -312,6 +448,21 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=True,
         )
+
+    def _fuse_branch_tokens(self, branch_tokens: torch.Tensor) -> torch.Tensor:
+        if self.branch_fusion_type == "linear":
+            if (
+                self.branch_fuser is None
+                or self.branch_activation is None
+                or self.branch_dropout is None
+            ):
+                raise RuntimeError("Linear branch fusion is not initialized.")
+            branch_feat = self.branch_fuser(branch_tokens.reshape(branch_tokens.shape[0], -1))
+            branch_feat = cast(torch.Tensor, self.branch_activation(branch_feat))
+            return cast(torch.Tensor, self.branch_dropout(branch_feat))
+        if self.branch_gated_attention is None:
+            raise RuntimeError("Gated-attention branch fusion is not initialized.")
+        return self.branch_gated_attention(branch_tokens)
 
     def _apply_balance_projection(
         self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
@@ -392,7 +543,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         branch_b_in = b_vals.reshape(b * axis * n_lines, m_points)
         branch_c_in = c_vals.reshape(b * axis * n_lines, m_points)
         branch_rhs_in = rhs_tilde.reshape(b * axis * n_lines, m_points)
-        branch_feat = torch.cat(
+        branch_tokens = torch.stack(
             (
                 self.branch_a(branch_a_in, pos_flat, db_flat),
                 self.branch_ap(branch_ap_in, pos_flat, db_flat),
@@ -400,15 +551,20 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 self.branch_c(branch_c_in, pos_flat, db_flat),
                 self.branch_rhs(branch_rhs_in, pos_flat, db_flat),
             ),
-            dim=-1,
+            dim=1,
         )
-        branch_feat = self.branch_fuser(branch_feat)
-        branch_feat = cast(torch.Tensor, self.branch_activation(branch_feat))
-        branch_feat = cast(torch.Tensor, self.branch_dropout(branch_feat))
+        branch_feat = self._fuse_branch_tokens(branch_tokens)
         branch_feat = branch_feat.unsqueeze(-1)
 
         coords_int = coords[:, :, 1:-1, :]
         trunk_flat = coords_int.reshape(axis * n_lines * (m_points - 2), -1)
+        if trunk_flat.shape[-1] != self.config.trunk_input_dim:
+            raise ValueError(
+                "coords trunk dimension must match coupling_model.trunk_input_dim "
+                f"(expected {self.config.trunk_input_dim}, got {trunk_flat.shape[-1]})."
+            )
+        if self.trunk_fourier is not None:
+            trunk_flat = self.trunk_fourier(trunk_flat)
         trunk_out = self.trunk(trunk_flat).reshape(axis * n_lines, m_points - 2, -1)
 
         trunk_expanded = trunk_out.unsqueeze(0).expand(b, -1, -1, -1)

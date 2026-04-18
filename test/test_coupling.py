@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import numpy as np
@@ -7,16 +8,23 @@ from torch import nn
 
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_evaluator import CouplingEvaluator
-from greenonet.coupling_model import CouplingLineEncoder, CouplingNet
+from greenonet.coupling_model import (
+    CouplingFixedFourierFeatures,
+    CouplingLineEncoder,
+    CouplingNet,
+)
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
     CouplingBestRelSolCheckpointConfig,
+    CouplingFusionConfig,
+    CouplingGatedAttentionFusionConfig,
     CouplingLineEncoderConfig,
     CouplingLineEncoderHeadConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
+    CouplingTrunkFourierConfig,
     CouplingTrainingConfig,
 )
 from greenonet.numerics import line_operator_fd
@@ -281,6 +289,30 @@ def test_coupling_line_encoder_shape_matches_hidden_dim():
     assert latent.shape == (6, 8)
 
 
+def test_coupling_fixed_fourier_features_match_expected_values():
+    module = CouplingFixedFourierFeatures(
+        input_dim=2,
+        config=CouplingTrunkFourierConfig(enabled=True, frequencies=[math.pi]),
+    ).to(dtype=torch.float64)
+    coords = torch.tensor([[0.0, 0.5]], dtype=torch.float64)
+
+    embedded = module(coords)
+
+    expected = torch.tensor(
+        [[
+            0.0,
+            0.5,
+            0.0,
+            1.0,
+            1.0,
+            6.123233995736766e-17,
+        ]],
+        dtype=torch.float64,
+    )
+    assert embedded.shape == (1, 6)
+    assert torch.allclose(embedded, expected, atol=1e-12)
+
+
 def test_coupling_model_construction_from_nested_line_encoder_config():
     cfg = CouplingModelConfig(
         branch_input_dim=5,
@@ -310,7 +342,49 @@ def test_coupling_model_construction_from_nested_line_encoder_config():
 
     assert isinstance(model.branch_a, CouplingLineEncoder)
     assert isinstance(model.branch_ap, CouplingLineEncoder)
+    assert model.branch_fuser is not None
     assert model.branch_fuser.in_features == 5 * cfg.hidden_dim
+
+
+def test_coupling_model_construction_with_gated_attention_fusion():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        fusion=CouplingFusionConfig(
+            type="gated_attention",
+            gated_attention=CouplingGatedAttentionFusionConfig(
+                activation="rational",
+                use_bias=True,
+                dropout=0.0,
+            ),
+        ),
+    )
+
+    model = CouplingNet(cfg)
+
+    assert model.branch_fuser is None
+    assert model.branch_gated_attention is not None
+
+
+def test_coupling_model_construction_with_trunk_fourier():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        trunk_fourier=CouplingTrunkFourierConfig(
+            enabled=True,
+            frequencies=[math.pi, 2.0 * math.pi],
+        ),
+    )
+
+    model = CouplingNet(cfg)
+
+    assert model.trunk_fourier is not None
+    first_linear = next(
+        module for module in model.trunk.net if isinstance(module, nn.Linear)
+    )
+    assert first_linear.in_features == 10
 
 
 def test_coupling_model_forward():
@@ -339,6 +413,75 @@ def test_coupling_model_forward():
     psi_y = projected_flux[:, 1]
     assert phi_x.shape == rhs_raw[:, 0].shape
     assert psi_y.shape == rhs_raw[:, 1].shape
+
+
+def test_coupling_model_forward_with_gated_attention_fusion():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        fusion=CouplingFusionConfig(type="gated_attention"),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    ap_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1, keepdim=False).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        ap_vals=ap_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert projected_flux.shape == (1, 2, 1, 3)
+    assert model.branch_gated_attention is not None
+
+
+def test_coupling_model_forward_with_trunk_fourier_enabled():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_fourier=CouplingTrunkFourierConfig(
+            enabled=True,
+            frequencies=[math.pi, 2.0 * math.pi, 4.0 * math.pi, 8.0 * math.pi],
+        ),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    coords[0, 0, :, 0] = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float64)
+    coords[1, 0, :, 1] = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    ap_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.zeros((1, 2, 1, 3), dtype=torch.float64)
+    c_vals = torch.zeros((1, 2, 1, 3), dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1, keepdim=False).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        ap_vals=ap_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert projected_flux.shape == (1, 2, 1, 3)
+    assert model.trunk_fourier is not None
 
 
 def test_coupling_model_backprop_through_all_branch_encoders():
@@ -384,7 +527,57 @@ def test_coupling_model_backprop_through_all_branch_encoders():
     assert _has_grad(model.branch_b)
     assert _has_grad(model.branch_c)
     assert _has_grad(model.branch_rhs)
+    assert model.branch_fuser is not None
     assert _has_grad(model.branch_fuser)
+    assert _has_grad(model.trunk)
+
+
+def test_coupling_model_backprop_through_gated_attention_fusion():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        fusion=CouplingFusionConfig(type="gated_attention"),
+    )
+    model = CouplingNet(cfg)
+
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    ap_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1, keepdim=False).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        ap_vals=ap_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+    loss = projected_flux.square().sum()
+    loss.backward()
+
+    def _has_grad(module: nn.Module) -> bool:
+        return any(
+            parameter.grad is not None
+            and torch.count_nonzero(parameter.grad).item() > 0
+            for parameter in module.parameters()
+        )
+
+    assert projected_flux.shape == (1, 2, 1, 3)
+    assert _has_grad(model.branch_a)
+    assert _has_grad(model.branch_ap)
+    assert _has_grad(model.branch_b)
+    assert _has_grad(model.branch_c)
+    assert _has_grad(model.branch_rhs)
+    assert model.branch_gated_attention is not None
+    assert _has_grad(model.branch_gated_attention)
     assert _has_grad(model.trunk)
 
 
@@ -443,6 +636,39 @@ def test_coupling_balance_projection_uses_fixed_half_split():
 
 def test_coupling_model_forward_accepts_zero_b_and_c():
     cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    coords[0, :, :, 0] = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    coords[1, :, :, 1] = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    ap_vals = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    b_vals = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    c_vals = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 3, 5, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        ap_vals=ap_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert projected_flux.shape == (1, 2, 3, 5)
+
+
+def test_coupling_gated_attention_forward_accepts_zero_b_and_c():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        fusion=CouplingFusionConfig(type="gated_attention"),
+    )
     model = CouplingNet(cfg)
     coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
     coords[0, :, :, 0] = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
