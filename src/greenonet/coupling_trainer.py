@@ -16,7 +16,7 @@ from greenonet.config import (
     CouplingTrainingConfig,
 )
 from greenonet.logging_mixin import LoggingMixin
-from greenonet.numerics import integrate, line_first_derivative_fd, line_operator_fd
+from greenonet.numerics import integrate, line_operator_fd, uniform_spacing
 from greenonet.visualizer import LossVisualizer
 from greenonet.io import (
     save_model_with_config,
@@ -83,7 +83,16 @@ class CouplingTrainer(LoggingMixin):
             rule=self.config.integration_rule,
         )
 
-    def _flux_consistency_loss(
+    @staticmethod
+    def _face_average_arithmetic(values: torch.Tensor, dim: int) -> torch.Tensor:
+        dim = dim % values.dim()
+        if values.shape[dim] < 2:
+            raise ValueError("Need at least two nodal samples to compute face averages.")
+        left = values.narrow(dim, 0, values.shape[dim] - 1)
+        right = values.narrow(dim, 1, values.shape[dim] - 1)
+        return 0.5 * (left + right)
+
+    def _energy_consistency_loss(
         self,
         u_phi_x: torch.Tensor,
         u_psi_y: torch.Tensor,
@@ -98,42 +107,45 @@ class CouplingTrainer(LoggingMixin):
         if a_vals.dim() != 4 or a_vals.shape[1] != 2:
             raise ValueError("a_vals must have shape (B, 2, n_lines, m_points).")
 
-        x_inner = x_axis[1:-1]
-        y_inner = y_axis[1:-1]
-        if (
-            not self._supports_auxiliary_quadrature(x_inner)
-            or not self._supports_auxiliary_quadrature(y_inner)
-        ):
-            return torch.zeros((), dtype=u_phi_x.dtype, device=u_phi_x.device)
+        u_psi_common = u_psi_y.transpose(-1, -2)
+        r = u_phi_x - u_psi_common
+        if r.dim() != 3:
+            raise ValueError(
+                f"expected residual r to be 3D (B, m, m), got {tuple(r.shape)}"
+            )
 
-        u_psi_x_view = u_psi_y.transpose(-1, -2)
-        dx_u_phi = line_first_derivative_fd(u_phi_x, x_axis)[:, 1:-1, :]
-        dx_u_psi = line_first_derivative_fd(u_psi_x_view, x_axis)[:, 1:-1, :]
-        a_x_inner = a_vals[:, 0, :, 1:-1]
-        if dx_u_phi.shape != a_x_inner.shape or dx_u_psi.shape != a_x_inner.shape:
-            raise ValueError("Dx(u) and x-line coefficient samples must have matching shapes.")
-        jx_res = a_x_inner * dx_u_phi - a_x_inner * dx_u_psi
-        jx_sq_int = integrate(
-            jx_res.pow(2), x=x_inner, dim=-1, rule=self.config.integration_rule
-        )
-        loss_jx = integrate(
-            jx_sq_int, x=y_inner, dim=-1, rule=self.config.integration_rule
-        ).mean()
+        hx = uniform_spacing(x_axis)
+        hy = uniform_spacing(y_axis)
 
-        u_phi_y_view = u_phi_x.transpose(-1, -2)
-        dy_u_phi = line_first_derivative_fd(u_phi_y_view, y_axis)[:, 1:-1, :]
-        dy_u_psi = line_first_derivative_fd(u_psi_y, y_axis)[:, 1:-1, :]
-        a_y_inner = a_vals[:, 1, :, 1:-1]
-        if dy_u_phi.shape != a_y_inner.shape or dy_u_psi.shape != a_y_inner.shape:
-            raise ValueError("Dy(u) and y-line coefficient samples must have matching shapes.")
-        jy_res = a_y_inner * dy_u_phi - a_y_inner * dy_u_psi
-        jy_sq_int = integrate(
-            jy_res.pow(2), x=y_inner, dim=-1, rule=self.config.integration_rule
-        )
-        loss_jy = integrate(
-            jy_sq_int, x=x_inner, dim=-1, rule=self.config.integration_rule
-        ).mean()
-        return loss_jx + loss_jy
+        dr_dx_face = (r[..., :, 1:] - r[..., :, :-1]) / hx
+        dr_dy_face = (r[..., 1:, :] - r[..., :-1, :]) / hy
+
+        dr_dx_face = dr_dx_face[:, 1:-1, :]
+        dr_dy_face = dr_dy_face[:, :, 1:-1]
+
+        a_x_nodes = a_vals[:, 0]
+        a_y_nodes_common = a_vals[:, 1].transpose(-1, -2)
+        a_x_face = self._face_average_arithmetic(a_x_nodes, dim=-1)
+        a_y_face = self._face_average_arithmetic(a_y_nodes_common, dim=-2)
+
+        if a_x_face.shape != dr_dx_face.shape:
+            raise ValueError(
+                f"x-face coefficient shape {tuple(a_x_face.shape)} does not match "
+                f"x-face derivative shape {tuple(dr_dx_face.shape)}."
+            )
+        if a_y_face.shape != dr_dy_face.shape:
+            raise ValueError(
+                f"y-face coefficient shape {tuple(a_y_face.shape)} does not match "
+                f"y-face derivative shape {tuple(dr_dy_face.shape)}."
+            )
+
+        # Physical energy density: a_face * |D_face r|^2, not |a_face D_face r|^2.
+        density_x = a_x_face * dr_dx_face.pow(2)
+        density_y = a_y_face * dr_dy_face.pow(2)
+
+        loss_x_per_batch = density_x.sum(dim=(-1, -2)) * hx * hy
+        loss_y_per_batch = density_y.sum(dim=(-1, -2)) * hx * hy
+        return (loss_x_per_batch + loss_y_per_batch).mean()
 
     def _cross_consistency_loss(
         self,
@@ -304,7 +316,7 @@ class CouplingTrainer(LoggingMixin):
         loss_cons = integrate(
             loss_cons, x=x_axis, dim=-1, rule=self.config.integration_rule
         ).mean()
-        loss_flux_consistency = self._flux_consistency_loss(
+        loss_energy_consistency = self._energy_consistency_loss(
             u_phi_x=u_phi_x,
             u_psi_y=u_psi_y,
             a_vals=a_vals,
@@ -323,24 +335,24 @@ class CouplingTrainer(LoggingMixin):
             y_axis=y_axis,
         )
         l2_cfg = self.config.losses.l2_consistency
-        flux_cfg = self.config.losses.flux_consistency
+        energy_cfg = self.config.losses.energy_consistency
         cross_cfg = self.config.losses.cross_consistency
         w_l2 = self._effective_weight(l2_cfg.enabled, l2_cfg.weight)
-        w_flux = self._effective_weight(flux_cfg.enabled, flux_cfg.weight)
+        w_energy = self._effective_weight(energy_cfg.enabled, energy_cfg.weight)
         w_cross = self._effective_weight(cross_cfg.enabled, cross_cfg.weight)
 
         loss = torch.zeros((), dtype=loss_cons.dtype, device=loss_cons.device)
         if w_l2 != 0.0:
             loss = loss + w_l2 * loss_cons
-        if w_flux != 0.0:
-            loss = loss + w_flux * loss_flux_consistency
+        if w_energy != 0.0:
+            loss = loss + w_energy * loss_energy_consistency
         if w_cross != 0.0:
             loss = loss + w_cross * loss_cross_consistency
 
         metrics = {
             "loss": float(loss.detach().item()),
             "loss_l2_consistency": float(loss_cons.detach().item()),
-            "loss_flux_consistency": float(loss_flux_consistency.detach().item()),
+            "loss_energy_consistency": float(loss_energy_consistency.detach().item()),
             "loss_cross_consistency": float(loss_cross_consistency.detach().item()),
             "rel_flux": self._relative_l2_integral(
                 pred_flux_target.detach(), flux_target, x_axis
@@ -451,7 +463,7 @@ class CouplingTrainer(LoggingMixin):
             accum = {
                 "loss": 0.0,
                 "loss_l2_consistency": 0.0,
-                "loss_flux_consistency": 0.0,
+                "loss_energy_consistency": 0.0,
                 "loss_cross_consistency": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
@@ -511,7 +523,7 @@ class CouplingTrainer(LoggingMixin):
             accum = {
                 "loss": 0.0,
                 "loss_l2_consistency": 0.0,
-                "loss_flux_consistency": 0.0,
+                "loss_energy_consistency": 0.0,
                 "loss_cross_consistency": 0.0,
                 "rel_flux": 0.0,
                 "rel_sol": 0.0,
@@ -559,7 +571,7 @@ class CouplingTrainer(LoggingMixin):
             val_metrics = {
                 "loss": float("nan"),
                 "loss_l2_consistency": float("nan"),
-                "loss_flux_consistency": float("nan"),
+                "loss_energy_consistency": float("nan"),
                 "loss_cross_consistency": float("nan"),
                 "rel_flux": float("nan"),
                 "rel_sol": float("nan"),
@@ -573,34 +585,34 @@ class CouplingTrainer(LoggingMixin):
             if epoch % self.config.log_interval == 0:
                 current_lr = optimizer.param_groups[0]["lr"]
                 l2_cfg = self.config.losses.l2_consistency
-                flux_cfg = self.config.losses.flux_consistency
+                energy_cfg = self.config.losses.energy_consistency
                 cross_cfg = self.config.losses.cross_consistency
                 self.logger.info(
                     (
-                        "epoch %s | train loss=%.4e l2_cons=%.4e flux_cons=%.4e "
+                        "epoch %s | train loss=%.4e l2_cons=%.4e energy_cons=%.4e "
                         "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
-                        "w_l2=%.4e on_l2=%s w_flux=%.4e on_flux=%s "
+                        "w_l2=%.4e on_l2=%s w_energy=%.4e on_energy=%s "
                         "w_cross=%.4e on_cross=%s | lr=%.4e | val loss=%.4e "
-                        "l2_cons=%.4e flux_cons=%.4e cross_cons=%.4e "
+                        "l2_cons=%.4e energy_cons=%.4e cross_cons=%.4e "
                         "rel_flux=%.4e rel_sol=%.4e"
                     ),
                     epoch,
                     train_metrics["loss"],
                     train_metrics["loss_l2_consistency"],
-                    train_metrics["loss_flux_consistency"],
+                    train_metrics["loss_energy_consistency"],
                     train_metrics["loss_cross_consistency"],
                     train_metrics["rel_flux"],
                     train_metrics["rel_sol"],
                     l2_cfg.weight,
                     l2_cfg.enabled,
-                    flux_cfg.weight,
-                    flux_cfg.enabled,
+                    energy_cfg.weight,
+                    energy_cfg.enabled,
                     cross_cfg.weight,
                     cross_cfg.enabled,
                     current_lr,
                     val_metrics["loss"],
                     val_metrics["loss_l2_consistency"],
-                    val_metrics["loss_flux_consistency"],
+                    val_metrics["loss_energy_consistency"],
                     val_metrics["loss_cross_consistency"],
                     val_metrics["rel_flux"],
                     val_metrics["rel_sol"],
@@ -645,7 +657,7 @@ class CouplingTrainer(LoggingMixin):
         loader = self._make_loader(dataset, shuffle=False)
         loss_total: List[float] = []
         loss_l2_consistency: List[float] = []
-        loss_flux_consistency: List[float] = []
+        loss_energy_consistency: List[float] = []
         loss_cross_consistency: List[float] = []
         rel_flux: List[float] = []
         rel_sol: List[float] = []
@@ -675,7 +687,7 @@ class CouplingTrainer(LoggingMixin):
                 )
                 loss_total.append(loss.item())
                 loss_l2_consistency.append(metrics["loss_l2_consistency"])
-                loss_flux_consistency.append(metrics["loss_flux_consistency"])
+                loss_energy_consistency.append(metrics["loss_energy_consistency"])
                 loss_cross_consistency.append(metrics["loss_cross_consistency"])
                 rel_flux.append(metrics["rel_flux"])
                 rel_sol.append(metrics["rel_sol"])
@@ -684,8 +696,8 @@ class CouplingTrainer(LoggingMixin):
             "loss_l2_consistency": float(
                 sum(loss_l2_consistency) / max(len(loss_l2_consistency), 1)
             ),
-            "loss_flux_consistency": float(
-                sum(loss_flux_consistency) / max(len(loss_flux_consistency), 1)
+            "loss_energy_consistency": float(
+                sum(loss_energy_consistency) / max(len(loss_energy_consistency), 1)
             ),
             "loss_cross_consistency": float(
                 sum(loss_cross_consistency) / max(len(loss_cross_consistency), 1)

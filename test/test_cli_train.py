@@ -111,7 +111,7 @@ class TestTrainCLIDatasetConfig:
                         "enabled": True,
                         "weight": 1.5,
                     },
-                    "flux_consistency": {
+                    "energy_consistency": {
                         "enabled": True,
                         "weight": 0.25,
                     },
@@ -154,8 +154,8 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.integration_rule == "trapezoid"
         assert coupling_training_cfg.losses.l2_consistency.enabled is True
         assert coupling_training_cfg.losses.l2_consistency.weight == 1.5
-        assert coupling_training_cfg.losses.flux_consistency.enabled is True
-        assert coupling_training_cfg.losses.flux_consistency.weight == 0.25
+        assert coupling_training_cfg.losses.energy_consistency.enabled is True
+        assert coupling_training_cfg.losses.energy_consistency.weight == 0.25
         assert coupling_training_cfg.losses.cross_consistency.enabled is False
         assert coupling_training_cfg.losses.cross_consistency.weight == 2.0
         assert coupling_training_cfg.learning_rate == 5e-4

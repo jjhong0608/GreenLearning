@@ -104,6 +104,8 @@ class EvalCouplingCLI:
             "lambda_consistency",
             "flux_consistency_enabled",
             "lambda_flux_consistency",
+            "energy_consistency_enabled",
+            "lambda_energy_consistency",
         }
         found_deprecated = sorted(
             key for key in deprecated_loss_keys if key in coupling_training_kwargs
@@ -155,7 +157,7 @@ class EvalCouplingCLI:
 
         loss_kwargs = dict(raw_losses)
         parsed: dict[str, CouplingLossTermConfig] = {}
-        for key in ("l2_consistency", "flux_consistency", "cross_consistency"):
+        for key in ("l2_consistency", "energy_consistency", "cross_consistency"):
             raw_term = loss_kwargs.pop(key, None)
             if raw_term is None:
                 parsed[key] = CouplingLossTermConfig()

@@ -31,15 +31,15 @@
     "device": "cuda:1",
     "losses": {
       "l2_consistency": {
-        "enabled": true,
+        "enabled": false,
         "weight": 1.0
       },
-      "flux_consistency": {
+      "energy_consistency": {
         "enabled": true,
         "weight": 1.0
       },
       "cross_consistency": {
-        "enabled": true,
+        "enabled": false,
         "weight": 1.0
       }
     },

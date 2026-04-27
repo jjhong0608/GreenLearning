@@ -178,8 +178,8 @@ def _losses_config(
     *,
     l2_enabled: bool = True,
     l2_weight: float = 1.0,
-    flux_enabled: bool = True,
-    flux_weight: float = 1.0,
+    energy_enabled: bool = True,
+    energy_weight: float = 1.0,
     cross_enabled: bool = True,
     cross_weight: float = 1.0,
 ) -> CouplingLossesConfig:
@@ -188,9 +188,9 @@ def _losses_config(
             enabled=l2_enabled,
             weight=l2_weight,
         ),
-        flux_consistency=CouplingLossTermConfig(
-            enabled=flux_enabled,
-            weight=flux_weight,
+        energy_consistency=CouplingLossTermConfig(
+            enabled=energy_enabled,
+            weight=energy_weight,
         ),
         cross_consistency=CouplingLossTermConfig(
             enabled=cross_enabled,
@@ -385,7 +385,7 @@ def test_coupling_trainer_runs(tmp_path):
     metrics = trainer.evaluate(ds)
     assert "loss" in metrics and "rel_flux" in metrics and "rel_sol" in metrics
     assert "loss_l2_consistency" in metrics
-    assert "loss_flux_consistency" in metrics
+    assert "loss_energy_consistency" in metrics
     assert "loss_cross_consistency" in metrics
 
 
@@ -704,7 +704,7 @@ def test_single_stage_optimization_resolution_uses_shared_config(tmp_path):
     assert single_cfg.min_lr == 1e-3
 
 
-def test_flux_consistency_loss_zero_for_identical_branch_reconstructions(tmp_path):
+def test_energy_consistency_loss_zero_for_identical_branch_reconstructions(tmp_path):
     trainer = CouplingTrainer(
         model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
         config=CouplingTrainingConfig(epochs=1, batch_size=1),
@@ -717,7 +717,7 @@ def test_flux_consistency_loss_zero_for_identical_branch_reconstructions(tmp_pat
     u_psi_y = base_grid.transpose(-1, -2)
     a_vals = torch.ones((1, 2, 3, 5), dtype=torch.float64)
 
-    loss_flux = trainer._flux_consistency_loss(
+    loss_energy = trainer._energy_consistency_loss(
         u_phi_x=u_phi_x,
         u_psi_y=u_psi_y,
         a_vals=a_vals,
@@ -725,8 +725,151 @@ def test_flux_consistency_loss_zero_for_identical_branch_reconstructions(tmp_pat
         y_axis=axis,
     )
 
-    assert loss_flux.item() >= 0.0
-    assert loss_flux.item() == pytest.approx(0.0, abs=1e-12)
+    assert loss_energy.item() >= 0.0
+    assert loss_energy.item() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_energy_consistency_physical_energy_constant_residual_is_zero(tmp_path):
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    axis = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    u_phi_x = torch.full((1, 5, 5), 3.0, dtype=torch.float64)
+    u_psi_y = torch.zeros((1, 5, 5), dtype=torch.float64)
+    a_vals = torch.ones((1, 2, 3, 5), dtype=torch.float64)
+
+    loss_energy = trainer._energy_consistency_loss(
+        u_phi_x=u_phi_x,
+        u_psi_y=u_psi_y,
+        a_vals=a_vals,
+        x_axis=axis,
+        y_axis=axis,
+    )
+
+    assert loss_energy.item() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_energy_consistency_physical_energy_linear_x_residual(tmp_path):
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    axis = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    x_grid = axis.view(1, 1, -1).expand(1, 5, 5)
+    u_phi_x = x_grid.clone()
+    u_psi_y = torch.zeros((1, 5, 5), dtype=torch.float64)
+    a_vals = torch.ones((1, 2, 3, 5), dtype=torch.float64)
+
+    loss_energy = trainer._energy_consistency_loss(
+        u_phi_x=u_phi_x,
+        u_psi_y=u_psi_y,
+        a_vals=a_vals,
+        x_axis=axis,
+        y_axis=axis,
+    )
+
+    assert torch.isfinite(loss_energy)
+    assert loss_energy.item() > 0.0
+    # Only x-faces contribute: n interior rows * (m - 1) x-faces * hx * hy.
+    assert loss_energy.item() == pytest.approx(3.0 * 4.0 * 0.25 * 0.25)
+
+
+def test_energy_consistency_physical_energy_scales_linearly_with_coefficient(tmp_path):
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    axis = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    x_grid = axis.view(1, 1, -1).expand(1, 5, 5)
+    u_phi_x = x_grid.clone()
+    u_psi_y = torch.zeros((1, 5, 5), dtype=torch.float64)
+    a_ones = torch.ones((1, 2, 3, 5), dtype=torch.float64)
+    a_twos = 2.0 * a_ones
+
+    loss_unit_coeff = trainer._energy_consistency_loss(
+        u_phi_x=u_phi_x,
+        u_psi_y=u_psi_y,
+        a_vals=a_ones,
+        x_axis=axis,
+        y_axis=axis,
+    )
+    loss_double_coeff = trainer._energy_consistency_loss(
+        u_phi_x=u_phi_x,
+        u_psi_y=u_psi_y,
+        a_vals=a_twos,
+        x_axis=axis,
+        y_axis=axis,
+    )
+
+    assert loss_double_coeff.item() == pytest.approx(2.0 * loss_unit_coeff.item())
+
+
+def test_energy_consistency_physical_energy_is_scalar_and_differentiable(tmp_path):
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(torch.zeros((2, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    axis = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    x_grid = axis.view(1, 1, -1).expand(2, 5, 5).clone()
+    y_grid = axis.view(1, -1, 1).expand(2, 5, 5).clone()
+    u_phi_x = (x_grid.square() + 0.25 * y_grid).clone().requires_grad_(True)
+    u_psi_y = torch.zeros_like(u_phi_x).requires_grad_(True)
+    a_vals = torch.ones((2, 2, 3, 5), dtype=torch.float64)
+
+    loss_energy = trainer._energy_consistency_loss(
+        u_phi_x=u_phi_x,
+        u_psi_y=u_psi_y,
+        a_vals=a_vals,
+        x_axis=axis,
+        y_axis=axis,
+    )
+    loss_energy.backward()
+
+    assert loss_energy.ndim == 0
+    assert u_phi_x.grad is not None
+    assert u_psi_y.grad is not None
+    assert torch.linalg.norm(u_phi_x.grad).item() > 0.0
+    assert torch.linalg.norm(u_psi_y.grad).item() > 0.0
+
+
+def test_energy_consistency_physical_energy_shape_mismatch_errors(tmp_path):
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    axis = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    u_phi_x = torch.zeros((1, 5, 5), dtype=torch.float64)
+    u_psi_y_bad = torch.zeros((1, 4, 5), dtype=torch.float64)
+    a_vals = torch.ones((1, 2, 3, 5), dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="same common grid"):
+        trainer._energy_consistency_loss(
+            u_phi_x=u_phi_x,
+            u_psi_y=u_psi_y_bad,
+            a_vals=a_vals,
+            x_axis=axis,
+            y_axis=axis,
+        )
+
+    with pytest.raises(ValueError, match="x-face coefficient shape"):
+        trainer._energy_consistency_loss(
+            u_phi_x=u_phi_x,
+            u_psi_y=torch.zeros((1, 5, 5), dtype=torch.float64),
+            a_vals=torch.ones((1, 2, 2, 5), dtype=torch.float64),
+            x_axis=axis,
+            y_axis=axis,
+        )
 
 
 def test_cross_consistency_loss_uses_cross_terms_not_self_closure(tmp_path):
@@ -798,7 +941,7 @@ def test_cross_consistency_loss_uses_cross_terms_not_self_closure(tmp_path):
     assert self_mismatch.item() > 0.0
 
 
-def test_step_loss_ignores_flux_consistency_when_disabled(tmp_path):
+def test_step_loss_ignores_energy_consistency_when_disabled(tmp_path):
     (
         coords,
         rhs_raw,
@@ -820,8 +963,8 @@ def test_step_loss_ignores_flux_consistency_when_disabled(tmp_path):
         config=CouplingTrainingConfig(
             losses=_losses_config(
                 l2_enabled=False,
-                flux_enabled=False,
-                flux_weight=1.0,
+                energy_enabled=False,
+                energy_weight=1.0,
                 cross_enabled=False,
             ),
             epochs=1,
@@ -843,11 +986,11 @@ def test_step_loss_ignores_flux_consistency_when_disabled(tmp_path):
         c_vals,
     )
 
-    assert metrics["loss_flux_consistency"] > 0.0
+    assert metrics["loss_energy_consistency"] > 0.0
     assert abs(loss.item()) < 1e-12
 
 
-def test_flux_consistency_loss_backpropagates_to_projected_flux(tmp_path):
+def test_energy_consistency_loss_backpropagates_to_projected_flux(tmp_path):
     (
         coords,
         rhs_raw,
@@ -869,8 +1012,8 @@ def test_flux_consistency_loss_backpropagates_to_projected_flux(tmp_path):
         config=CouplingTrainingConfig(
             losses=_losses_config(
                 l2_enabled=False,
-                flux_enabled=True,
-                flux_weight=1.0,
+                energy_enabled=True,
+                energy_weight=1.0,
                 cross_enabled=False,
             ),
             epochs=1,
@@ -893,7 +1036,7 @@ def test_flux_consistency_loss_backpropagates_to_projected_flux(tmp_path):
     )
     loss.backward()
 
-    assert metrics["loss_flux_consistency"] > 0.0
+    assert metrics["loss_energy_consistency"] > 0.0
     assert model.projected_flux.grad is not None
     assert torch.linalg.norm(model.projected_flux.grad).item() > 0.0
 
@@ -920,8 +1063,8 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
             losses=_losses_config(
                 l2_enabled=True,
                 l2_weight=0.5,
-                flux_enabled=True,
-                flux_weight=2.0,
+                energy_enabled=True,
+                energy_weight=2.0,
                 cross_enabled=True,
                 cross_weight=3.0,
             ),
@@ -946,7 +1089,7 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
 
     expected = (
         0.5 * metrics["loss_l2_consistency"]
-        + 2.0 * metrics["loss_flux_consistency"]
+        + 2.0 * metrics["loss_energy_consistency"]
         + 3.0 * metrics["loss_cross_consistency"]
     )
     assert loss.item() == pytest.approx(expected)
@@ -997,5 +1140,5 @@ def test_evaluate_reports_all_three_loss_components(tmp_path):
 
     assert "loss" in metrics
     assert "loss_l2_consistency" in metrics
-    assert "loss_flux_consistency" in metrics
+    assert "loss_energy_consistency" in metrics
     assert "loss_cross_consistency" in metrics

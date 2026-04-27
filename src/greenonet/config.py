@@ -86,7 +86,7 @@ class CouplingLossesConfig:
     l2_consistency: CouplingLossTermConfig = field(
         default_factory=CouplingLossTermConfig
     )
-    flux_consistency: CouplingLossTermConfig = field(
+    energy_consistency: CouplingLossTermConfig = field(
         default_factory=CouplingLossTermConfig
     )
     cross_consistency: CouplingLossTermConfig = field(
