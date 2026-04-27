@@ -7,9 +7,10 @@ from torch import nn
 
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_evaluator import CouplingEvaluator
-from greenonet.coupling_model import CouplingNet
+from greenonet.coupling_model import CouplingNet, FiveStencilStencilMLPCoupler
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
+    CouplerConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
@@ -89,13 +90,15 @@ class _RawSumFromRhsModel(nn.Module):
         projected_flux = torch.zeros_like(rhs_raw)
         rhs_inner = rhs_raw[:, 0, :, 1:-1]
         projected_flux[:, 0, :, 1:-1] = 0.25 * rhs_inner + 0.0 * self.anchor
-        projected_flux[:, 1, :, 1:-1] = (
-            0.75 * rhs_inner
-        ).transpose(-1, -2) + 0.0 * self.anchor
+        projected_flux[:, 1, :, 1:-1] = (0.75 * rhs_inner).transpose(
+            -1, -2
+        ) + 0.0 * self.anchor
         return projected_flux
 
 
-def _flux_from_q_common(q: torch.Tensor, common: torch.Tensor | None = None) -> torch.Tensor:
+def _flux_from_q_common(
+    q: torch.Tensor, common: torch.Tensor | None = None
+) -> torch.Tensor:
     """
     Build post-projection style flux tensors from interior gauge/common parts.
 
@@ -126,9 +129,7 @@ def _make_zero_dirichlet_grid(m_points: int) -> torch.Tensor:
 
 
 def _interior_second_difference(lines: torch.Tensor, spacing: float) -> torch.Tensor:
-    return -(
-        lines[..., 2:] - 2.0 * lines[..., 1:-1] + lines[..., :-2]
-    ) / (spacing**2)
+    return -(lines[..., 2:] - 2.0 * lines[..., 1:-1] + lines[..., :-2]) / (spacing**2)
 
 
 def _sequential_integrator(outputs: list[torch.Tensor]):
@@ -197,6 +198,219 @@ def _losses_config(
             weight=cross_weight,
         ),
     )
+
+
+def test_five_stencil_coupler_shape_preservation():
+    torch.set_default_dtype(torch.float64)
+    bsz = 3
+    n = 7
+    m = n + 2
+    raw_int = torch.randn(bsz, 2, n, n)
+    a_vals = torch.randn(bsz, 2, n, m)
+    b_vals = torch.randn(bsz, 2, n, m)
+    c_vals = torch.randn(bsz, 2, n, m)
+    rhs_raw = torch.randn(bsz, 2, n, m)
+    coupler = FiveStencilStencilMLPCoupler(CouplerConfig(enabled=True)).to(
+        dtype=torch.float64
+    )
+
+    out = coupler(raw_int, a_vals, b_vals, c_vals, rhs_raw)
+
+    assert out.shape == raw_int.shape
+
+
+def test_five_stencil_coupler_initial_identity():
+    torch.set_default_dtype(torch.float64)
+    bsz = 2
+    n = 5
+    m = n + 2
+    raw_int = torch.randn(bsz, 2, n, n)
+    a_vals = torch.randn(bsz, 2, n, m)
+    b_vals = torch.randn(bsz, 2, n, m)
+    c_vals = torch.randn(bsz, 2, n, m)
+    rhs_raw = torch.randn(bsz, 2, n, m)
+    coupler = FiveStencilStencilMLPCoupler(
+        CouplerConfig(
+            enabled=True,
+            hidden_channels=64,
+            depth=2,
+            activation="gelu",
+            residual_scale_init=0.05,
+        )
+    ).to(dtype=torch.float64)
+
+    out = coupler(raw_int, a_vals, b_vals, c_vals, rhs_raw)
+
+    torch.testing.assert_close(out, raw_int)
+
+
+def test_five_stencil_coupler_preserves_phi_plus_psi_for_nonzero_delta():
+    torch.set_default_dtype(torch.float64)
+    bsz = 2
+    n = 5
+    m = n + 2
+    raw_int = torch.randn(bsz, 2, n, n)
+    a_vals = torch.randn(bsz, 2, n, m)
+    b_vals = torch.randn(bsz, 2, n, m)
+    c_vals = torch.randn(bsz, 2, n, m)
+    rhs_raw = torch.randn(bsz, 2, n, m)
+    coupler = FiveStencilStencilMLPCoupler(
+        CouplerConfig(enabled=True, residual_scale_init=0.1)
+    ).to(dtype=torch.float64)
+
+    final_conv = coupler.local_mlp[-1]
+    assert isinstance(final_conv, nn.Conv2d)
+    assert final_conv.bias is not None
+    with torch.no_grad():
+        final_conv.bias.fill_(0.25)
+
+    out = coupler(raw_int, a_vals, b_vals, c_vals, rhs_raw)
+    phi0 = raw_int[:, 0]
+    psi0 = raw_int[:, 1].transpose(-1, -2)
+    phi1 = out[:, 0]
+    psi1 = out[:, 1].transpose(-1, -2)
+
+    torch.testing.assert_close(
+        phi1 + psi1,
+        phi0 + psi0,
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )
+    assert not torch.allclose(out, raw_int)
+
+
+def test_five_stencil_coupler_gather_uses_only_cardinal_neighbors():
+    torch.set_default_dtype(torch.float64)
+    coupler = FiveStencilStencilMLPCoupler(
+        CouplerConfig(enabled=True, padding="zero")
+    ).to(dtype=torch.float64)
+    q = torch.arange(9, dtype=torch.float64).reshape(1, 1, 3, 3)
+
+    q5 = coupler._gather_5_stencil(q)
+
+    assert q5.shape == (1, 5, 3, 3)
+    torch.testing.assert_close(
+        q5[0, :, 1, 1],
+        torch.tensor([4.0, 7.0, 1.0, 5.0, 3.0], dtype=torch.float64),
+    )
+    diagonal_values = {0.0, 2.0, 6.0, 8.0}
+    assert diagonal_values.isdisjoint(set(q5[0, :, 1, 1].tolist()))
+
+
+def test_coupling_net_with_disabled_coupler_matches_baseline():
+    torch.set_default_dtype(torch.float64)
+    bsz = 2
+    n = 5
+    m = n + 2
+    coords = torch.randn(2, n, m, 2)
+    a_vals = torch.randn(bsz, 2, n, m)
+    b_vals = torch.randn(bsz, 2, n, m)
+    c_vals = torch.randn(bsz, 2, n, m)
+    rhs_raw = torch.randn(bsz, 2, n, m)
+    rhs_tilde = torch.randn(bsz, 2, n, m)
+    rhs_norm = torch.rand(bsz, 2, n) + 0.1
+
+    torch.manual_seed(123)
+    cfg_without = CouplingModelConfig(
+        branch_input_dim=m,
+        trunk_input_dim=2,
+        hidden_dim=16,
+        depth=1,
+        activation="gelu",
+        dtype=torch.float64,
+    )
+    model_without = CouplingNet(cfg_without)
+
+    torch.manual_seed(123)
+    cfg_disabled = CouplingModelConfig(
+        branch_input_dim=m,
+        trunk_input_dim=2,
+        hidden_dim=16,
+        depth=1,
+        activation="gelu",
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=False),
+    )
+    model_disabled = CouplingNet(cfg_disabled)
+
+    out_without = model_without(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+    out_disabled = model_disabled(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    torch.testing.assert_close(out_disabled, out_without)
+
+
+def test_coupling_net_enabled_coupler_is_initially_identity():
+    torch.set_default_dtype(torch.float64)
+    bsz = 2
+    n = 5
+    m = n + 2
+    coords = torch.randn(2, n, m, 2)
+    a_vals = torch.randn(bsz, 2, n, m)
+    b_vals = torch.randn(bsz, 2, n, m)
+    c_vals = torch.randn(bsz, 2, n, m)
+    rhs_raw = torch.randn(bsz, 2, n, m)
+    rhs_tilde = torch.randn(bsz, 2, n, m)
+    rhs_norm = torch.rand(bsz, 2, n) + 0.1
+
+    torch.manual_seed(123)
+    cfg_disabled = CouplingModelConfig(
+        branch_input_dim=m,
+        trunk_input_dim=2,
+        hidden_dim=16,
+        depth=1,
+        activation="gelu",
+        dtype=torch.float64,
+    )
+    model_disabled = CouplingNet(cfg_disabled)
+
+    torch.manual_seed(123)
+    cfg_enabled = CouplingModelConfig(
+        branch_input_dim=m,
+        trunk_input_dim=2,
+        hidden_dim=16,
+        depth=1,
+        activation="gelu",
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=True, hidden_channels=8, depth=1),
+    )
+    model_enabled = CouplingNet(cfg_enabled)
+
+    out_disabled = model_disabled(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+    out_enabled = model_enabled(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    torch.testing.assert_close(out_enabled, out_disabled)
 
 
 def test_coupling_dataset_shapes(tmp_path):
@@ -389,8 +603,6 @@ def test_coupling_trainer_runs(tmp_path):
     assert "loss_cross_consistency" in metrics
 
 
-
-
 def test_coupling_trainer_compile_enabled_calls_torch_compile(tmp_path, monkeypatch):
     compiled = {"count": 0}
 
@@ -415,6 +627,7 @@ def test_coupling_trainer_compile_enabled_calls_torch_compile(tmp_path, monkeypa
     )
 
     assert compiled["count"] == 1
+
 
 def test_coupling_trainer_saves_periodic_adam_checkpoints(tmp_path):
     _make_npz(tmp_path)
@@ -525,7 +738,9 @@ def test_coupling_trainer_skips_best_validation_checkpoint_when_disabled(tmp_pat
     assert not (tmp_path / "coupling_model_adam_best_rel_sol.safetensors").exists()
 
 
-def test_coupling_trainer_skips_best_validation_checkpoint_without_val_dataset(tmp_path):
+def test_coupling_trainer_skips_best_validation_checkpoint_without_val_dataset(
+    tmp_path,
+):
     _make_npz(tmp_path)
     train_ds = CouplingDataset(
         data_dir=tmp_path,

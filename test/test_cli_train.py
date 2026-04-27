@@ -129,9 +129,7 @@ class TestTrainCLIDatasetConfig:
                     "enabled": True,
                     "every_epochs": 4,
                 },
-                "best_rel_sol_checkpoint": {
-                    "enabled": True
-                },
+                "best_rel_sol_checkpoint": {"enabled": True},
                 "compile": {
                     "enabled": True,
                 },
@@ -167,10 +165,68 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.periodic_checkpoint.every_epochs == 4
         assert coupling_training_cfg.best_rel_sol_checkpoint.enabled is True
         assert coupling_training_cfg.compile.enabled is True
+        assert coupling_model_cfg.coupler.enabled is False
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
         assert not hasattr(coupling_model_cfg, "fourier_include_input")
+
+    def test_parses_coupler_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "coupler": {
+                    "enabled": True,
+                    "type": "five_stencil_stencil_mlp",
+                    "hidden_channels": 64,
+                    "depth": 2,
+                    "activation": "gelu",
+                    "dropout": 0.0,
+                    "residual_scale_init": 0.05,
+                    "padding": "replicate",
+                    "eps": 1e-12,
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset_cfg,
+            _model_cfg,
+            _training_cfg,
+            coupling_model_cfg,
+            _coupling_training_cfg,
+            _pipeline_cfg,
+        ) = TrainCLI()._build_configs(config_path)
+
+        assert coupling_model_cfg.coupler.enabled is True
+        assert coupling_model_cfg.coupler.type == "five_stencil_stencil_mlp"
+        assert coupling_model_cfg.coupler.hidden_channels == 64
+        assert coupling_model_cfg.coupler.depth == 2
+        assert coupling_model_cfg.coupler.activation == "gelu"
+        assert coupling_model_cfg.coupler.padding == "replicate"
+
+    def test_rejects_non_object_coupler_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "coupler": "enabled",
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.coupler"):
+            TrainCLI()._build_configs(config_path)
 
     def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):
         config_path = tmp_path / "config.json"

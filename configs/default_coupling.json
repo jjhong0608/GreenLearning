@@ -23,7 +23,18 @@
     "dropout": 0.0,
     "branch_input_dim": 129,
     "trunk_input_dim": 2,
-    "dtype": "float64"
+    "dtype": "float64",
+    "coupler": {
+      "enabled": true,
+      "type": "five_stencil_stencil_mlp",
+      "hidden_channels": 64,
+      "depth": 2,
+      "activation": "gelu",
+      "dropout": 0.0,
+      "residual_scale_init": 0.05,
+      "padding": "replicate",
+      "eps": 1e-12
+    }
   },
   "coupling_training": {
     "batch_size": 200,

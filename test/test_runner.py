@@ -148,8 +148,9 @@ class TestRunGreenONet:
         logging.getLogger("GreenONetRunner").handlers.clear()
         logging.getLogger("Trainer").handlers.clear()
 
-
-    def test_compile_enabled_calls_torch_compile(self, tmp_path: Path, monkeypatch) -> None:
+    def test_compile_enabled_calls_torch_compile(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         compiled = {"count": 0}
 
         def fake_compile(model):

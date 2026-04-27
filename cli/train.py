@@ -11,6 +11,7 @@ from torch import Tensor
 
 from greenonet.config import (
     CompileConfig,
+    CouplerConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
@@ -106,9 +107,14 @@ class TrainCLI:
         training_cfg = self._build_training_config(raw.get("training", {}))
 
         coupling_model_kwargs = dict(raw.get("coupling_model", {}))
+        coupler_raw = coupling_model_kwargs.pop("coupler", None)
+        coupler_cfg = self._build_coupler_config(coupler_raw, "coupling_model")
         cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
         coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
-        coupling_model_cfg = CouplingModelConfig(**coupling_model_kwargs)
+        coupling_model_cfg = CouplingModelConfig(
+            coupler=coupler_cfg,
+            **coupling_model_kwargs,
+        )
 
         coupling_training_cfg = self._build_coupling_training_config(
             raw.get("coupling_training", {})
@@ -132,6 +138,17 @@ class TrainCLI:
         if isinstance(raw_compile, dict):
             return CompileConfig(**raw_compile)
         raise TypeError(f"{section_name}.compile must be an object.")
+
+    @staticmethod
+    def _build_coupler_config(
+        raw_coupler: object | None,
+        section_name: str,
+    ) -> CouplerConfig:
+        if raw_coupler is None:
+            return CouplerConfig()
+        if not isinstance(raw_coupler, dict):
+            raise TypeError(f"{section_name}.coupler must be an object.")
+        return CouplerConfig(**dict(raw_coupler))
 
     @classmethod
     def _build_training_config(

@@ -38,8 +38,12 @@ def test_plot_logs_figures_accept_current_metrics(tmp_path: Path) -> None:
     )
 
     metrics = parse_log(path)
-    fig_losses = make_fig_losses({path.name: metrics}, {"family": "Times New Roman", "size": 14})
-    fig_errors = make_fig_errors({path.name: metrics}, {"family": "Times New Roman", "size": 14})
+    fig_losses = make_fig_losses(
+        {path.name: metrics}, {"family": "Times New Roman", "size": 14}
+    )
+    fig_errors = make_fig_errors(
+        {path.name: metrics}, {"family": "Times New Roman", "size": 14}
+    )
 
     assert len(fig_losses.data) == 8
     assert len(fig_errors.data) == 4

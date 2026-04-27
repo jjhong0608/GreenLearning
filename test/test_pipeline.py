@@ -11,7 +11,9 @@ from greenonet.model import GreenONetModel
 from greenonet.trainer import Trainer
 
 
-def _build_trunk_grid(m_points: int, dtype: torch.dtype = torch.float64) -> torch.Tensor:
+def _build_trunk_grid(
+    m_points: int, dtype: torch.dtype = torch.float64
+) -> torch.Tensor:
     axis = torch.linspace(0, 1, m_points, dtype=dtype)
     return torch.stack(torch.meshgrid(axis, axis, indexing="ij"), dim=-1)
 

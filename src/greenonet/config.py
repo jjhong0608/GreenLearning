@@ -49,6 +49,21 @@ class ModelConfig:
 
 
 @dataclass
+class CouplerConfig:
+    """Optional local 2D coupler inserted before CouplingNet balance projection."""
+
+    enabled: bool = False
+    type: Literal["five_stencil_stencil_mlp"] = "five_stencil_stencil_mlp"
+    hidden_channels: int = 64
+    depth: int = 2
+    activation: Literal["tanh", "relu", "gelu", "rational"] = "gelu"
+    dropout: float = 0.0
+    residual_scale_init: float = 0.05
+    padding: Literal["replicate", "zero"] = "replicate"
+    eps: float = 1.0e-12
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -60,8 +75,7 @@ class CouplingModelConfig:
     use_bias: bool = True
     dropout: float = 0.0
     dtype: torch.dtype = torch.float64
-
-
+    coupler: CouplerConfig = field(default_factory=CouplerConfig)
 
 
 @dataclass

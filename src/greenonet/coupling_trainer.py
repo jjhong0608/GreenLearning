@@ -37,6 +37,7 @@ CouplingBatch = tuple[
     torch.Tensor,
 ]
 
+
 class CouplingTrainer(LoggingMixin):
     """Trainer for CouplingNet using Green kernel integrals."""
 
@@ -87,7 +88,9 @@ class CouplingTrainer(LoggingMixin):
     def _face_average_arithmetic(values: torch.Tensor, dim: int) -> torch.Tensor:
         dim = dim % values.dim()
         if values.shape[dim] < 2:
-            raise ValueError("Need at least two nodal samples to compute face averages.")
+            raise ValueError(
+                "Need at least two nodal samples to compute face averages."
+            )
         left = values.narrow(dim, 0, values.shape[dim] - 1)
         right = values.narrow(dim, 1, values.shape[dim] - 1)
         return 0.5 * (left + right)
@@ -166,10 +169,9 @@ class CouplingTrainer(LoggingMixin):
 
         x_inner = x_axis[1:-1]
         y_inner = y_axis[1:-1]
-        if (
-            not self._supports_auxiliary_quadrature(x_inner)
-            or not self._supports_auxiliary_quadrature(y_inner)
-        ):
+        if not self._supports_auxiliary_quadrature(
+            x_inner
+        ) or not self._supports_auxiliary_quadrature(y_inner):
             return torch.zeros((), dtype=u_phi_x.dtype, device=u_phi_x.device)
 
         u_psi_x_view = u_psi_y.transpose(-1, -2)
@@ -508,13 +510,13 @@ class CouplingTrainer(LoggingMixin):
         self.model.train()
         train_loader = self._make_loader(train_dataset, shuffle=True)
         val_loader = (
-            self._make_loader(val_dataset, shuffle=False) if val_dataset is not None else None
+            self._make_loader(val_dataset, shuffle=False)
+            if val_dataset is not None
+            else None
         )
         optimization_cfg = self._optimization_config()
         optimizer = self._build_optimizer(optimization_cfg)
-        scheduler = self._build_scheduler(
-            optimization_cfg, optimizer, max(epochs, 1)
-        )
+        scheduler = self._build_scheduler(optimization_cfg, optimizer, max(epochs, 1))
         phase_history: List[float] = []
         best_rel_sol = float("inf")
 

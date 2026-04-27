@@ -74,6 +74,7 @@ class GreenONetRunner(LoggingMixin):
         axial_lines = self._build_axial_lines(
             use_operator_learning, step_size, n_points_per_line
         )
+
         def resolve_sampler_cls(
             mode: Literal["forward", "backward"],
         ) -> type[ForwardSampler] | type[BackwardSampler]:
@@ -96,6 +97,7 @@ class GreenONetRunner(LoggingMixin):
                 deterministic=deterministic,
                 integration_rule=cfg_training.integration_rule,
             )
+
         sampler = make_sampler(sampler_mode, ndata, scale_length)
         self.logger.info(
             "Sampling data: mode=%s, ndata=%s, scale_length=%s, lines=%s",

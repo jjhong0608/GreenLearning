@@ -95,9 +95,7 @@ class Trainer(LoggingMixin):
         residual_energy = integrate(
             residual.pow(2), x=x, dim=-1, rule=integration_rule
         )  # (B,2,n)
-        solution_energy = integrate(
-            solution.pow(2), x=x, dim=-1, rule=integration_rule
-        )
+        solution_energy = integrate(solution.pow(2), x=x, dim=-1, rule=integration_rule)
         # relative = torch.sqrt(residual_energy / (solution_energy + 1e-12)).mean()
         relative = torch.sqrt(residual_energy / solution_energy).mean()
         loss = residual_energy.mean()
@@ -178,9 +176,7 @@ class Trainer(LoggingMixin):
         )
         integ = integrate(rhs, x=xi, dim=-1, rule=integration_rule)
         residual = solution - integ
-        residual_energy = integrate(
-            residual.pow(2), x=x, dim=-1, rule=integration_rule
-        )
+        residual_energy = integrate(residual.pow(2), x=x, dim=-1, rule=integration_rule)
         solution_energy = integrate(
             solution.pow(2), x=x, dim=-1, rule=integration_rule
         ).clamp_min(1e-12)
@@ -298,7 +294,9 @@ class Trainer(LoggingMixin):
             or rel_sol_min is None
             or rel_sol_max is None
         ):
-            raise ValueError("Per-line reconstruction aggregation skipped: empty dataset.")
+            raise ValueError(
+                "Per-line reconstruction aggregation skipped: empty dataset."
+            )
 
         mean = rel_sol_sum / max(rel_sol_count, 1)
         if rel_sol_count > 1:

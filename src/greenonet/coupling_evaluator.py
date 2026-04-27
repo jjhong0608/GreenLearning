@@ -84,9 +84,7 @@ class CouplingEvaluator(LoggingMixin):
             rule=self.integration_rule,
         )
         num = integrate(num, x=x_axis, dim=-1, rule=self.integration_rule).mean()
-        den = integrate(
-            target.pow(2), x=x_axis, dim=-1, rule=self.integration_rule
-        )
+        den = integrate(target.pow(2), x=x_axis, dim=-1, rule=self.integration_rule)
         den = (
             integrate(den, x=x_axis, dim=-1, rule=self.integration_rule)
             .mean()

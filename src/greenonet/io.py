@@ -9,7 +9,7 @@ from typing import Any, cast
 import torch
 
 from greenonet.compile_utils import model_state_dict_for_save
-from greenonet.config import CouplingModelConfig, ModelConfig
+from greenonet.config import CouplerConfig, CouplingModelConfig, ModelConfig
 
 
 def save_state_dict_safetensors(
@@ -33,6 +33,7 @@ def save_state_dict_safetensors(
                 exc,
                 fallback,
             )
+
 
 def _normalize_config_payload(payload: Any) -> Any:
     if isinstance(payload, torch.dtype):
@@ -68,6 +69,10 @@ def _deserialize_config(
     data = dict(payload)
     if "dtype" in data and isinstance(data["dtype"], str):
         data["dtype"] = _parse_dtype(data["dtype"])
+    if config_cls is CouplingModelConfig:
+        coupler_raw = data.get("coupler")
+        if isinstance(coupler_raw, dict):
+            data["coupler"] = CouplerConfig(**coupler_raw)
     allowed_keys = {field.name for field in fields(config_cls)}
     filtered = {key: value for key, value in data.items() if key in allowed_keys}
     return config_cls(**filtered)
@@ -103,7 +108,11 @@ def save_model_with_config(
     except Exception as exc:  # pragma: no cover - fallback
         fallback = path.with_suffix(".pt")
         torch.save(
-            {"state_dict": model_state_dict_for_save(model), **metadata, "model_config": payload},
+            {
+                "state_dict": model_state_dict_for_save(model),
+                **metadata,
+                "model_config": payload,
+            },
             fallback,
         )
         if logger:

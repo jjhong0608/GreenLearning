@@ -90,7 +90,9 @@ class StructuredGreenKernelMixin:
 
     def _structured_trunk_features(self, coords: torch.Tensor) -> torch.Tensor:
         if coords.shape[-1] != 2:
-            raise ValueError("GreenONetModel expects trunk coordinates shaped as (x, xi).")
+            raise ValueError(
+                "GreenONetModel expects trunk coordinates shaped as (x, xi)."
+            )
 
         x = coords[..., 0:1]
         xi = coords[..., 1:2]
