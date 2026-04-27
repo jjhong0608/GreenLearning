@@ -169,14 +169,14 @@ class FiveStencilStencilMLPCoupler(nn.Module, ActivationFactoryMixin):  # type: 
                     f"{name} must have shape {expected_full}, got {tuple(value.shape)}."
                 )
 
-    def forward(
+    def _build_canonical_point_features(
         self,
         raw_int: torch.Tensor,
         a_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
         rhs_raw: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         self._validate_inputs(raw_int, a_vals, b_vals, c_vals, rhs_raw)
 
         phi0, psi0 = self._canonicalize_flux(raw_int)
@@ -190,13 +190,32 @@ class FiveStencilStencilMLPCoupler(nn.Module, ActivationFactoryMixin):  # type: 
         cy = c_vals[:, 1, :, 1:-1].transpose(-1, -2)
 
         scale = torch.sqrt(torch.mean(f * f, dim=(-1, -2), keepdim=True) + self.eps)
-        phi_hat = phi0 / scale
-        psi_hat = psi0 / scale
+        diff_field = 0.5 * (phi0 - psi0)
+        balance_residual = f - (phi0 + psi0)
+        diff_hat = diff_field / scale
+        res_hat = balance_residual / scale
         f_hat = f / scale
 
         q = torch.stack(
-            [phi_hat, psi_hat, f_hat, ax, ay, bx, by, cx, cy],
+            [diff_hat, res_hat, f_hat, ax, ay, bx, by, cx, cy],
             dim=1,
+        )
+        return q, scale, phi0, psi0
+
+    def forward(
+        self,
+        raw_int: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+    ) -> torch.Tensor:
+        q, scale, phi0, psi0 = self._build_canonical_point_features(
+            raw_int,
+            a_vals,
+            b_vals,
+            c_vals,
+            rhs_raw,
         )
         q5 = self._gather_5_stencil(q)
         delta_hat = cast(torch.Tensor, self.local_mlp(q5)).squeeze(1)

@@ -244,6 +244,69 @@ def test_five_stencil_coupler_initial_identity():
     torch.testing.assert_close(out, raw_int)
 
 
+def test_five_stencil_coupler_builds_projection_aware_features():
+    torch.set_default_dtype(torch.float64)
+    n = 2
+    m = n + 2
+    phi = torch.tensor([[[2.0, 4.0], [6.0, 8.0]]], dtype=torch.float64)
+    psi = torch.tensor([[[1.0, 3.0], [5.0, 7.0]]], dtype=torch.float64)
+    f = torch.tensor([[[10.0, 12.0], [14.0, 16.0]]], dtype=torch.float64)
+
+    ax = torch.tensor([[[0.1, 0.2], [0.3, 0.4]]], dtype=torch.float64)
+    ay = torch.tensor([[[0.5, 0.6], [0.7, 0.8]]], dtype=torch.float64)
+    bx = torch.tensor([[[1.1, 1.2], [1.3, 1.4]]], dtype=torch.float64)
+    by = torch.tensor([[[1.5, 1.6], [1.7, 1.8]]], dtype=torch.float64)
+    cx = torch.tensor([[[2.1, 2.2], [2.3, 2.4]]], dtype=torch.float64)
+    cy = torch.tensor([[[2.5, 2.6], [2.7, 2.8]]], dtype=torch.float64)
+
+    raw_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
+    raw_int[:, 0] = phi
+    raw_int[:, 1] = psi.transpose(-1, -2)
+
+    rhs_raw = torch.zeros((1, 2, n, m), dtype=torch.float64)
+    rhs_raw[:, 0, :, 1:-1] = f
+
+    a_vals = torch.zeros((1, 2, n, m), dtype=torch.float64)
+    b_vals = torch.zeros((1, 2, n, m), dtype=torch.float64)
+    c_vals = torch.zeros((1, 2, n, m), dtype=torch.float64)
+    a_vals[:, 0, :, 1:-1] = ax
+    a_vals[:, 1, :, 1:-1] = ay.transpose(-1, -2)
+    b_vals[:, 0, :, 1:-1] = bx
+    b_vals[:, 1, :, 1:-1] = by.transpose(-1, -2)
+    c_vals[:, 0, :, 1:-1] = cx
+    c_vals[:, 1, :, 1:-1] = cy.transpose(-1, -2)
+
+    coupler = FiveStencilStencilMLPCoupler(CouplerConfig(enabled=True, eps=0.0)).to(
+        dtype=torch.float64
+    )
+
+    q, scale, phi0, psi0 = coupler._build_canonical_point_features(
+        raw_int,
+        a_vals,
+        b_vals,
+        c_vals,
+        rhs_raw,
+    )
+
+    expected_scale = torch.sqrt(torch.mean(f * f, dim=(-1, -2), keepdim=True))
+    expected_diff_hat = 0.5 * (phi - psi) / expected_scale
+    expected_res_hat = (f - (phi + psi)) / expected_scale
+
+    assert q.shape == (1, 9, n, n)
+    torch.testing.assert_close(scale, expected_scale)
+    torch.testing.assert_close(phi0, phi)
+    torch.testing.assert_close(psi0, psi)
+    torch.testing.assert_close(q[:, 0], expected_diff_hat)
+    torch.testing.assert_close(q[:, 1], expected_res_hat)
+    torch.testing.assert_close(q[:, 2], f / expected_scale)
+    torch.testing.assert_close(q[:, 3], ax)
+    torch.testing.assert_close(q[:, 4], ay)
+    torch.testing.assert_close(q[:, 5], bx)
+    torch.testing.assert_close(q[:, 6], by)
+    torch.testing.assert_close(q[:, 7], cx)
+    torch.testing.assert_close(q[:, 8], cy)
+
+
 def test_five_stencil_coupler_preserves_phi_plus_psi_for_nonzero_delta():
     torch.set_default_dtype(torch.float64)
     bsz = 2
