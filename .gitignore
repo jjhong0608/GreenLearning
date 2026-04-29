@@ -8,3 +8,5 @@ checkpoints/
 .venv/
 data/
 .codex
+.idea/
+.idea/*

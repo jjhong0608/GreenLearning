@@ -176,6 +176,7 @@ class FiveStencilStencilMLPCoupler(nn.Module, ActivationFactoryMixin):  # type: 
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
         rhs_raw: torch.Tensor,
+        auxiliary_residual: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         self._validate_inputs(raw_int, a_vals, b_vals, c_vals, rhs_raw)
 
@@ -191,7 +192,15 @@ class FiveStencilStencilMLPCoupler(nn.Module, ActivationFactoryMixin):  # type: 
 
         scale = torch.sqrt(torch.mean(f * f, dim=(-1, -2), keepdim=True) + self.eps)
         diff_field = 0.5 * (phi0 - psi0)
-        balance_residual = f - (phi0 + psi0)
+        if auxiliary_residual is None:
+            balance_residual = f - (phi0 + psi0)
+        else:
+            if tuple(auxiliary_residual.shape) != tuple(f.shape):
+                raise ValueError(
+                    "auxiliary_residual must have shape matching canonical source "
+                    f"{tuple(f.shape)}, got {tuple(auxiliary_residual.shape)}."
+                )
+            balance_residual = auxiliary_residual
         diff_hat = diff_field / scale
         res_hat = balance_residual / scale
         f_hat = f / scale
@@ -209,13 +218,15 @@ class FiveStencilStencilMLPCoupler(nn.Module, ActivationFactoryMixin):  # type: 
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
         rhs_raw: torch.Tensor,
+        auxiliary_residual: torch.Tensor | None = None,
     ) -> torch.Tensor:
         q, scale, phi0, psi0 = self._build_canonical_point_features(
-            raw_int,
-            a_vals,
-            b_vals,
-            c_vals,
-            rhs_raw,
+            raw_int=raw_int,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            auxiliary_residual=auxiliary_residual,
         )
         q5 = self._gather_5_stencil(q)
         delta_hat = cast(torch.Tensor, self.local_mlp(q5)).squeeze(1)
@@ -288,6 +299,15 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
         else:
             self.coupler = None
+
+    def _compute_balance_residual(
+        self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute canonical balance residual f - (phi + psi)."""
+        rhs_x_int = rhs_raw[:, 0, :, 1:-1]
+        phi = flux_int[:, 0]
+        psi_t = flux_int[:, 1].transpose(-1, -2)
+        return rhs_x_int - (phi + psi_t)
 
     def _apply_balance_projection(
         self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
@@ -365,23 +385,28 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
         norm_exp = rhs_norm.unsqueeze(-1)
         raw_int = flux_tilde * norm_exp
+        pre_projection_residual = self._compute_balance_residual(
+            flux_int=raw_int,
+            rhs_raw=rhs_raw,
+        )
+        projected_int = self._apply_balance_projection(raw_int, rhs_raw)
         if self.coupler is not None:
-            raw_int = self.coupler(
-                raw_int=raw_int,
+            projected_int = self.coupler(
+                raw_int=projected_int,
                 a_vals=a_vals,
                 b_vals=b_vals,
                 c_vals=c_vals,
                 rhs_raw=rhs_raw,
+                auxiliary_residual=pre_projection_residual,
             )
-        projected_int = self._apply_balance_projection(raw_int, rhs_raw)
 
         projected_flux = torch.zeros(
             b,
             axis,
             n_lines,
             m_points,
-            dtype=raw_int.dtype,
-            device=raw_int.device,
+            dtype=projected_int.dtype,
+            device=projected_int.device,
         )
         projected_flux[:, :, :, 1:-1] = projected_int
         return projected_flux

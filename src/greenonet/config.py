@@ -50,7 +50,7 @@ class ModelConfig:
 
 @dataclass
 class CouplerConfig:
-    """Optional local 2D coupler inserted before CouplingNet balance projection."""
+    """Optional local 2D coupler applied after CouplingNet balance projection."""
 
     enabled: bool = False
     type: Literal["five_stencil_stencil_mlp"] = "five_stencil_stencil_mlp"

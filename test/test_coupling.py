@@ -244,24 +244,34 @@ def test_five_stencil_coupler_initial_identity():
     torch.testing.assert_close(out, raw_int)
 
 
-def test_five_stencil_coupler_builds_projection_aware_features():
+def test_five_stencil_coupler_uses_projected_diff_and_auxiliary_residual():
     torch.set_default_dtype(torch.float64)
-    n = 2
+    n = 3
     m = n + 2
-    phi = torch.tensor([[[2.0, 4.0], [6.0, 8.0]]], dtype=torch.float64)
-    psi = torch.tensor([[[1.0, 3.0], [5.0, 7.0]]], dtype=torch.float64)
-    f = torch.tensor([[[10.0, 12.0], [14.0, 16.0]]], dtype=torch.float64)
+    phi_projected = torch.tensor(
+        [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]],
+        dtype=torch.float64,
+    )
+    psi_projected = torch.tensor(
+        [[[0.5, 1.5, 2.5], [3.5, 4.5, 5.5], [6.5, 7.5, 8.5]]],
+        dtype=torch.float64,
+    )
+    f = phi_projected + psi_projected
+    auxiliary_residual = torch.tensor(
+        [[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]]],
+        dtype=torch.float64,
+    )
 
-    ax = torch.tensor([[[0.1, 0.2], [0.3, 0.4]]], dtype=torch.float64)
-    ay = torch.tensor([[[0.5, 0.6], [0.7, 0.8]]], dtype=torch.float64)
-    bx = torch.tensor([[[1.1, 1.2], [1.3, 1.4]]], dtype=torch.float64)
-    by = torch.tensor([[[1.5, 1.6], [1.7, 1.8]]], dtype=torch.float64)
-    cx = torch.tensor([[[2.1, 2.2], [2.3, 2.4]]], dtype=torch.float64)
-    cy = torch.tensor([[[2.5, 2.6], [2.7, 2.8]]], dtype=torch.float64)
+    ax = torch.full((1, n, n), 1.0, dtype=torch.float64)
+    ay = torch.full((1, n, n), 2.0, dtype=torch.float64)
+    bx = torch.full((1, n, n), 3.0, dtype=torch.float64)
+    by = torch.full((1, n, n), 4.0, dtype=torch.float64)
+    cx = torch.full((1, n, n), 5.0, dtype=torch.float64)
+    cy = torch.full((1, n, n), 6.0, dtype=torch.float64)
 
     raw_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
-    raw_int[:, 0] = phi
-    raw_int[:, 1] = psi.transpose(-1, -2)
+    raw_int[:, 0] = phi_projected
+    raw_int[:, 1] = psi_projected.transpose(-1, -2)
 
     rhs_raw = torch.zeros((1, 2, n, m), dtype=torch.float64)
     rhs_raw[:, 0, :, 1:-1] = f
@@ -286,16 +296,19 @@ def test_five_stencil_coupler_builds_projection_aware_features():
         b_vals,
         c_vals,
         rhs_raw,
+        auxiliary_residual=auxiliary_residual,
     )
 
-    expected_scale = torch.sqrt(torch.mean(f * f, dim=(-1, -2), keepdim=True))
-    expected_diff_hat = 0.5 * (phi - psi) / expected_scale
-    expected_res_hat = (f - (phi + psi)) / expected_scale
+    expected_scale = torch.sqrt(
+        torch.mean(f * f, dim=(-1, -2), keepdim=True) + coupler.eps
+    )
+    expected_diff_hat = 0.5 * (phi_projected - psi_projected) / expected_scale
+    expected_res_hat = auxiliary_residual / expected_scale
 
     assert q.shape == (1, 9, n, n)
     torch.testing.assert_close(scale, expected_scale)
-    torch.testing.assert_close(phi0, phi)
-    torch.testing.assert_close(psi0, psi)
+    torch.testing.assert_close(phi0, phi_projected)
+    torch.testing.assert_close(psi0, psi_projected)
     torch.testing.assert_close(q[:, 0], expected_diff_hat)
     torch.testing.assert_close(q[:, 1], expected_res_hat)
     torch.testing.assert_close(q[:, 2], f / expected_scale)
@@ -305,6 +318,32 @@ def test_five_stencil_coupler_builds_projection_aware_features():
     torch.testing.assert_close(q[:, 6], by)
     torch.testing.assert_close(q[:, 7], cx)
     torch.testing.assert_close(q[:, 8], cy)
+
+
+def test_five_stencil_coupler_rejects_bad_auxiliary_residual_shape():
+    torch.set_default_dtype(torch.float64)
+    bsz = 2
+    n = 4
+    m = n + 2
+    raw_int = torch.randn(bsz, 2, n, n)
+    a_vals = torch.randn(bsz, 2, n, m)
+    b_vals = torch.randn(bsz, 2, n, m)
+    c_vals = torch.randn(bsz, 2, n, m)
+    rhs_raw = torch.randn(bsz, 2, n, m)
+    bad_auxiliary_residual = torch.zeros((bsz, n, n + 1), dtype=torch.float64)
+    coupler = FiveStencilStencilMLPCoupler(CouplerConfig(enabled=True)).to(
+        dtype=torch.float64
+    )
+
+    with pytest.raises(ValueError, match="auxiliary_residual"):
+        coupler._build_canonical_point_features(
+            raw_int,
+            a_vals,
+            b_vals,
+            c_vals,
+            rhs_raw,
+            auxiliary_residual=bad_auxiliary_residual,
+        )
 
 
 def test_five_stencil_coupler_preserves_phi_plus_psi_for_nonzero_delta():
@@ -474,6 +513,146 @@ def test_coupling_net_enabled_coupler_is_initially_identity():
     )
 
     torch.testing.assert_close(out_enabled, out_disabled)
+
+
+def test_coupling_net_passes_projected_input_and_auxiliary_residual_to_coupler():
+    class _ZeroBranch(nn.Module):
+        def __init__(self, hidden_dim: int) -> None:
+            super().__init__()
+            self.hidden_dim = hidden_dim
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.zeros(
+                (x.shape[0], self.hidden_dim), dtype=x.dtype, device=x.device
+            )
+
+    class _ProjectedInputAssertingCoupler(nn.Module):
+        def forward(
+            self,
+            raw_int: torch.Tensor,
+            a_vals: torch.Tensor,
+            b_vals: torch.Tensor,
+            c_vals: torch.Tensor,
+            rhs_raw: torch.Tensor,
+            auxiliary_residual: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            del a_vals, b_vals, c_vals
+            assert auxiliary_residual is not None
+            phi = raw_int[:, 0]
+            psi = raw_int[:, 1].transpose(-1, -2)
+            f = rhs_raw[:, 0, :, 1:-1]
+            torch.testing.assert_close(phi + psi, f, rtol=1.0e-12, atol=1.0e-12)
+            torch.testing.assert_close(
+                auxiliary_residual,
+                f,
+                rtol=1.0e-12,
+                atol=1.0e-12,
+            )
+            return raw_int
+
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=True),
+    )
+    model = CouplingNet(cfg)
+    model.branch_a = _ZeroBranch(cfg.hidden_dim)
+    model.branch_b = _ZeroBranch(cfg.hidden_dim)
+    model.branch_c = _ZeroBranch(cfg.hidden_dim)
+    model.branch_rhs = _ZeroBranch(cfg.hidden_dim)
+    model.trunk = _ZeroBranch(cfg.hidden_dim)
+    model.coupler = _ProjectedInputAssertingCoupler()
+
+    coords = torch.zeros((2, n, m, 2), dtype=torch.float64)
+    zeros = torch.zeros((1, 2, n, m), dtype=torch.float64)
+    rhs_raw = zeros.clone()
+    f = torch.tensor(
+        [[[1.0, 2.0, 3.0], [2.0, 1.0, 0.5], [0.5, 1.5, 2.5]]],
+        dtype=torch.float64,
+    )
+    rhs_raw[:, 0, :, 1:-1] = f
+    rhs_norm = torch.ones((1, 2, n), dtype=torch.float64)
+
+    out = model(
+        coords=coords,
+        a_vals=zeros,
+        b_vals=zeros,
+        c_vals=zeros,
+        rhs_raw=rhs_raw,
+        rhs_tilde=zeros,
+        rhs_norm=rhs_norm,
+    )
+
+    torch.testing.assert_close(out[:, 0, :, 1:-1], 0.5 * f)
+    torch.testing.assert_close(out[:, 1, :, 1:-1], (0.5 * f).transpose(-1, -2))
+
+
+def test_coupling_net_post_projection_coupler_preserves_balance_with_nonzero_delta():
+    class _ZeroBranch(nn.Module):
+        def __init__(self, hidden_dim: int) -> None:
+            super().__init__()
+            self.hidden_dim = hidden_dim
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.zeros(
+                (x.shape[0], self.hidden_dim), dtype=x.dtype, device=x.device
+            )
+
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=True, hidden_channels=8, depth=1),
+    )
+    model = CouplingNet(cfg)
+    model.branch_a = _ZeroBranch(cfg.hidden_dim)
+    model.branch_b = _ZeroBranch(cfg.hidden_dim)
+    model.branch_c = _ZeroBranch(cfg.hidden_dim)
+    model.branch_rhs = _ZeroBranch(cfg.hidden_dim)
+    model.trunk = _ZeroBranch(cfg.hidden_dim)
+
+    assert model.coupler is not None
+    final_conv = model.coupler.local_mlp[-1]
+    assert isinstance(final_conv, nn.Conv2d)
+    assert final_conv.bias is not None
+    with torch.no_grad():
+        final_conv.bias.fill_(0.25)
+
+    coords = torch.zeros((2, n, m, 2), dtype=torch.float64)
+    zeros = torch.zeros((1, 2, n, m), dtype=torch.float64)
+    rhs_raw = zeros.clone()
+    f = torch.tensor(
+        [[[1.0, 2.0, 3.0], [2.0, 1.0, 0.5], [0.5, 1.5, 2.5]]],
+        dtype=torch.float64,
+    )
+    rhs_raw[:, 0, :, 1:-1] = f
+    rhs_norm = torch.ones((1, 2, n), dtype=torch.float64)
+
+    out = model(
+        coords=coords,
+        a_vals=zeros,
+        b_vals=zeros,
+        c_vals=zeros,
+        rhs_raw=rhs_raw,
+        rhs_tilde=zeros,
+        rhs_norm=rhs_norm,
+    )
+
+    phi = out[:, 0, :, 1:-1]
+    psi = out[:, 1, :, 1:-1].transpose(-1, -2)
+    torch.testing.assert_close(phi + psi, f, rtol=1.0e-12, atol=1.0e-12)
+    assert not torch.allclose(phi, 0.5 * f)
 
 
 def test_coupling_dataset_shapes(tmp_path):
