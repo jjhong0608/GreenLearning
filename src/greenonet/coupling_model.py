@@ -334,7 +334,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
-    ) -> torch.Tensor:
+        return_intermediates: bool = False,
+        detach_coupler_input: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """
         Args:
             coords: (2, n_lines, m_points, 2) (interior trunk uses coords[:, :, 1:-1])
@@ -345,8 +347,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_tilde: (B, 2, n_lines, m_points) normalized source
             rhs_norm: (B, 2, n_lines) line-wise L2 norms
         Returns:
-            projected_flux: (B, 2, n_lines, m_points) axial flux-divergence per
-                axis after the cross-axis balance projection with zero-padded
+            output_flux: (B, 2, n_lines, m_points) axial flux-divergence per
+                axis after projection/coupling with zero-padded
                 boundaries.
         """
         if (
@@ -390,23 +392,38 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_raw=rhs_raw,
         )
         projected_int = self._apply_balance_projection(raw_int, rhs_raw)
+        projected_int_before_coupler = projected_int
         if self.coupler is not None:
-            projected_int = self.coupler(
-                raw_int=projected_int,
+            coupler_input = projected_int
+            coupler_residual = pre_projection_residual
+            if detach_coupler_input:
+                coupler_input = coupler_input.detach()
+                coupler_residual = coupler_residual.detach()
+            coupled_int = self.coupler(
+                raw_int=coupler_input,
                 a_vals=a_vals,
                 b_vals=b_vals,
                 c_vals=c_vals,
                 rhs_raw=rhs_raw,
-                auxiliary_residual=pre_projection_residual,
+                auxiliary_residual=coupler_residual,
             )
+        else:
+            coupled_int = projected_int
 
-        projected_flux = torch.zeros(
+        output_flux = torch.zeros(
             b,
             axis,
             n_lines,
             m_points,
-            dtype=projected_int.dtype,
-            device=projected_int.device,
+            dtype=coupled_int.dtype,
+            device=coupled_int.device,
         )
-        projected_flux[:, :, :, 1:-1] = projected_int
-        return projected_flux
+        output_flux[:, :, :, 1:-1] = coupled_int
+        if return_intermediates:
+            return output_flux, {
+                "raw_int": raw_int,
+                "pre_projection_residual": pre_projection_residual,
+                "projected_int": projected_int_before_coupler,
+                "coupled_int": coupled_int,
+            }
+        return output_flux

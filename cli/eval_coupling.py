@@ -13,6 +13,7 @@ from greenonet.config import (
     CompileConfig,
     CouplerConfig,
     CouplingBestRelSolCheckpointConfig,
+    CouplingHybridDetachConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
     CouplingModelConfig,
@@ -129,11 +130,15 @@ class EvalCouplingCLI:
                 f"({', '.join(found_deprecated)})."
             )
         losses_raw = coupling_training_kwargs.pop("losses", None)
+        hybrid_detach_raw = coupling_training_kwargs.pop("hybrid_detach", None)
         compile_raw = coupling_training_kwargs.pop("compile", None)
         periodic_raw = coupling_training_kwargs.pop("periodic_checkpoint", None)
         best_rel_sol_raw = coupling_training_kwargs.pop("best_rel_sol_checkpoint", None)
         losses_cfg = EvalCouplingCLI._build_coupling_losses_config(
             losses_raw, "coupling_training"
+        )
+        hybrid_detach_cfg = EvalCouplingCLI._build_hybrid_detach_config(
+            hybrid_detach_raw, "coupling_training"
         )
         compile_cfg = EvalCouplingCLI._build_compile_config(
             compile_raw, "coupling_training"
@@ -154,11 +159,23 @@ class EvalCouplingCLI:
             )
         return CouplingTrainingConfig(
             losses=losses_cfg,
+            hybrid_detach=hybrid_detach_cfg,
             compile=compile_cfg,
             periodic_checkpoint=periodic_cfg,
             best_rel_sol_checkpoint=best_rel_sol_cfg,
             **coupling_training_kwargs,
         )
+
+    @staticmethod
+    def _build_hybrid_detach_config(
+        raw_hybrid_detach: object | None,
+        section_name: str,
+    ) -> CouplingHybridDetachConfig:
+        if raw_hybrid_detach is None:
+            return CouplingHybridDetachConfig()
+        if not isinstance(raw_hybrid_detach, dict):
+            raise TypeError(f"{section_name}.hybrid_detach must be an object.")
+        return CouplingHybridDetachConfig(**dict(raw_hybrid_detach))
 
     @staticmethod
     def _build_coupling_losses_config(

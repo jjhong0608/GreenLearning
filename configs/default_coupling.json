@@ -54,6 +54,12 @@
         "weight": 1.0
       }
     },
+    "hybrid_detach": {
+      "enabled": false,
+      "projected_energy_weight": 1.0,
+      "coupled_energy_weight": 0.1,
+      "detach_coupler_input": true
+    },
     "integration_rule": "trapezoid",
     "epochs": 3000,
     "learning_rate": 0.001,

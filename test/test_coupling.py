@@ -12,6 +12,7 @@ from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
     CouplerConfig,
     CouplingBestRelSolCheckpointConfig,
+    CouplingHybridDetachConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
     CouplingModelConfig,
@@ -69,6 +70,49 @@ class _TrainableFluxModel(nn.Module):
     ) -> torch.Tensor:
         del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
         return self.projected_flux
+
+
+class _HybridFluxModel(nn.Module):
+    def __init__(self, projected_int: torch.Tensor, coupled_int: torch.Tensor) -> None:
+        super().__init__()
+        if projected_int.shape != coupled_int.shape:
+            raise ValueError("projected_int and coupled_int must have matching shapes")
+        self.projected_int = nn.Parameter(projected_int.clone())
+        self.coupled_delta = nn.Parameter(coupled_int.clone() - projected_int)
+
+    def forward(
+        self,
+        coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+        return_intermediates: bool = False,
+        detach_coupler_input: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        del coords, a_vals, b_vals, c_vals, rhs_tilde, rhs_norm, detach_coupler_input
+        projected_int = self.projected_int
+        coupled_int = projected_int + self.coupled_delta
+        bsz, axis, n_lines, n_inner = coupled_int.shape
+        output_flux = torch.zeros(
+            (bsz, axis, n_lines, n_inner + 2),
+            dtype=coupled_int.dtype,
+            device=coupled_int.device,
+        )
+        output_flux[:, :, :, 1:-1] = coupled_int
+        if return_intermediates:
+            pre_projection_residual = rhs_raw[:, 0, :, 1:-1] - (
+                projected_int[:, 0] + projected_int[:, 1].transpose(-1, -2)
+            )
+            return output_flux, {
+                "raw_int": projected_int,
+                "pre_projection_residual": pre_projection_residual,
+                "projected_int": projected_int,
+                "coupled_int": coupled_int,
+            }
+        return output_flux
 
 
 class _RawSumFromRhsModel(nn.Module):
@@ -639,7 +683,7 @@ def test_coupling_net_post_projection_coupler_preserves_balance_with_nonzero_del
     rhs_raw[:, 0, :, 1:-1] = f
     rhs_norm = torch.ones((1, 2, n), dtype=torch.float64)
 
-    out = model(
+    out, aux = model(
         coords=coords,
         a_vals=zeros,
         b_vals=zeros,
@@ -647,10 +691,19 @@ def test_coupling_net_post_projection_coupler_preserves_balance_with_nonzero_del
         rhs_raw=rhs_raw,
         rhs_tilde=zeros,
         rhs_norm=rhs_norm,
+        return_intermediates=True,
     )
 
     phi = out[:, 0, :, 1:-1]
     psi = out[:, 1, :, 1:-1].transpose(-1, -2)
+    phi_projected = aux["projected_int"][:, 0]
+    psi_projected = aux["projected_int"][:, 1].transpose(-1, -2)
+    phi_coupled = aux["coupled_int"][:, 0]
+    psi_coupled = aux["coupled_int"][:, 1].transpose(-1, -2)
+    torch.testing.assert_close(phi_projected + psi_projected, f)
+    torch.testing.assert_close(phi_coupled + psi_coupled, f)
+    torch.testing.assert_close(out[:, :, :, 1:-1], aux["coupled_int"])
+    assert not torch.allclose(aux["projected_int"], aux["coupled_int"])
     torch.testing.assert_close(phi + psi, f, rtol=1.0e-12, atol=1.0e-12)
     assert not torch.allclose(phi, 0.5 * f)
 
@@ -716,11 +769,123 @@ def test_coupling_model_forward():
         rhs_tilde=rhs_tilde,
         rhs_norm=rhs_norm,
     )
+    assert isinstance(projected_flux, torch.Tensor)
     assert projected_flux.shape == (1, 2, 1, 3)
     phi_x = projected_flux[:, 0]
     psi_y = projected_flux[:, 1]
     assert phi_x.shape == rhs_raw[:, 0].shape
     assert psi_y.shape == rhs_raw[:, 1].shape
+
+
+def test_coupling_model_forward_can_return_intermediates():
+    torch.set_default_dtype(torch.float64)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+    )
+    model = CouplingNet(cfg)
+    bsz = 2
+    n = 3
+    m = n + 2
+    coords = torch.zeros((2, n, m, 2), dtype=torch.float64)
+    a_vals = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    b_vals = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    c_vals = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    rhs_raw = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    output_flux, aux = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+        return_intermediates=True,
+    )
+
+    assert output_flux.shape == (bsz, 2, n, m)
+    assert set(aux) == {
+        "raw_int",
+        "pre_projection_residual",
+        "projected_int",
+        "coupled_int",
+    }
+    assert aux["raw_int"].shape == (bsz, 2, n, n)
+    assert aux["pre_projection_residual"].shape == (bsz, n, n)
+    assert aux["projected_int"].shape == (bsz, 2, n, n)
+    assert aux["coupled_int"].shape == (bsz, 2, n, n)
+    torch.testing.assert_close(output_flux[:, :, :, 1:-1], aux["coupled_int"])
+
+
+def test_coupling_model_detaches_coupler_inputs_but_keeps_aux_attached():
+    class _InspectingCoupler(nn.Module):
+        def __init__(self, expect_requires_grad: bool) -> None:
+            super().__init__()
+            self.expect_requires_grad = expect_requires_grad
+            self.raw_requires_grad: bool | None = None
+            self.residual_requires_grad: bool | None = None
+
+        def forward(
+            self,
+            raw_int: torch.Tensor,
+            a_vals: torch.Tensor,
+            b_vals: torch.Tensor,
+            c_vals: torch.Tensor,
+            rhs_raw: torch.Tensor,
+            auxiliary_residual: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            del a_vals, b_vals, c_vals, rhs_raw
+            assert auxiliary_residual is not None
+            self.raw_requires_grad = raw_int.requires_grad
+            self.residual_requires_grad = auxiliary_residual.requires_grad
+            assert raw_int.requires_grad is self.expect_requires_grad
+            assert auxiliary_residual.requires_grad is self.expect_requires_grad
+            return raw_int
+
+    torch.set_default_dtype(torch.float64)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=True),
+    )
+    bsz = 1
+    n = 3
+    m = n + 2
+    coords = torch.randn(2, n, m, 2, dtype=torch.float64)
+    a_vals = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    b_vals = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    c_vals = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    rhs_raw = torch.randn(bsz, 2, n, m, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    for detach, expect_requires_grad in ((True, False), (False, True)):
+        model = CouplingNet(cfg)
+        inspector = _InspectingCoupler(expect_requires_grad=expect_requires_grad)
+        model.coupler = inspector
+        _output_flux, aux = model(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+            return_intermediates=True,
+            detach_coupler_input=detach,
+        )
+
+        assert inspector.raw_requires_grad is expect_requires_grad
+        assert inspector.residual_requires_grad is expect_requires_grad
+        assert aux["projected_int"].requires_grad is True
+        assert aux["pre_projection_residual"].requires_grad is True
 
 
 def test_coupling_model_backprop_through_shared_encoder():
@@ -1141,6 +1306,38 @@ def test_step_loss_ignores_raw_split_sum_without_balance_loss(tmp_path):
     assert abs(loss.item()) < 1e-12
 
 
+def test_pad_interior_flux_like_preserves_interior_values(tmp_path):
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    flux_int = torch.arange(18, dtype=torch.float64).reshape(1, 2, 3, 3)
+    template_flux = torch.full((1, 2, 3, 5), 99.0, dtype=torch.float64)
+
+    padded = trainer._pad_interior_flux_like(flux_int, template_flux)
+
+    assert padded.shape == template_flux.shape
+    torch.testing.assert_close(padded[:, :, :, 1:-1], flux_int)
+    torch.testing.assert_close(padded[:, :, :, 0], torch.zeros((1, 2, 3)))
+    torch.testing.assert_close(padded[:, :, :, -1], torch.zeros((1, 2, 3)))
+
+
+def test_pad_interior_flux_like_rejects_incompatible_shape(tmp_path):
+    trainer = CouplingTrainer(
+        model=_DummyFluxModel(torch.zeros((1, 2, 3, 5), dtype=torch.float64)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    flux_int = torch.zeros((1, 2, 3, 4), dtype=torch.float64)
+    template_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="square flux_int"):
+        trainer._pad_interior_flux_like(flux_int, template_flux)
+
+
 def test_single_stage_optimization_resolution_uses_shared_config(tmp_path):
     trainer = CouplingTrainer(
         model=_RawSumFromRhsModel(),  # type: ignore[arg-type]
@@ -1550,6 +1747,84 @@ def test_step_loss_matches_weighted_sum_of_enabled_losses(tmp_path):
         + 3.0 * metrics["loss_cross_consistency"]
     )
     assert loss.item() == pytest.approx(expected)
+
+
+def test_hybrid_detach_loss_uses_projected_and_coupled_energy_weights(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    a_vals[:] = 1.0
+    projected_int = torch.tensor(
+        [
+            [
+                [[1.0, 0.5, 0.25], [0.25, 0.75, 1.25], [1.5, 0.5, 0.75]],
+                [[0.25, 0.75, 1.0], [1.0, 0.25, 0.5], [0.5, 1.25, 0.25]],
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    coupled_int = projected_int.clone()
+    coupled_int[:, 0] = coupled_int[:, 0] + 0.2
+    coupled_int[:, 1] = coupled_int[:, 1] - 0.1
+    model = _HybridFluxModel(projected_int=projected_int, coupled_int=coupled_int)
+    green_kernel = torch.eye(5, dtype=torch.float64).expand(2, 3, 5, 5).clone()
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_enabled=False,
+                energy_enabled=False,
+                energy_weight=99.0,
+                cross_enabled=False,
+            ),
+            hybrid_detach=CouplingHybridDetachConfig(
+                enabled=True,
+                projected_energy_weight=2.0,
+                coupled_energy_weight=3.0,
+                detach_coupler_input=True,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=green_kernel,
+    )
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    expected_hybrid = (
+        2.0 * metrics["loss_energy_projected"] + 3.0 * metrics["loss_energy_coupled"]
+    )
+    assert "loss_energy_projected" in metrics
+    assert "loss_energy_coupled" in metrics
+    assert "loss_hybrid_detach" in metrics
+    assert "energy_improvement" in metrics
+    assert metrics["loss_hybrid_detach"] > 0.0
+    assert metrics["loss_hybrid_detach"] == pytest.approx(expected_hybrid)
+    assert metrics["loss_energy_consistency"] == pytest.approx(expected_hybrid)
+    assert metrics["energy_improvement"] == pytest.approx(
+        metrics["loss_energy_projected"] - metrics["loss_energy_coupled"]
+    )
+    assert loss.item() == pytest.approx(metrics["loss_hybrid_detach"])
+    assert loss.item() != pytest.approx(99.0 * metrics["loss_hybrid_detach"])
 
 
 def test_evaluate_reports_all_three_loss_components(tmp_path):

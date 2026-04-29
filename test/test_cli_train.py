@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from greenonet.model import GreenONetModel
+from cli.eval_coupling import EvalCouplingCLI
 from cli.train import TrainCLI
 
 
@@ -130,6 +131,12 @@ class TestTrainCLIDatasetConfig:
                     "every_epochs": 4,
                 },
                 "best_rel_sol_checkpoint": {"enabled": True},
+                "hybrid_detach": {
+                    "enabled": True,
+                    "projected_energy_weight": 2.0,
+                    "coupled_energy_weight": 0.5,
+                    "detach_coupler_input": False,
+                },
                 "compile": {
                     "enabled": True,
                 },
@@ -164,6 +171,10 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.periodic_checkpoint.enabled is True
         assert coupling_training_cfg.periodic_checkpoint.every_epochs == 4
         assert coupling_training_cfg.best_rel_sol_checkpoint.enabled is True
+        assert coupling_training_cfg.hybrid_detach.enabled is True
+        assert coupling_training_cfg.hybrid_detach.projected_energy_weight == 2.0
+        assert coupling_training_cfg.hybrid_detach.coupled_energy_weight == 0.5
+        assert coupling_training_cfg.hybrid_detach.detach_coupler_input is False
         assert coupling_training_cfg.compile.enabled is True
         assert coupling_model_cfg.coupler.enabled is False
         assert not hasattr(coupling_model_cfg, "use_fourier")
@@ -227,6 +238,56 @@ class TestTrainCLIDatasetConfig:
 
         with pytest.raises(TypeError, match="coupling_model.coupler"):
             TrainCLI()._build_configs(config_path)
+
+    def test_missing_hybrid_detach_defaults_to_disabled(self):
+        cfg = TrainCLI._build_coupling_training_config({})
+
+        assert cfg.hybrid_detach.enabled is False
+        assert cfg.hybrid_detach.projected_energy_weight == 1.0
+        assert cfg.hybrid_detach.coupled_energy_weight == 0.1
+        assert cfg.hybrid_detach.detach_coupler_input is True
+
+    def test_parses_hybrid_detach_config(self):
+        cfg = TrainCLI._build_coupling_training_config(
+            {
+                "hybrid_detach": {
+                    "enabled": True,
+                    "projected_energy_weight": 4.0,
+                    "coupled_energy_weight": 0.25,
+                    "detach_coupler_input": False,
+                }
+            }
+        )
+
+        assert cfg.hybrid_detach.enabled is True
+        assert cfg.hybrid_detach.projected_energy_weight == 4.0
+        assert cfg.hybrid_detach.coupled_energy_weight == 0.25
+        assert cfg.hybrid_detach.detach_coupler_input is False
+
+    def test_rejects_non_object_hybrid_detach_config(self):
+        with pytest.raises(TypeError, match="coupling_training.hybrid_detach"):
+            TrainCLI._build_coupling_training_config({"hybrid_detach": True})
+
+    def test_eval_cli_parses_hybrid_detach_config(self):
+        cfg = EvalCouplingCLI._build_coupling_training_config(
+            {
+                "hybrid_detach": {
+                    "enabled": True,
+                    "projected_energy_weight": 1.5,
+                    "coupled_energy_weight": 0.75,
+                    "detach_coupler_input": False,
+                }
+            }
+        )
+
+        assert cfg.hybrid_detach.enabled is True
+        assert cfg.hybrid_detach.projected_energy_weight == 1.5
+        assert cfg.hybrid_detach.coupled_energy_weight == 0.75
+        assert cfg.hybrid_detach.detach_coupler_input is False
+
+    def test_eval_cli_rejects_non_object_hybrid_detach_config(self):
+        with pytest.raises(TypeError, match="coupling_training.hybrid_detach"):
+            EvalCouplingCLI._build_coupling_training_config({"hybrid_detach": True})
 
     def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):
         config_path = tmp_path / "config.json"

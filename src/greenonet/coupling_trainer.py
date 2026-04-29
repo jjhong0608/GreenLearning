@@ -41,6 +41,19 @@ CouplingBatch = tuple[
 class CouplingTrainer(LoggingMixin):
     """Trainer for CouplingNet using Green kernel integrals."""
 
+    _METRIC_KEYS: tuple[str, ...] = (
+        "loss",
+        "loss_l2_consistency",
+        "loss_energy_consistency",
+        "loss_cross_consistency",
+        "loss_energy_projected",
+        "loss_energy_coupled",
+        "loss_hybrid_detach",
+        "energy_improvement",
+        "rel_flux",
+        "rel_sol",
+    )
+
     def __init__(
         self,
         model: CouplingNet,
@@ -150,6 +163,86 @@ class CouplingTrainer(LoggingMixin):
         loss_y_per_batch = density_y.sum(dim=(-1, -2)) * hx * hy
         return (loss_x_per_batch + loss_y_per_batch).mean()
 
+    @staticmethod
+    def _pad_interior_flux_like(
+        flux_int: torch.Tensor,
+        template_flux: torch.Tensor,
+    ) -> torch.Tensor:
+        if flux_int.dim() != 4:
+            raise ValueError("flux_int must have shape (B, 2, N, N).")
+        if template_flux.dim() != 4:
+            raise ValueError("template_flux must have shape (B, 2, N, N + 2).")
+        bsz, axis, n_lines, n_inner = flux_int.shape
+        if axis != 2:
+            raise ValueError(f"Expected flux_int axis dimension 2, got {axis}.")
+        if n_lines != n_inner:
+            raise ValueError(
+                f"Expected square flux_int interior grid, got {n_lines} x {n_inner}."
+            )
+        expected_template = (bsz, axis, n_lines, n_inner + 2)
+        if tuple(template_flux.shape) != expected_template:
+            raise ValueError(
+                "template_flux must have shape matching padded flux_int "
+                f"{expected_template}, got {tuple(template_flux.shape)}."
+            )
+
+        padded = torch.zeros_like(template_flux)
+        padded[:, :, :, 1:-1] = flux_int
+        return padded
+
+    def _represented_solutions_from_flux(
+        self,
+        flux: torch.Tensor,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        gx = self.green_kernel[0]  # (n,m,m)
+        gy = self.green_kernel[1]
+
+        phi_x = flux[:, 0].clone()
+        psi_y = flux[:, 1].clone()
+
+        phi_x[..., 0] = 0.0
+        phi_x[..., -1] = 0.0
+        psi_y[..., 0] = 0.0
+        psi_y[..., -1] = 0.0
+        u_phi_x_raw = self._integrate(gx, phi_x, x_axis)
+        u_psi_y_raw = self._integrate(gy, psi_y, y_axis)
+
+        u_phi_x = pad(
+            u_phi_x_raw[..., 1:-1],
+            pad=(1, 1, 1, 1),
+            mode="constant",
+            value=0.0,
+        )  # homogeneous Dirichlet condition
+        u_psi_y = pad(
+            u_psi_y_raw[..., 1:-1],
+            pad=(1, 1, 1, 1),
+            mode="constant",
+            value=0.0,
+        )  # homogeneous Dirichlet condition
+        return phi_x, psi_y, u_phi_x, u_psi_y
+
+    def _energy_loss_from_flux(
+        self,
+        flux: torch.Tensor,
+        a_vals: torch.Tensor,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+    ) -> torch.Tensor:
+        _phi_x, _psi_y, u_phi_x, u_psi_y = self._represented_solutions_from_flux(
+            flux=flux,
+            x_axis=x_axis,
+            y_axis=y_axis,
+        )
+        return self._energy_consistency_loss(
+            u_phi_x=u_phi_x,
+            u_psi_y=u_psi_y,
+            a_vals=a_vals,
+            x_axis=x_axis,
+            y_axis=y_axis,
+        )
+
     def _cross_consistency_loss(
         self,
         u_phi_x: torch.Tensor,
@@ -217,6 +310,10 @@ class CouplingTrainer(LoggingMixin):
     def _effective_weight(enabled: bool, weight: float) -> float:
         return weight if enabled else 0.0
 
+    @classmethod
+    def _metric_accumulator(cls, fill_value: float) -> dict[str, float]:
+        return {key: fill_value for key in cls._METRIC_KEYS}
+
     def _supports_auxiliary_quadrature(self, axis_coords: torch.Tensor) -> bool:
         samples = int(axis_coords.numel())
         if self.config.integration_rule == "simpson":
@@ -273,35 +370,50 @@ class CouplingTrainer(LoggingMixin):
         c_vals = c_vals.to(self.device)
         coords = coords.to(self.device)
 
-        pred_flux = self.model(
-            coords=coords,
-            a_vals=a_vals,
-            b_vals=b_vals,
-            c_vals=c_vals,
-            rhs_raw=rhs_raw,
-            rhs_tilde=rhs_tilde,
-            rhs_norm=rhs_norm,
-        )  # (B,2,n,m)
+        hybrid_cfg = self.config.hybrid_detach
+        projected_flux: torch.Tensor | None = None
+        if hybrid_cfg.enabled:
+            model_output = self.model(
+                coords=coords,
+                a_vals=a_vals,
+                b_vals=b_vals,
+                c_vals=c_vals,
+                rhs_raw=rhs_raw,
+                rhs_tilde=rhs_tilde,
+                rhs_norm=rhs_norm,
+                return_intermediates=True,
+                detach_coupler_input=hybrid_cfg.detach_coupler_input,
+            )
+            if not isinstance(model_output, tuple) or len(model_output) != 2:
+                raise TypeError(
+                    "CouplingNet must return (flux, aux) when hybrid_detach is enabled."
+                )
+            pred_flux, aux = model_output
+            if not isinstance(aux, dict):
+                raise TypeError("CouplingNet intermediate output must be a dict.")
+            projected_int = aux.get("projected_int")
+            if not isinstance(projected_int, torch.Tensor):
+                raise TypeError("CouplingNet intermediates must include projected_int.")
+            projected_flux = self._pad_interior_flux_like(
+                projected_int,
+                template_flux=pred_flux,
+            )
+        else:
+            pred_flux = self.model(
+                coords=coords,
+                a_vals=a_vals,
+                b_vals=b_vals,
+                c_vals=c_vals,
+                rhs_raw=rhs_raw,
+                rhs_tilde=rhs_tilde,
+                rhs_norm=rhs_norm,
+            )  # (B,2,n,m)
 
-        gx = self.green_kernel[0]  # (n,m,m)
-        gy = self.green_kernel[1]
-
-        phi_x = pred_flux[:, 0].clone()
-        psi_y = pred_flux[:, 1].clone()
-
-        phi_x[..., 0] = 0.0
-        phi_x[..., -1] = 0.0
-        psi_y[..., 0] = 0.0
-        psi_y[..., -1] = 0.0
-        u_phi_x_raw = self._integrate(gx, phi_x, x_axis)
-        u_psi_y_raw = self._integrate(gy, psi_y, y_axis)
-
-        u_phi_x = pad(
-            u_phi_x_raw[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
-        )  # homogeneous Dirichlet condition
-        u_psi_y = pad(
-            u_psi_y_raw[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
-        )  # homogeneous Dirichlet condition
+        phi_x, psi_y, u_phi_x, u_psi_y = self._represented_solutions_from_flux(
+            flux=pred_flux,
+            x_axis=x_axis,
+            y_axis=y_axis,
+        )
         pred_flux_target = torch.stack((phi_x, psi_y), dim=1)
         pred_flux_target = pad(
             pred_flux_target[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
@@ -318,7 +430,7 @@ class CouplingTrainer(LoggingMixin):
         loss_cons = integrate(
             loss_cons, x=x_axis, dim=-1, rule=self.config.integration_rule
         ).mean()
-        loss_energy_consistency = self._energy_consistency_loss(
+        loss_energy_final = self._energy_consistency_loss(
             u_phi_x=u_phi_x,
             u_psi_y=u_psi_y,
             a_vals=a_vals,
@@ -343,10 +455,38 @@ class CouplingTrainer(LoggingMixin):
         w_energy = self._effective_weight(energy_cfg.enabled, energy_cfg.weight)
         w_cross = self._effective_weight(cross_cfg.enabled, cross_cfg.weight)
 
+        nan_loss = torch.full(
+            (), float("nan"), dtype=loss_cons.dtype, device=self.device
+        )
+        loss_energy_projected = nan_loss
+        loss_energy_coupled = nan_loss
+        loss_hybrid_detach = nan_loss
+        energy_improvement = nan_loss
+        if hybrid_cfg.enabled:
+            if projected_flux is None:
+                raise RuntimeError("projected_flux is required in hybrid_detach mode.")
+            loss_energy_projected = self._energy_loss_from_flux(
+                flux=projected_flux,
+                a_vals=a_vals,
+                x_axis=x_axis,
+                y_axis=y_axis,
+            )
+            loss_energy_coupled = loss_energy_final
+            loss_hybrid_detach = (
+                hybrid_cfg.projected_energy_weight * loss_energy_projected
+                + hybrid_cfg.coupled_energy_weight * loss_energy_coupled
+            )
+            loss_energy_consistency = loss_hybrid_detach
+            energy_improvement = loss_energy_projected - loss_energy_coupled
+        else:
+            loss_energy_consistency = loss_energy_final
+
         loss = torch.zeros((), dtype=loss_cons.dtype, device=loss_cons.device)
         if w_l2 != 0.0:
             loss = loss + w_l2 * loss_cons
-        if w_energy != 0.0:
+        if hybrid_cfg.enabled:
+            loss = loss + loss_hybrid_detach
+        elif w_energy != 0.0:
             loss = loss + w_energy * loss_energy_consistency
         if w_cross != 0.0:
             loss = loss + w_cross * loss_cross_consistency
@@ -356,6 +496,10 @@ class CouplingTrainer(LoggingMixin):
             "loss_l2_consistency": float(loss_cons.detach().item()),
             "loss_energy_consistency": float(loss_energy_consistency.detach().item()),
             "loss_cross_consistency": float(loss_cross_consistency.detach().item()),
+            "loss_energy_projected": float(loss_energy_projected.detach().item()),
+            "loss_energy_coupled": float(loss_energy_coupled.detach().item()),
+            "loss_hybrid_detach": float(loss_hybrid_detach.detach().item()),
+            "energy_improvement": float(energy_improvement.detach().item()),
             "rel_flux": self._relative_l2_integral(
                 pred_flux_target.detach(), flux_target, x_axis
             ),
@@ -462,14 +606,7 @@ class CouplingTrainer(LoggingMixin):
         loader: DataLoader[CouplingBatch],
     ) -> dict[str, float]:
         with torch.no_grad():
-            accum = {
-                "loss": 0.0,
-                "loss_l2_consistency": 0.0,
-                "loss_energy_consistency": 0.0,
-                "loss_cross_consistency": 0.0,
-                "rel_flux": 0.0,
-                "rel_sol": 0.0,
-            }
+            accum = self._metric_accumulator(0.0)
             batch_count = 0
             for (
                 coords,
@@ -522,14 +659,7 @@ class CouplingTrainer(LoggingMixin):
 
         for epoch in range(1, epochs + 1):
             epoch_losses: List[float] = []
-            accum = {
-                "loss": 0.0,
-                "loss_l2_consistency": 0.0,
-                "loss_energy_consistency": 0.0,
-                "loss_cross_consistency": 0.0,
-                "rel_flux": 0.0,
-                "rel_sol": 0.0,
-            }
+            accum = self._metric_accumulator(0.0)
             batch_count = 0
             for (
                 coords,
@@ -570,14 +700,7 @@ class CouplingTrainer(LoggingMixin):
             self.loss_history.append(mean_loss)
             phase_history.append(mean_loss)
 
-            val_metrics = {
-                "loss": float("nan"),
-                "loss_l2_consistency": float("nan"),
-                "loss_energy_consistency": float("nan"),
-                "loss_cross_consistency": float("nan"),
-                "rel_flux": float("nan"),
-                "rel_sol": float("nan"),
-            }
+            val_metrics = self._metric_accumulator(float("nan"))
             if val_loader is not None:
                 val_metrics = self._evaluate_loader(val_loader)
                 best_rel_sol = self._maybe_save_best_rel_sol_checkpoint(
@@ -589,15 +712,16 @@ class CouplingTrainer(LoggingMixin):
                 l2_cfg = self.config.losses.l2_consistency
                 energy_cfg = self.config.losses.energy_consistency
                 cross_cfg = self.config.losses.cross_consistency
-                self.logger.info(
-                    (
-                        "epoch %s | train loss=%.4e l2_cons=%.4e energy_cons=%.4e "
-                        "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
-                        "w_l2=%.4e on_l2=%s w_energy=%.4e on_energy=%s "
-                        "w_cross=%.4e on_cross=%s | lr=%.4e | val loss=%.4e "
-                        "l2_cons=%.4e energy_cons=%.4e cross_cons=%.4e "
-                        "rel_flux=%.4e rel_sol=%.4e"
-                    ),
+                hybrid_cfg = self.config.hybrid_detach
+                log_message = (
+                    "epoch %s | train loss=%.4e l2_cons=%.4e energy_cons=%.4e "
+                    "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
+                    "w_l2=%.4e on_l2=%s w_energy=%.4e on_energy=%s "
+                    "w_cross=%.4e on_cross=%s | lr=%.4e | val loss=%.4e "
+                    "l2_cons=%.4e energy_cons=%.4e cross_cons=%.4e "
+                    "rel_flux=%.4e rel_sol=%.4e"
+                )
+                log_args: tuple[object, ...] = (
                     epoch,
                     train_metrics["loss"],
                     train_metrics["loss_l2_consistency"],
@@ -618,6 +742,30 @@ class CouplingTrainer(LoggingMixin):
                     val_metrics["loss_cross_consistency"],
                     val_metrics["rel_flux"],
                     val_metrics["rel_sol"],
+                )
+                if hybrid_cfg.enabled:
+                    log_message = (
+                        log_message + " | hybrid train_proj=%.4e train_coupled=%.4e "
+                        "train_hybrid=%.4e train_improve=%.4e val_proj=%.4e "
+                        "val_coupled=%.4e val_hybrid=%.4e val_improve=%.4e "
+                        "w_proj=%.4e w_coupled=%.4e detach=%s"
+                    )
+                    log_args = log_args + (
+                        train_metrics["loss_energy_projected"],
+                        train_metrics["loss_energy_coupled"],
+                        train_metrics["loss_hybrid_detach"],
+                        train_metrics["energy_improvement"],
+                        val_metrics["loss_energy_projected"],
+                        val_metrics["loss_energy_coupled"],
+                        val_metrics["loss_hybrid_detach"],
+                        val_metrics["energy_improvement"],
+                        hybrid_cfg.projected_energy_weight,
+                        hybrid_cfg.coupled_energy_weight,
+                        hybrid_cfg.detach_coupler_input,
+                    )
+                self.logger.info(
+                    log_message,
+                    *log_args,
                 )
             self._maybe_save_periodic_checkpoint(epoch)
             if scheduler is not None:
@@ -657,12 +805,8 @@ class CouplingTrainer(LoggingMixin):
     ) -> dict[str, float]:
         self.model.eval()
         loader = self._make_loader(dataset, shuffle=False)
-        loss_total: List[float] = []
-        loss_l2_consistency: List[float] = []
-        loss_energy_consistency: List[float] = []
-        loss_cross_consistency: List[float] = []
-        rel_flux: List[float] = []
-        rel_sol: List[float] = []
+        accum = self._metric_accumulator(0.0)
+        batch_count = 0
         with torch.no_grad():
             for (
                 coords,
@@ -676,7 +820,8 @@ class CouplingTrainer(LoggingMixin):
                 c_vals,
                 ap,
             ) in loader:
-                loss, metrics = self._step_loss(
+                del ap
+                _loss, metrics = self._step_loss(
                     coords,
                     rhs_raw,
                     rhs_tilde,
@@ -687,23 +832,7 @@ class CouplingTrainer(LoggingMixin):
                     b_vals,
                     c_vals,
                 )
-                loss_total.append(loss.item())
-                loss_l2_consistency.append(metrics["loss_l2_consistency"])
-                loss_energy_consistency.append(metrics["loss_energy_consistency"])
-                loss_cross_consistency.append(metrics["loss_cross_consistency"])
-                rel_flux.append(metrics["rel_flux"])
-                rel_sol.append(metrics["rel_sol"])
-        return {
-            "loss": float(sum(loss_total) / max(len(loss_total), 1)),
-            "loss_l2_consistency": float(
-                sum(loss_l2_consistency) / max(len(loss_l2_consistency), 1)
-            ),
-            "loss_energy_consistency": float(
-                sum(loss_energy_consistency) / max(len(loss_energy_consistency), 1)
-            ),
-            "loss_cross_consistency": float(
-                sum(loss_cross_consistency) / max(len(loss_cross_consistency), 1)
-            ),
-            "rel_flux": float(sum(rel_flux) / max(len(rel_flux), 1)),
-            "rel_sol": float(sum(rel_sol) / max(len(rel_sol), 1)),
-        }
+                for key in accum:
+                    accum[key] += metrics.get(key, 0.0)
+                batch_count += 1
+        return {key: value / max(batch_count, 1) for key, value in accum.items()}

@@ -109,6 +109,16 @@ class CouplingLossesConfig:
 
 
 @dataclass
+class CouplingHybridDetachConfig:
+    """Optional hybrid projected/coupled energy training for the coupler."""
+
+    enabled: bool = False
+    projected_energy_weight: float = 1.0
+    coupled_energy_weight: float = 0.1
+    detach_coupler_input: bool = True
+
+
+@dataclass
 class CouplingPeriodicCheckpointConfig:
     """Periodic checkpoint settings for CouplingNet Adam training."""
 
@@ -133,6 +143,9 @@ class CouplingTrainingConfig:
     log_interval: int = 1
     device: str = "cpu"
     losses: CouplingLossesConfig = field(default_factory=CouplingLossesConfig)
+    hybrid_detach: CouplingHybridDetachConfig = field(
+        default_factory=CouplingHybridDetachConfig
+    )
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
     min_lr: float = 1e-6
