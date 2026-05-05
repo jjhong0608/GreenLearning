@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from greenonet.config import CouplingModelConfig
 from greenonet.model import GreenONetModel
 from cli.eval_coupling import EvalCouplingCLI
 from cli.train import TrainCLI
@@ -166,6 +167,9 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.periodic_checkpoint.every_epochs == 4
         assert coupling_training_cfg.best_rel_sol_checkpoint.enabled is True
         assert coupling_training_cfg.compile.enabled is True
+        assert coupling_model_cfg.balance_projection == "symmetric"
+        assert coupling_model_cfg.smooth_mask_normalize is True
+        assert coupling_model_cfg.smooth_mask_eps == 1e-12
         assert coupling_model_cfg.source_stencil_lift.enabled is False
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
@@ -179,6 +183,9 @@ class TestTrainCLIDatasetConfig:
             "model": {},
             "training": {},
             "coupling_model": {
+                "balance_projection": "smooth_mask",
+                "smooth_mask_normalize": False,
+                "smooth_mask_eps": 1e-9,
                 "source_stencil_lift": {
                     "enabled": True,
                     "hidden_dim": 48,
@@ -205,6 +212,9 @@ class TestTrainCLIDatasetConfig:
         ) = TrainCLI()._build_configs(config_path)
 
         source_lift = coupling_model_cfg.source_stencil_lift
+        assert coupling_model_cfg.balance_projection == "smooth_mask"
+        assert coupling_model_cfg.smooth_mask_normalize is False
+        assert coupling_model_cfg.smooth_mask_eps == 1e-9
         assert source_lift.enabled is True
         assert source_lift.hidden_dim == 48
         assert source_lift.depth == 2
@@ -283,13 +293,25 @@ class TestTrainCLIDatasetConfig:
         assert cfg.eps == 1e-12
 
     def test_eval_cli_parses_source_stencil_lift_config(self):
-        cfg = EvalCouplingCLI._build_source_stencil_lift_config(
-            {"enabled": True, "hidden_dim": 16},
-            "coupling_model",
+        config_kwargs = {
+            "branch_input_dim": 5,
+            "balance_projection": "smooth_mask",
+            "smooth_mask_normalize": False,
+            "smooth_mask_eps": 1e-9,
+            "source_stencil_lift": EvalCouplingCLI._build_source_stencil_lift_config(
+                {"enabled": True, "hidden_dim": 16},
+                "coupling_model",
+            ),
+        }
+        model_cfg = CouplingModelConfig(
+            **config_kwargs,
         )
 
-        assert cfg.enabled is True
-        assert cfg.hidden_dim == 16
+        assert model_cfg.balance_projection == "smooth_mask"
+        assert model_cfg.smooth_mask_normalize is False
+        assert model_cfg.smooth_mask_eps == 1e-9
+        assert model_cfg.source_stencil_lift.enabled is True
+        assert model_cfg.source_stencil_lift.hidden_dim == 16
 
     def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):
         config_path = tmp_path / "config.json"

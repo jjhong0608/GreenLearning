@@ -6,7 +6,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/src/modified_greenonet.egg-info" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.14 (GreenNetModify)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="$USER_HOME$/.conda/envs/green_net" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">

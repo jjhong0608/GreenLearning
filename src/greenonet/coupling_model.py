@@ -188,6 +188,15 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
         torch.set_default_dtype(config.dtype)
+        if config.balance_projection not in {"symmetric", "smooth_mask"}:
+            raise ValueError(
+                f"Unsupported balance_projection: {config.balance_projection}"
+            )
+        if config.smooth_mask_eps <= 0.0:
+            raise ValueError("smooth_mask_eps must be positive.")
+        self.balance_projection = config.balance_projection
+        self.smooth_mask_normalize = bool(config.smooth_mask_normalize)
+        self.smooth_mask_eps = float(config.smooth_mask_eps)
         if config.source_stencil_lift.enabled and config.branch_input_dim <= 2:
             raise ValueError(
                 "source_stencil_lift requires branch_input_dim > 2 because "
@@ -252,7 +261,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         else:
             self.source_stencil_lift = None
 
-    def _apply_balance_projection(
+    def _apply_symmetric_balance_projection(
         self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
     ) -> torch.Tensor:
         """Apply interior balance projection with a fixed 1/2 residual split."""
@@ -267,6 +276,83 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         projected[:, 0] = phi
         projected[:, 1] = psi_t.transpose(-1, -2)
         return projected
+
+    def _smooth_mask_components(
+        self,
+        coords: torch.Tensor,
+        flux_int: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if coords.dim() != 4:
+            raise ValueError("coords must have shape (2, N, N + 2, 2).")
+        if flux_int.dim() != 4:
+            raise ValueError("flux_int must have shape (B, 2, N, N).")
+        _bsz, _axis, n_lines, n_inner = flux_int.shape
+
+        x_axis = coords[0, 0, :, 0].to(
+            device=flux_int.device,
+            dtype=flux_int.dtype,
+        )
+        y_lines = coords[0, :, 0, 1].to(
+            device=flux_int.device,
+            dtype=flux_int.dtype,
+        )
+        x_inner = x_axis[1:-1]
+        y_inner = y_lines
+        if x_inner.numel() != n_inner or y_inner.numel() != n_lines:
+            raise ValueError(
+                "coords interior dimensions must match flux_int common grid "
+                f"({n_lines}, {n_inner}); got x_inner={x_inner.numel()}, "
+                f"y_inner={y_inner.numel()}."
+            )
+
+        m_phi = y_inner * (1.0 - y_inner)
+        m_psi = x_inner * (1.0 - x_inner)
+        if self.smooth_mask_normalize:
+            m_phi = 4.0 * m_phi
+            m_psi = 4.0 * m_psi
+        return m_phi.view(1, -1, 1), m_psi.view(1, 1, -1)
+
+    def _apply_smooth_mask_balance_projection(
+        self,
+        flux_int: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply smooth-mask balance projection on the interior common grid."""
+        phi0 = flux_int[:, 0]
+        psi0 = flux_int[:, 1].transpose(-1, -2)
+        f = rhs_raw[:, 0, :, 1:-1]
+
+        m_phi, m_psi = self._smooth_mask_components(coords, flux_int)
+        denom = (m_phi + m_psi).clamp_min(self.smooth_mask_eps)
+        w_phi = m_phi / denom
+        w_psi = m_psi / denom
+        alpha = (m_phi * m_psi) / denom
+
+        diff = phi0 - psi0
+        phi = w_phi * f + alpha * diff
+        psi_t = w_psi * f - alpha * diff
+
+        projected = flux_int.clone()
+        projected[:, 0] = phi
+        projected[:, 1] = psi_t.transpose(-1, -2)
+        return projected
+
+    def _apply_balance_projection(
+        self,
+        flux_int: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.balance_projection == "symmetric":
+            return self._apply_symmetric_balance_projection(flux_int, rhs_raw)
+        if self.balance_projection == "smooth_mask":
+            return self._apply_smooth_mask_balance_projection(
+                flux_int=flux_int,
+                rhs_raw=rhs_raw,
+                coords=coords,
+            )
+        raise ValueError(f"Unsupported balance_projection: {self.balance_projection}")
 
     def forward(
         self,
@@ -333,7 +419,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
         norm_exp = rhs_norm.unsqueeze(-1)
         raw_int = flux_tilde * norm_exp
-        projected_int = self._apply_balance_projection(raw_int, rhs_raw)
+        projected_int = self._apply_balance_projection(raw_int, rhs_raw, coords)
 
         output_flux = torch.zeros(
             b,

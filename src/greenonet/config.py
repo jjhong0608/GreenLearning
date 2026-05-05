@@ -74,6 +74,9 @@ class CouplingModelConfig:
     use_bias: bool = True
     dropout: float = 0.0
     dtype: torch.dtype = torch.float64
+    balance_projection: Literal["symmetric", "smooth_mask"] = "symmetric"
+    smooth_mask_normalize: bool = True
+    smooth_mask_eps: float = 1.0e-12
     source_stencil_lift: SourceStencilLiftConfig = field(
         default_factory=SourceStencilLiftConfig
     )

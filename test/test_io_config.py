@@ -109,6 +109,9 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
         use_bias=True,
         dropout=0.0,
         dtype=torch.float64,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=False,
+        smooth_mask_eps=1e-9,
         source_stencil_lift=SourceStencilLiftConfig(enabled=True, hidden_dim=32),
     )
     model = CouplingNet(cfg)
@@ -121,6 +124,9 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
 
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
+    assert loaded_cfg.balance_projection == "smooth_mask"
+    assert loaded_cfg.smooth_mask_normalize is False
+    assert loaded_cfg.smooth_mask_eps == 1e-9
     assert loaded_cfg.source_stencil_lift.enabled is True
     assert loaded_cfg.source_stencil_lift.hidden_dim == 32
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
@@ -205,6 +211,9 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
 
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
+    assert loaded_cfg.balance_projection == "symmetric"
+    assert loaded_cfg.smooth_mask_normalize is True
+    assert loaded_cfg.smooth_mask_eps == 1e-12
     assert loaded_cfg.source_stencil_lift.enabled is False
     assert not hasattr(loaded_cfg, "use_fourier")
     assert not hasattr(loaded_cfg, "fourier_dim")

@@ -10,9 +10,9 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/5_fold_test_diffusion/fold0/train",
-    "validation_path": "data/5_fold_test_diffusion/fold0/valid",
-    "test_path": "data/5_fold_test_diffusion/fold0/valid",
+    "training_path": "data/poisson/fold0/train",
+    "validation_path": "data/poisson/fold0/valid",
+    "test_path": "data/poisson/fold0/valid",
     "dtype": "float64"
   },
   "coupling_model": {
@@ -24,8 +24,11 @@
     "branch_input_dim": 129,
     "trunk_input_dim": 2,
     "dtype": "float64",
+    "balance_projection": "symmetric",
+    "smooth_mask_normalize": true,
+    "smooth_mask_eps": 1e-12,
     "source_stencil_lift": {
-      "enabled": false,
+      "enabled": true,
       "hidden_dim": 32,
       "depth": 2,
       "activation": "gelu",

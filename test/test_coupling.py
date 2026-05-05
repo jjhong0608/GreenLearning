@@ -449,6 +449,18 @@ def test_coupling_model_backprop_through_shared_encoder():
     assert _has_grad(model.trunk)
 
 
+def _make_projection_coords(n_lines: int, dtype: torch.dtype = torch.float64):
+    m_points = n_lines + 2
+    axis = torch.linspace(0.0, 1.0, m_points, dtype=dtype)
+    y_inner = axis[1:-1]
+    coords = torch.zeros((2, n_lines, m_points, 2), dtype=dtype)
+    coords[0, :, :, 0] = axis.unsqueeze(0).expand(n_lines, -1)
+    coords[0, :, :, 1] = y_inner.view(-1, 1).expand(-1, m_points)
+    coords[1, :, :, 0] = y_inner.view(-1, 1).expand(-1, m_points)
+    coords[1, :, :, 1] = axis.unsqueeze(0).expand(n_lines, -1)
+    return coords
+
+
 def test_coupling_balance_projection_uses_fixed_half_split():
     class _ZeroBranch(nn.Module):
         def __init__(self, hidden_dim: int) -> None:
@@ -496,6 +508,89 @@ def test_coupling_balance_projection_uses_fixed_half_split():
     assert torch.allclose(
         projected_flux[:, 1, :, 1:-1], expected_psi, atol=1e-12, rtol=1e-12
     )
+
+
+def test_symmetric_balance_projection_matches_old_formula_directly():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(branch_input_dim=m, balance_projection="symmetric")
+    model = CouplingNet(cfg)
+    flux_int = torch.randn(2, 2, n, n, dtype=torch.float64)
+    rhs_raw = torch.randn(2, 2, n, m, dtype=torch.float64)
+    coords = _make_projection_coords(n)
+
+    projected = model._apply_balance_projection(flux_int, rhs_raw, coords)
+
+    phi0 = flux_int[:, 0]
+    psi0 = flux_int[:, 1].transpose(-1, -2)
+    f = rhs_raw[:, 0, :, 1:-1]
+    residual = f - (phi0 + psi0)
+    expected_phi = phi0 + 0.5 * residual
+    expected_psi = psi0 + 0.5 * residual
+    torch.testing.assert_close(projected[:, 0], expected_phi)
+    torch.testing.assert_close(projected[:, 1].transpose(-1, -2), expected_psi)
+
+
+def test_smooth_mask_balance_projection_preserves_balance_shape_dtype_and_device():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=True,
+    )
+    model = CouplingNet(cfg)
+    flux_int = torch.randn(2, 2, n, n, dtype=torch.float64)
+    rhs_raw = torch.randn(2, 2, n, m, dtype=torch.float64)
+    coords = _make_projection_coords(n)
+
+    projected = model._apply_balance_projection(flux_int, rhs_raw, coords)
+
+    assert projected.shape == flux_int.shape
+    assert projected.dtype == flux_int.dtype
+    assert projected.device == flux_int.device
+    phi = projected[:, 0]
+    psi = projected[:, 1].transpose(-1, -2)
+    torch.testing.assert_close(
+        phi + psi,
+        rhs_raw[:, 0, :, 1:-1],
+        atol=1.0e-10,
+        rtol=1.0e-10,
+    )
+
+
+def test_smooth_mask_components_use_expected_axes_and_normalization():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=True,
+    )
+    model = CouplingNet(cfg)
+    coords = _make_projection_coords(n)
+    flux_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
+
+    m_phi, m_psi = model._smooth_mask_components(coords, flux_int)
+
+    expected = torch.tensor([0.75, 1.0, 0.75], dtype=torch.float64)
+    assert m_phi.shape == (1, n, 1)
+    assert m_psi.shape == (1, 1, n)
+    torch.testing.assert_close(m_phi[0, :, 0], expected)
+    torch.testing.assert_close(m_psi[0, 0, :], expected)
+    assert torch.all(m_phi + m_psi > 0.0)
+    assert torch.max(m_phi).item() == pytest.approx(1.0)
+    assert torch.max(m_psi).item() == pytest.approx(1.0)
+
+
+def test_smooth_mask_projection_config_validation():
+    with pytest.raises(ValueError, match="Unsupported balance_projection"):
+        CouplingNet(CouplingModelConfig(balance_projection="bad"))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="smooth_mask_eps"):
+        CouplingNet(CouplingModelConfig(smooth_mask_eps=0.0))
 
 
 def test_coupling_trainer_runs(tmp_path):
