@@ -49,17 +49,16 @@ class ModelConfig:
 
 
 @dataclass
-class CouplerConfig:
-    """Optional local 2D coupler applied after CouplingNet balance projection."""
+class SourceStencilLiftConfig:
+    """Optional input-side learned source lift for CouplingNet."""
 
     enabled: bool = False
-    type: Literal["five_stencil_stencil_mlp"] = "five_stencil_stencil_mlp"
-    hidden_channels: int = 64
+    hidden_dim: int = 32
     depth: int = 2
     activation: Literal["tanh", "relu", "gelu", "rational"] = "gelu"
+    use_bias: bool = True
     dropout: float = 0.0
-    residual_scale_init: float = 0.05
-    padding: Literal["replicate", "zero"] = "replicate"
+    use_g_normalization: bool = True
     eps: float = 1.0e-12
 
 
@@ -75,7 +74,9 @@ class CouplingModelConfig:
     use_bias: bool = True
     dropout: float = 0.0
     dtype: torch.dtype = torch.float64
-    coupler: CouplerConfig = field(default_factory=CouplerConfig)
+    source_stencil_lift: SourceStencilLiftConfig = field(
+        default_factory=SourceStencilLiftConfig
+    )
 
 
 @dataclass
@@ -109,33 +110,6 @@ class CouplingLossesConfig:
 
 
 @dataclass
-class CouplingHybridDetachConfig:
-    """Optional hybrid projected/coupled energy training for the coupler."""
-
-    enabled: bool = False
-    projected_energy_weight: float = 1.0
-    coupled_energy_weight: float = 0.1
-    detach_coupler_input: bool = True
-
-
-@dataclass
-class CouplingStage2Config:
-    """Optional Stage 2 coupler-only training from a Stage 1 checkpoint."""
-
-    enabled: bool = False
-    checkpoint_path: str | None = None
-    freeze_main: bool = True
-    train_coupler_only: bool = True
-    coupled_energy_weight: float = 1.0
-    lr: float = 1.0e-3
-    weight_decay: float = 0.0
-    epochs: int | None = None
-    early_stopping: bool = False
-    log_relative_improvement: bool = True
-    log_delta_norm_ratio: bool = True
-
-
-@dataclass
 class CouplingPeriodicCheckpointConfig:
     """Periodic checkpoint settings for CouplingNet Adam training."""
 
@@ -160,10 +134,6 @@ class CouplingTrainingConfig:
     log_interval: int = 1
     device: str = "cpu"
     losses: CouplingLossesConfig = field(default_factory=CouplingLossesConfig)
-    hybrid_detach: CouplingHybridDetachConfig = field(
-        default_factory=CouplingHybridDetachConfig
-    )
-    stage2: CouplingStage2Config = field(default_factory=CouplingStage2Config)
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
     min_lr: float = 1e-6

@@ -1,6 +1,6 @@
 import torch
 
-from greenonet.config import CouplerConfig, CouplingModelConfig, ModelConfig
+from greenonet.config import CouplingModelConfig, ModelConfig, SourceStencilLiftConfig
 from greenonet.coupling_model import CouplingNet
 from greenonet.model import GreenONetModel
 
@@ -90,7 +90,7 @@ def test_save_load_coupling_model_with_config(tmp_path):
 
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
-    assert loaded_cfg.coupler.enabled is False
+    assert loaded_cfg.source_stencil_lift.enabled is False
     assert not hasattr(loaded_cfg, "use_fourier")
     assert not hasattr(loaded_cfg, "fourier_dim")
     assert not hasattr(loaded_cfg, "fourier_scale")
@@ -98,7 +98,7 @@ def test_save_load_coupling_model_with_config(tmp_path):
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
-def test_save_load_coupling_model_with_enabled_coupler_config(tmp_path):
+def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
     torch.manual_seed(0)
     cfg = CouplingModelConfig(
         branch_input_dim=5,
@@ -109,10 +109,10 @@ def test_save_load_coupling_model_with_enabled_coupler_config(tmp_path):
         use_bias=True,
         dropout=0.0,
         dtype=torch.float64,
-        coupler=CouplerConfig(enabled=True, hidden_channels=32),
+        source_stencil_lift=SourceStencilLiftConfig(enabled=True, hidden_dim=32),
     )
     model = CouplingNet(cfg)
-    path = tmp_path / "coupling_coupler.safetensors"
+    path = tmp_path / "coupling_source_lift.safetensors"
 
     from greenonet.io import load_model_with_config, save_model_with_config
 
@@ -121,8 +121,8 @@ def test_save_load_coupling_model_with_enabled_coupler_config(tmp_path):
 
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
-    assert loaded_cfg.coupler.enabled is True
-    assert loaded_cfg.coupler.hidden_channels == 32
+    assert loaded_cfg.source_stencil_lift.enabled is True
+    assert loaded_cfg.source_stencil_lift.hidden_dim == 32
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -194,6 +194,7 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
             "balance_hidden_dim": 64,
             "balance_depth": 2,
             "balance_eps": 1e-12,
+            "coupler": {"enabled": True, "hidden_channels": 32},
         },
     }
     torch.save(legacy_payload, path)
@@ -204,7 +205,7 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
 
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
-    assert loaded_cfg.coupler.enabled is False
+    assert loaded_cfg.source_stencil_lift.enabled is False
     assert not hasattr(loaded_cfg, "use_fourier")
     assert not hasattr(loaded_cfg, "fourier_dim")
     assert not hasattr(loaded_cfg, "fourier_scale")

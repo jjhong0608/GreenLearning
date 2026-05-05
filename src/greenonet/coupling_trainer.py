@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List
 
 import torch
-from torch import nn, optim
+from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.nn.functional import pad
 
@@ -38,18 +38,6 @@ CouplingBatch = tuple[
 ]
 
 
-def freeze_main_train_coupler_only(model: nn.Module) -> None:
-    """Freeze all model parameters except the post-projection coupler."""
-    coupler = getattr(model, "coupler", None)
-    if coupler is None:
-        raise RuntimeError("Stage 2 requires model.coupler, but model.coupler is None.")
-
-    for param in model.parameters():
-        param.requires_grad = False
-    for param in coupler.parameters():
-        param.requires_grad = True
-
-
 class CouplingTrainer(LoggingMixin):
     """Trainer for CouplingNet using Green kernel integrals."""
 
@@ -58,17 +46,11 @@ class CouplingTrainer(LoggingMixin):
         "loss_l2_consistency",
         "loss_energy_consistency",
         "loss_cross_consistency",
-        "loss_energy_projected",
-        "loss_energy_coupled",
-        "loss_hybrid_detach",
-        "energy_improvement",
-        "loss_stage2_projected_energy",
-        "loss_stage2_coupled_energy",
-        "stage2_energy_improvement",
-        "stage2_relative_improvement",
-        "stage2_delta_norm_ratio",
         "rel_flux",
         "rel_sol",
+        "source_lift_corr_g_f",
+        "source_lift_rel_diff_g_f",
+        "source_lift_g_rms",
     )
 
     def __init__(
@@ -87,9 +69,6 @@ class CouplingTrainer(LoggingMixin):
         super().__init__(logger_name="CouplingTrainer", work_dir=self.work_dir)
         self.device = torch.device(config.device)
         self.model.to(self.device)
-        self._validate_stage2_setup()
-        if self.config.stage2.enabled:
-            freeze_main_train_coupler_only(self.model)
         self.model = maybe_compile_model(
             self.model,
             self.config.compile,
@@ -99,38 +78,6 @@ class CouplingTrainer(LoggingMixin):
         self.green_kernel = green_kernel.to(self.device)  # (2, n, m, m)
         self.loss_history: List[float] = []
         self.stage_loss_history: dict[str, List[float]] = {}
-
-    def _validate_stage2_setup(self) -> None:
-        stage2_cfg = self.config.stage2
-        if not stage2_cfg.enabled:
-            return
-        if self.config.hybrid_detach.enabled:
-            raise ValueError(
-                "coupling_training.stage2.enabled and "
-                "coupling_training.hybrid_detach.enabled cannot both be true."
-            )
-        if stage2_cfg.checkpoint_path is None:
-            raise ValueError(
-                "coupling_training.stage2.checkpoint_path must be provided when "
-                "coupling_training.stage2.enabled=true."
-            )
-        if not stage2_cfg.freeze_main or not stage2_cfg.train_coupler_only:
-            raise ValueError(
-                "Stage 2 requires freeze_main=true and train_coupler_only=true."
-            )
-        if stage2_cfg.early_stopping:
-            raise ValueError(
-                "coupling_training.stage2.early_stopping is not supported and must be false."
-            )
-        if self.model_cfg is not None and not self.model_cfg.coupler.enabled:
-            raise ValueError(
-                "coupling_model.coupler.enabled must be true when "
-                "coupling_training.stage2.enabled=true."
-            )
-        if getattr(self.model, "coupler", None) is None:
-            raise RuntimeError(
-                "Stage 2 requires model.coupler, but model.coupler is None."
-            )
 
     def _integrate(
         self, green: torch.Tensor, values: torch.Tensor, x_axis: torch.Tensor
@@ -215,33 +162,6 @@ class CouplingTrainer(LoggingMixin):
         loss_y_per_batch = density_y.sum(dim=(-1, -2)) * hx * hy
         return (loss_x_per_batch + loss_y_per_batch).mean()
 
-    @staticmethod
-    def _pad_interior_flux_like(
-        flux_int: torch.Tensor,
-        template_flux: torch.Tensor,
-    ) -> torch.Tensor:
-        if flux_int.dim() != 4:
-            raise ValueError("flux_int must have shape (B, 2, N, N).")
-        if template_flux.dim() != 4:
-            raise ValueError("template_flux must have shape (B, 2, N, N + 2).")
-        bsz, axis, n_lines, n_inner = flux_int.shape
-        if axis != 2:
-            raise ValueError(f"Expected flux_int axis dimension 2, got {axis}.")
-        if n_lines != n_inner:
-            raise ValueError(
-                f"Expected square flux_int interior grid, got {n_lines} x {n_inner}."
-            )
-        expected_template = (bsz, axis, n_lines, n_inner + 2)
-        if tuple(template_flux.shape) != expected_template:
-            raise ValueError(
-                "template_flux must have shape matching padded flux_int "
-                f"{expected_template}, got {tuple(template_flux.shape)}."
-            )
-
-        padded = torch.zeros_like(template_flux)
-        padded[:, :, :, 1:-1] = flux_int
-        return padded
-
     def _represented_solutions_from_flux(
         self,
         flux: torch.Tensor,
@@ -274,59 +194,6 @@ class CouplingTrainer(LoggingMixin):
             value=0.0,
         )  # homogeneous Dirichlet condition
         return phi_x, psi_y, u_phi_x, u_psi_y
-
-    def _energy_loss_from_flux(
-        self,
-        flux: torch.Tensor,
-        a_vals: torch.Tensor,
-        x_axis: torch.Tensor,
-        y_axis: torch.Tensor,
-    ) -> torch.Tensor:
-        _phi_x, _psi_y, u_phi_x, u_psi_y = self._represented_solutions_from_flux(
-            flux=flux,
-            x_axis=x_axis,
-            y_axis=y_axis,
-        )
-        return self._energy_consistency_loss(
-            u_phi_x=u_phi_x,
-            u_psi_y=u_psi_y,
-            a_vals=a_vals,
-            x_axis=x_axis,
-            y_axis=y_axis,
-        )
-
-    @staticmethod
-    def _delta_from_intermediates(
-        projected_int: torch.Tensor,
-        coupled_int: torch.Tensor,
-    ) -> torch.Tensor:
-        """Recover scalar coupler correction delta from projected/coupled states."""
-        phi_p = projected_int[:, 0]
-        psi_p = projected_int[:, 1].transpose(-1, -2)
-        phi_c = coupled_int[:, 0]
-        psi_c = coupled_int[:, 1].transpose(-1, -2)
-
-        delta_phi = phi_c - phi_p
-        delta_psi = psi_p - psi_c
-        return 0.5 * (delta_phi + delta_psi)
-
-    @staticmethod
-    def _delta_norm_ratio(
-        delta: torch.Tensor,
-        projected_int: torch.Tensor,
-        eps: float = 1.0e-12,
-    ) -> torch.Tensor:
-        """Compute ||delta|| / (||phi_projected|| + ||psi_projected||)."""
-        phi_p = projected_int[:, 0]
-        psi_p = projected_int[:, 1].transpose(-1, -2)
-
-        num = torch.linalg.vector_norm(delta.reshape(delta.shape[0], -1), dim=1)
-        den = (
-            torch.linalg.vector_norm(phi_p.reshape(phi_p.shape[0], -1), dim=1)
-            + torch.linalg.vector_norm(psi_p.reshape(psi_p.shape[0], -1), dim=1)
-            + eps
-        )
-        return torch.mean(num / den)
 
     def _cross_consistency_loss(
         self,
@@ -399,6 +266,35 @@ class CouplingTrainer(LoggingMixin):
     def _metric_accumulator(cls, fill_value: float) -> dict[str, float]:
         return {key: fill_value for key in cls._METRIC_KEYS}
 
+    def _source_lift_metrics(self, rhs_raw: torch.Tensor) -> dict[str, float]:
+        nan = float("nan")
+        default = {
+            "source_lift_corr_g_f": nan,
+            "source_lift_rel_diff_g_f": nan,
+            "source_lift_g_rms": nan,
+        }
+        module = getattr(self.model, "_orig_mod", self.model)
+        diagnostics_fn = getattr(module, "source_lift_diagnostics", None)
+        if not callable(diagnostics_fn):
+            return default
+        with torch.no_grad():
+            diagnostics = diagnostics_fn(rhs_raw)
+        if not diagnostics:
+            return default
+        values = dict(default)
+        values.update(
+            {
+                key: float(value.detach().item())
+                for key, value in diagnostics.items()
+                if key in default
+            }
+        )
+        return values
+
+    def _source_lift_enabled(self) -> bool:
+        module = getattr(self.model, "_orig_mod", self.model)
+        return getattr(module, "source_stencil_lift", None) is not None
+
     def _supports_auxiliary_quadrature(self, axis_coords: torch.Tensor) -> bool:
         samples = int(axis_coords.numel())
         if self.config.integration_rule == "simpson":
@@ -429,126 +325,6 @@ class CouplingTrainer(LoggingMixin):
         )
         return float(torch.sqrt(num / den).item())
 
-    def _step_loss_stage2(
-        self,
-        coords: torch.Tensor,
-        rhs_raw: torch.Tensor,
-        rhs_tilde: torch.Tensor,
-        rhs_norm: torch.Tensor,
-        sol: torch.Tensor,
-        flux_target: torch.Tensor,
-        a_vals: torch.Tensor,
-        b_vals: torch.Tensor,
-        c_vals: torch.Tensor,
-        x_axis: torch.Tensor,
-        y_axis: torch.Tensor,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
-        model_output = self.model(
-            coords=coords,
-            a_vals=a_vals,
-            b_vals=b_vals,
-            c_vals=c_vals,
-            rhs_raw=rhs_raw,
-            rhs_tilde=rhs_tilde,
-            rhs_norm=rhs_norm,
-            return_intermediates=True,
-            detach_coupler_input=True,
-        )
-        if not isinstance(model_output, tuple) or len(model_output) != 2:
-            raise TypeError(
-                "CouplingNet must return (flux, aux) when stage2 is enabled."
-            )
-        pred_flux, aux = model_output
-        if not isinstance(aux, dict):
-            raise TypeError("CouplingNet intermediate output must be a dict.")
-        projected_int = aux.get("projected_int")
-        coupled_int = aux.get("coupled_int")
-        if not isinstance(projected_int, torch.Tensor):
-            raise TypeError("CouplingNet intermediates must include projected_int.")
-        if not isinstance(coupled_int, torch.Tensor):
-            raise TypeError("CouplingNet intermediates must include coupled_int.")
-
-        projected_flux = self._pad_interior_flux_like(
-            projected_int,
-            template_flux=pred_flux,
-        )
-        loss_energy_projected = self._energy_loss_from_flux(
-            flux=projected_flux,
-            a_vals=a_vals,
-            x_axis=x_axis,
-            y_axis=y_axis,
-        )
-        loss_energy_coupled = self._energy_loss_from_flux(
-            flux=pred_flux,
-            a_vals=a_vals,
-            x_axis=x_axis,
-            y_axis=y_axis,
-        )
-        loss = self.config.stage2.coupled_energy_weight * loss_energy_coupled
-
-        delta = self._delta_from_intermediates(
-            projected_int=projected_int,
-            coupled_int=coupled_int,
-        )
-        stage2_energy_improvement = loss_energy_projected - loss_energy_coupled
-        stage2_relative_improvement = stage2_energy_improvement / (
-            loss_energy_projected.abs() + 1.0e-12
-        )
-        stage2_delta_norm_ratio = self._delta_norm_ratio(
-            delta=delta,
-            projected_int=projected_int,
-        )
-
-        phi_x, psi_y, u_phi_x, u_psi_y = self._represented_solutions_from_flux(
-            flux=pred_flux,
-            x_axis=x_axis,
-            y_axis=y_axis,
-        )
-        pred_flux_target = torch.stack((phi_x, psi_y), dim=1)
-        pred_flux_target = pad(
-            pred_flux_target[..., 1:-1],
-            pad=(1, 1, 1, 1),
-            mode="constant",
-            value=0.0,
-        )
-        flux_target = pad(
-            flux_target[..., 1:-1],
-            pad=(1, 1, 1, 1),
-            mode="constant",
-            value=0.0,
-        )
-        sol = pad(sol[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0)
-        nan_metric = float("nan")
-        return loss, {
-            "loss": float(loss.detach().item()),
-            "loss_l2_consistency": nan_metric,
-            "loss_energy_consistency": float(loss_energy_coupled.detach().item()),
-            "loss_cross_consistency": nan_metric,
-            "loss_energy_projected": nan_metric,
-            "loss_energy_coupled": nan_metric,
-            "loss_hybrid_detach": nan_metric,
-            "energy_improvement": nan_metric,
-            "loss_stage2_projected_energy": float(
-                loss_energy_projected.detach().item()
-            ),
-            "loss_stage2_coupled_energy": float(loss_energy_coupled.detach().item()),
-            "stage2_energy_improvement": float(
-                stage2_energy_improvement.detach().item()
-            ),
-            "stage2_relative_improvement": float(
-                stage2_relative_improvement.detach().item()
-            ),
-            "stage2_delta_norm_ratio": float(stage2_delta_norm_ratio.detach().item()),
-            "rel_flux": self._relative_l2_integral(
-                pred_flux_target.detach(), flux_target, x_axis
-            ),
-            "rel_sol": self._relative_l2_integral(
-                torch.stack((u_phi_x, u_psi_y), dim=1).detach(),
-                torch.stack((sol[:, 0], sol[:, 1]), dim=1),
-                x_axis,
-            ),
-        }
-
     def _step_loss(
         self,
         coords: torch.Tensor,
@@ -575,59 +351,15 @@ class CouplingTrainer(LoggingMixin):
         c_vals = c_vals.to(self.device)
         coords = coords.to(self.device)
 
-        if self.config.stage2.enabled:
-            return self._step_loss_stage2(
-                coords=coords,
-                rhs_raw=rhs_raw,
-                rhs_tilde=rhs_tilde,
-                rhs_norm=rhs_norm,
-                sol=sol,
-                flux_target=flux_target,
-                a_vals=a_vals,
-                b_vals=b_vals,
-                c_vals=c_vals,
-                x_axis=x_axis,
-                y_axis=y_axis,
-            )
-
-        hybrid_cfg = self.config.hybrid_detach
-        projected_flux: torch.Tensor | None = None
-        if hybrid_cfg.enabled:
-            model_output = self.model(
-                coords=coords,
-                a_vals=a_vals,
-                b_vals=b_vals,
-                c_vals=c_vals,
-                rhs_raw=rhs_raw,
-                rhs_tilde=rhs_tilde,
-                rhs_norm=rhs_norm,
-                return_intermediates=True,
-                detach_coupler_input=hybrid_cfg.detach_coupler_input,
-            )
-            if not isinstance(model_output, tuple) or len(model_output) != 2:
-                raise TypeError(
-                    "CouplingNet must return (flux, aux) when hybrid_detach is enabled."
-                )
-            pred_flux, aux = model_output
-            if not isinstance(aux, dict):
-                raise TypeError("CouplingNet intermediate output must be a dict.")
-            projected_int = aux.get("projected_int")
-            if not isinstance(projected_int, torch.Tensor):
-                raise TypeError("CouplingNet intermediates must include projected_int.")
-            projected_flux = self._pad_interior_flux_like(
-                projected_int,
-                template_flux=pred_flux,
-            )
-        else:
-            pred_flux = self.model(
-                coords=coords,
-                a_vals=a_vals,
-                b_vals=b_vals,
-                c_vals=c_vals,
-                rhs_raw=rhs_raw,
-                rhs_tilde=rhs_tilde,
-                rhs_norm=rhs_norm,
-            )  # (B,2,n,m)
+        pred_flux = self.model(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+        )  # (B,2,n,m)
 
         phi_x, psi_y, u_phi_x, u_psi_y = self._represented_solutions_from_flux(
             flux=pred_flux,
@@ -675,56 +407,22 @@ class CouplingTrainer(LoggingMixin):
         w_energy = self._effective_weight(energy_cfg.enabled, energy_cfg.weight)
         w_cross = self._effective_weight(cross_cfg.enabled, cross_cfg.weight)
 
-        nan_loss = torch.full(
-            (), float("nan"), dtype=loss_cons.dtype, device=self.device
-        )
-        loss_energy_projected = nan_loss
-        loss_energy_coupled = nan_loss
-        loss_hybrid_detach = nan_loss
-        energy_improvement = nan_loss
-        if hybrid_cfg.enabled:
-            if projected_flux is None:
-                raise RuntimeError("projected_flux is required in hybrid_detach mode.")
-            loss_energy_projected = self._energy_loss_from_flux(
-                flux=projected_flux,
-                a_vals=a_vals,
-                x_axis=x_axis,
-                y_axis=y_axis,
-            )
-            loss_energy_coupled = loss_energy_final
-            loss_hybrid_detach = (
-                hybrid_cfg.projected_energy_weight * loss_energy_projected
-                + hybrid_cfg.coupled_energy_weight * loss_energy_coupled
-            )
-            loss_energy_consistency = loss_hybrid_detach
-            energy_improvement = loss_energy_projected - loss_energy_coupled
-        else:
-            loss_energy_consistency = loss_energy_final
+        loss_energy_consistency = loss_energy_final
 
         loss = torch.zeros((), dtype=loss_cons.dtype, device=loss_cons.device)
         if w_l2 != 0.0:
             loss = loss + w_l2 * loss_cons
-        if hybrid_cfg.enabled:
-            loss = loss + loss_hybrid_detach
-        elif w_energy != 0.0:
+        if w_energy != 0.0:
             loss = loss + w_energy * loss_energy_consistency
         if w_cross != 0.0:
             loss = loss + w_cross * loss_cross_consistency
 
+        source_lift_metrics = self._source_lift_metrics(rhs_raw)
         metrics = {
             "loss": float(loss.detach().item()),
             "loss_l2_consistency": float(loss_cons.detach().item()),
             "loss_energy_consistency": float(loss_energy_consistency.detach().item()),
             "loss_cross_consistency": float(loss_cross_consistency.detach().item()),
-            "loss_energy_projected": float(loss_energy_projected.detach().item()),
-            "loss_energy_coupled": float(loss_energy_coupled.detach().item()),
-            "loss_hybrid_detach": float(loss_hybrid_detach.detach().item()),
-            "energy_improvement": float(energy_improvement.detach().item()),
-            "loss_stage2_projected_energy": float("nan"),
-            "loss_stage2_coupled_energy": float("nan"),
-            "stage2_energy_improvement": float("nan"),
-            "stage2_relative_improvement": float("nan"),
-            "stage2_delta_norm_ratio": float("nan"),
             "rel_flux": self._relative_l2_integral(
                 pred_flux_target.detach(), flux_target, x_axis
             ),
@@ -733,6 +431,7 @@ class CouplingTrainer(LoggingMixin):
                 torch.stack((sol[:, 0], sol[:, 1]), dim=1),
                 x_axis,
             ),
+            **source_lift_metrics,
         }
         return loss, metrics
 
@@ -797,17 +496,6 @@ class CouplingTrainer(LoggingMixin):
         return self.config
 
     def _build_optimizer(self, optimization_cfg: CouplingTrainingConfig) -> optim.Adam:
-        if optimization_cfg.stage2.enabled:
-            trainable_params = [
-                param for param in self.model.parameters() if param.requires_grad
-            ]
-            if not trainable_params:
-                raise RuntimeError("No trainable parameters found for Stage 2.")
-            return optim.Adam(
-                trainable_params,
-                lr=optimization_cfg.stage2.lr,
-                weight_decay=optimization_cfg.stage2.weight_decay,
-            )
         return optim.Adam(self.model.parameters(), lr=optimization_cfg.learning_rate)
 
     def _build_scheduler(
@@ -816,8 +504,6 @@ class CouplingTrainer(LoggingMixin):
         optimizer: optim.Optimizer,
         total_epochs: int,
     ) -> optim.lr_scheduler.LambdaLR | None:
-        if optimization_cfg.stage2.enabled:
-            return None
         if not optimization_cfg.use_lr_schedule:
             return None
         warmup_epochs = max(optimization_cfg.warmup_epochs, 0)
@@ -950,7 +636,6 @@ class CouplingTrainer(LoggingMixin):
                 l2_cfg = self.config.losses.l2_consistency
                 energy_cfg = self.config.losses.energy_consistency
                 cross_cfg = self.config.losses.cross_consistency
-                hybrid_cfg = self.config.hybrid_detach
                 log_message = (
                     "epoch %s | train loss=%.4e l2_cons=%.4e energy_cons=%.4e "
                     "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
@@ -981,47 +666,19 @@ class CouplingTrainer(LoggingMixin):
                     val_metrics["rel_flux"],
                     val_metrics["rel_sol"],
                 )
-                if hybrid_cfg.enabled:
+                if self._source_lift_enabled():
                     log_message = (
-                        log_message + " | hybrid train_proj=%.4e train_coupled=%.4e "
-                        "train_hybrid=%.4e train_improve=%.4e val_proj=%.4e "
-                        "val_coupled=%.4e val_hybrid=%.4e val_improve=%.4e "
-                        "w_proj=%.4e w_coupled=%.4e detach=%s"
+                        log_message + " | source_lift train_corr=%.4e "
+                        "train_rel_diff=%.4e train_g_rms=%.4e val_corr=%.4e "
+                        "val_rel_diff=%.4e val_g_rms=%.4e"
                     )
                     log_args = log_args + (
-                        train_metrics["loss_energy_projected"],
-                        train_metrics["loss_energy_coupled"],
-                        train_metrics["loss_hybrid_detach"],
-                        train_metrics["energy_improvement"],
-                        val_metrics["loss_energy_projected"],
-                        val_metrics["loss_energy_coupled"],
-                        val_metrics["loss_hybrid_detach"],
-                        val_metrics["energy_improvement"],
-                        hybrid_cfg.projected_energy_weight,
-                        hybrid_cfg.coupled_energy_weight,
-                        hybrid_cfg.detach_coupler_input,
-                    )
-                if self.config.stage2.enabled:
-                    stage2_cfg = self.config.stage2
-                    log_message = (
-                        log_message + " | stage2 train_proj=%.4e train_coupled=%.4e "
-                        "train_improve=%.4e train_rel_improve=%.4e "
-                        "train_delta_ratio=%.4e val_proj=%.4e val_coupled=%.4e "
-                        "val_improve=%.4e val_rel_improve=%.4e "
-                        "val_delta_ratio=%.4e w_coupled=%.4e"
-                    )
-                    log_args = log_args + (
-                        train_metrics["loss_stage2_projected_energy"],
-                        train_metrics["loss_stage2_coupled_energy"],
-                        train_metrics["stage2_energy_improvement"],
-                        train_metrics["stage2_relative_improvement"],
-                        train_metrics["stage2_delta_norm_ratio"],
-                        val_metrics["loss_stage2_projected_energy"],
-                        val_metrics["loss_stage2_coupled_energy"],
-                        val_metrics["stage2_energy_improvement"],
-                        val_metrics["stage2_relative_improvement"],
-                        val_metrics["stage2_delta_norm_ratio"],
-                        stage2_cfg.coupled_energy_weight,
+                        train_metrics["source_lift_corr_g_f"],
+                        train_metrics["source_lift_rel_diff_g_f"],
+                        train_metrics["source_lift_g_rms"],
+                        val_metrics["source_lift_corr_g_f"],
+                        val_metrics["source_lift_rel_diff_g_f"],
+                        val_metrics["source_lift_g_rms"],
                     )
                 self.logger.info(
                     log_message,
@@ -1034,8 +691,7 @@ class CouplingTrainer(LoggingMixin):
         adam_model_path = self.work_dir / "coupling_model_adam.safetensors"
         self._save_checkpoint(adam_model_path)
 
-        stage_name = "stage2" if self.config.stage2.enabled else "single"
-        self.stage_loss_history[stage_name] = phase_history
+        self.stage_loss_history["single"] = phase_history
         phase_curve_path = self.work_dir / "coupling_loss_curve.html"
         if phase_history:
             LossVisualizer.save_loss_curve(
@@ -1054,11 +710,7 @@ class CouplingTrainer(LoggingMixin):
     ) -> None:
         self.loss_history = []
         self.stage_loss_history = {}
-        epochs = (
-            self.config.stage2.epochs
-            if self.config.stage2.enabled and self.config.stage2.epochs is not None
-            else self.config.epochs
-        )
+        epochs = self.config.epochs
         self._run_training_phase(
             train_dataset=train_dataset,
             val_dataset=val_dataset,

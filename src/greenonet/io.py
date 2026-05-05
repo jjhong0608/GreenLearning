@@ -9,7 +9,7 @@ from typing import Any, cast
 import torch
 
 from greenonet.compile_utils import model_state_dict_for_save
-from greenonet.config import CouplerConfig, CouplingModelConfig, ModelConfig
+from greenonet.config import CouplingModelConfig, ModelConfig, SourceStencilLiftConfig
 
 
 def save_state_dict_safetensors(
@@ -70,9 +70,9 @@ def _deserialize_config(
     if "dtype" in data and isinstance(data["dtype"], str):
         data["dtype"] = _parse_dtype(data["dtype"])
     if config_cls is CouplingModelConfig:
-        coupler_raw = data.get("coupler")
-        if isinstance(coupler_raw, dict):
-            data["coupler"] = CouplerConfig(**coupler_raw)
+        source_lift_raw = data.get("source_stencil_lift")
+        if isinstance(source_lift_raw, dict):
+            data["source_stencil_lift"] = SourceStencilLiftConfig(**source_lift_raw)
     allowed_keys = {field.name for field in fields(config_cls)}
     filtered = {key: value for key, value in data.items() if key in allowed_keys}
     return config_cls(**filtered)

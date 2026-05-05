@@ -11,24 +11,22 @@ from torch import Tensor
 
 from greenonet.config import (
     CompileConfig,
-    CouplerConfig,
     CouplingBestRelSolCheckpointConfig,
-    CouplingHybridDetachConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
-    CouplingStage2Config,
     CouplingTrainingConfig,
     DatasetConfig,
     ModelConfig,
     PipelineConfig,
+    SourceStencilLiftConfig,
     TrainingConfig,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_model import CouplingNet
-from greenonet.coupling_trainer import CouplingTrainer, freeze_main_train_coupler_only
+from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
@@ -109,12 +107,17 @@ class TrainCLI:
         training_cfg = self._build_training_config(raw.get("training", {}))
 
         coupling_model_kwargs = dict(raw.get("coupling_model", {}))
-        coupler_raw = coupling_model_kwargs.pop("coupler", None)
-        coupler_cfg = self._build_coupler_config(coupler_raw, "coupling_model")
+        if "coupler" in coupling_model_kwargs:
+            raise TypeError("coupling_model.coupler has been removed.")
+        source_lift_raw = coupling_model_kwargs.pop("source_stencil_lift", None)
+        source_lift_cfg = self._build_source_stencil_lift_config(
+            source_lift_raw,
+            "coupling_model",
+        )
         cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
         coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
         coupling_model_cfg = CouplingModelConfig(
-            coupler=coupler_cfg,
+            source_stencil_lift=source_lift_cfg,
             **coupling_model_kwargs,
         )
 
@@ -142,15 +145,15 @@ class TrainCLI:
         raise TypeError(f"{section_name}.compile must be an object.")
 
     @staticmethod
-    def _build_coupler_config(
-        raw_coupler: object | None,
+    def _build_source_stencil_lift_config(
+        raw_source_lift: object | None,
         section_name: str,
-    ) -> CouplerConfig:
-        if raw_coupler is None:
-            return CouplerConfig()
-        if not isinstance(raw_coupler, dict):
-            raise TypeError(f"{section_name}.coupler must be an object.")
-        return CouplerConfig(**dict(raw_coupler))
+    ) -> SourceStencilLiftConfig:
+        if raw_source_lift is None:
+            return SourceStencilLiftConfig()
+        if not isinstance(raw_source_lift, dict):
+            raise TypeError(f"{section_name}.source_stencil_lift must be an object.")
+        return SourceStencilLiftConfig(**dict(raw_source_lift))
 
     @classmethod
     def _build_training_config(
@@ -183,19 +186,17 @@ class TrainCLI:
                 "coupling_training.losses.* instead "
                 f"({', '.join(found_deprecated)})."
             )
+        if "hybrid_detach" in coupling_training_kwargs:
+            raise TypeError("coupling_training.hybrid_detach has been removed.")
+        if "stage2" in coupling_training_kwargs:
+            raise TypeError("coupling_training.stage2 has been removed.")
         losses_raw = coupling_training_kwargs.pop("losses", None)
-        hybrid_detach_raw = coupling_training_kwargs.pop("hybrid_detach", None)
-        stage2_raw = coupling_training_kwargs.pop("stage2", None)
         compile_raw = coupling_training_kwargs.pop("compile", None)
         periodic_raw = coupling_training_kwargs.pop("periodic_checkpoint", None)
         best_rel_sol_raw = coupling_training_kwargs.pop("best_rel_sol_checkpoint", None)
         losses_cfg = TrainCLI._build_coupling_losses_config(
             losses_raw, "coupling_training"
         )
-        hybrid_detach_cfg = TrainCLI._build_hybrid_detach_config(
-            hybrid_detach_raw, "coupling_training"
-        )
-        stage2_cfg = TrainCLI._build_stage2_config(stage2_raw, "coupling_training")
         compile_cfg = TrainCLI._build_compile_config(compile_raw, "coupling_training")
         if periodic_raw is None:
             periodic_cfg = CouplingPeriodicCheckpointConfig()
@@ -213,35 +214,11 @@ class TrainCLI:
             )
         return CouplingTrainingConfig(
             losses=losses_cfg,
-            hybrid_detach=hybrid_detach_cfg,
-            stage2=stage2_cfg,
             compile=compile_cfg,
             periodic_checkpoint=periodic_cfg,
             best_rel_sol_checkpoint=best_rel_sol_cfg,
             **coupling_training_kwargs,
         )
-
-    @staticmethod
-    def _build_hybrid_detach_config(
-        raw_hybrid_detach: object | None,
-        section_name: str,
-    ) -> CouplingHybridDetachConfig:
-        if raw_hybrid_detach is None:
-            return CouplingHybridDetachConfig()
-        if not isinstance(raw_hybrid_detach, dict):
-            raise TypeError(f"{section_name}.hybrid_detach must be an object.")
-        return CouplingHybridDetachConfig(**dict(raw_hybrid_detach))
-
-    @staticmethod
-    def _build_stage2_config(
-        raw_stage2: object | None,
-        section_name: str,
-    ) -> CouplingStage2Config:
-        if raw_stage2 is None:
-            return CouplingStage2Config()
-        if not isinstance(raw_stage2, dict):
-            raise TypeError(f"{section_name}.stage2 must be an object.")
-        return CouplingStage2Config(**dict(raw_stage2))
 
     @staticmethod
     def _build_coupling_losses_config(
@@ -512,35 +489,7 @@ class TrainCLI:
                     c_vals=sample_c.to(device),
                 )
             coupling_model = CouplingNet(coupling_model_cfg)
-            stage2_cfg = coupling_training_cfg.stage2
-            if stage2_cfg.enabled:
-                if coupling_training_cfg.hybrid_detach.enabled:
-                    raise ValueError(
-                        "coupling_training.stage2.enabled and "
-                        "coupling_training.hybrid_detach.enabled cannot both be true."
-                    )
-                if not coupling_model_cfg.coupler.enabled:
-                    raise ValueError(
-                        "coupling_model.coupler.enabled must be true when "
-                        "coupling_training.stage2.enabled=true."
-                    )
-                if stage2_cfg.checkpoint_path is None:
-                    raise ValueError(
-                        "coupling_training.stage2.checkpoint_path must be provided "
-                        "when coupling_training.stage2.enabled=true."
-                    )
-                if not stage2_cfg.freeze_main or not stage2_cfg.train_coupler_only:
-                    raise ValueError(
-                        "Stage 2 requires freeze_main=true and train_coupler_only=true."
-                    )
-                if stage2_cfg.early_stopping:
-                    raise ValueError(
-                        "coupling_training.stage2.early_stopping is not supported "
-                        "and must be false."
-                    )
-                load_state_dict_auto(coupling_model, Path(stage2_cfg.checkpoint_path))
-                freeze_main_train_coupler_only(coupling_model)
-            elif pipeline_cfg.coupling_pretrained_path is not None:
+            if pipeline_cfg.coupling_pretrained_path is not None:
                 try:
                     coupling_model, coupling_model_cfg = load_model_with_config(
                         pipeline_cfg.coupling_pretrained_path

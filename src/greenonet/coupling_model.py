@@ -4,10 +4,9 @@ from typing import List, cast
 
 import torch
 from torch import nn
-import torch.nn.functional as F
 
 from greenonet.activations import RationalActivation
-from greenonet.config import CouplerConfig, CouplingModelConfig
+from greenonet.config import CouplingModelConfig, SourceStencilLiftConfig
 
 
 class ActivationFactoryMixin:
@@ -56,185 +55,126 @@ class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         return cast(torch.Tensor, self.net(x))
 
 
-class FiveStencilStencilMLPCoupler(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
-    """Explicit five-stencil gather and pointwise MLP null-space coupler."""
+class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+    """Input-side learned scalar source lift from canonical five-stencils."""
 
-    point_features: int = 9
+    stencil_features: int = 5
 
-    def __init__(self, config: CouplerConfig) -> None:
+    def __init__(self, config: SourceStencilLiftConfig) -> None:
         super().__init__()
-        if config.type != "five_stencil_stencil_mlp":
-            raise ValueError(f"Unsupported coupler type: {config.type}")
-        if config.hidden_channels <= 0:
-            raise ValueError("coupler.hidden_channels must be positive.")
+        if config.hidden_dim <= 0:
+            raise ValueError("source_stencil_lift.hidden_dim must be positive.")
         if config.depth <= 0:
-            raise ValueError("coupler.depth must be positive.")
-        if config.padding not in {"replicate", "zero"}:
-            raise ValueError("coupler.padding must be 'replicate' or 'zero'.")
+            raise ValueError("source_stencil_lift.depth must be positive.")
+        if config.dropout < 0.0:
+            raise ValueError("source_stencil_lift.dropout must be non-negative.")
+        if config.eps <= 0.0:
+            raise ValueError("source_stencil_lift.eps must be positive.")
 
-        self.padding = config.padding
+        self.use_g_normalization = bool(config.use_g_normalization)
         self.eps = float(config.eps)
-        in_channels = 5 * self.point_features
 
         layers: List[nn.Module] = []
-        ch = in_channels
+        in_dim = self.stencil_features
         for _ in range(config.depth):
-            layers.append(
-                nn.Conv2d(
-                    in_channels=ch,
-                    out_channels=config.hidden_channels,
-                    kernel_size=1,
-                    bias=True,
-                )
-            )
+            layers.append(nn.Linear(in_dim, config.hidden_dim, bias=config.use_bias))
             layers.append(self.build_activation(config.activation))
             if config.dropout > 0.0:
-                layers.append(nn.Dropout2d(config.dropout))
-            ch = config.hidden_channels
-
-        final = nn.Conv2d(
-            in_channels=ch,
-            out_channels=1,
-            kernel_size=1,
-            bias=True,
-        )
-        nn.init.zeros_(final.weight)
-        nn.init.zeros_(final.bias)
-        layers.append(final)
-
-        self.local_mlp = nn.Sequential(*layers)
-        self.residual_scale = nn.Parameter(
-            torch.tensor(float(config.residual_scale_init))
-        )
-
-    def _pad(self, q: torch.Tensor) -> torch.Tensor:
-        if self.padding == "replicate":
-            return F.pad(q, (1, 1, 1, 1), mode="replicate")
-        if self.padding == "zero":
-            return F.pad(q, (1, 1, 1, 1), mode="constant", value=0.0)
-        raise RuntimeError(f"Unexpected padding mode: {self.padding}")
-
-    def _gather_5_stencil(self, q: torch.Tensor) -> torch.Tensor:
-        """Gather center, i+1, i-1, j+1, j-1 features without corners."""
-        q_pad = self._pad(q)
-        center = q_pad[:, :, 1:-1, 1:-1]
-        plus_i = q_pad[:, :, 2:, 1:-1]
-        minus_i = q_pad[:, :, :-2, 1:-1]
-        plus_j = q_pad[:, :, 1:-1, 2:]
-        minus_j = q_pad[:, :, 1:-1, :-2]
-        return torch.cat([center, plus_i, minus_i, plus_j, minus_j], dim=1)
+                layers.append(nn.Dropout(config.dropout))
+            in_dim = config.hidden_dim
+        layers.append(nn.Linear(in_dim, 1, bias=config.use_bias))
+        self.encoder = nn.Sequential(*layers)
 
     @staticmethod
-    def _canonicalize_flux(raw_int: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        phi = raw_int[:, 0]
-        psi = raw_int[:, 1].transpose(-1, -2)
-        return phi, psi
-
-    @staticmethod
-    def _decanonicalize_flux(
-        phi: torch.Tensor, psi: torch.Tensor, template: torch.Tensor
-    ) -> torch.Tensor:
-        out = template.clone()
-        out[:, 0] = phi
-        out[:, 1] = psi.transpose(-1, -2)
-        return out
-
-    def _validate_inputs(
-        self,
-        raw_int: torch.Tensor,
-        a_vals: torch.Tensor,
-        b_vals: torch.Tensor,
-        c_vals: torch.Tensor,
-        rhs_raw: torch.Tensor,
-    ) -> None:
-        if raw_int.dim() != 4:
-            raise ValueError("raw_int must have shape (B, 2, N, N).")
-        bsz, axis, n_i, n_j = raw_int.shape
+    def _validate_rhs_raw(rhs_raw: torch.Tensor) -> tuple[int, int, int]:
+        if rhs_raw.dim() != 4:
+            raise ValueError("rhs_raw must have shape (B, 2, N, N + 2).")
+        bsz, axis, n_lines, m_points = rhs_raw.shape
         if axis != 2:
-            raise ValueError(f"Expected raw_int axis dimension 2, got {axis}.")
-        if n_i != n_j:
+            raise ValueError(f"Expected rhs_raw axis dimension 2, got {axis}.")
+        if n_lines + 2 != m_points:
             raise ValueError(
-                f"Expected square raw_int interior grid, got {n_i} x {n_j}."
+                "rhs_raw must have n_lines + 2 == m_points "
+                f"(got n_lines={n_lines}, m_points={m_points})."
             )
+        return bsz, n_lines, m_points
 
-        expected_full = (bsz, 2, n_i, n_i + 2)
-        for name, value in (
-            ("a_vals", a_vals),
-            ("b_vals", b_vals),
-            ("c_vals", c_vals),
-            ("rhs_raw", rhs_raw),
-        ):
-            if tuple(value.shape) != expected_full:
-                raise ValueError(
-                    f"{name} must have shape {expected_full}, got {tuple(value.shape)}."
-                )
+    def _build_canonical_full_source(self, rhs_raw: torch.Tensor) -> torch.Tensor:
+        """Reconstruct canonical full source grid with zero corners."""
+        bsz, _n_lines, m_points = self._validate_rhs_raw(rhs_raw)
+        full = torch.zeros(
+            (bsz, m_points, m_points),
+            dtype=rhs_raw.dtype,
+            device=rhs_raw.device,
+        )
+        full[:, 1:-1, :] = rhs_raw[:, 0]
+        full[:, 0, 1:-1] = rhs_raw[:, 1, :, 0]
+        full[:, -1, 1:-1] = rhs_raw[:, 1, :, -1]
+        return full
 
-    def _build_canonical_point_features(
-        self,
-        raw_int: torch.Tensor,
-        a_vals: torch.Tensor,
-        b_vals: torch.Tensor,
-        c_vals: torch.Tensor,
-        rhs_raw: torch.Tensor,
-        auxiliary_residual: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        self._validate_inputs(raw_int, a_vals, b_vals, c_vals, rhs_raw)
+    @staticmethod
+    def _gather_5_stencil(full_source: torch.Tensor) -> torch.Tensor:
+        """Gather center, east, west, north, south for all interior points."""
+        center = full_source[:, 1:-1, 1:-1]
+        east = full_source[:, 1:-1, 2:]
+        west = full_source[:, 1:-1, :-2]
+        north = full_source[:, 2:, 1:-1]
+        south = full_source[:, :-2, 1:-1]
+        return torch.stack((center, east, west, north, south), dim=-1)
 
-        phi0, psi0 = self._canonicalize_flux(raw_int)
-        f = rhs_raw[:, 0, :, 1:-1]
+    def lift_with_diagnostics(
+        self, rhs_raw: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        full_source = self._build_canonical_full_source(rhs_raw)
+        f_int = full_source[:, 1:-1, 1:-1]
+        scale = torch.sqrt(
+            torch.mean(f_int * f_int, dim=(-1, -2), keepdim=True) + self.eps
+        )
+        normalized_full = full_source / scale
+        stencil = self._gather_5_stencil(normalized_full)
+        bsz, n_lines, n_inner, _features = stencil.shape
+        g_raw = cast(
+            torch.Tensor,
+            self.encoder(stencil.reshape(bsz * n_lines * n_inner, -1)),
+        ).reshape(bsz, n_lines, n_inner)
 
-        ax = a_vals[:, 0, :, 1:-1]
-        ay = a_vals[:, 1, :, 1:-1].transpose(-1, -2)
-        bx = b_vals[:, 0, :, 1:-1]
-        by = b_vals[:, 1, :, 1:-1].transpose(-1, -2)
-        cx = c_vals[:, 0, :, 1:-1]
-        cy = c_vals[:, 1, :, 1:-1].transpose(-1, -2)
-
-        scale = torch.sqrt(torch.mean(f * f, dim=(-1, -2), keepdim=True) + self.eps)
-        diff_field = 0.5 * (phi0 - psi0)
-        if auxiliary_residual is None:
-            balance_residual = f - (phi0 + psi0)
+        if self.use_g_normalization:
+            g_scale = torch.sqrt(
+                torch.mean(g_raw * g_raw, dim=(-1, -2), keepdim=True) + self.eps
+            )
+            g = g_raw / g_scale
         else:
-            if tuple(auxiliary_residual.shape) != tuple(f.shape):
-                raise ValueError(
-                    "auxiliary_residual must have shape matching canonical source "
-                    f"{tuple(f.shape)}, got {tuple(auxiliary_residual.shape)}."
-                )
-            balance_residual = auxiliary_residual
-        diff_hat = diff_field / scale
-        res_hat = balance_residual / scale
-        f_hat = f / scale
+            g = g_raw
 
-        q = torch.stack(
-            [diff_hat, res_hat, f_hat, ax, ay, bx, by, cx, cy],
-            dim=1,
+        lifted = torch.empty(
+            (bsz, 2, n_lines, n_inner),
+            dtype=g.dtype,
+            device=g.device,
         )
-        return q, scale, phi0, psi0
+        lifted[:, 0] = g
+        lifted[:, 1] = g.transpose(-1, -2)
 
-    def forward(
-        self,
-        raw_int: torch.Tensor,
-        a_vals: torch.Tensor,
-        b_vals: torch.Tensor,
-        c_vals: torch.Tensor,
-        rhs_raw: torch.Tensor,
-        auxiliary_residual: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        q, scale, phi0, psi0 = self._build_canonical_point_features(
-            raw_int=raw_int,
-            a_vals=a_vals,
-            b_vals=b_vals,
-            c_vals=c_vals,
-            rhs_raw=rhs_raw,
-            auxiliary_residual=auxiliary_residual,
+        f_hat = f_int / scale
+        g_flat = g.reshape(bsz, -1)
+        f_flat = f_hat.reshape(bsz, -1)
+        inner = torch.sum(g_flat * f_flat, dim=-1)
+        g_norm = torch.linalg.vector_norm(g_flat, dim=-1)
+        f_norm = torch.linalg.vector_norm(f_flat, dim=-1)
+        corr = inner / (g_norm * f_norm + self.eps)
+        rel_diff = torch.linalg.vector_norm(g_flat - f_flat, dim=-1) / (
+            f_norm + self.eps
         )
-        q5 = self._gather_5_stencil(q)
-        delta_hat = cast(torch.Tensor, self.local_mlp(q5)).squeeze(1)
-        delta = self.residual_scale * scale * delta_hat
+        g_rms = torch.sqrt(torch.mean(g * g, dim=(-1, -2)))
+        diagnostics = {
+            "source_lift_corr_g_f": corr.mean(),
+            "source_lift_rel_diff_g_f": rel_diff.mean(),
+            "source_lift_g_rms": g_rms.mean(),
+        }
+        return lifted, diagnostics
 
-        phi1 = phi0 + delta
-        psi1 = psi0 - delta
-        return self._decanonicalize_flux(phi1, psi1, raw_int)
+    def forward(self, rhs_raw: torch.Tensor) -> torch.Tensor:
+        lifted, _diagnostics = self.lift_with_diagnostics(rhs_raw)
+        return lifted
 
 
 class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
@@ -248,6 +188,18 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
         torch.set_default_dtype(config.dtype)
+        if config.source_stencil_lift.enabled and config.branch_input_dim <= 2:
+            raise ValueError(
+                "source_stencil_lift requires branch_input_dim > 2 because "
+                "the lifted source branch uses the interior length "
+                "branch_input_dim - 2."
+            )
+        self.branch_input_dim = config.branch_input_dim
+        self.branch_rhs_input_dim = (
+            config.branch_input_dim - 2
+            if config.source_stencil_lift.enabled
+            else config.branch_input_dim
+        )
         self.branch_a = MLP(
             input_dim=config.branch_input_dim,
             hidden_dim=config.hidden_dim,
@@ -276,7 +228,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             last_activation=False,
         )
         self.branch_rhs = MLP(
-            input_dim=config.branch_input_dim,
+            input_dim=self.branch_rhs_input_dim,
             hidden_dim=config.hidden_dim,
             depth=config.depth,
             activation=config.activation,
@@ -293,21 +245,12 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=True,
         )
-        if config.coupler.enabled:
-            self.coupler: FiveStencilStencilMLPCoupler | None = (
-                FiveStencilStencilMLPCoupler(config.coupler)
+        if config.source_stencil_lift.enabled:
+            self.source_stencil_lift: FiveStencilSourceLift | None = (
+                FiveStencilSourceLift(config.source_stencil_lift)
             )
         else:
-            self.coupler = None
-
-    def _compute_balance_residual(
-        self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
-    ) -> torch.Tensor:
-        """Compute canonical balance residual f - (phi + psi)."""
-        rhs_x_int = rhs_raw[:, 0, :, 1:-1]
-        phi = flux_int[:, 0]
-        psi_t = flux_int[:, 1].transpose(-1, -2)
-        return rhs_x_int - (phi + psi_t)
+            self.source_stencil_lift = None
 
     def _apply_balance_projection(
         self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
@@ -334,9 +277,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
-        return_intermediates: bool = False,
-        detach_coupler_input: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> torch.Tensor:
         """
         Args:
             coords: (2, n_lines, m_points, 2) (interior trunk uses coords[:, :, 1:-1])
@@ -348,8 +289,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_norm: (B, 2, n_lines) line-wise L2 norms
         Returns:
             output_flux: (B, 2, n_lines, m_points) axial flux-divergence per
-                axis after projection/coupling with zero-padded
-                boundaries.
+                axis after projection with zero-padded boundaries.
         """
         if (
             coords.dim() != 4
@@ -370,7 +310,13 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
 
         branch_a_in = a_vals.reshape(b * axis * n_lines, m_points)
-        branch_r_in = rhs_tilde.reshape(b * axis * n_lines, m_points)
+        if self.source_stencil_lift is None:
+            branch_rhs_source = rhs_tilde
+        else:
+            branch_rhs_source = self.source_stencil_lift(rhs_raw)
+        branch_r_in = branch_rhs_source.reshape(
+            b * axis * n_lines, self.branch_rhs_input_dim
+        )
         branch_a_out = self.branch_a(branch_a_in)
         branch_r_out = self.branch_rhs(branch_r_in)
         branch_feat = branch_a_out * branch_r_out
@@ -387,43 +333,21 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
         norm_exp = rhs_norm.unsqueeze(-1)
         raw_int = flux_tilde * norm_exp
-        pre_projection_residual = self._compute_balance_residual(
-            flux_int=raw_int,
-            rhs_raw=rhs_raw,
-        )
         projected_int = self._apply_balance_projection(raw_int, rhs_raw)
-        projected_int_before_coupler = projected_int
-        if self.coupler is not None:
-            coupler_input = projected_int
-            coupler_residual = pre_projection_residual
-            if detach_coupler_input:
-                coupler_input = coupler_input.detach()
-                coupler_residual = coupler_residual.detach()
-            coupled_int = self.coupler(
-                raw_int=coupler_input,
-                a_vals=a_vals,
-                b_vals=b_vals,
-                c_vals=c_vals,
-                rhs_raw=rhs_raw,
-                auxiliary_residual=coupler_residual,
-            )
-        else:
-            coupled_int = projected_int
 
         output_flux = torch.zeros(
             b,
             axis,
             n_lines,
             m_points,
-            dtype=coupled_int.dtype,
-            device=coupled_int.device,
+            dtype=projected_int.dtype,
+            device=projected_int.device,
         )
-        output_flux[:, :, :, 1:-1] = coupled_int
-        if return_intermediates:
-            return output_flux, {
-                "raw_int": raw_int,
-                "pre_projection_residual": pre_projection_residual,
-                "projected_int": projected_int_before_coupler,
-                "coupled_int": coupled_int,
-            }
+        output_flux[:, :, :, 1:-1] = projected_int
         return output_flux
+
+    def source_lift_diagnostics(self, rhs_raw: torch.Tensor) -> dict[str, torch.Tensor]:
+        if self.source_stencil_lift is None:
+            return {}
+        _lifted, diagnostics = self.source_stencil_lift.lift_with_diagnostics(rhs_raw)
+        return diagnostics

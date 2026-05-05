@@ -131,25 +131,6 @@ class TestTrainCLIDatasetConfig:
                     "every_epochs": 4,
                 },
                 "best_rel_sol_checkpoint": {"enabled": True},
-                "hybrid_detach": {
-                    "enabled": True,
-                    "projected_energy_weight": 2.0,
-                    "coupled_energy_weight": 0.5,
-                    "detach_coupler_input": False,
-                },
-                "stage2": {
-                    "enabled": True,
-                    "checkpoint_path": "dummy_stage1.pt",
-                    "freeze_main": True,
-                    "train_coupler_only": True,
-                    "coupled_energy_weight": 1.25,
-                    "lr": 2e-4,
-                    "weight_decay": 0.01,
-                    "epochs": 500,
-                    "early_stopping": False,
-                    "log_relative_improvement": True,
-                    "log_delta_norm_ratio": False,
-                },
                 "compile": {
                     "enabled": True,
                 },
@@ -184,44 +165,28 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.periodic_checkpoint.enabled is True
         assert coupling_training_cfg.periodic_checkpoint.every_epochs == 4
         assert coupling_training_cfg.best_rel_sol_checkpoint.enabled is True
-        assert coupling_training_cfg.hybrid_detach.enabled is True
-        assert coupling_training_cfg.hybrid_detach.projected_energy_weight == 2.0
-        assert coupling_training_cfg.hybrid_detach.coupled_energy_weight == 0.5
-        assert coupling_training_cfg.hybrid_detach.detach_coupler_input is False
-        assert coupling_training_cfg.stage2.enabled is True
-        assert coupling_training_cfg.stage2.checkpoint_path == "dummy_stage1.pt"
-        assert coupling_training_cfg.stage2.freeze_main is True
-        assert coupling_training_cfg.stage2.train_coupler_only is True
-        assert coupling_training_cfg.stage2.coupled_energy_weight == 1.25
-        assert coupling_training_cfg.stage2.lr == 2e-4
-        assert coupling_training_cfg.stage2.weight_decay == 0.01
-        assert coupling_training_cfg.stage2.epochs == 500
-        assert coupling_training_cfg.stage2.early_stopping is False
-        assert coupling_training_cfg.stage2.log_relative_improvement is True
-        assert coupling_training_cfg.stage2.log_delta_norm_ratio is False
         assert coupling_training_cfg.compile.enabled is True
-        assert coupling_model_cfg.coupler.enabled is False
+        assert coupling_model_cfg.source_stencil_lift.enabled is False
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
         assert not hasattr(coupling_model_cfg, "fourier_include_input")
 
-    def test_parses_coupler_config(self, tmp_path):
+    def test_parses_source_stencil_lift_config(self, tmp_path):
         config_path = tmp_path / "config.json"
         payload = {
             "dataset": {"step_size": 0.25},
             "model": {},
             "training": {},
             "coupling_model": {
-                "coupler": {
+                "source_stencil_lift": {
                     "enabled": True,
-                    "type": "five_stencil_stencil_mlp",
-                    "hidden_channels": 64,
+                    "hidden_dim": 48,
                     "depth": 2,
                     "activation": "gelu",
+                    "use_bias": False,
                     "dropout": 0.0,
-                    "residual_scale_init": 0.05,
-                    "padding": "replicate",
+                    "use_g_normalization": True,
                     "eps": 1e-12,
                 },
             },
@@ -239,156 +204,92 @@ class TestTrainCLIDatasetConfig:
             _pipeline_cfg,
         ) = TrainCLI()._build_configs(config_path)
 
-        assert coupling_model_cfg.coupler.enabled is True
-        assert coupling_model_cfg.coupler.type == "five_stencil_stencil_mlp"
-        assert coupling_model_cfg.coupler.hidden_channels == 64
-        assert coupling_model_cfg.coupler.depth == 2
-        assert coupling_model_cfg.coupler.activation == "gelu"
-        assert coupling_model_cfg.coupler.padding == "replicate"
+        source_lift = coupling_model_cfg.source_stencil_lift
+        assert source_lift.enabled is True
+        assert source_lift.hidden_dim == 48
+        assert source_lift.depth == 2
+        assert source_lift.activation == "gelu"
+        assert source_lift.use_bias is False
+        assert source_lift.dropout == 0.0
+        assert source_lift.use_g_normalization is True
+        assert source_lift.eps == 1e-12
 
-    def test_rejects_non_object_coupler_config(self, tmp_path):
+    def test_rejects_non_object_source_stencil_lift_config(self, tmp_path):
         config_path = tmp_path / "config.json"
         payload = {
             "dataset": {"step_size": 0.25},
             "model": {},
             "training": {},
             "coupling_model": {
-                "coupler": "enabled",
+                "source_stencil_lift": "enabled",
             },
             "coupling_training": {},
             "pipeline": {"run_green": True, "run_coupling": False},
         }
         config_path.write_text(json.dumps(payload))
 
-        with pytest.raises(TypeError, match="coupling_model.coupler"):
+        with pytest.raises(TypeError, match="coupling_model.source_stencil_lift"):
             TrainCLI()._build_configs(config_path)
 
-    def test_missing_hybrid_detach_defaults_to_disabled(self):
-        cfg = TrainCLI._build_coupling_training_config({})
+    def test_rejects_removed_coupler_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {"coupler": {"enabled": True}},
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
 
-        assert cfg.hybrid_detach.enabled is False
-        assert cfg.hybrid_detach.projected_energy_weight == 1.0
-        assert cfg.hybrid_detach.coupled_energy_weight == 0.1
-        assert cfg.hybrid_detach.detach_coupler_input is True
+        with pytest.raises(TypeError, match="coupling_model.coupler has been removed"):
+            TrainCLI()._build_configs(config_path)
 
-    def test_parses_hybrid_detach_config(self):
-        cfg = TrainCLI._build_coupling_training_config(
-            {
-                "hybrid_detach": {
-                    "enabled": True,
-                    "projected_energy_weight": 4.0,
-                    "coupled_energy_weight": 0.25,
-                    "detach_coupler_input": False,
-                }
-            }
-        )
-
-        assert cfg.hybrid_detach.enabled is True
-        assert cfg.hybrid_detach.projected_energy_weight == 4.0
-        assert cfg.hybrid_detach.coupled_energy_weight == 0.25
-        assert cfg.hybrid_detach.detach_coupler_input is False
-
-    def test_rejects_non_object_hybrid_detach_config(self):
-        with pytest.raises(TypeError, match="coupling_training.hybrid_detach"):
+    def test_rejects_removed_hybrid_detach_config(self):
+        with pytest.raises(
+            TypeError, match="coupling_training.hybrid_detach has been removed"
+        ):
             TrainCLI._build_coupling_training_config({"hybrid_detach": True})
 
-    def test_eval_cli_parses_hybrid_detach_config(self):
-        cfg = EvalCouplingCLI._build_coupling_training_config(
-            {
-                "hybrid_detach": {
-                    "enabled": True,
-                    "projected_energy_weight": 1.5,
-                    "coupled_energy_weight": 0.75,
-                    "detach_coupler_input": False,
-                }
-            }
-        )
-
-        assert cfg.hybrid_detach.enabled is True
-        assert cfg.hybrid_detach.projected_energy_weight == 1.5
-        assert cfg.hybrid_detach.coupled_energy_weight == 0.75
-        assert cfg.hybrid_detach.detach_coupler_input is False
-
-    def test_eval_cli_rejects_non_object_hybrid_detach_config(self):
-        with pytest.raises(TypeError, match="coupling_training.hybrid_detach"):
-            EvalCouplingCLI._build_coupling_training_config({"hybrid_detach": True})
-
-    def test_missing_stage2_defaults_to_disabled(self):
-        cfg = TrainCLI._build_coupling_training_config({})
-
-        assert cfg.stage2.enabled is False
-        assert cfg.stage2.checkpoint_path is None
-        assert cfg.stage2.freeze_main is True
-        assert cfg.stage2.train_coupler_only is True
-        assert cfg.stage2.coupled_energy_weight == 1.0
-        assert cfg.stage2.lr == 1e-3
-        assert cfg.stage2.weight_decay == 0.0
-        assert cfg.stage2.epochs is None
-        assert cfg.stage2.early_stopping is False
-        assert cfg.stage2.log_relative_improvement is True
-        assert cfg.stage2.log_delta_norm_ratio is True
-
-    def test_parses_stage2_config(self):
-        cfg = TrainCLI._build_coupling_training_config(
-            {
-                "stage2": {
-                    "enabled": True,
-                    "checkpoint_path": "dummy_stage1.pt",
-                    "freeze_main": True,
-                    "train_coupler_only": True,
-                    "coupled_energy_weight": 3.0,
-                    "lr": 5e-4,
-                    "weight_decay": 0.02,
-                    "epochs": 12,
-                    "early_stopping": False,
-                    "log_relative_improvement": False,
-                    "log_delta_norm_ratio": True,
-                }
-            }
-        )
-
-        assert cfg.stage2.enabled is True
-        assert cfg.stage2.checkpoint_path == "dummy_stage1.pt"
-        assert cfg.stage2.coupled_energy_weight == 3.0
-        assert cfg.stage2.lr == 5e-4
-        assert cfg.stage2.weight_decay == 0.02
-        assert cfg.stage2.epochs == 12
-        assert cfg.stage2.early_stopping is False
-        assert cfg.stage2.log_relative_improvement is False
-        assert cfg.stage2.log_delta_norm_ratio is True
-        assert not hasattr(cfg.stage2, "delta_reg_weight")
-        assert not hasattr(cfg.stage2, "delta_regularization")
-        assert not hasattr(cfg.stage2, "delta_smoothness_weight")
-
-    def test_rejects_non_object_stage2_config(self):
-        with pytest.raises(TypeError, match="coupling_training.stage2"):
+    def test_rejects_removed_stage2_config(self):
+        with pytest.raises(
+            TypeError, match="coupling_training.stage2 has been removed"
+        ):
             TrainCLI._build_coupling_training_config({"stage2": True})
 
-    def test_eval_cli_parses_stage2_config(self):
-        cfg = EvalCouplingCLI._build_coupling_training_config(
-            {
-                "stage2": {
-                    "enabled": True,
-                    "checkpoint_path": "dummy_stage1.pt",
-                    "coupled_energy_weight": 0.75,
-                    "lr": 1e-4,
-                    "weight_decay": 0.03,
-                    "epochs": 9,
-                }
-            }
+    def test_eval_cli_rejects_removed_hybrid_detach_config(self):
+        with pytest.raises(
+            TypeError, match="coupling_training.hybrid_detach has been removed"
+        ):
+            EvalCouplingCLI._build_coupling_training_config({"hybrid_detach": True})
+
+    def test_eval_cli_rejects_removed_stage2_config(self):
+        with pytest.raises(
+            TypeError, match="coupling_training.stage2 has been removed"
+        ):
+            EvalCouplingCLI._build_coupling_training_config({"stage2": True})
+
+    def test_source_stencil_lift_defaults(self):
+        cfg = TrainCLI._build_source_stencil_lift_config(None, "coupling_model")
+
+        assert cfg.enabled is False
+        assert cfg.hidden_dim == 32
+        assert cfg.depth == 2
+        assert cfg.activation == "gelu"
+        assert cfg.use_bias is True
+        assert cfg.dropout == 0.0
+        assert cfg.use_g_normalization is True
+        assert cfg.eps == 1e-12
+
+    def test_eval_cli_parses_source_stencil_lift_config(self):
+        cfg = EvalCouplingCLI._build_source_stencil_lift_config(
+            {"enabled": True, "hidden_dim": 16},
+            "coupling_model",
         )
 
-        assert cfg.stage2.enabled is True
-        assert cfg.stage2.checkpoint_path == "dummy_stage1.pt"
-        assert cfg.stage2.coupled_energy_weight == 0.75
-        assert cfg.stage2.lr == 1e-4
-        assert cfg.stage2.weight_decay == 0.03
-        assert cfg.stage2.epochs == 9
-        assert cfg.stage2.early_stopping is False
-
-    def test_eval_cli_rejects_non_object_stage2_config(self):
-        with pytest.raises(TypeError, match="coupling_training.stage2"):
-            EvalCouplingCLI._build_coupling_training_config({"stage2": True})
+        assert cfg.enabled is True
+        assert cfg.hidden_dim == 16
 
     def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):
         config_path = tmp_path / "config.json"
