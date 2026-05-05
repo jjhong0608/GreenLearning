@@ -8,7 +8,10 @@ from torch import nn
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.coupling_model import CouplingNet, FiveStencilStencilMLPCoupler
-from greenonet.coupling_trainer import CouplingTrainer
+from greenonet.coupling_trainer import (
+    CouplingTrainer,
+    freeze_main_train_coupler_only,
+)
 from greenonet.config import (
     CouplerConfig,
     CouplingBestRelSolCheckpointConfig,
@@ -17,6 +20,7 @@ from greenonet.config import (
     CouplingLossesConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
+    CouplingStage2Config,
     CouplingTrainingConfig,
 )
 from greenonet.numerics import line_operator_fd
@@ -79,6 +83,7 @@ class _HybridFluxModel(nn.Module):
             raise ValueError("projected_int and coupled_int must have matching shapes")
         self.projected_int = nn.Parameter(projected_int.clone())
         self.coupled_delta = nn.Parameter(coupled_int.clone() - projected_int)
+        self.coupler = nn.Linear(1, 1, dtype=projected_int.dtype)
 
     def forward(
         self,
@@ -557,6 +562,79 @@ def test_coupling_net_enabled_coupler_is_initially_identity():
     )
 
     torch.testing.assert_close(out_enabled, out_disabled)
+
+
+def test_freeze_main_train_coupler_only_leaves_only_coupler_trainable():
+    torch.set_default_dtype(torch.float64)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=True, hidden_channels=4, depth=1),
+    )
+    model = CouplingNet(cfg)
+    assert model.coupler is not None
+
+    freeze_main_train_coupler_only(model)
+
+    coupler_param_ids = {id(param) for param in model.coupler.parameters()}
+    assert coupler_param_ids
+    for param in model.parameters():
+        if id(param) in coupler_param_ids:
+            assert param.requires_grad
+        else:
+            assert not param.requires_grad
+
+
+def test_freeze_main_train_coupler_only_rejects_missing_coupler():
+    model = CouplingNet(
+        CouplingModelConfig(branch_input_dim=5, coupler=CouplerConfig())
+    )
+
+    with pytest.raises(RuntimeError, match="model.coupler"):
+        freeze_main_train_coupler_only(model)
+
+
+def test_stage2_optimizer_contains_only_coupler_parameters(tmp_path):
+    torch.set_default_dtype(torch.float64)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=True, hidden_channels=4, depth=1),
+    )
+    model = CouplingNet(cfg)
+    assert model.coupler is not None
+    trainer = CouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=1,
+            batch_size=1,
+            stage2=CouplingStage2Config(
+                enabled=True,
+                checkpoint_path="dummy_stage1.safetensors",
+                lr=2.0e-3,
+                weight_decay=0.25,
+            ),
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        model_cfg=cfg,
+    )
+
+    optimizer = trainer._build_optimizer(trainer.config)
+
+    opt_param_ids = {
+        id(param) for group in optimizer.param_groups for param in group["params"]
+    }
+    coupler_param_ids = {id(param) for param in model.coupler.parameters()}
+    assert opt_param_ids == coupler_param_ids
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(2.0e-3)
+    assert optimizer.param_groups[0]["weight_decay"] == pytest.approx(0.25)
 
 
 def test_coupling_net_passes_projected_input_and_auxiliary_residual_to_coupler():
@@ -1338,6 +1416,35 @@ def test_pad_interior_flux_like_rejects_incompatible_shape(tmp_path):
         trainer._pad_interior_flux_like(flux_int, template_flux)
 
 
+def test_stage2_delta_helpers_recover_delta_and_ratio():
+    projected_int = torch.zeros((1, 2, 2, 2), dtype=torch.float64)
+    phi_p = torch.tensor([[[1.0, 2.0], [3.0, 4.0]]], dtype=torch.float64)
+    psi_p = torch.tensor([[[0.5, 1.5], [2.5, 3.5]]], dtype=torch.float64)
+    delta = torch.tensor([[[0.1, 0.2], [0.3, 0.4]]], dtype=torch.float64)
+    projected_int[:, 0] = phi_p
+    projected_int[:, 1] = psi_p.transpose(-1, -2)
+    coupled_int = projected_int.clone()
+    coupled_int[:, 0] = phi_p + delta
+    coupled_int[:, 1] = (psi_p - delta).transpose(-1, -2)
+
+    recovered_delta = CouplingTrainer._delta_from_intermediates(
+        projected_int=projected_int,
+        coupled_int=coupled_int,
+    )
+    ratio = CouplingTrainer._delta_norm_ratio(
+        delta=recovered_delta,
+        projected_int=projected_int,
+        eps=0.0,
+    )
+
+    expected_ratio = torch.linalg.vector_norm(delta.reshape(1, -1), dim=1) / (
+        torch.linalg.vector_norm(phi_p.reshape(1, -1), dim=1)
+        + torch.linalg.vector_norm(psi_p.reshape(1, -1), dim=1)
+    )
+    torch.testing.assert_close(recovered_delta, delta)
+    torch.testing.assert_close(ratio, expected_ratio.mean())
+
+
 def test_single_stage_optimization_resolution_uses_shared_config(tmp_path):
     trainer = CouplingTrainer(
         model=_RawSumFromRhsModel(),  # type: ignore[arg-type]
@@ -1825,6 +1932,135 @@ def test_hybrid_detach_loss_uses_projected_and_coupled_energy_weights(tmp_path):
     )
     assert loss.item() == pytest.approx(metrics["loss_hybrid_detach"])
     assert loss.item() != pytest.approx(99.0 * metrics["loss_hybrid_detach"])
+
+
+def test_stage2_loss_uses_only_coupled_energy_and_reports_diagnostics(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    a_vals[:] = 1.0
+    projected_int = torch.tensor(
+        [
+            [
+                [[1.0, 0.5, 0.25], [0.25, 0.75, 1.25], [1.5, 0.5, 0.75]],
+                [[0.25, 0.75, 1.0], [1.0, 0.25, 0.5], [0.5, 1.25, 0.25]],
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    coupled_int = projected_int.clone()
+    coupled_int[:, 0] = coupled_int[:, 0] + 0.2
+    coupled_int[:, 1] = coupled_int[:, 1] - 0.1
+    model = _HybridFluxModel(projected_int=projected_int, coupled_int=coupled_int)
+    green_kernel = torch.eye(5, dtype=torch.float64).expand(2, 3, 5, 5).clone()
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_enabled=True,
+                l2_weight=99.0,
+                energy_enabled=True,
+                energy_weight=99.0,
+                cross_enabled=True,
+                cross_weight=99.0,
+            ),
+            stage2=CouplingStage2Config(
+                enabled=True,
+                checkpoint_path="dummy_stage1.safetensors",
+                coupled_energy_weight=2.5,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=green_kernel,
+    )
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    expected_loss = 2.5 * metrics["loss_stage2_coupled_energy"]
+    assert metrics["loss_stage2_projected_energy"] > 0.0
+    assert metrics["loss_stage2_coupled_energy"] > 0.0
+    assert metrics["stage2_delta_norm_ratio"] > 0.0
+    assert metrics["stage2_energy_improvement"] == pytest.approx(
+        metrics["loss_stage2_projected_energy"] - metrics["loss_stage2_coupled_energy"]
+    )
+    assert metrics["stage2_relative_improvement"] == pytest.approx(
+        metrics["stage2_energy_improvement"]
+        / (abs(metrics["loss_stage2_projected_energy"]) + 1.0e-12)
+    )
+    assert loss.item() == pytest.approx(expected_loss)
+
+
+def test_stage2_best_checkpoint_policy_still_uses_validation_rel_sol(
+    tmp_path, monkeypatch
+):
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+        coupler=CouplerConfig(enabled=True, hidden_channels=4, depth=1),
+    )
+    trainer = CouplingTrainer(
+        model=CouplingNet(cfg),
+        config=CouplingTrainingConfig(
+            epochs=1,
+            batch_size=1,
+            best_rel_sol_checkpoint=CouplingBestRelSolCheckpointConfig(enabled=True),
+            stage2=CouplingStage2Config(
+                enabled=True,
+                checkpoint_path="dummy_stage1.safetensors",
+            ),
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        model_cfg=cfg,
+    )
+    saved_paths: list[Path] = []
+
+    def _fake_save(path: Path) -> None:
+        saved_paths.append(path)
+
+    monkeypatch.setattr(trainer, "_save_checkpoint", _fake_save)
+
+    best_rel_sol = trainer._maybe_save_best_rel_sol_checkpoint(
+        {
+            "rel_sol": 0.5,
+            "loss_stage2_coupled_energy": 100.0,
+        },
+        best_rel_sol=1.0,
+    )
+    unchanged = trainer._maybe_save_best_rel_sol_checkpoint(
+        {
+            "rel_sol": 0.75,
+            "loss_stage2_coupled_energy": 0.0,
+        },
+        best_rel_sol=best_rel_sol,
+    )
+
+    assert best_rel_sol == pytest.approx(0.5)
+    assert unchanged == pytest.approx(0.5)
+    assert saved_paths == [tmp_path / "coupling_model_adam_best_rel_sol.safetensors"]
 
 
 def test_evaluate_reports_all_three_loss_components(tmp_path):

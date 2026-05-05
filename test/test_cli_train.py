@@ -137,6 +137,19 @@ class TestTrainCLIDatasetConfig:
                     "coupled_energy_weight": 0.5,
                     "detach_coupler_input": False,
                 },
+                "stage2": {
+                    "enabled": True,
+                    "checkpoint_path": "dummy_stage1.pt",
+                    "freeze_main": True,
+                    "train_coupler_only": True,
+                    "coupled_energy_weight": 1.25,
+                    "lr": 2e-4,
+                    "weight_decay": 0.01,
+                    "epochs": 500,
+                    "early_stopping": False,
+                    "log_relative_improvement": True,
+                    "log_delta_norm_ratio": False,
+                },
                 "compile": {
                     "enabled": True,
                 },
@@ -175,6 +188,17 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.hybrid_detach.projected_energy_weight == 2.0
         assert coupling_training_cfg.hybrid_detach.coupled_energy_weight == 0.5
         assert coupling_training_cfg.hybrid_detach.detach_coupler_input is False
+        assert coupling_training_cfg.stage2.enabled is True
+        assert coupling_training_cfg.stage2.checkpoint_path == "dummy_stage1.pt"
+        assert coupling_training_cfg.stage2.freeze_main is True
+        assert coupling_training_cfg.stage2.train_coupler_only is True
+        assert coupling_training_cfg.stage2.coupled_energy_weight == 1.25
+        assert coupling_training_cfg.stage2.lr == 2e-4
+        assert coupling_training_cfg.stage2.weight_decay == 0.01
+        assert coupling_training_cfg.stage2.epochs == 500
+        assert coupling_training_cfg.stage2.early_stopping is False
+        assert coupling_training_cfg.stage2.log_relative_improvement is True
+        assert coupling_training_cfg.stage2.log_delta_norm_ratio is False
         assert coupling_training_cfg.compile.enabled is True
         assert coupling_model_cfg.coupler.enabled is False
         assert not hasattr(coupling_model_cfg, "use_fourier")
@@ -288,6 +312,83 @@ class TestTrainCLIDatasetConfig:
     def test_eval_cli_rejects_non_object_hybrid_detach_config(self):
         with pytest.raises(TypeError, match="coupling_training.hybrid_detach"):
             EvalCouplingCLI._build_coupling_training_config({"hybrid_detach": True})
+
+    def test_missing_stage2_defaults_to_disabled(self):
+        cfg = TrainCLI._build_coupling_training_config({})
+
+        assert cfg.stage2.enabled is False
+        assert cfg.stage2.checkpoint_path is None
+        assert cfg.stage2.freeze_main is True
+        assert cfg.stage2.train_coupler_only is True
+        assert cfg.stage2.coupled_energy_weight == 1.0
+        assert cfg.stage2.lr == 1e-3
+        assert cfg.stage2.weight_decay == 0.0
+        assert cfg.stage2.epochs is None
+        assert cfg.stage2.early_stopping is False
+        assert cfg.stage2.log_relative_improvement is True
+        assert cfg.stage2.log_delta_norm_ratio is True
+
+    def test_parses_stage2_config(self):
+        cfg = TrainCLI._build_coupling_training_config(
+            {
+                "stage2": {
+                    "enabled": True,
+                    "checkpoint_path": "dummy_stage1.pt",
+                    "freeze_main": True,
+                    "train_coupler_only": True,
+                    "coupled_energy_weight": 3.0,
+                    "lr": 5e-4,
+                    "weight_decay": 0.02,
+                    "epochs": 12,
+                    "early_stopping": False,
+                    "log_relative_improvement": False,
+                    "log_delta_norm_ratio": True,
+                }
+            }
+        )
+
+        assert cfg.stage2.enabled is True
+        assert cfg.stage2.checkpoint_path == "dummy_stage1.pt"
+        assert cfg.stage2.coupled_energy_weight == 3.0
+        assert cfg.stage2.lr == 5e-4
+        assert cfg.stage2.weight_decay == 0.02
+        assert cfg.stage2.epochs == 12
+        assert cfg.stage2.early_stopping is False
+        assert cfg.stage2.log_relative_improvement is False
+        assert cfg.stage2.log_delta_norm_ratio is True
+        assert not hasattr(cfg.stage2, "delta_reg_weight")
+        assert not hasattr(cfg.stage2, "delta_regularization")
+        assert not hasattr(cfg.stage2, "delta_smoothness_weight")
+
+    def test_rejects_non_object_stage2_config(self):
+        with pytest.raises(TypeError, match="coupling_training.stage2"):
+            TrainCLI._build_coupling_training_config({"stage2": True})
+
+    def test_eval_cli_parses_stage2_config(self):
+        cfg = EvalCouplingCLI._build_coupling_training_config(
+            {
+                "stage2": {
+                    "enabled": True,
+                    "checkpoint_path": "dummy_stage1.pt",
+                    "coupled_energy_weight": 0.75,
+                    "lr": 1e-4,
+                    "weight_decay": 0.03,
+                    "epochs": 9,
+                }
+            }
+        )
+
+        assert cfg.stage2.enabled is True
+        assert cfg.stage2.checkpoint_path == "dummy_stage1.pt"
+        assert cfg.stage2.coupled_energy_weight == 0.75
+        assert cfg.stage2.lr == 1e-4
+        assert cfg.stage2.weight_decay == 0.03
+        assert cfg.stage2.epochs == 9
+        assert cfg.stage2.early_stopping is False
+
+    def test_eval_cli_rejects_non_object_stage2_config(self):
+        with pytest.raises(TypeError, match="coupling_training.stage2"):
+            EvalCouplingCLI._build_coupling_training_config({"stage2": True})
 
     def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):
         config_path = tmp_path / "config.json"

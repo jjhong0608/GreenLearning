@@ -119,6 +119,23 @@ class CouplingHybridDetachConfig:
 
 
 @dataclass
+class CouplingStage2Config:
+    """Optional Stage 2 coupler-only training from a Stage 1 checkpoint."""
+
+    enabled: bool = False
+    checkpoint_path: str | None = None
+    freeze_main: bool = True
+    train_coupler_only: bool = True
+    coupled_energy_weight: float = 1.0
+    lr: float = 1.0e-3
+    weight_decay: float = 0.0
+    epochs: int | None = None
+    early_stopping: bool = False
+    log_relative_improvement: bool = True
+    log_delta_norm_ratio: bool = True
+
+
+@dataclass
 class CouplingPeriodicCheckpointConfig:
     """Periodic checkpoint settings for CouplingNet Adam training."""
 
@@ -146,6 +163,7 @@ class CouplingTrainingConfig:
     hybrid_detach: CouplingHybridDetachConfig = field(
         default_factory=CouplingHybridDetachConfig
     )
+    stage2: CouplingStage2Config = field(default_factory=CouplingStage2Config)
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
     min_lr: float = 1e-6

@@ -18,6 +18,7 @@ from greenonet.config import (
     CouplingLossTermConfig,
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
+    CouplingStage2Config,
     CouplingTrainingConfig,
     DatasetConfig,
     ModelConfig,
@@ -131,6 +132,7 @@ class EvalCouplingCLI:
             )
         losses_raw = coupling_training_kwargs.pop("losses", None)
         hybrid_detach_raw = coupling_training_kwargs.pop("hybrid_detach", None)
+        stage2_raw = coupling_training_kwargs.pop("stage2", None)
         compile_raw = coupling_training_kwargs.pop("compile", None)
         periodic_raw = coupling_training_kwargs.pop("periodic_checkpoint", None)
         best_rel_sol_raw = coupling_training_kwargs.pop("best_rel_sol_checkpoint", None)
@@ -139,6 +141,9 @@ class EvalCouplingCLI:
         )
         hybrid_detach_cfg = EvalCouplingCLI._build_hybrid_detach_config(
             hybrid_detach_raw, "coupling_training"
+        )
+        stage2_cfg = EvalCouplingCLI._build_stage2_config(
+            stage2_raw, "coupling_training"
         )
         compile_cfg = EvalCouplingCLI._build_compile_config(
             compile_raw, "coupling_training"
@@ -160,6 +165,7 @@ class EvalCouplingCLI:
         return CouplingTrainingConfig(
             losses=losses_cfg,
             hybrid_detach=hybrid_detach_cfg,
+            stage2=stage2_cfg,
             compile=compile_cfg,
             periodic_checkpoint=periodic_cfg,
             best_rel_sol_checkpoint=best_rel_sol_cfg,
@@ -176,6 +182,17 @@ class EvalCouplingCLI:
         if not isinstance(raw_hybrid_detach, dict):
             raise TypeError(f"{section_name}.hybrid_detach must be an object.")
         return CouplingHybridDetachConfig(**dict(raw_hybrid_detach))
+
+    @staticmethod
+    def _build_stage2_config(
+        raw_stage2: object | None,
+        section_name: str,
+    ) -> CouplingStage2Config:
+        if raw_stage2 is None:
+            return CouplingStage2Config()
+        if not isinstance(raw_stage2, dict):
+            raise TypeError(f"{section_name}.stage2 must be an object.")
+        return CouplingStage2Config(**dict(raw_stage2))
 
     @staticmethod
     def _build_coupling_losses_config(
