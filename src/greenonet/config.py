@@ -132,6 +132,7 @@ class CouplingTrainingConfig:
     """Training settings for CouplingNet."""
 
     learning_rate: float = 1e-3
+    source_stencil_lift_learning_rate: float | None = None
     epochs: int = 20
     batch_size: int = 4
     log_interval: int = 1

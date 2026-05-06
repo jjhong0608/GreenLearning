@@ -234,6 +234,22 @@ def _make_linear_source_lift(
     return lift
 
 
+def _make_optimizer_test_coupling_net(*, source_lift_enabled: bool) -> CouplingNet:
+    return CouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=5,
+            trunk_input_dim=2,
+            hidden_dim=8,
+            depth=1,
+            dtype=torch.float64,
+            source_stencil_lift=SourceStencilLiftConfig(
+                enabled=source_lift_enabled,
+                hidden_dim=4,
+            ),
+        )
+    )
+
+
 def test_source_stencil_lift_shape_and_g_normalization():
     torch.set_default_dtype(torch.float64)
     full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
@@ -939,6 +955,104 @@ def test_single_stage_optimization_resolution_uses_shared_config(tmp_path):
     assert single_cfg.learning_rate == 1.25
     assert single_cfg.warmup_epochs == 9
     assert single_cfg.min_lr == 1e-3
+
+
+def test_coupling_optimizer_splits_source_lift_parameter_group(tmp_path):
+    model = _make_optimizer_test_coupling_net(source_lift_enabled=True)
+    trainer = CouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            source_stencil_lift_learning_rate=1.0e-4,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    optimizer = trainer._build_optimizer(trainer.config)
+
+    assert len(optimizer.param_groups) == 2
+    main_group = next(
+        group for group in optimizer.param_groups if group["name"] == "main"
+    )
+    source_group = next(
+        group
+        for group in optimizer.param_groups
+        if group["name"] == "source_stencil_lift"
+    )
+    assert main_group["lr"] == pytest.approx(1.0e-3)
+    assert source_group["lr"] == pytest.approx(1.0e-4)
+
+    source_lift = trainer.model.source_stencil_lift
+    assert source_lift is not None
+    source_expected_ids = {
+        id(param) for param in source_lift.parameters() if param.requires_grad
+    }
+    source_group_ids = {id(param) for param in source_group["params"]}
+    main_group_ids = {id(param) for param in main_group["params"]}
+    trainable_ids = {
+        id(param) for param in trainer.model.parameters() if param.requires_grad
+    }
+
+    assert source_group_ids == source_expected_ids
+    assert main_group_ids.isdisjoint(source_group_ids)
+    assert main_group_ids | source_group_ids == trainable_ids
+
+
+def test_coupling_optimizer_keeps_single_group_without_source_lift_lr(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=False),
+        config=CouplingTrainingConfig(learning_rate=2.0e-3),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    optimizer = trainer._build_optimizer(trainer.config)
+
+    assert len(optimizer.param_groups) == 1
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(2.0e-3)
+
+
+def test_coupling_optimizer_rejects_source_lift_lr_without_source_lift(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=False),
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            source_stencil_lift_learning_rate=1.0e-4,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="source_stencil_lift_learning_rate"):
+        trainer._build_optimizer(trainer.config)
+
+
+def test_coupling_optimizer_rejects_non_positive_source_lift_lr(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=True),
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            source_stencil_lift_learning_rate=0.0,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="source_stencil_lift_learning_rate"):
+        trainer._build_optimizer(trainer.config)
+
+
+def test_coupling_optimizer_rejects_non_positive_main_lr(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=True),
+        config=CouplingTrainingConfig(learning_rate=0.0),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="learning_rate"):
+        trainer._build_optimizer(trainer.config)
 
 
 def test_energy_consistency_loss_zero_for_identical_branch_reconstructions(tmp_path):

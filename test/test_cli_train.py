@@ -123,6 +123,7 @@ class TestTrainCLIDatasetConfig:
                     },
                 },
                 "learning_rate": 5e-4,
+                "source_stencil_lift_learning_rate": 2.5e-5,
                 "epochs": 11,
                 "use_lr_schedule": True,
                 "warmup_epochs": 3,
@@ -159,6 +160,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.losses.cross_consistency.enabled is False
         assert coupling_training_cfg.losses.cross_consistency.weight == 2.0
         assert coupling_training_cfg.learning_rate == 5e-4
+        assert coupling_training_cfg.source_stencil_lift_learning_rate == 2.5e-5
         assert coupling_training_cfg.epochs == 11
         assert coupling_training_cfg.use_lr_schedule is True
         assert coupling_training_cfg.warmup_epochs == 3
@@ -267,6 +269,22 @@ class TestTrainCLIDatasetConfig:
             TypeError, match="coupling_training.stage2 has been removed"
         ):
             TrainCLI._build_coupling_training_config({"stage2": True})
+
+    def test_source_stencil_lift_learning_rate_defaults_to_none(self):
+        cfg = TrainCLI._build_coupling_training_config({})
+
+        assert cfg.source_stencil_lift_learning_rate is None
+
+    def test_eval_cli_parses_source_stencil_lift_learning_rate(self):
+        cfg = EvalCouplingCLI._build_coupling_training_config(
+            {
+                "learning_rate": 1.0e-3,
+                "source_stencil_lift_learning_rate": 5.0e-5,
+            }
+        )
+
+        assert cfg.learning_rate == 1.0e-3
+        assert cfg.source_stencil_lift_learning_rate == 5.0e-5
 
     def test_eval_cli_rejects_removed_hybrid_detach_config(self):
         with pytest.raises(

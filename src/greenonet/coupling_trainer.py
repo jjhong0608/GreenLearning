@@ -496,7 +496,71 @@ class CouplingTrainer(LoggingMixin):
         return self.config
 
     def _build_optimizer(self, optimization_cfg: CouplingTrainingConfig) -> optim.Adam:
-        return optim.Adam(self.model.parameters(), lr=optimization_cfg.learning_rate)
+        if optimization_cfg.learning_rate <= 0.0:
+            raise ValueError("coupling_training.learning_rate must be positive.")
+
+        source_lift_lr = optimization_cfg.source_stencil_lift_learning_rate
+        if source_lift_lr is None:
+            return optim.Adam(
+                self.model.parameters(),
+                lr=optimization_cfg.learning_rate,
+            )
+        if source_lift_lr <= 0.0:
+            raise ValueError(
+                "coupling_training.source_stencil_lift_learning_rate must be positive."
+            )
+
+        module = getattr(self.model, "_orig_mod", self.model)
+        source_lift = getattr(module, "source_stencil_lift", None)
+        if source_lift is None:
+            raise ValueError(
+                "source_stencil_lift_learning_rate requires "
+                "model.source_stencil_lift to be enabled."
+            )
+        if not isinstance(source_lift, torch.nn.Module):
+            raise ValueError("model.source_stencil_lift must be a torch.nn.Module.")
+
+        source_lift_params = [
+            param for param in source_lift.parameters() if param.requires_grad
+        ]
+        if not source_lift_params:
+            raise RuntimeError("source_stencil_lift optimizer group is empty.")
+
+        source_lift_param_ids = {id(param) for param in source_lift_params}
+        main_params = [
+            param
+            for param in self.model.parameters()
+            if param.requires_grad and id(param) not in source_lift_param_ids
+        ]
+        if not main_params:
+            raise RuntimeError("main CouplingNet optimizer group is empty.")
+
+        main_param_ids = {id(param) for param in main_params}
+        trainable_param_ids = {
+            id(param) for param in self.model.parameters() if param.requires_grad
+        }
+        if main_param_ids & source_lift_param_ids:
+            raise RuntimeError("optimizer parameter groups must be disjoint.")
+        if main_param_ids | source_lift_param_ids != trainable_param_ids:
+            raise RuntimeError(
+                "optimizer parameter groups must cover all trainable parameters."
+            )
+
+        return optim.Adam(
+            [
+                {
+                    "params": main_params,
+                    "lr": optimization_cfg.learning_rate,
+                    "name": "main",
+                },
+                {
+                    "params": source_lift_params,
+                    "lr": source_lift_lr,
+                    "name": "source_stencil_lift",
+                },
+            ],
+            lr=optimization_cfg.learning_rate,
+        )
 
     def _build_scheduler(
         self,
