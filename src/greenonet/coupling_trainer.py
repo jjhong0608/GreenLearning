@@ -495,26 +495,39 @@ class CouplingTrainer(LoggingMixin):
     def _optimization_config(self) -> CouplingTrainingConfig:
         return self.config
 
-    def _build_optimizer(self, optimization_cfg: CouplingTrainingConfig) -> optim.Adam:
+    def _build_optimizer(self, optimization_cfg: CouplingTrainingConfig) -> optim.AdamW:
         if optimization_cfg.learning_rate <= 0.0:
             raise ValueError("coupling_training.learning_rate must be positive.")
+        if optimization_cfg.weight_decay < 0.0:
+            raise ValueError("coupling_training.weight_decay must be non-negative.")
 
         source_lift_lr = optimization_cfg.source_stencil_lift_learning_rate
-        if source_lift_lr is None:
-            return optim.Adam(
-                self.model.parameters(),
-                lr=optimization_cfg.learning_rate,
-            )
-        if source_lift_lr <= 0.0:
+        if source_lift_lr is not None and source_lift_lr <= 0.0:
             raise ValueError(
                 "coupling_training.source_stencil_lift_learning_rate must be positive."
+            )
+        source_lift_weight_decay = optimization_cfg.source_stencil_lift_weight_decay
+        if source_lift_weight_decay is not None and source_lift_weight_decay < 0.0:
+            raise ValueError(
+                "coupling_training.source_stencil_lift_weight_decay must be "
+                "non-negative."
+            )
+
+        use_source_lift_group = (
+            source_lift_lr is not None or source_lift_weight_decay is not None
+        )
+        if not use_source_lift_group:
+            return optim.AdamW(
+                self.model.parameters(),
+                lr=optimization_cfg.learning_rate,
+                weight_decay=optimization_cfg.weight_decay,
             )
 
         module = getattr(self.model, "_orig_mod", self.model)
         source_lift = getattr(module, "source_stencil_lift", None)
         if source_lift is None:
             raise ValueError(
-                "source_stencil_lift_learning_rate requires "
+                "source_stencil_lift learning-rate or weight-decay overrides require "
                 "model.source_stencil_lift to be enabled."
             )
         if not isinstance(source_lift, torch.nn.Module):
@@ -546,20 +559,33 @@ class CouplingTrainer(LoggingMixin):
                 "optimizer parameter groups must cover all trainable parameters."
             )
 
-        return optim.Adam(
+        source_group_lr = (
+            source_lift_lr
+            if source_lift_lr is not None
+            else optimization_cfg.learning_rate
+        )
+        source_group_weight_decay = (
+            source_lift_weight_decay
+            if source_lift_weight_decay is not None
+            else optimization_cfg.weight_decay
+        )
+        return optim.AdamW(
             [
                 {
                     "params": main_params,
                     "lr": optimization_cfg.learning_rate,
+                    "weight_decay": optimization_cfg.weight_decay,
                     "name": "main",
                 },
                 {
                     "params": source_lift_params,
-                    "lr": source_lift_lr,
+                    "lr": source_group_lr,
+                    "weight_decay": source_group_weight_decay,
                     "name": "source_stencil_lift",
                 },
             ],
             lr=optimization_cfg.learning_rate,
+            weight_decay=optimization_cfg.weight_decay,
         )
 
     def _build_scheduler(

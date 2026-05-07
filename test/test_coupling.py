@@ -964,6 +964,7 @@ def test_coupling_optimizer_splits_source_lift_parameter_group(tmp_path):
         config=CouplingTrainingConfig(
             learning_rate=1.0e-3,
             source_stencil_lift_learning_rate=1.0e-4,
+            weight_decay=1.0e-2,
         ),
         work_dir=tmp_path,
         green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
@@ -971,6 +972,7 @@ def test_coupling_optimizer_splits_source_lift_parameter_group(tmp_path):
 
     optimizer = trainer._build_optimizer(trainer.config)
 
+    assert isinstance(optimizer, torch.optim.AdamW)
     assert len(optimizer.param_groups) == 2
     main_group = next(
         group for group in optimizer.param_groups if group["name"] == "main"
@@ -982,6 +984,8 @@ def test_coupling_optimizer_splits_source_lift_parameter_group(tmp_path):
     )
     assert main_group["lr"] == pytest.approx(1.0e-3)
     assert source_group["lr"] == pytest.approx(1.0e-4)
+    assert main_group["weight_decay"] == pytest.approx(1.0e-2)
+    assert source_group["weight_decay"] == pytest.approx(1.0e-2)
 
     source_lift = trainer.model.source_stencil_lift
     assert source_lift is not None
@@ -999,18 +1003,74 @@ def test_coupling_optimizer_splits_source_lift_parameter_group(tmp_path):
     assert main_group_ids | source_group_ids == trainable_ids
 
 
-def test_coupling_optimizer_keeps_single_group_without_source_lift_lr(tmp_path):
+def test_coupling_optimizer_source_weight_decay_override_splits_group(tmp_path):
     trainer = CouplingTrainer(
-        model=_make_optimizer_test_coupling_net(source_lift_enabled=False),
-        config=CouplingTrainingConfig(learning_rate=2.0e-3),
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=True),
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            weight_decay=1.0e-2,
+            source_stencil_lift_weight_decay=2.0e-3,
+        ),
         work_dir=tmp_path,
         green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
     )
 
     optimizer = trainer._build_optimizer(trainer.config)
 
+    assert isinstance(optimizer, torch.optim.AdamW)
+    assert len(optimizer.param_groups) == 2
+    main_group = next(
+        group for group in optimizer.param_groups if group["name"] == "main"
+    )
+    source_group = next(
+        group
+        for group in optimizer.param_groups
+        if group["name"] == "source_stencil_lift"
+    )
+    assert main_group["lr"] == pytest.approx(1.0e-3)
+    assert source_group["lr"] == pytest.approx(1.0e-3)
+    assert main_group["weight_decay"] == pytest.approx(1.0e-2)
+    assert source_group["weight_decay"] == pytest.approx(2.0e-3)
+
+
+def test_coupling_optimizer_honors_source_lr_and_weight_decay(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=True),
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            source_stencil_lift_learning_rate=1.0e-4,
+            weight_decay=1.0e-2,
+            source_stencil_lift_weight_decay=2.0e-3,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    optimizer = trainer._build_optimizer(trainer.config)
+    source_group = next(
+        group
+        for group in optimizer.param_groups
+        if group["name"] == "source_stencil_lift"
+    )
+
+    assert source_group["lr"] == pytest.approx(1.0e-4)
+    assert source_group["weight_decay"] == pytest.approx(2.0e-3)
+
+
+def test_coupling_optimizer_keeps_single_group_without_source_lift_lr(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=False),
+        config=CouplingTrainingConfig(learning_rate=2.0e-3, weight_decay=3.0e-2),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    optimizer = trainer._build_optimizer(trainer.config)
+
+    assert isinstance(optimizer, torch.optim.AdamW)
     assert len(optimizer.param_groups) == 1
     assert optimizer.param_groups[0]["lr"] == pytest.approx(2.0e-3)
+    assert optimizer.param_groups[0]["weight_decay"] == pytest.approx(3.0e-2)
 
 
 def test_coupling_optimizer_rejects_source_lift_lr_without_source_lift(tmp_path):
@@ -1024,7 +1084,22 @@ def test_coupling_optimizer_rejects_source_lift_lr_without_source_lift(tmp_path)
         green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
     )
 
-    with pytest.raises(ValueError, match="source_stencil_lift_learning_rate"):
+    with pytest.raises(ValueError, match="source_stencil_lift"):
+        trainer._build_optimizer(trainer.config)
+
+
+def test_coupling_optimizer_rejects_source_weight_decay_without_source_lift(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=False),
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            source_stencil_lift_weight_decay=1.0e-2,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="source_stencil_lift"):
         trainer._build_optimizer(trainer.config)
 
 
@@ -1052,6 +1127,36 @@ def test_coupling_optimizer_rejects_non_positive_main_lr(tmp_path):
     )
 
     with pytest.raises(ValueError, match="learning_rate"):
+        trainer._build_optimizer(trainer.config)
+
+
+def test_coupling_optimizer_rejects_negative_weight_decay(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=True),
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            weight_decay=-1.0e-2,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="weight_decay"):
+        trainer._build_optimizer(trainer.config)
+
+
+def test_coupling_optimizer_rejects_negative_source_weight_decay(tmp_path):
+    trainer = CouplingTrainer(
+        model=_make_optimizer_test_coupling_net(source_lift_enabled=True),
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            source_stencil_lift_weight_decay=-1.0e-2,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="source_stencil_lift_weight_decay"):
         trainer._build_optimizer(trainer.config)
 
 

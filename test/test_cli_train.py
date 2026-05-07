@@ -124,6 +124,8 @@ class TestTrainCLIDatasetConfig:
                 },
                 "learning_rate": 5e-4,
                 "source_stencil_lift_learning_rate": 2.5e-5,
+                "weight_decay": 1.0e-2,
+                "source_stencil_lift_weight_decay": 2.0e-3,
                 "epochs": 11,
                 "use_lr_schedule": True,
                 "warmup_epochs": 3,
@@ -161,6 +163,8 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.losses.cross_consistency.weight == 2.0
         assert coupling_training_cfg.learning_rate == 5e-4
         assert coupling_training_cfg.source_stencil_lift_learning_rate == 2.5e-5
+        assert coupling_training_cfg.weight_decay == 1.0e-2
+        assert coupling_training_cfg.source_stencil_lift_weight_decay == 2.0e-3
         assert coupling_training_cfg.epochs == 11
         assert coupling_training_cfg.use_lr_schedule is True
         assert coupling_training_cfg.warmup_epochs == 3
@@ -274,17 +278,23 @@ class TestTrainCLIDatasetConfig:
         cfg = TrainCLI._build_coupling_training_config({})
 
         assert cfg.source_stencil_lift_learning_rate is None
+        assert cfg.weight_decay == 0.0
+        assert cfg.source_stencil_lift_weight_decay is None
 
     def test_eval_cli_parses_source_stencil_lift_learning_rate(self):
         cfg = EvalCouplingCLI._build_coupling_training_config(
             {
                 "learning_rate": 1.0e-3,
                 "source_stencil_lift_learning_rate": 5.0e-5,
+                "weight_decay": 1.0e-2,
+                "source_stencil_lift_weight_decay": 2.0e-3,
             }
         )
 
         assert cfg.learning_rate == 1.0e-3
         assert cfg.source_stencil_lift_learning_rate == 5.0e-5
+        assert cfg.weight_decay == 1.0e-2
+        assert cfg.source_stencil_lift_weight_decay == 2.0e-3
 
     def test_eval_cli_rejects_removed_hybrid_detach_config(self):
         with pytest.raises(
