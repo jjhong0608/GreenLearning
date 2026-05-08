@@ -200,15 +200,19 @@ def _losses_config(
     )
 
 
-def _rhs_raw_from_canonical_full(full_source: torch.Tensor) -> torch.Tensor:
-    bsz, m_points, m_points_2 = full_source.shape
+def _axis_field_from_canonical_full(full_field: torch.Tensor) -> torch.Tensor:
+    bsz, m_points, m_points_2 = full_field.shape
     if m_points != m_points_2:
-        raise ValueError("full_source must be square.")
+        raise ValueError("full_field must be square.")
     n_lines = m_points - 2
-    rhs_raw = torch.zeros((bsz, 2, n_lines, m_points), dtype=full_source.dtype)
-    rhs_raw[:, 0] = full_source[:, 1:-1, :]
-    rhs_raw[:, 1] = full_source[:, :, 1:-1].transpose(-1, -2)
-    return rhs_raw
+    values = torch.zeros((bsz, 2, n_lines, m_points), dtype=full_field.dtype)
+    values[:, 0] = full_field[:, 1:-1, :]
+    values[:, 1] = full_field[:, :, 1:-1].transpose(-1, -2)
+    return values
+
+
+def _rhs_raw_from_canonical_full(full_source: torch.Tensor) -> torch.Tensor:
+    return _axis_field_from_canonical_full(full_source)
 
 
 def _make_linear_source_lift(
@@ -254,19 +258,43 @@ def test_source_stencil_lift_shape_and_g_normalization():
     torch.set_default_dtype(torch.float64)
     full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
     rhs_raw = _rhs_raw_from_canonical_full(full)
+    a_vals = _axis_field_from_canonical_full(2.0 + full)
     lift = _make_linear_source_lift(use_g_normalization=True)
 
-    lifted = lift(rhs_raw)
-    diagnostics = lift.lift_with_diagnostics(rhs_raw)[1]
+    lifted = lift(rhs_raw, a_vals)
+    diagnostics = lift.lift_with_diagnostics(rhs_raw, a_vals)[1]
 
     assert lifted.shape == (1, 2, 3, 3)
     torch.testing.assert_close(lifted[:, 1], lifted[:, 0].transpose(-1, -2))
     assert diagnostics["source_lift_g_rms"].item() == pytest.approx(1.0)
 
 
+def test_source_stencil_lift_feature_contract_uses_normalized_f_and_raw_a():
+    torch.set_default_dtype(torch.float64)
+    source_full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
+    a_full = torch.arange(101, 126, dtype=torch.float64).reshape(1, 5, 5)
+    lift = _make_linear_source_lift(use_g_normalization=False)
+
+    features, f_hat = lift._build_stencil_features(
+        _rhs_raw_from_canonical_full(source_full),
+        _axis_field_from_canonical_full(a_full),
+    )
+
+    f_int = source_full[:, 1:-1, 1:-1]
+    scale = torch.sqrt(torch.mean(f_int * f_int, dim=(-1, -2), keepdim=True) + lift.eps)
+    expected_f_stencil = lift._gather_5_stencil(source_full / scale)
+    expected_a_stencil = lift._gather_5_stencil(a_full)
+    expected_features = torch.cat((expected_f_stencil, expected_a_stencil), dim=-1)
+
+    assert features.shape == (1, 3, 3, 10)
+    torch.testing.assert_close(features, expected_features)
+    torch.testing.assert_close(f_hat, f_int / scale)
+
+
 def test_source_stencil_lift_uses_boundaries_but_ignores_corners():
     torch.set_default_dtype(torch.float64)
     full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
+    a_full = full + 10.0
     lift = _make_linear_source_lift(use_g_normalization=False)
 
     corner_changed = full.clone()
@@ -278,13 +306,45 @@ def test_source_stencil_lift_uses_boundaries_but_ignores_corners():
     boundary_changed = full.clone()
     boundary_changed[:, 1, 0] = boundary_changed[:, 1, 0] + 50.0
 
-    base = lift(_rhs_raw_from_canonical_full(full))
-    from_corners = lift(_rhs_raw_from_canonical_full(corner_changed))
-    from_boundary = lift(_rhs_raw_from_canonical_full(boundary_changed))
+    a_corner_changed = a_full.clone()
+    a_corner_changed[:, 0, 0] = 1.0e6
+    a_boundary_changed = a_full.clone()
+    a_boundary_changed[:, 1, 0] = a_boundary_changed[:, 1, 0] + 50.0
+
+    a_vals = _axis_field_from_canonical_full(a_full)
+    base = lift(_rhs_raw_from_canonical_full(full), a_vals)
+    from_corners = lift(_rhs_raw_from_canonical_full(corner_changed), a_vals)
+    from_boundary = lift(_rhs_raw_from_canonical_full(boundary_changed), a_vals)
+    from_a_corners = lift(
+        _rhs_raw_from_canonical_full(full),
+        _axis_field_from_canonical_full(a_corner_changed),
+    )
+    from_a_boundary = lift(
+        _rhs_raw_from_canonical_full(full),
+        _axis_field_from_canonical_full(a_boundary_changed),
+    )
 
     torch.testing.assert_close(base, from_corners)
+    torch.testing.assert_close(base, from_a_corners)
     assert not torch.allclose(base[:, 0, 0, 0], from_boundary[:, 0, 0, 0])
+    assert not torch.allclose(base[:, 0, 0, 0], from_a_boundary[:, 0, 0, 0])
     torch.testing.assert_close(base[:, 0, :, 1:], from_boundary[:, 0, :, 1:])
+    torch.testing.assert_close(base[:, 0, :, 1:], from_a_boundary[:, 0, :, 1:])
+
+
+def test_source_stencil_lift_uses_raw_a_channel_without_normalization():
+    torch.set_default_dtype(torch.float64)
+    source_full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
+    a_full = torch.ones((1, 5, 5), dtype=torch.float64) * 2.0
+    lift = _make_linear_source_lift(use_g_normalization=False)
+    rhs_raw = _rhs_raw_from_canonical_full(source_full)
+
+    base = lift(rhs_raw, _axis_field_from_canonical_full(a_full))
+    changed = lift(rhs_raw, _axis_field_from_canonical_full(a_full + 3.0))
+    scaled = lift(rhs_raw, _axis_field_from_canonical_full(4.0 * a_full))
+
+    assert not torch.allclose(base, changed)
+    assert not torch.allclose(base, scaled)
 
 
 def test_coupling_net_source_branch_input_dimension_changes_only_when_enabled():
@@ -299,13 +359,17 @@ def test_coupling_net_source_branch_input_dimension_changes_only_when_enabled():
     disabled_rhs_first = disabled.branch_rhs.net[0]
     enabled_rhs_first = enabled.branch_rhs.net[0]
     enabled_a_first = enabled.branch_a.net[0]
+    enabled_lift_first = enabled.source_stencil_lift.encoder[0]
 
     assert isinstance(disabled_rhs_first, nn.Linear)
     assert isinstance(enabled_rhs_first, nn.Linear)
     assert isinstance(enabled_a_first, nn.Linear)
+    assert enabled.source_stencil_lift is not None
+    assert isinstance(enabled_lift_first, nn.Linear)
     assert disabled_rhs_first.in_features == 5
     assert enabled_rhs_first.in_features == 3
     assert enabled_a_first.in_features == 5
+    assert enabled_lift_first.in_features == 10
 
 
 def test_coupling_net_source_lift_rejects_too_short_branch_input():
@@ -353,6 +417,72 @@ def test_coupling_net_source_lift_keeps_physical_rhs_for_projection():
     phi = out[:, 0, :, 1:-1]
     psi = out[:, 1, :, 1:-1].transpose(-1, -2)
     torch.testing.assert_close(phi + psi, rhs_raw[:, 0, :, 1:-1])
+
+
+def test_coupling_net_enabled_source_lift_uses_single_encoded_branch():
+    class _InspectSourceLift(nn.Module):
+        def forward(self, rhs_raw: torch.Tensor, a_vals: torch.Tensor) -> torch.Tensor:
+            assert rhs_raw.shape == a_vals.shape
+            bsz, axis, n_lines, m_points = rhs_raw.shape
+            return torch.ones(
+                (bsz, axis, n_lines, m_points - 2),
+                dtype=rhs_raw.dtype,
+                device=rhs_raw.device,
+            )
+
+    class _FailBranch(nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            raise AssertionError(
+                "branch_a should not be used when source lift is enabled"
+            )
+
+    class _OnesBranch(nn.Module):
+        def __init__(self, hidden_dim: int) -> None:
+            super().__init__()
+            self.hidden_dim = hidden_dim
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.ones(
+                (x.shape[0], self.hidden_dim),
+                dtype=x.dtype,
+                device=x.device,
+            )
+
+    torch.set_default_dtype(torch.float64)
+    bsz = 1
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        trunk_input_dim=2,
+        hidden_dim=4,
+        depth=1,
+        dtype=torch.float64,
+        source_stencil_lift=SourceStencilLiftConfig(enabled=True, hidden_dim=4),
+    )
+    model = CouplingNet(cfg)
+    model.source_stencil_lift = _InspectSourceLift()  # type: ignore[assignment]
+    model.branch_a = _FailBranch()
+    model.branch_rhs = _OnesBranch(cfg.hidden_dim)
+    model.trunk = _OnesBranch(cfg.hidden_dim)
+
+    coords = torch.zeros((2, n, m, 2), dtype=torch.float64)
+    a_vals = torch.ones((bsz, 2, n, m), dtype=torch.float64)
+    zeros = torch.zeros_like(a_vals)
+    rhs_raw = torch.zeros_like(a_vals)
+    rhs_norm = torch.ones((bsz, 2, n), dtype=torch.float64)
+
+    out = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=zeros,
+        c_vals=zeros,
+        rhs_raw=rhs_raw,
+        rhs_tilde=zeros,
+        rhs_norm=rhs_norm,
+    )
+
+    assert out.shape == (bsz, 2, n, m)
 
 
 def test_coupling_dataset_shapes(tmp_path):
@@ -463,6 +593,50 @@ def test_coupling_model_backprop_through_shared_encoder():
     assert _has_grad(model.branch_a)
     assert _has_grad(model.branch_rhs)
     assert _has_grad(model.trunk)
+
+
+def test_coupling_model_enabled_source_lift_backprop_skips_branch_a():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        source_stencil_lift=SourceStencilLiftConfig(enabled=True, hidden_dim=4),
+    )
+    model = CouplingNet(cfg)
+
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    a_vals = torch.rand(1, 2, 1, 3, dtype=torch.float64) + 1.0
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1, keepdim=False).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+    loss = projected_flux.square().sum()
+    loss.backward()
+
+    def _has_grad(module: nn.Module) -> bool:
+        return any(
+            parameter.grad is not None
+            and torch.count_nonzero(parameter.grad).item() > 0
+            for parameter in module.parameters()
+        )
+
+    assert projected_flux.shape == (1, 2, 1, 3)
+    assert model.source_stencil_lift is not None
+    assert _has_grad(model.source_stencil_lift)
+    assert _has_grad(model.branch_rhs)
+    assert _has_grad(model.trunk)
+    assert not _has_grad(model.branch_a)
 
 
 def _make_projection_coords(n_lines: int, dtype: torch.dtype = torch.float64):

@@ -266,7 +266,9 @@ class CouplingTrainer(LoggingMixin):
     def _metric_accumulator(cls, fill_value: float) -> dict[str, float]:
         return {key: fill_value for key in cls._METRIC_KEYS}
 
-    def _source_lift_metrics(self, rhs_raw: torch.Tensor) -> dict[str, float]:
+    def _source_lift_metrics(
+        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    ) -> dict[str, float]:
         nan = float("nan")
         default = {
             "source_lift_corr_g_f": nan,
@@ -278,7 +280,7 @@ class CouplingTrainer(LoggingMixin):
         if not callable(diagnostics_fn):
             return default
         with torch.no_grad():
-            diagnostics = diagnostics_fn(rhs_raw)
+            diagnostics = diagnostics_fn(rhs_raw, a_vals)
         if not diagnostics:
             return default
         values = dict(default)
@@ -417,7 +419,7 @@ class CouplingTrainer(LoggingMixin):
         if w_cross != 0.0:
             loss = loss + w_cross * loss_cross_consistency
 
-        source_lift_metrics = self._source_lift_metrics(rhs_raw)
+        source_lift_metrics = self._source_lift_metrics(rhs_raw, a_vals)
         metrics = {
             "loss": float(loss.detach().item()),
             "loss_l2_consistency": float(loss_cons.detach().item()),

@@ -56,9 +56,11 @@ class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
 
 class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
-    """Input-side learned scalar source lift from canonical five-stencils."""
+    """Input-side learned scalar branch lift from source/a five-stencils."""
 
-    stencil_features: int = 5
+    stencil_positions: int = 5
+    stencil_channels: int = 2
+    stencil_features: int = stencil_positions * stencil_channels
 
     def __init__(self, config: SourceStencilLiftConfig) -> None:
         super().__init__()
@@ -86,31 +88,42 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         self.encoder = nn.Sequential(*layers)
 
     @staticmethod
-    def _validate_rhs_raw(rhs_raw: torch.Tensor) -> tuple[int, int, int]:
-        if rhs_raw.dim() != 4:
-            raise ValueError("rhs_raw must have shape (B, 2, N, N + 2).")
-        bsz, axis, n_lines, m_points = rhs_raw.shape
+    def _validate_axis_field(
+        values: torch.Tensor, field_name: str
+    ) -> tuple[int, int, int]:
+        if values.dim() != 4:
+            raise ValueError(f"{field_name} must have shape (B, 2, N, N + 2).")
+        bsz, axis, n_lines, m_points = values.shape
         if axis != 2:
-            raise ValueError(f"Expected rhs_raw axis dimension 2, got {axis}.")
+            raise ValueError(f"Expected {field_name} axis dimension 2, got {axis}.")
         if n_lines + 2 != m_points:
             raise ValueError(
-                "rhs_raw must have n_lines + 2 == m_points "
+                f"{field_name} must have n_lines + 2 == m_points "
                 f"(got n_lines={n_lines}, m_points={m_points})."
             )
         return bsz, n_lines, m_points
 
-    def _build_canonical_full_source(self, rhs_raw: torch.Tensor) -> torch.Tensor:
-        """Reconstruct canonical full source grid with zero corners."""
-        bsz, _n_lines, m_points = self._validate_rhs_raw(rhs_raw)
+    def _validate_rhs_raw(self, rhs_raw: torch.Tensor) -> tuple[int, int, int]:
+        return self._validate_axis_field(rhs_raw, "rhs_raw")
+
+    def _build_canonical_full_field(
+        self, values: torch.Tensor, field_name: str
+    ) -> torch.Tensor:
+        """Reconstruct a canonical full grid with zero corners."""
+        bsz, _n_lines, m_points = self._validate_axis_field(values, field_name)
         full = torch.zeros(
             (bsz, m_points, m_points),
-            dtype=rhs_raw.dtype,
-            device=rhs_raw.device,
+            dtype=values.dtype,
+            device=values.device,
         )
-        full[:, 1:-1, :] = rhs_raw[:, 0]
-        full[:, 0, 1:-1] = rhs_raw[:, 1, :, 0]
-        full[:, -1, 1:-1] = rhs_raw[:, 1, :, -1]
+        full[:, 1:-1, :] = values[:, 0]
+        full[:, 0, 1:-1] = values[:, 1, :, 0]
+        full[:, -1, 1:-1] = values[:, 1, :, -1]
         return full
+
+    def _build_canonical_full_source(self, rhs_raw: torch.Tensor) -> torch.Tensor:
+        """Reconstruct canonical full source grid with zero corners."""
+        return self._build_canonical_full_field(rhs_raw, "rhs_raw")
 
     @staticmethod
     def _gather_5_stencil(full_source: torch.Tensor) -> torch.Tensor:
@@ -122,16 +135,32 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         south = full_source[:, :-2, 1:-1]
         return torch.stack((center, east, west, north, south), dim=-1)
 
-    def lift_with_diagnostics(
-        self, rhs_raw: torch.Tensor
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def _build_stencil_features(
+        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        source_shape = self._validate_rhs_raw(rhs_raw)
+        a_shape = self._validate_axis_field(a_vals, "a_vals")
+        if a_shape != source_shape:
+            raise ValueError(
+                "a_vals must match rhs_raw shape metadata "
+                f"(got rhs={source_shape}, a={a_shape})."
+            )
+
         full_source = self._build_canonical_full_source(rhs_raw)
+        full_a = self._build_canonical_full_field(a_vals, "a_vals")
         f_int = full_source[:, 1:-1, 1:-1]
         scale = torch.sqrt(
             torch.mean(f_int * f_int, dim=(-1, -2), keepdim=True) + self.eps
         )
-        normalized_full = full_source / scale
-        stencil = self._gather_5_stencil(normalized_full)
+        normalized_source = full_source / scale
+        source_stencil = self._gather_5_stencil(normalized_source)
+        a_stencil = self._gather_5_stencil(full_a)
+        return torch.cat((source_stencil, a_stencil), dim=-1), f_int / scale
+
+    def lift_with_diagnostics(
+        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        stencil, f_hat = self._build_stencil_features(rhs_raw, a_vals)
         bsz, n_lines, n_inner, _features = stencil.shape
         g_raw = cast(
             torch.Tensor,
@@ -154,7 +183,6 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         lifted[:, 0] = g
         lifted[:, 1] = g.transpose(-1, -2)
 
-        f_hat = f_int / scale
         g_flat = g.reshape(bsz, -1)
         f_flat = f_hat.reshape(bsz, -1)
         inner = torch.sum(g_flat * f_flat, dim=-1)
@@ -172,8 +200,8 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         }
         return lifted, diagnostics
 
-    def forward(self, rhs_raw: torch.Tensor) -> torch.Tensor:
-        lifted, _diagnostics = self.lift_with_diagnostics(rhs_raw)
+    def forward(self, rhs_raw: torch.Tensor, a_vals: torch.Tensor) -> torch.Tensor:
+        lifted, _diagnostics = self.lift_with_diagnostics(rhs_raw, a_vals)
         return lifted
 
 
@@ -395,17 +423,21 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 f"Expected n_lines + 2 == m_points (got n_lines={n_lines}, m_points={m_points})."
             )
 
-        branch_a_in = a_vals.reshape(b * axis * n_lines, m_points)
         if self.source_stencil_lift is None:
+            branch_a_in = a_vals.reshape(b * axis * n_lines, m_points)
             branch_rhs_source = rhs_tilde
+            branch_r_in = branch_rhs_source.reshape(
+                b * axis * n_lines, self.branch_rhs_input_dim
+            )
+            branch_a_out = self.branch_a(branch_a_in)
+            branch_r_out = self.branch_rhs(branch_r_in)
+            branch_feat = branch_a_out * branch_r_out
         else:
-            branch_rhs_source = self.source_stencil_lift(rhs_raw)
-        branch_r_in = branch_rhs_source.reshape(
-            b * axis * n_lines, self.branch_rhs_input_dim
-        )
-        branch_a_out = self.branch_a(branch_a_in)
-        branch_r_out = self.branch_rhs(branch_r_in)
-        branch_feat = branch_a_out * branch_r_out
+            branch_rhs_source = self.source_stencil_lift(rhs_raw, a_vals)
+            branch_r_in = branch_rhs_source.reshape(
+                b * axis * n_lines, self.branch_rhs_input_dim
+            )
+            branch_feat = self.branch_rhs(branch_r_in)
         branch_feat = branch_feat.unsqueeze(-1)
 
         coords_int = coords[:, :, 1:-1, :]
@@ -432,8 +464,13 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         output_flux[:, :, :, 1:-1] = projected_int
         return output_flux
 
-    def source_lift_diagnostics(self, rhs_raw: torch.Tensor) -> dict[str, torch.Tensor]:
+    def source_lift_diagnostics(
+        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
         if self.source_stencil_lift is None:
             return {}
-        _lifted, diagnostics = self.source_stencil_lift.lift_with_diagnostics(rhs_raw)
+        _lifted, diagnostics = self.source_stencil_lift.lift_with_diagnostics(
+            rhs_raw,
+            a_vals,
+        )
         return diagnostics
