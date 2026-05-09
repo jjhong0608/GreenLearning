@@ -617,6 +617,22 @@ class CouplingTrainer(LoggingMixin):
 
         return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
+    def _clip_gradients_if_enabled(
+        self,
+        optimization_cfg: CouplingTrainingConfig,
+    ) -> torch.Tensor | None:
+        max_norm = optimization_cfg.gradient_clip_max_norm
+        if max_norm is None:
+            return None
+        if max_norm <= 0.0:
+            raise ValueError(
+                "coupling_training.gradient_clip_max_norm must be positive or null."
+            )
+        return torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(),
+            max_norm=max_norm,
+        )
+
     def _evaluate_loader(
         self,
         loader: DataLoader[CouplingBatch],
@@ -703,6 +719,7 @@ class CouplingTrainer(LoggingMixin):
                     c_vals,
                 )
                 loss.backward()
+                self._clip_gradients_if_enabled(optimization_cfg)
                 optimizer.step()
                 epoch_losses.append(loss.detach().item())
                 for key in accum:

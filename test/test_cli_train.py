@@ -126,6 +126,7 @@ class TestTrainCLIDatasetConfig:
                 "source_stencil_lift_learning_rate": 2.5e-5,
                 "weight_decay": 1.0e-2,
                 "source_stencil_lift_weight_decay": 2.0e-3,
+                "gradient_clip_max_norm": 0.75,
                 "epochs": 11,
                 "use_lr_schedule": True,
                 "warmup_epochs": 3,
@@ -165,6 +166,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.source_stencil_lift_learning_rate == 2.5e-5
         assert coupling_training_cfg.weight_decay == 1.0e-2
         assert coupling_training_cfg.source_stencil_lift_weight_decay == 2.0e-3
+        assert coupling_training_cfg.gradient_clip_max_norm == 0.75
         assert coupling_training_cfg.epochs == 11
         assert coupling_training_cfg.use_lr_schedule is True
         assert coupling_training_cfg.warmup_epochs == 3
@@ -194,6 +196,7 @@ class TestTrainCLIDatasetConfig:
                 "smooth_mask_eps": 1e-9,
                 "source_stencil_lift": {
                     "enabled": True,
+                    "encoder_type": "linear",
                     "hidden_dim": 48,
                     "depth": 2,
                     "activation": "gelu",
@@ -222,6 +225,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.smooth_mask_normalize is False
         assert coupling_model_cfg.smooth_mask_eps == 1e-9
         assert source_lift.enabled is True
+        assert source_lift.encoder_type == "linear"
         assert source_lift.hidden_dim == 48
         assert source_lift.depth == 2
         assert source_lift.activation == "gelu"
@@ -280,6 +284,12 @@ class TestTrainCLIDatasetConfig:
         assert cfg.source_stencil_lift_learning_rate is None
         assert cfg.weight_decay == 0.0
         assert cfg.source_stencil_lift_weight_decay is None
+        assert cfg.gradient_clip_max_norm == 1.0
+
+    def test_coupling_gradient_clip_max_norm_can_be_disabled(self):
+        cfg = TrainCLI._build_coupling_training_config({"gradient_clip_max_norm": None})
+
+        assert cfg.gradient_clip_max_norm is None
 
     def test_eval_cli_parses_source_stencil_lift_learning_rate(self):
         cfg = EvalCouplingCLI._build_coupling_training_config(
@@ -288,6 +298,7 @@ class TestTrainCLIDatasetConfig:
                 "source_stencil_lift_learning_rate": 5.0e-5,
                 "weight_decay": 1.0e-2,
                 "source_stencil_lift_weight_decay": 2.0e-3,
+                "gradient_clip_max_norm": 0.5,
             }
         )
 
@@ -295,6 +306,7 @@ class TestTrainCLIDatasetConfig:
         assert cfg.source_stencil_lift_learning_rate == 5.0e-5
         assert cfg.weight_decay == 1.0e-2
         assert cfg.source_stencil_lift_weight_decay == 2.0e-3
+        assert cfg.gradient_clip_max_norm == 0.5
 
     def test_eval_cli_rejects_removed_hybrid_detach_config(self):
         with pytest.raises(
@@ -312,6 +324,7 @@ class TestTrainCLIDatasetConfig:
         cfg = TrainCLI._build_source_stencil_lift_config(None, "coupling_model")
 
         assert cfg.enabled is False
+        assert cfg.encoder_type == "mlp"
         assert cfg.hidden_dim == 32
         assert cfg.depth == 2
         assert cfg.activation == "gelu"
@@ -327,7 +340,7 @@ class TestTrainCLIDatasetConfig:
             "smooth_mask_normalize": False,
             "smooth_mask_eps": 1e-9,
             "source_stencil_lift": EvalCouplingCLI._build_source_stencil_lift_config(
-                {"enabled": True, "hidden_dim": 16},
+                {"enabled": True, "encoder_type": "linear", "hidden_dim": 16},
                 "coupling_model",
             ),
         }
@@ -339,6 +352,7 @@ class TestTrainCLIDatasetConfig:
         assert model_cfg.smooth_mask_normalize is False
         assert model_cfg.smooth_mask_eps == 1e-9
         assert model_cfg.source_stencil_lift.enabled is True
+        assert model_cfg.source_stencil_lift.encoder_type == "linear"
         assert model_cfg.source_stencil_lift.hidden_dim == 16
 
     def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):

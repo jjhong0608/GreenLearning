@@ -72,19 +72,32 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
             raise ValueError("source_stencil_lift.dropout must be non-negative.")
         if config.eps <= 0.0:
             raise ValueError("source_stencil_lift.eps must be positive.")
+        encoder_type = config.encoder_type.lower()
+        if encoder_type not in {"linear", "mlp"}:
+            raise ValueError(
+                "source_stencil_lift.encoder_type must be 'linear' or 'mlp'."
+            )
 
+        self.encoder_type = encoder_type
         self.use_g_normalization = bool(config.use_g_normalization)
         self.eps = float(config.eps)
 
-        layers: List[nn.Module] = []
-        in_dim = self.stencil_features
-        for _ in range(config.depth):
-            layers.append(nn.Linear(in_dim, config.hidden_dim, bias=config.use_bias))
-            layers.append(self.build_activation(config.activation))
-            if config.dropout > 0.0:
-                layers.append(nn.Dropout(config.dropout))
-            in_dim = config.hidden_dim
-        layers.append(nn.Linear(in_dim, 1, bias=config.use_bias))
+        if encoder_type == "linear":
+            layers: List[nn.Module] = [
+                nn.Linear(self.stencil_features, 1, bias=config.use_bias)
+            ]
+        else:
+            layers = []
+            in_dim = self.stencil_features
+            for _ in range(config.depth):
+                layers.append(
+                    nn.Linear(in_dim, config.hidden_dim, bias=config.use_bias)
+                )
+                layers.append(self.build_activation(config.activation))
+                if config.dropout > 0.0:
+                    layers.append(nn.Dropout(config.dropout))
+                in_dim = config.hidden_dim
+            layers.append(nn.Linear(in_dim, 1, bias=config.use_bias))
         self.encoder = nn.Sequential(*layers)
 
     @staticmethod

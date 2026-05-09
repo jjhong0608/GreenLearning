@@ -112,7 +112,11 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
         balance_projection="smooth_mask",
         smooth_mask_normalize=False,
         smooth_mask_eps=1e-9,
-        source_stencil_lift=SourceStencilLiftConfig(enabled=True, hidden_dim=32),
+        source_stencil_lift=SourceStencilLiftConfig(
+            enabled=True,
+            encoder_type="linear",
+            hidden_dim=32,
+        ),
     )
     model = CouplingNet(cfg)
     path = tmp_path / "coupling_source_lift.safetensors"
@@ -128,6 +132,7 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
     assert loaded_cfg.smooth_mask_normalize is False
     assert loaded_cfg.smooth_mask_eps == 1e-9
     assert loaded_cfg.source_stencil_lift.enabled is True
+    assert loaded_cfg.source_stencil_lift.encoder_type == "linear"
     assert loaded_cfg.source_stencil_lift.hidden_dim == 32
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 

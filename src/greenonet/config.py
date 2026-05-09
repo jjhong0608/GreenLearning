@@ -53,6 +53,7 @@ class SourceStencilLiftConfig:
     """Optional input-side learned source lift for CouplingNet."""
 
     enabled: bool = False
+    encoder_type: Literal["linear", "mlp", "MLP"] = "mlp"
     hidden_dim: int = 32
     depth: int = 2
     activation: Literal["tanh", "relu", "gelu", "rational"] = "gelu"
@@ -135,6 +136,7 @@ class CouplingTrainingConfig:
     source_stencil_lift_learning_rate: float | None = None
     weight_decay: float = 0.0
     source_stencil_lift_weight_decay: float | None = None
+    gradient_clip_max_norm: float | None = 1.0
     epochs: int = 20
     batch_size: int = 4
     log_interval: int = 1

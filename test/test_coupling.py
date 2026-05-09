@@ -221,6 +221,7 @@ def _make_linear_source_lift(
     lift = FiveStencilSourceLift(
         SourceStencilLiftConfig(
             enabled=True,
+            encoder_type="linear",
             hidden_dim=1,
             depth=1,
             activation="relu",
@@ -228,13 +229,11 @@ def _make_linear_source_lift(
             use_g_normalization=use_g_normalization,
         )
     ).to(dtype=torch.float64)
-    first = lift.encoder[0]
-    final = lift.encoder[-1]
-    assert isinstance(first, nn.Linear)
-    assert isinstance(final, nn.Linear)
+    only = lift.encoder[0]
+    assert len(lift.encoder) == 1
+    assert isinstance(only, nn.Linear)
     with torch.no_grad():
-        first.weight.fill_(1.0)
-        final.weight.fill_(1.0)
+        only.weight.fill_(1.0)
     return lift
 
 
@@ -252,6 +251,62 @@ def _make_optimizer_test_coupling_net(*, source_lift_enabled: bool) -> CouplingN
             ),
         )
     )
+
+
+def test_source_stencil_lift_default_encoder_is_mlp():
+    cfg = SourceStencilLiftConfig(enabled=True)
+    lift = FiveStencilSourceLift(cfg)
+
+    linear_layers = [module for module in lift.encoder if isinstance(module, nn.Linear)]
+
+    assert lift.encoder_type == "mlp"
+    assert len(linear_layers) == cfg.depth + 1
+    assert linear_layers[0].in_features == lift.stencil_features
+    assert linear_layers[0].out_features == cfg.hidden_dim
+    assert linear_layers[-1].in_features == cfg.hidden_dim
+    assert linear_layers[-1].out_features == 1
+
+
+def test_source_stencil_lift_mlp_encoder_accepts_uppercase_config():
+    lift = FiveStencilSourceLift(
+        SourceStencilLiftConfig(enabled=True, encoder_type="MLP")
+    )
+
+    assert lift.encoder_type == "mlp"
+
+
+def test_source_stencil_lift_linear_encoder_has_single_affine_layer():
+    torch.set_default_dtype(torch.float64)
+    lift = FiveStencilSourceLift(
+        SourceStencilLiftConfig(
+            enabled=True,
+            encoder_type="linear",
+            hidden_dim=7,
+            depth=3,
+            use_bias=False,
+        )
+    ).to(dtype=torch.float64)
+    only = lift.encoder[0]
+
+    assert lift.encoder_type == "linear"
+    assert len(lift.encoder) == 1
+    assert isinstance(only, nn.Linear)
+    assert only.in_features == lift.stencil_features
+    assert only.out_features == 1
+    assert only.bias is None
+
+    full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
+    lifted = lift(
+        _rhs_raw_from_canonical_full(full),
+        _axis_field_from_canonical_full(full + 2.0),
+    )
+
+    assert lifted.shape == (1, 2, 3, 3)
+
+
+def test_source_stencil_lift_rejects_invalid_encoder_type():
+    with pytest.raises(ValueError, match="encoder_type"):
+        FiveStencilSourceLift(SourceStencilLiftConfig(enabled=True, encoder_type="cnn"))
 
 
 def test_source_stencil_lift_shape_and_g_normalization():
@@ -1245,6 +1300,83 @@ def test_coupling_optimizer_keeps_single_group_without_source_lift_lr(tmp_path):
     assert len(optimizer.param_groups) == 1
     assert optimizer.param_groups[0]["lr"] == pytest.approx(2.0e-3)
     assert optimizer.param_groups[0]["weight_decay"] == pytest.approx(3.0e-2)
+
+
+def _manual_global_grad_norm(module: nn.Module) -> torch.Tensor:
+    grads = [
+        param.grad.reshape(-1)
+        for param in module.parameters()
+        if param.grad is not None
+    ]
+    if not grads:
+        return torch.tensor(0.0, dtype=torch.float64)
+    return torch.linalg.vector_norm(torch.cat(grads), ord=2)
+
+
+def test_coupling_trainer_default_gradient_clipping_uses_max_norm_one(tmp_path):
+    model = nn.Linear(2, 1, bias=False).to(dtype=torch.float64)
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    for param in model.parameters():
+        param.grad = torch.full_like(param, 10.0)
+
+    returned_norm = trainer._clip_gradients_if_enabled(trainer.config)
+
+    assert returned_norm is not None
+    assert returned_norm.item() > 1.0
+    assert _manual_global_grad_norm(model).item() <= 1.0 + 1.0e-12
+
+
+def test_coupling_trainer_custom_gradient_clipping_max_norm(tmp_path):
+    model = nn.Linear(3, 1, bias=False).to(dtype=torch.float64)
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(gradient_clip_max_norm=0.25),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    for param in model.parameters():
+        param.grad = torch.full_like(param, 5.0)
+
+    returned_norm = trainer._clip_gradients_if_enabled(trainer.config)
+
+    assert returned_norm is not None
+    assert returned_norm.item() > 0.25
+    assert _manual_global_grad_norm(model).item() <= 0.25 + 1.0e-12
+
+
+def test_coupling_trainer_gradient_clipping_none_leaves_gradients_unchanged(tmp_path):
+    model = nn.Linear(2, 1, bias=False).to(dtype=torch.float64)
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(gradient_clip_max_norm=None),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    for param in model.parameters():
+        param.grad = torch.full_like(param, 3.0)
+    before = _manual_global_grad_norm(model)
+
+    returned_norm = trainer._clip_gradients_if_enabled(trainer.config)
+
+    assert returned_norm is None
+    torch.testing.assert_close(_manual_global_grad_norm(model), before)
+
+
+def test_coupling_trainer_rejects_non_positive_gradient_clip_max_norm(tmp_path):
+    trainer = CouplingTrainer(
+        model=nn.Linear(2, 1).to(dtype=torch.float64),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(gradient_clip_max_norm=0.0),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="gradient_clip_max_norm"):
+        trainer._clip_gradients_if_enabled(trainer.config)
 
 
 def test_coupling_optimizer_rejects_source_lift_lr_without_source_lift(tmp_path):
