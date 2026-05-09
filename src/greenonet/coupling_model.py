@@ -56,11 +56,10 @@ class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
 
 
 class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
-    """Input-side learned scalar branch lift from source/a five-stencils."""
+    """Input-side learned scalar branch lift from source/coefficient stencils."""
 
     stencil_positions: int = 5
-    stencil_channels: int = 2
-    stencil_features: int = stencil_positions * stencil_channels
+    stencil_features: int = stencil_positions
 
     def __init__(self, config: SourceStencilLiftConfig) -> None:
         super().__init__()
@@ -82,13 +81,25 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         self.use_g_normalization = bool(config.use_g_normalization)
         self.eps = float(config.eps)
 
-        if encoder_type == "linear":
-            layers: List[nn.Module] = [
-                nn.Linear(self.stencil_features, 1, bias=config.use_bias)
-            ]
+        self.source_encoder = self._build_pointwise_encoder(
+            input_dim=self.stencil_features,
+            config=config,
+        )
+        self.coefficient_encoder = self._build_pointwise_encoder(
+            input_dim=self.stencil_features,
+            config=config,
+        )
+
+    def _build_pointwise_encoder(
+        self,
+        input_dim: int,
+        config: SourceStencilLiftConfig,
+    ) -> nn.Sequential:
+        if self.encoder_type == "linear":
+            layers: List[nn.Module] = [nn.Linear(input_dim, 1, bias=config.use_bias)]
         else:
             layers = []
-            in_dim = self.stencil_features
+            in_dim = input_dim
             for _ in range(config.depth):
                 layers.append(
                     nn.Linear(in_dim, config.hidden_dim, bias=config.use_bias)
@@ -98,7 +109,7 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
                     layers.append(nn.Dropout(config.dropout))
                 in_dim = config.hidden_dim
             layers.append(nn.Linear(in_dim, 1, bias=config.use_bias))
-        self.encoder = nn.Sequential(*layers)
+        return nn.Sequential(*layers)
 
     @staticmethod
     def _validate_axis_field(
@@ -148,37 +159,65 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         south = full_source[:, :-2, 1:-1]
         return torch.stack((center, east, west, north, south), dim=-1)
 
-    def _build_stencil_features(
-        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    def _build_source_stencil_features(
+        self, rhs_raw: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        source_shape = self._validate_rhs_raw(rhs_raw)
-        a_shape = self._validate_axis_field(a_vals, "a_vals")
-        if a_shape != source_shape:
-            raise ValueError(
-                "a_vals must match rhs_raw shape metadata "
-                f"(got rhs={source_shape}, a={a_shape})."
-            )
-
         full_source = self._build_canonical_full_source(rhs_raw)
-        full_a = self._build_canonical_full_field(a_vals, "a_vals")
         f_int = full_source[:, 1:-1, 1:-1]
         scale = torch.sqrt(
             torch.mean(f_int * f_int, dim=(-1, -2), keepdim=True) + self.eps
         )
         normalized_source = full_source / scale
-        source_stencil = self._gather_5_stencil(normalized_source)
-        a_stencil = self._gather_5_stencil(full_a)
-        return torch.cat((source_stencil, a_stencil), dim=-1), f_int / scale
+        return self._gather_5_stencil(normalized_source), f_int / scale
+
+    def _build_coefficient_stencil_features(
+        self,
+        a_vals: torch.Tensor,
+        expected_shape: tuple[int, int, int],
+    ) -> torch.Tensor:
+        a_shape = self._validate_axis_field(a_vals, "a_vals")
+        if a_shape != expected_shape:
+            raise ValueError(
+                "a_vals must match rhs_raw shape metadata "
+                f"(got rhs={expected_shape}, a={a_shape})."
+            )
+        full_a = self._build_canonical_full_field(a_vals, "a_vals")
+        return self._gather_5_stencil(full_a)
+
+    def _build_stencil_features(
+        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        source_shape = self._validate_rhs_raw(rhs_raw)
+        source_stencil, f_hat = self._build_source_stencil_features(rhs_raw)
+        coefficient_stencil = self._build_coefficient_stencil_features(
+            a_vals,
+            expected_shape=source_shape,
+        )
+        return torch.cat((source_stencil, coefficient_stencil), dim=-1), f_hat
+
+    @staticmethod
+    def _encode_stencil(encoder: nn.Module, stencil: torch.Tensor) -> torch.Tensor:
+        bsz, n_lines, n_inner, _features = stencil.shape
+        return cast(
+            torch.Tensor,
+            encoder(stencil.reshape(bsz * n_lines * n_inner, -1)),
+        ).reshape(bsz, n_lines, n_inner)
 
     def lift_with_diagnostics(
         self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        stencil, f_hat = self._build_stencil_features(rhs_raw, a_vals)
-        bsz, n_lines, n_inner, _features = stencil.shape
-        g_raw = cast(
-            torch.Tensor,
-            self.encoder(stencil.reshape(bsz * n_lines * n_inner, -1)),
-        ).reshape(bsz, n_lines, n_inner)
+        source_shape = self._validate_rhs_raw(rhs_raw)
+        source_stencil, f_hat = self._build_source_stencil_features(rhs_raw)
+        coefficient_stencil = self._build_coefficient_stencil_features(
+            a_vals,
+            expected_shape=source_shape,
+        )
+        g_source_raw = self._encode_stencil(self.source_encoder, source_stencil)
+        g_coefficient_raw = self._encode_stencil(
+            self.coefficient_encoder,
+            coefficient_stencil,
+        )
+        g_raw = g_source_raw * g_coefficient_raw
 
         if self.use_g_normalization:
             g_scale = torch.sqrt(
@@ -188,6 +227,7 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         else:
             g = g_raw
 
+        bsz, n_lines, n_inner = g.shape
         lifted = torch.empty(
             (bsz, 2, n_lines, n_inner),
             dtype=g.dtype,

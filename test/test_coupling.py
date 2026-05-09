@@ -229,11 +229,15 @@ def _make_linear_source_lift(
             use_g_normalization=use_g_normalization,
         )
     ).to(dtype=torch.float64)
-    only = lift.encoder[0]
-    assert len(lift.encoder) == 1
-    assert isinstance(only, nn.Linear)
+    source = lift.source_encoder[0]
+    coefficient = lift.coefficient_encoder[0]
+    assert len(lift.source_encoder) == 1
+    assert len(lift.coefficient_encoder) == 1
+    assert isinstance(source, nn.Linear)
+    assert isinstance(coefficient, nn.Linear)
     with torch.no_grad():
-        only.weight.fill_(1.0)
+        source.weight.fill_(1.0)
+        coefficient.weight.fill_(1.0)
     return lift
 
 
@@ -257,14 +261,25 @@ def test_source_stencil_lift_default_encoder_is_mlp():
     cfg = SourceStencilLiftConfig(enabled=True)
     lift = FiveStencilSourceLift(cfg)
 
-    linear_layers = [module for module in lift.encoder if isinstance(module, nn.Linear)]
+    source_linear_layers = [
+        module for module in lift.source_encoder if isinstance(module, nn.Linear)
+    ]
+    coefficient_linear_layers = [
+        module for module in lift.coefficient_encoder if isinstance(module, nn.Linear)
+    ]
 
     assert lift.encoder_type == "mlp"
-    assert len(linear_layers) == cfg.depth + 1
-    assert linear_layers[0].in_features == lift.stencil_features
-    assert linear_layers[0].out_features == cfg.hidden_dim
-    assert linear_layers[-1].in_features == cfg.hidden_dim
-    assert linear_layers[-1].out_features == 1
+    assert len(source_linear_layers) == cfg.depth + 1
+    assert len(coefficient_linear_layers) == cfg.depth + 1
+    assert source_linear_layers[0].in_features == lift.stencil_features
+    assert coefficient_linear_layers[0].in_features == lift.stencil_features
+    assert source_linear_layers[0].out_features == cfg.hidden_dim
+    assert coefficient_linear_layers[0].out_features == cfg.hidden_dim
+    assert source_linear_layers[-1].in_features == cfg.hidden_dim
+    assert coefficient_linear_layers[-1].in_features == cfg.hidden_dim
+    assert source_linear_layers[-1].out_features == 1
+    assert coefficient_linear_layers[-1].out_features == 1
+    assert lift.source_encoder is not lift.coefficient_encoder
 
 
 def test_source_stencil_lift_mlp_encoder_accepts_uppercase_config():
@@ -286,14 +301,21 @@ def test_source_stencil_lift_linear_encoder_has_single_affine_layer():
             use_bias=False,
         )
     ).to(dtype=torch.float64)
-    only = lift.encoder[0]
+    source = lift.source_encoder[0]
+    coefficient = lift.coefficient_encoder[0]
 
     assert lift.encoder_type == "linear"
-    assert len(lift.encoder) == 1
-    assert isinstance(only, nn.Linear)
-    assert only.in_features == lift.stencil_features
-    assert only.out_features == 1
-    assert only.bias is None
+    assert len(lift.source_encoder) == 1
+    assert len(lift.coefficient_encoder) == 1
+    assert isinstance(source, nn.Linear)
+    assert isinstance(coefficient, nn.Linear)
+    assert source.in_features == lift.stencil_features
+    assert coefficient.in_features == lift.stencil_features
+    assert source.out_features == 1
+    assert coefficient.out_features == 1
+    assert source.bias is None
+    assert coefficient.bias is None
+    assert source is not coefficient
 
     full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
     lifted = lift(
@@ -324,16 +346,20 @@ def test_source_stencil_lift_shape_and_g_normalization():
     assert diagnostics["source_lift_g_rms"].item() == pytest.approx(1.0)
 
 
-def test_source_stencil_lift_feature_contract_uses_normalized_f_and_raw_a():
+def test_source_stencil_lift_feature_contract_uses_normalized_f_and_raw_coefficient():
     torch.set_default_dtype(torch.float64)
     source_full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
     a_full = torch.arange(101, 126, dtype=torch.float64).reshape(1, 5, 5)
     lift = _make_linear_source_lift(use_g_normalization=False)
+    rhs_raw = _rhs_raw_from_canonical_full(source_full)
+    a_vals = _axis_field_from_canonical_full(a_full)
 
-    features, f_hat = lift._build_stencil_features(
-        _rhs_raw_from_canonical_full(source_full),
-        _axis_field_from_canonical_full(a_full),
+    source_stencil, f_hat = lift._build_source_stencil_features(rhs_raw)
+    coefficient_stencil = lift._build_coefficient_stencil_features(
+        a_vals,
+        expected_shape=lift._validate_rhs_raw(rhs_raw),
     )
+    features, combined_f_hat = lift._build_stencil_features(rhs_raw, a_vals)
 
     f_int = source_full[:, 1:-1, 1:-1]
     scale = torch.sqrt(torch.mean(f_int * f_int, dim=(-1, -2), keepdim=True) + lift.eps)
@@ -341,9 +367,54 @@ def test_source_stencil_lift_feature_contract_uses_normalized_f_and_raw_a():
     expected_a_stencil = lift._gather_5_stencil(a_full)
     expected_features = torch.cat((expected_f_stencil, expected_a_stencil), dim=-1)
 
-    assert features.shape == (1, 3, 3, 10)
+    assert source_stencil.shape == (1, 3, 3, 5)
+    assert coefficient_stencil.shape == (1, 3, 3, 5)
+    torch.testing.assert_close(source_stencil, expected_f_stencil)
+    torch.testing.assert_close(coefficient_stencil, expected_a_stencil)
     torch.testing.assert_close(features, expected_features)
     torch.testing.assert_close(f_hat, f_int / scale)
+    torch.testing.assert_close(combined_f_hat, f_hat)
+
+
+def test_source_stencil_lift_multiplies_source_and_coefficient_encodings():
+    torch.set_default_dtype(torch.float64)
+    source_full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
+    a_full = torch.arange(101, 126, dtype=torch.float64).reshape(1, 5, 5)
+    lift = FiveStencilSourceLift(
+        SourceStencilLiftConfig(
+            enabled=True,
+            encoder_type="linear",
+            use_bias=False,
+            use_g_normalization=False,
+        )
+    ).to(dtype=torch.float64)
+    source_layer = lift.source_encoder[0]
+    coefficient_layer = lift.coefficient_encoder[0]
+    assert isinstance(source_layer, nn.Linear)
+    assert isinstance(coefficient_layer, nn.Linear)
+    with torch.no_grad():
+        source_layer.weight.zero_()
+        source_layer.weight[0, 0] = 1.0
+        coefficient_layer.weight.zero_()
+        coefficient_layer.weight[0, 0] = 2.0
+
+    lifted = lift(
+        _rhs_raw_from_canonical_full(source_full),
+        _axis_field_from_canonical_full(a_full),
+    )
+
+    source_stencil, _f_hat = lift._build_source_stencil_features(
+        _rhs_raw_from_canonical_full(source_full)
+    )
+    coefficient_stencil = lift._build_coefficient_stencil_features(
+        _axis_field_from_canonical_full(a_full),
+        expected_shape=lift._validate_rhs_raw(
+            _rhs_raw_from_canonical_full(source_full)
+        ),
+    )
+    expected = source_stencil[..., 0] * (2.0 * coefficient_stencil[..., 0])
+    torch.testing.assert_close(lifted[:, 0], expected)
+    torch.testing.assert_close(lifted[:, 1], expected.transpose(-1, -2))
 
 
 def test_source_stencil_lift_uses_boundaries_but_ignores_corners():
@@ -414,17 +485,20 @@ def test_coupling_net_source_branch_input_dimension_changes_only_when_enabled():
     disabled_rhs_first = disabled.branch_rhs.net[0]
     enabled_rhs_first = enabled.branch_rhs.net[0]
     enabled_a_first = enabled.branch_a.net[0]
-    enabled_lift_first = enabled.source_stencil_lift.encoder[0]
+    enabled_lift_source_first = enabled.source_stencil_lift.source_encoder[0]
+    enabled_lift_coefficient_first = enabled.source_stencil_lift.coefficient_encoder[0]
 
     assert isinstance(disabled_rhs_first, nn.Linear)
     assert isinstance(enabled_rhs_first, nn.Linear)
     assert isinstance(enabled_a_first, nn.Linear)
     assert enabled.source_stencil_lift is not None
-    assert isinstance(enabled_lift_first, nn.Linear)
+    assert isinstance(enabled_lift_source_first, nn.Linear)
+    assert isinstance(enabled_lift_coefficient_first, nn.Linear)
     assert disabled_rhs_first.in_features == 5
     assert enabled_rhs_first.in_features == 3
     assert enabled_a_first.in_features == 5
-    assert enabled_lift_first.in_features == 10
+    assert enabled_lift_source_first.in_features == 5
+    assert enabled_lift_coefficient_first.in_features == 5
 
 
 def test_coupling_net_source_lift_rejects_too_short_branch_input():
