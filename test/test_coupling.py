@@ -339,11 +339,24 @@ def test_source_stencil_lift_shape_and_g_normalization():
     lift = _make_linear_source_lift(use_g_normalization=True)
 
     lifted = lift(rhs_raw, a_vals)
+    lifted_source, lifted_coefficient = lift.forward_components(rhs_raw, a_vals)
     diagnostics = lift.lift_with_diagnostics(rhs_raw, a_vals)[1]
 
     assert lifted.shape == (1, 2, 3, 3)
+    assert lifted_source.shape == (1, 2, 3, 3)
+    assert lifted_coefficient.shape == (1, 2, 3, 3)
     torch.testing.assert_close(lifted[:, 1], lifted[:, 0].transpose(-1, -2))
-    assert diagnostics["source_lift_g_rms"].item() == pytest.approx(1.0)
+    torch.testing.assert_close(
+        lifted[:, 0],
+        lifted_source[:, 0] * lifted_coefficient[:, 0],
+    )
+    assert torch.sqrt(torch.mean(lifted_source[:, 0].square())).item() == pytest.approx(
+        1.0
+    )
+    assert torch.sqrt(
+        torch.mean(lifted_coefficient[:, 0].square())
+    ).item() == pytest.approx(1.0)
+    assert torch.isfinite(diagnostics["source_lift_g_rms"]).item()
 
 
 def test_source_stencil_lift_feature_contract_uses_normalized_f_and_raw_coefficient():
@@ -402,6 +415,10 @@ def test_source_stencil_lift_multiplies_source_and_coefficient_encodings():
         _rhs_raw_from_canonical_full(source_full),
         _axis_field_from_canonical_full(a_full),
     )
+    lifted_source, lifted_coefficient = lift.forward_components(
+        _rhs_raw_from_canonical_full(source_full),
+        _axis_field_from_canonical_full(a_full),
+    )
 
     source_stencil, _f_hat = lift._build_source_stencil_features(
         _rhs_raw_from_canonical_full(source_full)
@@ -413,6 +430,11 @@ def test_source_stencil_lift_multiplies_source_and_coefficient_encodings():
         ),
     )
     expected = source_stencil[..., 0] * (2.0 * coefficient_stencil[..., 0])
+    torch.testing.assert_close(lifted_source[:, 0], source_stencil[..., 0])
+    torch.testing.assert_close(
+        lifted_coefficient[:, 0],
+        2.0 * coefficient_stencil[..., 0],
+    )
     torch.testing.assert_close(lifted[:, 0], expected)
     torch.testing.assert_close(lifted[:, 1], expected.transpose(-1, -2))
 
@@ -485,18 +507,22 @@ def test_coupling_net_source_branch_input_dimension_changes_only_when_enabled():
     disabled_rhs_first = disabled.branch_rhs.net[0]
     enabled_rhs_first = enabled.branch_rhs.net[0]
     enabled_a_first = enabled.branch_a.net[0]
+    assert enabled.branch_coefficient is not None
+    enabled_coefficient_branch_first = enabled.branch_coefficient.net[0]
     enabled_lift_source_first = enabled.source_stencil_lift.source_encoder[0]
     enabled_lift_coefficient_first = enabled.source_stencil_lift.coefficient_encoder[0]
 
     assert isinstance(disabled_rhs_first, nn.Linear)
     assert isinstance(enabled_rhs_first, nn.Linear)
     assert isinstance(enabled_a_first, nn.Linear)
+    assert isinstance(enabled_coefficient_branch_first, nn.Linear)
     assert enabled.source_stencil_lift is not None
     assert isinstance(enabled_lift_source_first, nn.Linear)
     assert isinstance(enabled_lift_coefficient_first, nn.Linear)
     assert disabled_rhs_first.in_features == 5
     assert enabled_rhs_first.in_features == 3
     assert enabled_a_first.in_features == 5
+    assert enabled_coefficient_branch_first.in_features == 3
     assert enabled_lift_source_first.in_features == 5
     assert enabled_lift_coefficient_first.in_features == 5
 
@@ -548,21 +574,55 @@ def test_coupling_net_source_lift_keeps_physical_rhs_for_projection():
     torch.testing.assert_close(phi + psi, rhs_raw[:, 0, :, 1:-1])
 
 
-def test_coupling_net_enabled_source_lift_uses_single_encoded_branch():
+def test_coupling_net_enabled_source_lift_uses_separate_source_and_coefficient_branches():
     class _InspectSourceLift(nn.Module):
-        def forward(self, rhs_raw: torch.Tensor, a_vals: torch.Tensor) -> torch.Tensor:
+        def forward_components(
+            self,
+            rhs_raw: torch.Tensor,
+            a_vals: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
             assert rhs_raw.shape == a_vals.shape
             bsz, axis, n_lines, m_points = rhs_raw.shape
-            return torch.ones(
+            source = torch.full(
                 (bsz, axis, n_lines, m_points - 2),
+                2.0,
                 dtype=rhs_raw.dtype,
                 device=rhs_raw.device,
             )
+            coefficient = torch.full(
+                (bsz, axis, n_lines, m_points - 2),
+                3.0,
+                dtype=rhs_raw.dtype,
+                device=rhs_raw.device,
+            )
+            return source, coefficient
+
+        def forward(self, rhs_raw: torch.Tensor, a_vals: torch.Tensor) -> torch.Tensor:
+            raise AssertionError("CouplingNet should use forward_components")
 
     class _FailBranch(nn.Module):
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             raise AssertionError(
                 "branch_a should not be used when source lift is enabled"
+            )
+
+    class _ExpectBranch(nn.Module):
+        def __init__(self, expected_value: float, output_value: float, hidden_dim: int):
+            super().__init__()
+            self.expected_value = expected_value
+            self.output_value = output_value
+            self.hidden_dim = hidden_dim
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            torch.testing.assert_close(
+                x,
+                torch.full_like(x, self.expected_value),
+            )
+            return torch.full(
+                (x.shape[0], self.hidden_dim),
+                self.output_value,
+                dtype=x.dtype,
+                device=x.device,
             )
 
     class _OnesBranch(nn.Module):
@@ -572,9 +632,7 @@ def test_coupling_net_enabled_source_lift_uses_single_encoded_branch():
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return torch.ones(
-                (x.shape[0], self.hidden_dim),
-                dtype=x.dtype,
-                device=x.device,
+                (x.shape[0], self.hidden_dim), dtype=x.dtype, device=x.device
             )
 
     torch.set_default_dtype(torch.float64)
@@ -592,7 +650,8 @@ def test_coupling_net_enabled_source_lift_uses_single_encoded_branch():
     model = CouplingNet(cfg)
     model.source_stencil_lift = _InspectSourceLift()  # type: ignore[assignment]
     model.branch_a = _FailBranch()
-    model.branch_rhs = _OnesBranch(cfg.hidden_dim)
+    model.branch_rhs = _ExpectBranch(2.0, 5.0, cfg.hidden_dim)
+    model.branch_coefficient = _ExpectBranch(3.0, 7.0, cfg.hidden_dim)  # type: ignore[assignment]
     model.trunk = _OnesBranch(cfg.hidden_dim)
 
     coords = torch.zeros((2, n, m, 2), dtype=torch.float64)
@@ -762,8 +821,10 @@ def test_coupling_model_enabled_source_lift_backprop_skips_branch_a():
 
     assert projected_flux.shape == (1, 2, 1, 3)
     assert model.source_stencil_lift is not None
+    assert model.branch_coefficient is not None
     assert _has_grad(model.source_stencil_lift)
     assert _has_grad(model.branch_rhs)
+    assert _has_grad(model.branch_coefficient)
     assert _has_grad(model.trunk)
     assert not _has_grad(model.branch_a)
 

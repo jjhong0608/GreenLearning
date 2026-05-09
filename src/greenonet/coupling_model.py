@@ -203,9 +203,29 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
             encoder(stencil.reshape(bsz * n_lines * n_inner, -1)),
         ).reshape(bsz, n_lines, n_inner)
 
-    def lift_with_diagnostics(
+    def _normalize_lifted_scalar(self, value: torch.Tensor) -> torch.Tensor:
+        if not self.use_g_normalization:
+            return value
+        scale = torch.sqrt(
+            torch.mean(value * value, dim=(-1, -2), keepdim=True) + self.eps
+        )
+        return value / scale
+
+    @staticmethod
+    def _to_axis_lift(value: torch.Tensor) -> torch.Tensor:
+        bsz, n_lines, n_inner = value.shape
+        lifted = torch.empty(
+            (bsz, 2, n_lines, n_inner),
+            dtype=value.dtype,
+            device=value.device,
+        )
+        lifted[:, 0] = value
+        lifted[:, 1] = value.transpose(-1, -2)
+        return lifted
+
+    def _encoded_components(
         self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         source_shape = self._validate_rhs_raw(rhs_raw)
         source_stencil, f_hat = self._build_source_stencil_features(rhs_raw)
         coefficient_stencil = self._build_coefficient_stencil_features(
@@ -217,25 +237,24 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
             self.coefficient_encoder,
             coefficient_stencil,
         )
-        g_raw = g_source_raw * g_coefficient_raw
+        g_source = self._normalize_lifted_scalar(g_source_raw)
+        g_coefficient = self._normalize_lifted_scalar(g_coefficient_raw)
+        return g_source, g_coefficient, f_hat
 
-        if self.use_g_normalization:
-            g_scale = torch.sqrt(
-                torch.mean(g_raw * g_raw, dim=(-1, -2), keepdim=True) + self.eps
-            )
-            g = g_raw / g_scale
-        else:
-            g = g_raw
+    def forward_components(
+        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        g_source, g_coefficient, _f_hat = self._encoded_components(rhs_raw, a_vals)
+        return self._to_axis_lift(g_source), self._to_axis_lift(g_coefficient)
 
-        bsz, n_lines, n_inner = g.shape
-        lifted = torch.empty(
-            (bsz, 2, n_lines, n_inner),
-            dtype=g.dtype,
-            device=g.device,
-        )
-        lifted[:, 0] = g
-        lifted[:, 1] = g.transpose(-1, -2)
+    def lift_with_diagnostics(
+        self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        g_source, g_coefficient, f_hat = self._encoded_components(rhs_raw, a_vals)
+        g = g_source * g_coefficient
+        lifted = self._to_axis_lift(g)
 
+        bsz = g.shape[0]
         g_flat = g.reshape(bsz, -1)
         f_flat = f_hat.reshape(bsz, -1)
         inner = torch.sum(g_flat * f_flat, dim=-1)
@@ -326,6 +345,18 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=False,
         )
+        if config.source_stencil_lift.enabled:
+            self.branch_coefficient: MLP | None = MLP(
+                input_dim=self.branch_rhs_input_dim,
+                hidden_dim=config.hidden_dim,
+                depth=config.depth,
+                activation=config.activation,
+                use_bias=config.use_bias,
+                dropout=config.dropout,
+                last_activation=False,
+            )
+        else:
+            self.branch_coefficient = None
         self.trunk = MLP(
             input_dim=config.trunk_input_dim,
             hidden_dim=config.hidden_dim,
@@ -486,11 +517,22 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             branch_r_out = self.branch_rhs(branch_r_in)
             branch_feat = branch_a_out * branch_r_out
         else:
-            branch_rhs_source = self.source_stencil_lift(rhs_raw, a_vals)
-            branch_r_in = branch_rhs_source.reshape(
+            if self.branch_coefficient is None:
+                raise RuntimeError(
+                    "branch_coefficient must be initialized when source lift is enabled."
+                )
+            lifted_source, lifted_coefficient = (
+                self.source_stencil_lift.forward_components(rhs_raw, a_vals)
+            )
+            branch_r_in = lifted_source.reshape(
                 b * axis * n_lines, self.branch_rhs_input_dim
             )
-            branch_feat = self.branch_rhs(branch_r_in)
+            branch_coefficient_in = lifted_coefficient.reshape(
+                b * axis * n_lines, self.branch_rhs_input_dim
+            )
+            branch_r_out = self.branch_rhs(branch_r_in)
+            branch_coefficient_out = self.branch_coefficient(branch_coefficient_in)
+            branch_feat = branch_r_out * branch_coefficient_out
         branch_feat = branch_feat.unsqueeze(-1)
 
         coords_int = coords[:, :, 1:-1, :]
