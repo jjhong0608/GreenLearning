@@ -76,8 +76,19 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
             raise ValueError(
                 "source_stencil_lift.encoder_type must be 'linear' or 'mlp'."
             )
+        coefficient_normalization = config.coefficient_normalization.lower()
+        if coefficient_normalization not in {"rms", "tanh"}:
+            raise ValueError(
+                "source_stencil_lift.coefficient_normalization must be 'rms' or 'tanh'."
+            )
+        if config.coefficient_tanh_beta <= 0.0:
+            raise ValueError(
+                "source_stencil_lift.coefficient_tanh_beta must be positive."
+            )
 
         self.encoder_type = encoder_type
+        self.coefficient_normalization = coefficient_normalization
+        self.coefficient_tanh_beta = float(config.coefficient_tanh_beta)
         self.use_g_normalization = bool(config.use_g_normalization)
         self.eps = float(config.eps)
 
@@ -211,6 +222,11 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         )
         return value / scale
 
+    def _normalize_coefficient_lift(self, value: torch.Tensor) -> torch.Tensor:
+        if self.coefficient_normalization == "tanh":
+            return self.coefficient_tanh_beta * torch.tanh(value)
+        return self._normalize_lifted_scalar(value)
+
     @staticmethod
     def _to_axis_lift(value: torch.Tensor) -> torch.Tensor:
         bsz, n_lines, n_inner = value.shape
@@ -238,7 +254,7 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
             coefficient_stencil,
         )
         g_source = self._normalize_lifted_scalar(g_source_raw)
-        g_coefficient = self._normalize_lifted_scalar(g_coefficient_raw)
+        g_coefficient = self._normalize_coefficient_lift(g_coefficient_raw)
         return g_source, g_coefficient, f_hat
 
     def forward_components(

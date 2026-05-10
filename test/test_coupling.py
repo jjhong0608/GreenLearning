@@ -269,6 +269,8 @@ def test_source_stencil_lift_default_encoder_is_mlp():
     ]
 
     assert lift.encoder_type == "mlp"
+    assert lift.coefficient_normalization == "rms"
+    assert lift.coefficient_tanh_beta == 1.0
     assert len(source_linear_layers) == cfg.depth + 1
     assert len(coefficient_linear_layers) == cfg.depth + 1
     assert source_linear_layers[0].in_features == lift.stencil_features
@@ -331,6 +333,27 @@ def test_source_stencil_lift_rejects_invalid_encoder_type():
         FiveStencilSourceLift(SourceStencilLiftConfig(enabled=True, encoder_type="cnn"))
 
 
+def test_source_stencil_lift_rejects_invalid_coefficient_normalization():
+    with pytest.raises(ValueError, match="coefficient_normalization"):
+        FiveStencilSourceLift(
+            SourceStencilLiftConfig(
+                enabled=True,
+                coefficient_normalization="softmax",  # type: ignore[arg-type]
+            )
+        )
+
+
+def test_source_stencil_lift_rejects_non_positive_coefficient_tanh_beta():
+    with pytest.raises(ValueError, match="coefficient_tanh_beta"):
+        FiveStencilSourceLift(
+            SourceStencilLiftConfig(
+                enabled=True,
+                coefficient_normalization="tanh",
+                coefficient_tanh_beta=0.0,
+            )
+        )
+
+
 def test_source_stencil_lift_shape_and_g_normalization():
     torch.set_default_dtype(torch.float64)
     full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
@@ -357,6 +380,60 @@ def test_source_stencil_lift_shape_and_g_normalization():
         torch.mean(lifted_coefficient[:, 0].square())
     ).item() == pytest.approx(1.0)
     assert torch.isfinite(diagnostics["source_lift_g_rms"]).item()
+
+
+def test_source_stencil_lift_tanh_coefficient_normalization_uses_raw_encoder_output():
+    torch.set_default_dtype(torch.float64)
+    source_full = torch.arange(25, dtype=torch.float64).reshape(1, 5, 5) + 1.0
+    a_full = torch.linspace(-1.0, 1.0, 25, dtype=torch.float64).reshape(1, 5, 5)
+    beta = 2.5
+    lift = FiveStencilSourceLift(
+        SourceStencilLiftConfig(
+            enabled=True,
+            encoder_type="linear",
+            use_bias=False,
+            use_g_normalization=True,
+            coefficient_normalization="tanh",
+            coefficient_tanh_beta=beta,
+        )
+    ).to(dtype=torch.float64)
+    source_layer = lift.source_encoder[0]
+    coefficient_layer = lift.coefficient_encoder[0]
+    assert isinstance(source_layer, nn.Linear)
+    assert isinstance(coefficient_layer, nn.Linear)
+    with torch.no_grad():
+        source_layer.weight.fill_(1.0)
+        coefficient_layer.weight.zero_()
+        coefficient_layer.weight[0, 0] = 0.75
+
+    rhs_raw = _rhs_raw_from_canonical_full(source_full)
+    a_vals = _axis_field_from_canonical_full(a_full)
+    lifted_source, lifted_coefficient = lift.forward_components(rhs_raw, a_vals)
+
+    source_stencil, _f_hat = lift._build_source_stencil_features(rhs_raw)
+    coefficient_stencil = lift._build_coefficient_stencil_features(
+        a_vals,
+        expected_shape=lift._validate_rhs_raw(rhs_raw),
+    )
+    source_raw = torch.sum(source_stencil, dim=-1)
+    expected_source = source_raw / torch.sqrt(
+        torch.mean(source_raw.square(), dim=(-1, -2), keepdim=True) + lift.eps
+    )
+    r_coef = 0.75 * coefficient_stencil[..., 0]
+    expected_coefficient = beta * torch.tanh(r_coef)
+
+    torch.testing.assert_close(lifted_source[:, 0], expected_source)
+    torch.testing.assert_close(lifted_coefficient[:, 0], expected_coefficient)
+    torch.testing.assert_close(
+        lifted_coefficient[:, 1],
+        expected_coefficient.transpose(-1, -2),
+    )
+    assert torch.sqrt(torch.mean(lifted_source[:, 0].square())).item() == pytest.approx(
+        1.0
+    )
+    assert torch.sqrt(torch.mean(lifted_coefficient[:, 0].square())).item() != (
+        pytest.approx(1.0)
+    )
 
 
 def test_source_stencil_lift_feature_contract_uses_normalized_f_and_raw_coefficient():

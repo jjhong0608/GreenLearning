@@ -197,6 +197,8 @@ class TestTrainCLIDatasetConfig:
                 "source_stencil_lift": {
                     "enabled": True,
                     "encoder_type": "linear",
+                    "coefficient_normalization": "tanh",
+                    "coefficient_tanh_beta": 1.7,
                     "hidden_dim": 48,
                     "depth": 2,
                     "activation": "gelu",
@@ -226,6 +228,8 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.smooth_mask_eps == 1e-9
         assert source_lift.enabled is True
         assert source_lift.encoder_type == "linear"
+        assert source_lift.coefficient_normalization == "tanh"
+        assert source_lift.coefficient_tanh_beta == 1.7
         assert source_lift.hidden_dim == 48
         assert source_lift.depth == 2
         assert source_lift.activation == "gelu"
@@ -325,6 +329,8 @@ class TestTrainCLIDatasetConfig:
 
         assert cfg.enabled is False
         assert cfg.encoder_type == "mlp"
+        assert cfg.coefficient_normalization == "rms"
+        assert cfg.coefficient_tanh_beta == 1.0
         assert cfg.hidden_dim == 32
         assert cfg.depth == 2
         assert cfg.activation == "gelu"
@@ -340,7 +346,13 @@ class TestTrainCLIDatasetConfig:
             "smooth_mask_normalize": False,
             "smooth_mask_eps": 1e-9,
             "source_stencil_lift": EvalCouplingCLI._build_source_stencil_lift_config(
-                {"enabled": True, "encoder_type": "linear", "hidden_dim": 16},
+                {
+                    "enabled": True,
+                    "encoder_type": "linear",
+                    "coefficient_normalization": "tanh",
+                    "coefficient_tanh_beta": 2.0,
+                    "hidden_dim": 16,
+                },
                 "coupling_model",
             ),
         }
@@ -353,6 +365,8 @@ class TestTrainCLIDatasetConfig:
         assert model_cfg.smooth_mask_eps == 1e-9
         assert model_cfg.source_stencil_lift.enabled is True
         assert model_cfg.source_stencil_lift.encoder_type == "linear"
+        assert model_cfg.source_stencil_lift.coefficient_normalization == "tanh"
+        assert model_cfg.source_stencil_lift.coefficient_tanh_beta == 2.0
         assert model_cfg.source_stencil_lift.hidden_dim == 16
 
     def test_rejects_deprecated_flat_coupling_loss_config(self, tmp_path):

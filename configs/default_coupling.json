@@ -17,7 +17,7 @@
   },
   "coupling_model": {
     "hidden_dim": 256,
-    "depth": 4,
+    "depth": 2,
     "activation": "rational",
     "use_bias": true,
     "dropout": 0.0,
@@ -29,9 +29,11 @@
     "smooth_mask_eps": 1e-12,
     "source_stencil_lift": {
       "enabled": true,
-      "encoder_type": "linear",
-      "hidden_dim": 128,
-      "depth": 2,
+      "encoder_type": "mlp",
+      "coefficient_normalization": "rms",
+      "coefficient_tanh_beta": 1.0,
+      "hidden_dim": 16,
+      "depth": 1,
       "activation": "gelu",
       "use_bias": true,
       "dropout": 0.0,

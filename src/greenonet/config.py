@@ -54,6 +54,8 @@ class SourceStencilLiftConfig:
 
     enabled: bool = False
     encoder_type: Literal["linear", "mlp", "MLP"] = "mlp"
+    coefficient_normalization: Literal["rms", "tanh"] = "rms"
+    coefficient_tanh_beta: float = 1.0
     hidden_dim: int = 32
     depth: int = 2
     activation: Literal["tanh", "relu", "gelu", "rational"] = "gelu"
