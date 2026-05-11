@@ -332,388 +332,439 @@ class CouplingEvaluator(LoggingMixin):
         batch_size: int = 1,
         plot_workers: int = 20,
     ) -> None:
-        loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=coupling_collate_fn,
-        )
-        rows: List[dict[str, str | float]] = []
-        font = {"family": "Times New Roman", "size": 24}
-        executor: ProcessPoolExecutor | None = None
-        if plot_workers > 1:
-            executor = ProcessPoolExecutor(max_workers=plot_workers)
+        was_training = self.model.training
+        self.model.eval()
         try:
-            for batch_idx, batch in enumerate(loader):
-                (
-                    coords,
-                    rhs_raw,
-                    rhs_tilde,
-                    rhs_norm,
-                    sol,
-                    flux,
-                    a_vals,
-                    b_vals,
-                    c_vals,
-                    ap,
-                ) = batch
-                tensors = self._evaluate_batch(
-                    coords,
-                    rhs_raw,
-                    rhs_tilde,
-                    rhs_norm,
-                    sol,
-                    flux,
-                    a_vals,
-                    b_vals,
-                    c_vals,
-                )
-                batch_size_actual = rhs_raw.shape[0]
-                for i in range(batch_size_actual):
-                    global_idx = batch_idx * batch_size + i
-                    file_stem = ""
-                    if isinstance(dataset, CouplingDataset) and global_idx < len(
-                        dataset.files
-                    ):
-                        file_stem = dataset.files[global_idx].stem
-                    total = len(dataset) if hasattr(dataset, "__len__") else None
-                    if total is not None:
-                        self.logger.info(
-                            "Evaluating sample %s/%s (%s)",
-                            global_idx + 1,
-                            total,
-                            file_stem or f"sample_{global_idx}",
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                collate_fn=coupling_collate_fn,
+            )
+            rows: List[dict[str, str | float]] = []
+            font = {"family": "Times New Roman", "size": 24}
+            executor: ProcessPoolExecutor | None = None
+            if plot_workers > 1:
+                executor = ProcessPoolExecutor(max_workers=plot_workers)
+            try:
+                with torch.no_grad():
+                    for batch_idx, batch in enumerate(loader):
+                        (
+                            coords,
+                            rhs_raw,
+                            rhs_tilde,
+                            rhs_norm,
+                            sol,
+                            flux,
+                            a_vals,
+                            b_vals,
+                            c_vals,
+                            ap,
+                        ) = batch
+                        tensors = self._evaluate_batch(
+                            coords,
+                            rhs_raw,
+                            rhs_tilde,
+                            rhs_norm,
+                            sol,
+                            flux,
+                            a_vals,
+                            b_vals,
+                            c_vals,
                         )
-                    else:
-                        self.logger.info(
-                            "Evaluating sample %s (%s)",
-                            global_idx + 1,
-                            file_stem or f"sample_{global_idx}",
-                        )
+                        batch_size_actual = rhs_raw.shape[0]
+                        for i in range(batch_size_actual):
+                            global_idx = batch_idx * batch_size + i
+                            file_stem = ""
+                            if isinstance(
+                                dataset, CouplingDataset
+                            ) and global_idx < len(dataset.files):
+                                file_stem = dataset.files[global_idx].stem
+                            total = (
+                                len(dataset) if hasattr(dataset, "__len__") else None
+                            )
+                            if total is not None:
+                                self.logger.info(
+                                    "Evaluating sample %s/%s (%s)",
+                                    global_idx + 1,
+                                    total,
+                                    file_stem or f"sample_{global_idx}",
+                                )
+                            else:
+                                self.logger.info(
+                                    "Evaluating sample %s (%s)",
+                                    global_idx + 1,
+                                    file_stem or f"sample_{global_idx}",
+                                )
 
-                    pred_flux = tensors["pred_flux"][i : i + 1]
-                    flux_i = tensors["flux"][i : i + 1]
-                    pred_sol = torch.stack(
-                        (tensors["pred_sol_x"][i], tensors["pred_sol_y"][i]), dim=0
-                    ).unsqueeze(0)
-                    sol_i = tensors["sol"][i : i + 1]
-                    x_axis = coords[0, 0, :, 0].to(self.device)
-                    y_axis = coords[1, 0, :, 1].to(self.device)
+                            pred_flux = tensors["pred_flux"][i : i + 1]
+                            flux_i = tensors["flux"][i : i + 1]
+                            pred_sol = torch.stack(
+                                (
+                                    tensors["pred_sol_x"][i],
+                                    tensors["pred_sol_y"][i],
+                                ),
+                                dim=0,
+                            ).unsqueeze(0)
+                            sol_i = tensors["sol"][i : i + 1]
+                            x_axis = coords[0, 0, :, 0].to(self.device)
+                            y_axis = coords[1, 0, :, 1].to(self.device)
 
-                    metrics = {
-                        "rel_flux": self._relative_l2_integral(
-                            pred_flux.to(self.device), flux_i.to(self.device), x_axis
-                        ),
-                        "rel_sol": self._relative_l2_integral(
-                            pred_sol.to(self.device), sol_i.to(self.device), x_axis
-                        ),
-                    }
-                    rows.append({"file": file_stem, **metrics})
+                            metrics = {
+                                "rel_flux": self._relative_l2_integral(
+                                    pred_flux.to(self.device),
+                                    flux_i.to(self.device),
+                                    x_axis,
+                                ),
+                                "rel_sol": self._relative_l2_integral(
+                                    pred_sol.to(self.device),
+                                    sol_i.to(self.device),
+                                    x_axis,
+                                ),
+                            }
+                            rows.append({"file": file_stem, **metrics})
 
-                    # Build grids for plotting
-                    sol_x = sol[i, 0]
-                    sol_y = sol[i, 1]
-                    pred_sol_x = tensors["pred_sol_x"][i]
-                    pred_sol_y = tensors["pred_sol_y"][i]
-                    sol_grid = (
-                        sol_x[..., 1:-1] + sol_y[..., 1:-1].transpose(-1, -2)
-                    ) / 2
-                    sol_grid = pad(
-                        sol_grid, pad=(1, 1, 1, 1), mode="constant", value=0.0
-                    )
-                    sol_grid_x = pad(
-                        sol_x[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
-                    )
-                    sol_grid_y = pad(
-                        sol_y[..., 1:-1], pad=(1, 1, 1, 1), mode="constant", value=0.0
-                    ).transpose(-1, -2)
-                    pred_sol_grid = (pred_sol_x + pred_sol_y.transpose(-1, -2)) / 2
-                    pred_sol_grid_x = pred_sol_x
-                    pred_sol_grid_y = pred_sol_y.transpose(-1, -2)
-                    err_sol_grid = (pred_sol_grid - sol_grid).abs()
-                    err_sol_grid_x = (pred_sol_grid_x - sol_grid_x).abs()
-                    err_sol_grid_y = (pred_sol_grid_y - sol_grid_y).abs()
+                            # Build grids for plotting
+                            sol_x = sol[i, 0]
+                            sol_y = sol[i, 1]
+                            pred_sol_x = tensors["pred_sol_x"][i]
+                            pred_sol_y = tensors["pred_sol_y"][i]
+                            sol_grid = (
+                                sol_x[..., 1:-1] + sol_y[..., 1:-1].transpose(-1, -2)
+                            ) / 2
+                            sol_grid = pad(
+                                sol_grid,
+                                pad=(1, 1, 1, 1),
+                                mode="constant",
+                                value=0.0,
+                            )
+                            sol_grid_x = pad(
+                                sol_x[..., 1:-1],
+                                pad=(1, 1, 1, 1),
+                                mode="constant",
+                                value=0.0,
+                            )
+                            sol_grid_y = pad(
+                                sol_y[..., 1:-1],
+                                pad=(1, 1, 1, 1),
+                                mode="constant",
+                                value=0.0,
+                            ).transpose(-1, -2)
+                            pred_sol_grid = (
+                                pred_sol_x + pred_sol_y.transpose(-1, -2)
+                            ) / 2
+                            pred_sol_grid_x = pred_sol_x
+                            pred_sol_grid_y = pred_sol_y.transpose(-1, -2)
+                            err_sol_grid = (pred_sol_grid - sol_grid).abs()
+                            err_sol_grid_x = (pred_sol_grid_x - sol_grid_x).abs()
+                            err_sol_grid_y = (pred_sol_grid_y - sol_grid_y).abs()
 
-                    flux_x = flux[i, 0]
-                    flux_y = flux[i, 1]
-                    pred_flux_x = tensors["pred_flux"][i, 0]
-                    pred_flux_y = tensors["pred_flux"][i, 1]
-                    pred_flux_x_lines = pred_flux_x[1:-1, :]
-                    pred_flux_y_lines = pred_flux_y[1:-1, :]
-                    flux_x_grid = flux_x[..., 1:-1]
-                    pred_flux_x_grid = pred_flux_x[1:-1, 1:-1]
-                    flux_y_grid = flux_y[..., 1:-1].T
-                    pred_flux_y_grid = pred_flux_y[1:-1, 1:-1].T
-                    err_flux_x_grid = (pred_flux_x_grid - flux_x_grid).abs()
-                    err_flux_y_grid = (pred_flux_y_grid - flux_y_grid).abs()
+                            flux_x = flux[i, 0]
+                            flux_y = flux[i, 1]
+                            pred_flux_x = tensors["pred_flux"][i, 0]
+                            pred_flux_y = tensors["pred_flux"][i, 1]
+                            pred_flux_x_lines = pred_flux_x[1:-1, :]
+                            pred_flux_y_lines = pred_flux_y[1:-1, :]
+                            flux_x_grid = flux_x[..., 1:-1]
+                            pred_flux_x_grid = pred_flux_x[1:-1, 1:-1]
+                            flux_y_grid = flux_y[..., 1:-1].T
+                            pred_flux_y_grid = pred_flux_y[1:-1, 1:-1].T
+                            err_flux_x_grid = (pred_flux_x_grid - flux_x_grid).abs()
+                            err_flux_y_grid = (pred_flux_y_grid - flux_y_grid).abs()
 
-                    err_flux_sum_grid = (
-                        pred_flux_x_grid - flux_x_grid + pred_flux_y_grid - flux_y_grid
-                    )
-                    err_flux_sub_grid = (
-                        pred_flux_x_grid - flux_x_grid - pred_flux_y_grid + flux_y_grid
-                    )
-                    null_diag = self._null_space_solution_diagnostics(
-                        pred_flux_x_lines=pred_flux_x_lines,
-                        pred_flux_y_lines=pred_flux_y_lines,
-                        flux_x_lines=flux_x,
-                        flux_y_lines=flux_y,
-                        x_axis=x_axis,
-                        y_axis=y_axis,
-                    )
-                    null_sol_x_grid = null_diag["u_q_x"]
-                    null_sol_y_grid = null_diag["u_q_y"]
-                    null_sol_residual_grid = null_diag["u_q_residual"]
-                    null_abs_max: float | None = max(
-                        null_sol_x_grid.abs().max().item(),
-                        null_sol_y_grid.abs().max().item(),
-                        null_sol_residual_grid.abs().max().item(),
-                    )
-                    if null_abs_max == 0.0:
-                        null_abs_max = None
+                            err_flux_sum_grid = (
+                                pred_flux_x_grid
+                                - flux_x_grid
+                                + pred_flux_y_grid
+                                - flux_y_grid
+                            )
+                            err_flux_sub_grid = (
+                                pred_flux_x_grid
+                                - flux_x_grid
+                                - pred_flux_y_grid
+                                + flux_y_grid
+                            )
+                            null_diag = self._null_space_solution_diagnostics(
+                                pred_flux_x_lines=pred_flux_x_lines,
+                                pred_flux_y_lines=pred_flux_y_lines,
+                                flux_x_lines=flux_x,
+                                flux_y_lines=flux_y,
+                                x_axis=x_axis,
+                                y_axis=y_axis,
+                            )
+                            null_sol_x_grid = null_diag["u_q_x"]
+                            null_sol_y_grid = null_diag["u_q_y"]
+                            null_sol_residual_grid = null_diag["u_q_residual"]
+                            null_abs_max: float | None = max(
+                                null_sol_x_grid.abs().max().item(),
+                                null_sol_y_grid.abs().max().item(),
+                                null_sol_residual_grid.abs().max().item(),
+                            )
+                            if null_abs_max == 0.0:
+                                null_abs_max = None
 
-                    closure_diag = self._closure_residual_diagnostics(
-                        flux_x_lines=flux_x,
-                        flux_y_lines=flux_y,
-                        a_x_lines=a_vals[i, 0],
-                        a_y_lines=a_vals[i, 1],
-                        b_x_lines=b_vals[i, 0],
-                        b_y_lines=b_vals[i, 1],
-                        c_x_lines=c_vals[i, 0],
-                        c_y_lines=c_vals[i, 1],
-                        x_axis=x_axis,
-                        y_axis=y_axis,
-                    )
-                    closure_phi_grid = closure_diag["phi_residual"]
-                    closure_psi_grid = closure_diag["psi_residual"]
-                    closure_abs_max: float | None = max(
-                        closure_phi_grid.abs().max().item(),
-                        closure_psi_grid.abs().max().item(),
-                    )
-                    if closure_abs_max == 0.0:
-                        closure_abs_max = None
+                            closure_diag = self._closure_residual_diagnostics(
+                                flux_x_lines=flux_x,
+                                flux_y_lines=flux_y,
+                                a_x_lines=a_vals[i, 0],
+                                a_y_lines=a_vals[i, 1],
+                                b_x_lines=b_vals[i, 0],
+                                b_y_lines=b_vals[i, 1],
+                                c_x_lines=c_vals[i, 0],
+                                c_y_lines=c_vals[i, 1],
+                                x_axis=x_axis,
+                                y_axis=y_axis,
+                            )
+                            closure_phi_grid = closure_diag["phi_residual"]
+                            closure_psi_grid = closure_diag["psi_residual"]
+                            closure_abs_max: float | None = max(
+                                closure_phi_grid.abs().max().item(),
+                                closure_psi_grid.abs().max().item(),
+                            )
+                            if closure_abs_max == 0.0:
+                                closure_abs_max = None
 
-                    u_max = sol_grid.max().item()
-                    u_min = sol_grid.min().item()
-                    phi_max = flux_x_grid.max().item()
-                    phi_min = flux_x_grid.min().item()
-                    psi_max = flux_y_grid.max().item()
-                    psi_min = flux_y_grid.min().item()
+                            u_max = sol_grid.max().item()
+                            u_min = sol_grid.min().item()
+                            phi_max = flux_x_grid.max().item()
+                            phi_min = flux_x_grid.min().item()
+                            psi_max = flux_y_grid.max().item()
+                            psi_min = flux_y_grid.min().item()
 
-                    out_dir = self.work_dir / dataset_name
-                    stem = file_stem or f"sample_{global_idx}"
-                    plot_tasks: List[dict[str, Any]] = [
-                        {
-                            "title": "Exact Solution",
-                            "z": sol_grid.cpu().numpy(),
-                            "zmax": u_max,
-                            "zmin": u_min,
-                            "base_path": str(out_dir / f"{stem}_sol_exact"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Predicted Solution",
-                            "z": pred_sol_grid.cpu().numpy(),
-                            "zmax": u_max,
-                            "zmin": u_min,
-                            "base_path": str(out_dir / f"{stem}_sol_pred"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Solution Error",
-                            "z": err_sol_grid.cpu().numpy(),
-                            "zmax": None,
-                            "zmin": None,
-                            "base_path": str(out_dir / f"{stem}_sol_error"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Exact Solution along x",
-                            "z": sol_grid_x.cpu().numpy(),
-                            "zmax": u_max,
-                            "zmin": u_min,
-                            "base_path": str(out_dir / f"{stem}_sol_exact_x"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Predicted Solution along x",
-                            "z": pred_sol_grid_x.cpu().numpy(),
-                            "zmax": u_max,
-                            "zmin": u_min,
-                            "base_path": str(out_dir / f"{stem}_sol_pred_x"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Solution Error along x",
-                            "z": err_sol_grid_x.cpu().numpy(),
-                            "zmax": None,
-                            "zmin": None,
-                            "base_path": str(out_dir / f"{stem}_sol_error_x"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Exact Solution along y",
-                            "z": sol_grid_y.cpu().numpy(),
-                            "zmax": u_max,
-                            "zmin": u_min,
-                            "base_path": str(out_dir / f"{stem}_sol_exact_y"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Predicted Solution along y",
-                            "z": pred_sol_grid_y.cpu().numpy(),
-                            "zmax": u_max,
-                            "zmin": u_min,
-                            "base_path": str(out_dir / f"{stem}_sol_pred_y"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Solution Error along y",
-                            "z": err_sol_grid_y.cpu().numpy(),
-                            "zmax": None,
-                            "zmin": None,
-                            "base_path": str(out_dir / f"{stem}_sol_error_y"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Exact x-Flux-Div",
-                            "z": flux_x_grid.cpu().numpy(),
-                            "zmax": phi_max,
-                            "zmin": phi_min,
-                            "base_path": str(out_dir / f"{stem}_flux_x_exact"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Predicted x-Flux-Div",
-                            "z": pred_flux_x_grid.cpu().numpy(),
-                            "zmax": phi_max,
-                            "zmin": phi_min,
-                            "base_path": str(out_dir / f"{stem}_flux_x_pred"),
-                            "font": font,
-                        },
-                        {
-                            "title": "x-Flux-Div Error",
-                            "z": err_flux_x_grid.cpu().numpy(),
-                            "zmax": None,
-                            "zmin": None,
-                            "base_path": str(out_dir / f"{stem}_flux_x_error"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Exact y-Flux-Div",
-                            "z": flux_y_grid.cpu().numpy(),
-                            "zmax": psi_max,
-                            "zmin": psi_min,
-                            "base_path": str(out_dir / f"{stem}_flux_y_exact"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Predicted y-Flux-Div",
-                            "z": pred_flux_y_grid.cpu().numpy(),
-                            "zmax": psi_max,
-                            "zmin": psi_min,
-                            "base_path": str(out_dir / f"{stem}_flux_y_pred"),
-                            "font": font,
-                        },
-                        {
-                            "title": "y-Flux-Div Error",
-                            "z": err_flux_y_grid.cpu().numpy(),
-                            "zmax": None,
-                            "zmin": None,
-                            "base_path": str(out_dir / f"{stem}_flux_y_error"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Flux-Div Sum",
-                            "z": err_flux_sum_grid.cpu().numpy(),
-                            "zmax": None,
-                            "zmin": None,
-                            "base_path": str(out_dir / f"{stem}_flux_sum"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Flux-Div Sub",
-                            "z": err_flux_sub_grid.cpu().numpy(),
-                            "zmax": None,
-                            "zmin": None,
-                            "base_path": str(out_dir / f"{stem}_flux_sub"),
-                            "font": font,
-                        },
-                        {
-                            "title": "Null-space Solution Contribution along x",
-                            "z": null_sol_x_grid.cpu().numpy(),
-                            "zmax": null_abs_max,
-                            "zmin": -null_abs_max if null_abs_max is not None else None,
-                            "base_path": str(out_dir / f"{stem}_null_sol_x"),
-                            "font": font,
-                            "colorscale": "RdBu",
-                        },
-                        {
-                            "title": "Null-space Solution Contribution along y",
-                            "z": null_sol_y_grid.cpu().numpy(),
-                            "zmax": null_abs_max,
-                            "zmin": -null_abs_max if null_abs_max is not None else None,
-                            "base_path": str(out_dir / f"{stem}_null_sol_y"),
-                            "font": font,
-                            "colorscale": "RdBu",
-                        },
-                        {
-                            "title": "Null-space Solution Residual",
-                            "z": null_sol_residual_grid.cpu().numpy(),
-                            "zmax": null_abs_max,
-                            "zmin": -null_abs_max if null_abs_max is not None else None,
-                            "base_path": str(out_dir / f"{stem}_null_sol_residual"),
-                            "font": font,
-                            "colorscale": "RdBu",
-                        },
-                        {
-                            "title": "Closure Residual along x",
-                            "z": closure_phi_grid.cpu().numpy(),
-                            "zmax": closure_abs_max,
-                            "zmin": (
-                                -closure_abs_max
-                                if closure_abs_max is not None
-                                else None
-                            ),
-                            "base_path": str(out_dir / f"{stem}_closure_phi_residual"),
-                            "font": font,
-                            "colorscale": "RdBu",
-                        },
-                        {
-                            "title": "Closure Residual along y",
-                            "z": closure_psi_grid.cpu().numpy(),
-                            "zmax": closure_abs_max,
-                            "zmin": (
-                                -closure_abs_max
-                                if closure_abs_max is not None
-                                else None
-                            ),
-                            "base_path": str(out_dir / f"{stem}_closure_psi_residual"),
-                            "font": font,
-                            "colorscale": "RdBu",
-                        },
-                    ]
-                    if executor is not None:
-                        futures = [
-                            executor.submit(_render_heatmap_task, task)
-                            for task in plot_tasks
-                        ]
-                        for fut in futures:
-                            fut.result()
-                    else:
-                        for task in plot_tasks:
-                            _render_heatmap_task(task)
+                            out_dir = self.work_dir / dataset_name
+                            stem = file_stem or f"sample_{global_idx}"
+                            plot_tasks: List[dict[str, Any]] = [
+                                {
+                                    "title": "Exact Solution",
+                                    "z": sol_grid.cpu().numpy(),
+                                    "zmax": u_max,
+                                    "zmin": u_min,
+                                    "base_path": str(out_dir / f"{stem}_sol_exact"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Predicted Solution",
+                                    "z": pred_sol_grid.cpu().numpy(),
+                                    "zmax": u_max,
+                                    "zmin": u_min,
+                                    "base_path": str(out_dir / f"{stem}_sol_pred"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Solution Error",
+                                    "z": err_sol_grid.cpu().numpy(),
+                                    "zmax": None,
+                                    "zmin": None,
+                                    "base_path": str(out_dir / f"{stem}_sol_error"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Exact Solution along x",
+                                    "z": sol_grid_x.cpu().numpy(),
+                                    "zmax": u_max,
+                                    "zmin": u_min,
+                                    "base_path": str(out_dir / f"{stem}_sol_exact_x"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Predicted Solution along x",
+                                    "z": pred_sol_grid_x.cpu().numpy(),
+                                    "zmax": u_max,
+                                    "zmin": u_min,
+                                    "base_path": str(out_dir / f"{stem}_sol_pred_x"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Solution Error along x",
+                                    "z": err_sol_grid_x.cpu().numpy(),
+                                    "zmax": None,
+                                    "zmin": None,
+                                    "base_path": str(out_dir / f"{stem}_sol_error_x"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Exact Solution along y",
+                                    "z": sol_grid_y.cpu().numpy(),
+                                    "zmax": u_max,
+                                    "zmin": u_min,
+                                    "base_path": str(out_dir / f"{stem}_sol_exact_y"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Predicted Solution along y",
+                                    "z": pred_sol_grid_y.cpu().numpy(),
+                                    "zmax": u_max,
+                                    "zmin": u_min,
+                                    "base_path": str(out_dir / f"{stem}_sol_pred_y"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Solution Error along y",
+                                    "z": err_sol_grid_y.cpu().numpy(),
+                                    "zmax": None,
+                                    "zmin": None,
+                                    "base_path": str(out_dir / f"{stem}_sol_error_y"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Exact x-Flux-Div",
+                                    "z": flux_x_grid.cpu().numpy(),
+                                    "zmax": phi_max,
+                                    "zmin": phi_min,
+                                    "base_path": str(out_dir / f"{stem}_flux_x_exact"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Predicted x-Flux-Div",
+                                    "z": pred_flux_x_grid.cpu().numpy(),
+                                    "zmax": phi_max,
+                                    "zmin": phi_min,
+                                    "base_path": str(out_dir / f"{stem}_flux_x_pred"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "x-Flux-Div Error",
+                                    "z": err_flux_x_grid.cpu().numpy(),
+                                    "zmax": None,
+                                    "zmin": None,
+                                    "base_path": str(out_dir / f"{stem}_flux_x_error"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Exact y-Flux-Div",
+                                    "z": flux_y_grid.cpu().numpy(),
+                                    "zmax": psi_max,
+                                    "zmin": psi_min,
+                                    "base_path": str(out_dir / f"{stem}_flux_y_exact"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Predicted y-Flux-Div",
+                                    "z": pred_flux_y_grid.cpu().numpy(),
+                                    "zmax": psi_max,
+                                    "zmin": psi_min,
+                                    "base_path": str(out_dir / f"{stem}_flux_y_pred"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "y-Flux-Div Error",
+                                    "z": err_flux_y_grid.cpu().numpy(),
+                                    "zmax": None,
+                                    "zmin": None,
+                                    "base_path": str(out_dir / f"{stem}_flux_y_error"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Flux-Div Sum",
+                                    "z": err_flux_sum_grid.cpu().numpy(),
+                                    "zmax": None,
+                                    "zmin": None,
+                                    "base_path": str(out_dir / f"{stem}_flux_sum"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Flux-Div Sub",
+                                    "z": err_flux_sub_grid.cpu().numpy(),
+                                    "zmax": None,
+                                    "zmin": None,
+                                    "base_path": str(out_dir / f"{stem}_flux_sub"),
+                                    "font": font,
+                                },
+                                {
+                                    "title": "Null-space Solution Contribution along x",
+                                    "z": null_sol_x_grid.cpu().numpy(),
+                                    "zmax": null_abs_max,
+                                    "zmin": (
+                                        -null_abs_max
+                                        if null_abs_max is not None
+                                        else None
+                                    ),
+                                    "base_path": str(out_dir / f"{stem}_null_sol_x"),
+                                    "font": font,
+                                    "colorscale": "RdBu",
+                                },
+                                {
+                                    "title": "Null-space Solution Contribution along y",
+                                    "z": null_sol_y_grid.cpu().numpy(),
+                                    "zmax": null_abs_max,
+                                    "zmin": (
+                                        -null_abs_max
+                                        if null_abs_max is not None
+                                        else None
+                                    ),
+                                    "base_path": str(out_dir / f"{stem}_null_sol_y"),
+                                    "font": font,
+                                    "colorscale": "RdBu",
+                                },
+                                {
+                                    "title": "Null-space Solution Residual",
+                                    "z": null_sol_residual_grid.cpu().numpy(),
+                                    "zmax": null_abs_max,
+                                    "zmin": (
+                                        -null_abs_max
+                                        if null_abs_max is not None
+                                        else None
+                                    ),
+                                    "base_path": str(
+                                        out_dir / f"{stem}_null_sol_residual"
+                                    ),
+                                    "font": font,
+                                    "colorscale": "RdBu",
+                                },
+                                {
+                                    "title": "Closure Residual along x",
+                                    "z": closure_phi_grid.cpu().numpy(),
+                                    "zmax": closure_abs_max,
+                                    "zmin": (
+                                        -closure_abs_max
+                                        if closure_abs_max is not None
+                                        else None
+                                    ),
+                                    "base_path": str(
+                                        out_dir / f"{stem}_closure_phi_residual"
+                                    ),
+                                    "font": font,
+                                    "colorscale": "RdBu",
+                                },
+                                {
+                                    "title": "Closure Residual along y",
+                                    "z": closure_psi_grid.cpu().numpy(),
+                                    "zmax": closure_abs_max,
+                                    "zmin": (
+                                        -closure_abs_max
+                                        if closure_abs_max is not None
+                                        else None
+                                    ),
+                                    "base_path": str(
+                                        out_dir / f"{stem}_closure_psi_residual"
+                                    ),
+                                    "font": font,
+                                    "colorscale": "RdBu",
+                                },
+                            ]
+                            if executor is not None:
+                                futures = [
+                                    executor.submit(_render_heatmap_task, task)
+                                    for task in plot_tasks
+                                ]
+                                for fut in futures:
+                                    fut.result()
+                            else:
+                                for task in plot_tasks:
+                                    _render_heatmap_task(task)
+            finally:
+                if executor is not None:
+                    executor.shutdown(wait=True)
+
+            # Save metrics CSV
+            import csv
+
+            csv_path = self.work_dir / dataset_name / "metrics.csv"
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            with csv_path.open("w", newline="") as fp:
+                writer = csv.DictWriter(fp, fieldnames=["file", "rel_flux", "rel_sol"])
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(row)
         finally:
-            if executor is not None:
-                executor.shutdown(wait=True)
-
-        # Save metrics CSV
-        import csv
-
-        csv_path = self.work_dir / dataset_name / "metrics.csv"
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with csv_path.open("w", newline="") as fp:
-            writer = csv.DictWriter(fp, fieldnames=["file", "rel_flux", "rel_sol"])
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
+            self.model.train(was_training)

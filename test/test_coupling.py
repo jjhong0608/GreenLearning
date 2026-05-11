@@ -52,6 +52,29 @@ class _DummyFluxModel(nn.Module):
         return self._projected_flux.clone()
 
 
+class _InspectModeFluxModel(nn.Module):
+    def __init__(self, projected_flux: torch.Tensor) -> None:
+        super().__init__()
+        self.register_buffer("_projected_flux", projected_flux)
+        self.training_states: list[bool] = []
+        self.grad_enabled_states: list[bool] = []
+
+    def forward(
+        self,
+        coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+    ) -> torch.Tensor:
+        del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
+        self.training_states.append(self.training)
+        self.grad_enabled_states.append(torch.is_grad_enabled())
+        return self._projected_flux.clone()
+
+
 class _TrainableFluxModel(nn.Module):
     def __init__(self, projected_flux: torch.Tensor) -> None:
         super().__init__()
@@ -173,6 +196,39 @@ def _make_step_loss_inputs(
         b_vals,
         c_vals,
     )
+
+
+def _make_coupling_dataset_item(
+    *,
+    n_lines: int = 3,
+    m_points: int = 5,
+) -> tuple[tuple[torch.Tensor, ...], tuple[torch.Tensor, ...]]:
+    inputs = _make_step_loss_inputs(batch=1, n_lines=n_lines, m_points=m_points)
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = inputs
+    a_vals[:] = 1.0
+    item = (
+        coords,
+        rhs_raw[0],
+        rhs_tilde[0],
+        rhs_norm[0],
+        sol[0],
+        flux_target[0],
+        a_vals[0],
+        b_vals[0],
+        c_vals[0],
+        torch.zeros_like(a_vals[0]),
+    )
+    return inputs, item
 
 
 def _losses_config(
@@ -1080,6 +1136,108 @@ def test_coupling_trainer_runs(tmp_path):
     assert "loss_l2_consistency" in metrics
     assert "loss_energy_consistency" in metrics
     assert "loss_cross_consistency" in metrics
+
+
+def test_coupling_trainer_validation_uses_eval_mode_and_restores_training(tmp_path):
+    inputs, item = _make_coupling_dataset_item()
+    flux_target = inputs[5]
+    model = _InspectModeFluxModel(projected_flux=torch.zeros_like(flux_target))
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    trainer.model.train()
+    loader = trainer._make_loader([item], shuffle=False)  # type: ignore[arg-type]
+
+    metrics = trainer._evaluate_loader(loader)
+
+    assert "loss" in metrics
+    assert trainer.model.training is True
+    assert model.training_states == [False]
+    assert model.grad_enabled_states == [False]
+
+
+def test_coupling_trainer_evaluate_uses_eval_mode_and_restores_training(tmp_path):
+    inputs, item = _make_coupling_dataset_item()
+    flux_target = inputs[5]
+    model = _InspectModeFluxModel(projected_flux=torch.zeros_like(flux_target))
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+    trainer.model.train()
+
+    metrics = trainer.evaluate([item])  # type: ignore[arg-type]
+
+    assert "loss" in metrics
+    assert trainer.model.training is True
+    assert model.training_states == [False]
+    assert model.grad_enabled_states == [False]
+
+
+def test_coupling_validation_metrics_are_deterministic_with_dropout(tmp_path):
+    _inputs, item = _make_coupling_dataset_item()
+    model_cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        dropout=0.9,
+        dtype=torch.float64,
+    )
+    trainer = CouplingTrainer(
+        model=CouplingNet(model_cfg),
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        model_cfg=model_cfg,
+    )
+    loader = trainer._make_loader([item], shuffle=False)  # type: ignore[arg-type]
+    trainer.model.train()
+
+    metrics_a = trainer._evaluate_loader(loader)
+    metrics_b = trainer._evaluate_loader(loader)
+
+    assert trainer.model.training is True
+    for key in (
+        "loss",
+        "loss_l2_consistency",
+        "loss_energy_consistency",
+        "loss_cross_consistency",
+        "rel_flux",
+        "rel_sol",
+    ):
+        assert metrics_a[key] == pytest.approx(metrics_b[key])
+
+
+def test_coupling_evaluator_uses_eval_mode_no_grad_and_restores_training(
+    tmp_path,
+    monkeypatch,
+):
+    inputs, item = _make_coupling_dataset_item()
+    flux_target = inputs[5]
+    model = _InspectModeFluxModel(projected_flux=torch.zeros_like(flux_target))
+    model.train()
+    evaluator = CouplingEvaluator(
+        model=model,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        device=torch.device("cpu"),
+        work_dir=tmp_path,
+    )
+    monkeypatch.setattr(
+        "greenonet.coupling_evaluator._render_heatmap_task",
+        lambda task: None,
+    )
+
+    evaluator.evaluate([item], batch_size=1, plot_workers=1)  # type: ignore[arg-type]
+
+    assert model.training is True
+    assert model.training_states == [False]
+    assert model.grad_enabled_states == [False]
+    assert (tmp_path / "test" / "metrics.csv").exists()
 
 
 def test_coupling_trainer_compile_enabled_calls_torch_compile(tmp_path, monkeypatch):

@@ -637,23 +637,13 @@ class CouplingTrainer(LoggingMixin):
         self,
         loader: DataLoader[CouplingBatch],
     ) -> dict[str, float]:
-        with torch.no_grad():
-            accum = self._metric_accumulator(0.0)
-            batch_count = 0
-            for (
-                coords,
-                rhs_raw,
-                rhs_tilde,
-                rhs_norm,
-                sol,
-                flux,
-                a_vals,
-                b_vals,
-                c_vals,
-                ap,
-            ) in loader:
-                del ap
-                _, metrics = self._step_loss(
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            with torch.no_grad():
+                accum = self._metric_accumulator(0.0)
+                batch_count = 0
+                for (
                     coords,
                     rhs_raw,
                     rhs_tilde,
@@ -663,11 +653,26 @@ class CouplingTrainer(LoggingMixin):
                     a_vals,
                     b_vals,
                     c_vals,
-                )
-                for key in accum:
-                    accum[key] += metrics.get(key, 0.0)
-                batch_count += 1
-        return {key: value / max(batch_count, 1) for key, value in accum.items()}
+                    ap,
+                ) in loader:
+                    del ap
+                    _, metrics = self._step_loss(
+                        coords,
+                        rhs_raw,
+                        rhs_tilde,
+                        rhs_norm,
+                        sol,
+                        flux,
+                        a_vals,
+                        b_vals,
+                        c_vals,
+                    )
+                    for key in accum:
+                        accum[key] += metrics.get(key, 0.0)
+                    batch_count += 1
+            return {key: value / max(batch_count, 1) for key, value in accum.items()}
+        finally:
+            self.model.train(was_training)
 
     def _run_training_phase(
         self,
@@ -830,25 +835,14 @@ class CouplingTrainer(LoggingMixin):
         self,
         dataset: Dataset[CouplingBatch],
     ) -> dict[str, float]:
+        was_training = self.model.training
         self.model.eval()
-        loader = self._make_loader(dataset, shuffle=False)
-        accum = self._metric_accumulator(0.0)
-        batch_count = 0
-        with torch.no_grad():
-            for (
-                coords,
-                rhs_raw,
-                rhs_tilde,
-                rhs_norm,
-                sol,
-                flux,
-                a_vals,
-                b_vals,
-                c_vals,
-                ap,
-            ) in loader:
-                del ap
-                _loss, metrics = self._step_loss(
+        try:
+            loader = self._make_loader(dataset, shuffle=False)
+            accum = self._metric_accumulator(0.0)
+            batch_count = 0
+            with torch.no_grad():
+                for (
                     coords,
                     rhs_raw,
                     rhs_tilde,
@@ -858,8 +852,23 @@ class CouplingTrainer(LoggingMixin):
                     a_vals,
                     b_vals,
                     c_vals,
-                )
-                for key in accum:
-                    accum[key] += metrics.get(key, 0.0)
-                batch_count += 1
-        return {key: value / max(batch_count, 1) for key, value in accum.items()}
+                    ap,
+                ) in loader:
+                    del ap
+                    _loss, metrics = self._step_loss(
+                        coords,
+                        rhs_raw,
+                        rhs_tilde,
+                        rhs_norm,
+                        sol,
+                        flux,
+                        a_vals,
+                        b_vals,
+                        c_vals,
+                    )
+                    for key in accum:
+                        accum[key] += metrics.get(key, 0.0)
+                    batch_count += 1
+            return {key: value / max(batch_count, 1) for key, value in accum.items()}
+        finally:
+            self.model.train(was_training)

@@ -32,11 +32,11 @@
       "encoder_type": "mlp",
       "coefficient_normalization": "rms",
       "coefficient_tanh_beta": 1.0,
-      "hidden_dim": 16,
-      "depth": 1,
+      "hidden_dim": 32,
+      "depth": 2,
       "activation": "gelu",
       "use_bias": true,
-      "dropout": 0.0,
+      "dropout": 0.05,
       "use_g_normalization": true,
       "eps": 1e-12
     }
