@@ -60,13 +60,18 @@ class CouplingTrainer(LoggingMixin):
         work_dir: Path | str,
         green_kernel: torch.Tensor,
         model_cfg: CouplingModelConfig | None = None,
+        terminal_width: int | None = None,
     ) -> None:
         self.model = model
         self.config = config
         self.model_cfg = model_cfg
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        super().__init__(logger_name="CouplingTrainer", work_dir=self.work_dir)
+        super().__init__(
+            logger_name="CouplingTrainer",
+            work_dir=self.work_dir,
+            terminal_width=terminal_width,
+        )
         self.device = torch.device(config.device)
         self.model.to(self.device)
         self.model = maybe_compile_model(

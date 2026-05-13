@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 
+from rich.logging import RichHandler
 import torch
 
 from greenonet.axial import make_square_axial_lines
@@ -123,6 +124,11 @@ class TestRunGreenONet:
 
         def fake_train(self, dataset, validation_dataset=None):
             del validation_dataset
+            for handler in self.logger.handlers:
+                if isinstance(handler, RichHandler):
+                    captured["trainer_terminal_width"] = getattr(
+                        handler.console, "_width"
+                    )
             return None
 
         monkeypatch.setattr(ForwardSampler, "generate_dataset", fake_generate_dataset)
@@ -141,10 +147,12 @@ class TestRunGreenONet:
             scale_length=0.1,
             use_operator_learning=True,
             deterministic=True,
+            terminal_width=210,
         )
 
         assert captured["b_fun"] is b_fun
         assert captured["c_fun"] is c_fun
+        assert captured["trainer_terminal_width"] == 210
         logging.getLogger("GreenONetRunner").handlers.clear()
         logging.getLogger("Trainer").handlers.clear()
 

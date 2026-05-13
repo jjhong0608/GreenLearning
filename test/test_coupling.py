@@ -1074,6 +1074,39 @@ def test_smooth_mask_balance_projection_preserves_balance_shape_dtype_and_device
     )
 
 
+def test_smooth_mask_default_powers_match_original_formula():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=True,
+        smooth_mask_power=1.0,
+        smooth_mask_diff_power=1.0,
+    )
+    model = CouplingNet(cfg)
+    flux_int = torch.randn(2, 2, n, n, dtype=torch.float64)
+    rhs_raw = torch.randn(2, 2, n, m, dtype=torch.float64)
+    coords = _make_projection_coords(n)
+
+    projected = model._apply_balance_projection(flux_int, rhs_raw, coords)
+
+    phi0 = flux_int[:, 0]
+    psi0 = flux_int[:, 1].transpose(-1, -2)
+    f = rhs_raw[:, 0, :, 1:-1]
+    m_phi, m_psi = model._smooth_mask_components(coords, flux_int)
+    denom = m_phi + m_psi
+    w_phi = m_phi / denom
+    w_psi = m_psi / denom
+    alpha = (m_phi * m_psi) / denom
+    expected_phi = w_phi * f + alpha * (phi0 - psi0)
+    expected_psi = w_psi * f - alpha * (phi0 - psi0)
+
+    torch.testing.assert_close(projected[:, 0], expected_phi)
+    torch.testing.assert_close(projected[:, 1].transpose(-1, -2), expected_psi)
+
+
 def test_smooth_mask_components_use_expected_axes_and_normalization():
     torch.set_default_dtype(torch.float64)
     n = 3
@@ -1099,11 +1132,116 @@ def test_smooth_mask_components_use_expected_axes_and_normalization():
     assert torch.max(m_psi).item() == pytest.approx(1.0)
 
 
+def test_smooth_mask_components_apply_power_without_moving_center():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=True,
+        smooth_mask_power=0.5,
+    )
+    model = CouplingNet(cfg)
+    coords = _make_projection_coords(n)
+    flux_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
+
+    m_phi, m_psi = model._smooth_mask_components(coords, flux_int)
+
+    base = torch.tensor([0.75, 1.0, 0.75], dtype=torch.float64)
+    expected = torch.sqrt(base)
+    torch.testing.assert_close(m_phi[0, :, 0], expected)
+    torch.testing.assert_close(m_psi[0, 0, :], expected)
+    assert m_phi[0, 0, 0].item() > base[0].item()
+    assert m_phi[0, 1, 0].item() == pytest.approx(1.0)
+    assert m_psi[0, 0, 1].item() == pytest.approx(1.0)
+
+
+def test_smooth_mask_diff_power_keeps_split_and_increases_boundary_difference():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=True,
+        smooth_mask_diff_power=0.5,
+    )
+    model = CouplingNet(cfg)
+    coords = _make_projection_coords(n)
+    flux_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
+    phi0 = torch.tensor(
+        [[[1.0, 2.0, 3.0], [1.5, 0.5, -0.5], [0.25, -1.0, 2.5]]],
+        dtype=torch.float64,
+    )
+    psi0 = torch.tensor(
+        [[[0.5, -1.0, 2.0], [0.25, 1.25, -1.5], [1.0, 0.0, -0.25]]],
+        dtype=torch.float64,
+    )
+    flux_int[:, 0] = phi0
+    flux_int[:, 1] = psi0.transpose(-1, -2)
+    rhs_raw = torch.zeros((1, 2, n, m), dtype=torch.float64)
+    f = torch.tensor(
+        [[[2.0, 1.0, -1.0], [0.5, 3.0, -0.75], [1.25, -0.25, 0.75]]],
+        dtype=torch.float64,
+    )
+    rhs_raw[:, 0, :, 1:-1] = f
+
+    projected = model._apply_balance_projection(flux_int, rhs_raw, coords)
+
+    m_phi, m_psi = model._smooth_mask_components(coords, flux_int)
+    denom = m_phi + m_psi
+    w_phi = m_phi / denom
+    w_psi = m_psi / denom
+    alpha_soft = (m_phi * m_psi) / denom
+    beta = 0.5 * torch.sqrt(2.0 * alpha_soft)
+    expected_phi = w_phi * f + beta * (phi0 - psi0)
+    expected_psi = w_psi * f - beta * (phi0 - psi0)
+    old_beta = alpha_soft
+
+    torch.testing.assert_close(projected[:, 0], expected_phi)
+    torch.testing.assert_close(projected[:, 1].transpose(-1, -2), expected_psi)
+    assert beta[0, 0, 0].item() > old_beta[0, 0, 0].item()
+    torch.testing.assert_close(w_phi + w_psi, torch.ones_like(w_phi + w_psi))
+
+
+def test_smooth_mask_power_and_diff_power_preserve_balance():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=True,
+        smooth_mask_power=0.5,
+        smooth_mask_diff_power=0.5,
+    )
+    model = CouplingNet(cfg)
+    flux_int = torch.randn(2, 2, n, n, dtype=torch.float64)
+    rhs_raw = torch.randn(2, 2, n, m, dtype=torch.float64)
+    coords = _make_projection_coords(n)
+
+    projected = model._apply_balance_projection(flux_int, rhs_raw, coords)
+
+    phi = projected[:, 0]
+    psi = projected[:, 1].transpose(-1, -2)
+    torch.testing.assert_close(
+        phi + psi,
+        rhs_raw[:, 0, :, 1:-1],
+        atol=1.0e-10,
+        rtol=1.0e-10,
+    )
+
+
 def test_smooth_mask_projection_config_validation():
     with pytest.raises(ValueError, match="Unsupported balance_projection"):
         CouplingNet(CouplingModelConfig(balance_projection="bad"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="smooth_mask_eps"):
         CouplingNet(CouplingModelConfig(smooth_mask_eps=0.0))
+    with pytest.raises(ValueError, match="smooth_mask_power"):
+        CouplingNet(CouplingModelConfig(smooth_mask_power=0.0))
+    with pytest.raises(ValueError, match="smooth_mask_diff_power"):
+        CouplingNet(CouplingModelConfig(smooth_mask_diff_power=0.0))
 
 
 def test_coupling_trainer_runs(tmp_path):

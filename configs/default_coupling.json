@@ -10,14 +10,17 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/5_fold_test_diffusion/fold0/train",
-    "validation_path": "data/5_fold_test_diffusion/fold0/valid",
-    "test_path": "data/5_fold_test_diffusion/fold0/valid",
+    "training_path": "data/Sinusoidal_Diffusion_Only/fold0/train",
+    "validation_path": "data/Sinusoidal_Diffusion_Only/fold0/valid",
+    "test_path": "data/Sinusoidal_Diffusion_Only/fold0/valid",
     "dtype": "float64"
+  },
+  "terminal": {
+    "width": 305
   },
   "coupling_model": {
     "hidden_dim": 256,
-    "depth": 2,
+    "depth": 4,
     "activation": "rational",
     "use_bias": true,
     "dropout": 0.0,
@@ -27,8 +30,10 @@
     "balance_projection": "smooth_mask",
     "smooth_mask_normalize": true,
     "smooth_mask_eps": 1e-12,
+    "smooth_mask_power": 1.0,
+    "smooth_mask_diff_power": 1.0,
     "source_stencil_lift": {
-      "enabled": true,
+      "enabled": false,
       "encoder_type": "mlp",
       "coefficient_normalization": "rms",
       "coefficient_tanh_beta": 1.0,
@@ -83,7 +88,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/test_diffusion/green/backward/model.safetensors",
+    "green_pretrained_path": "checkpoints/Sinusoidal_Diffusion_Only/green/backward/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

@@ -21,6 +21,7 @@ from greenonet.config import (
     ModelConfig,
     PipelineConfig,
     SourceStencilLiftConfig,
+    TerminalConfig,
     TrainingConfig,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
@@ -70,9 +71,11 @@ class TrainCLI:
         CouplingModelConfig,
         CouplingTrainingConfig,
         PipelineConfig,
+        TerminalConfig,
     ]:
         with config_path.open() as fp:
             raw = json.load(fp)
+        terminal_cfg = self._build_terminal_config(raw.get("terminal"))
         dataset_kwargs = dict(raw["dataset"])
         dataset_kwargs.pop("domain", None)
         dtype_name = dataset_kwargs.pop("dtype", "float64")
@@ -132,7 +135,16 @@ class TrainCLI:
             coupling_model_cfg,
             coupling_training_cfg,
             pipeline_cfg,
+            terminal_cfg,
         )
+
+    @staticmethod
+    def _build_terminal_config(raw_terminal: object | None) -> TerminalConfig:
+        if raw_terminal is None:
+            return TerminalConfig()
+        if not isinstance(raw_terminal, dict):
+            raise TypeError("terminal must be an object.")
+        return TerminalConfig(**dict(raw_terminal))
 
     @staticmethod
     def _build_compile_config(
@@ -370,6 +382,7 @@ class TrainCLI:
             coupling_model_cfg,
             coupling_training_cfg,
             pipeline_cfg,
+            terminal_cfg,
         ) = self._build_configs(config_path)
 
         work_dir = Path(args.work_dir)
@@ -401,6 +414,7 @@ class TrainCLI:
                 step_size=dataset_cfg.step_size,
                 model_cfg=model_cfg,
                 training_cfg=training_cfg,
+                terminal_width=terminal_cfg.width,
             )
             green_model.load_state_dict(model_state_dict_for_save(green_trainer.model))
         else:
@@ -504,6 +518,7 @@ class TrainCLI:
                 work_dir=work_dir,
                 green_kernel=green_kernel,
                 model_cfg=coupling_model_cfg,
+                terminal_width=terminal_cfg.width,
             )
             coupling_trainer.train(coupling_train_dataset, coupling_val_dataset)
             if coupling_test_dataset is not None:
@@ -513,6 +528,7 @@ class TrainCLI:
                     device=torch.device(coupling_training_cfg.device),
                     work_dir=work_dir,
                     integration_rule=coupling_training_cfg.integration_rule,
+                    terminal_width=terminal_cfg.width,
                 )
                 evaluator.evaluate(
                     coupling_test_dataset,

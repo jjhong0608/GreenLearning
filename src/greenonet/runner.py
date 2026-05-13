@@ -20,10 +20,19 @@ from greenonet.trainer import Trainer
 class GreenONetRunner(LoggingMixin):
     """Cleaned runner inspired by the original GreenONet script."""
 
-    def __init__(self, work_dir: Path | str) -> None:
+    def __init__(
+        self,
+        work_dir: Path | str,
+        terminal_width: int | None = None,
+    ) -> None:
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        super().__init__(logger_name="GreenONetRunner", work_dir=self.work_dir)
+        self.terminal_width = terminal_width
+        super().__init__(
+            logger_name="GreenONetRunner",
+            work_dir=self.work_dir,
+            terminal_width=terminal_width,
+        )
 
     def _build_axial_lines(
         self,
@@ -187,6 +196,7 @@ class GreenONetRunner(LoggingMixin):
             config=cfg_training,
             work_dir=self.work_dir,
             model_cfg=cfg_model,
+            terminal_width=self.terminal_width,
         )
         trainer.train(dataset, validation_dataset)
         return trainer
@@ -215,8 +225,9 @@ def run_green_o_net(
     sampler_mode: Literal["forward", "backward"] = "forward",
     model_cfg: ModelConfig | None = None,
     training_cfg: TrainingConfig | None = None,
+    terminal_width: int | None = None,
 ) -> Trainer:
-    runner = GreenONetRunner(work_dir=work_dir)
+    runner = GreenONetRunner(work_dir=work_dir, terminal_width=terminal_width)
     return runner.run(
         a_fun=a_fun,
         apx_fun=apx_fun,

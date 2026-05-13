@@ -53,6 +53,7 @@ class CouplingEvaluator(LoggingMixin):
         device: torch.device,
         work_dir: Path | str,
         integration_rule: IntegrationRule = "simpson",
+        terminal_width: int | None = None,
     ) -> None:
         self.model = model.to(device)
         self.green_kernel = green_kernel.to(device)
@@ -60,7 +61,11 @@ class CouplingEvaluator(LoggingMixin):
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.integration_rule = integration_rule
-        super().__init__(logger_name="CouplingEvaluator", work_dir=self.work_dir)
+        super().__init__(
+            logger_name="CouplingEvaluator",
+            work_dir=self.work_dir,
+            terminal_width=terminal_width,
+        )
 
     def _integrate(
         self, green: torch.Tensor, values: torch.Tensor, x_axis: torch.Tensor

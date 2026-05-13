@@ -18,6 +18,7 @@ class TestTrainCLIConfigCopy:
             },
             "model": {},
             "training": {},
+            "terminal": {"width": 250},
             "pipeline": {"run_green": True, "run_coupling": False},
         }
         path.write_text(json.dumps(payload))
@@ -27,8 +28,10 @@ class TestTrainCLIConfigCopy:
         config_path = tmp_path / "config.json"
         payload = self._write_config(config_path)
         work_dir = tmp_path / "work"
+        captured = {}
 
         def _fake_run_green_o_net(*_args, **kwargs):
+            captured["terminal_width"] = kwargs["terminal_width"]
             return SimpleNamespace(model=GreenONetModel(kwargs["model_cfg"]))
 
         monkeypatch.setattr("cli.train.run_green_o_net", _fake_run_green_o_net)
@@ -43,6 +46,7 @@ class TestTrainCLIConfigCopy:
         copied = work_dir / "config_used.json"
         assert copied.exists()
         assert json.loads(copied.read_text()) == payload
+        assert captured["terminal_width"] == 250
 
 
 class TestTrainCLIDatasetConfig:
@@ -151,6 +155,7 @@ class TestTrainCLIDatasetConfig:
             coupling_model_cfg,
             coupling_training_cfg,
             _pipeline_cfg,
+            _terminal_cfg,
         ) = TrainCLI()._build_configs(config_path)
 
         assert training_cfg.integration_rule == "trapezoid"
@@ -194,6 +199,8 @@ class TestTrainCLIDatasetConfig:
                 "balance_projection": "smooth_mask",
                 "smooth_mask_normalize": False,
                 "smooth_mask_eps": 1e-9,
+                "smooth_mask_power": 0.5,
+                "smooth_mask_diff_power": 0.75,
                 "source_stencil_lift": {
                     "enabled": True,
                     "encoder_type": "linear",
@@ -220,12 +227,15 @@ class TestTrainCLIDatasetConfig:
             coupling_model_cfg,
             _coupling_training_cfg,
             _pipeline_cfg,
+            _terminal_cfg,
         ) = TrainCLI()._build_configs(config_path)
 
         source_lift = coupling_model_cfg.source_stencil_lift
         assert coupling_model_cfg.balance_projection == "smooth_mask"
         assert coupling_model_cfg.smooth_mask_normalize is False
         assert coupling_model_cfg.smooth_mask_eps == 1e-9
+        assert coupling_model_cfg.smooth_mask_power == 0.5
+        assert coupling_model_cfg.smooth_mask_diff_power == 0.75
         assert source_lift.enabled is True
         assert source_lift.encoder_type == "linear"
         assert source_lift.coefficient_normalization == "tanh"
@@ -345,6 +355,8 @@ class TestTrainCLIDatasetConfig:
             "balance_projection": "smooth_mask",
             "smooth_mask_normalize": False,
             "smooth_mask_eps": 1e-9,
+            "smooth_mask_power": 0.5,
+            "smooth_mask_diff_power": 0.75,
             "source_stencil_lift": EvalCouplingCLI._build_source_stencil_lift_config(
                 {
                     "enabled": True,
@@ -363,6 +375,8 @@ class TestTrainCLIDatasetConfig:
         assert model_cfg.balance_projection == "smooth_mask"
         assert model_cfg.smooth_mask_normalize is False
         assert model_cfg.smooth_mask_eps == 1e-9
+        assert model_cfg.smooth_mask_power == 0.5
+        assert model_cfg.smooth_mask_diff_power == 0.75
         assert model_cfg.source_stencil_lift.enabled is True
         assert model_cfg.source_stencil_lift.encoder_type == "linear"
         assert model_cfg.source_stencil_lift.coefficient_normalization == "tanh"
@@ -386,3 +400,83 @@ class TestTrainCLIDatasetConfig:
 
         with pytest.raises(TypeError, match="deprecated flat coupling loss"):
             TrainCLI()._build_configs(config_path)
+
+
+class TestTerminalConfig:
+    def test_missing_terminal_defaults_to_auto_width(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {},
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        *_configs, terminal_cfg = TrainCLI()._build_configs(config_path)
+
+        assert terminal_cfg.width is None
+
+    def test_parses_terminal_width(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "terminal": {"width": 250},
+            "coupling_model": {},
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        *_configs, terminal_cfg = TrainCLI()._build_configs(config_path)
+
+        assert terminal_cfg.width == 250
+
+    def test_rejects_non_object_terminal_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "terminal": 250,
+            "coupling_model": {},
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="terminal must be an object"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_rejects_non_positive_terminal_width(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "terminal": {"width": 0},
+            "coupling_model": {},
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(ValueError, match="terminal.width"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_eval_cli_parses_terminal_width(self):
+        cfg = EvalCouplingCLI._build_terminal_config({"width": 180})
+
+        assert cfg.width == 180
+
+    def test_eval_cli_rejects_non_object_terminal_config(self):
+        with pytest.raises(TypeError, match="terminal must be an object"):
+            EvalCouplingCLI._build_terminal_config("wide")
+
+    def test_eval_cli_rejects_non_positive_terminal_width(self):
+        with pytest.raises(ValueError, match="terminal.width"):
+            EvalCouplingCLI._build_terminal_config({"width": -1})

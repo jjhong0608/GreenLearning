@@ -310,9 +310,15 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
         if config.smooth_mask_eps <= 0.0:
             raise ValueError("smooth_mask_eps must be positive.")
+        if config.smooth_mask_power <= 0.0:
+            raise ValueError("smooth_mask_power must be positive.")
+        if config.smooth_mask_diff_power <= 0.0:
+            raise ValueError("smooth_mask_diff_power must be positive.")
         self.balance_projection = config.balance_projection
         self.smooth_mask_normalize = bool(config.smooth_mask_normalize)
         self.smooth_mask_eps = float(config.smooth_mask_eps)
+        self.smooth_mask_power = float(config.smooth_mask_power)
+        self.smooth_mask_diff_power = float(config.smooth_mask_diff_power)
         if config.source_stencil_lift.enabled and config.branch_input_dim <= 2:
             raise ValueError(
                 "source_stencil_lift requires branch_input_dim > 2 because "
@@ -438,6 +444,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         if self.smooth_mask_normalize:
             m_phi = 4.0 * m_phi
             m_psi = 4.0 * m_psi
+        if self.smooth_mask_power != 1.0:
+            m_phi = torch.pow(m_phi.clamp_min(0.0), self.smooth_mask_power)
+            m_psi = torch.pow(m_psi.clamp_min(0.0), self.smooth_mask_power)
         return m_phi.view(1, -1, 1), m_psi.view(1, 1, -1)
 
     def _apply_smooth_mask_balance_projection(
@@ -455,11 +464,18 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         denom = (m_phi + m_psi).clamp_min(self.smooth_mask_eps)
         w_phi = m_phi / denom
         w_psi = m_psi / denom
-        alpha = (m_phi * m_psi) / denom
+        alpha_soft = (m_phi * m_psi) / denom
+        if self.smooth_mask_diff_power == 1.0:
+            beta = alpha_soft
+        else:
+            beta = 0.5 * torch.pow(
+                (2.0 * alpha_soft).clamp_min(0.0),
+                self.smooth_mask_diff_power,
+            )
 
         diff = phi0 - psi0
-        phi = w_phi * f + alpha * diff
-        psi_t = w_psi * f - alpha * diff
+        phi = w_phi * f + beta * diff
+        psi_t = w_psi * f - beta * diff
 
         projected = flux_int.clone()
         projected[:, 0] = phi

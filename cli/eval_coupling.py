@@ -20,6 +20,7 @@ from greenonet.config import (
     DatasetConfig,
     ModelConfig,
     SourceStencilLiftConfig,
+    TerminalConfig,
     TrainingConfig,
 )
 from greenonet.compile_utils import maybe_compile_model
@@ -75,6 +76,14 @@ class EvalCouplingCLI:
             if key in dataset_kwargs and dataset_kwargs[key] is not None:
                 dataset_kwargs[key] = Path(dataset_kwargs[key])
         return DatasetConfig(**dataset_kwargs)
+
+    @staticmethod
+    def _build_terminal_config(raw_terminal: object | None) -> TerminalConfig:
+        if raw_terminal is None:
+            return TerminalConfig()
+        if not isinstance(raw_terminal, dict):
+            raise TypeError("terminal must be an object.")
+        return TerminalConfig(**dict(raw_terminal))
 
     @staticmethod
     def _build_compile_config(
@@ -251,6 +260,7 @@ class EvalCouplingCLI:
         with Path(args.config).open() as fp:
             raw = json.load(fp)
 
+        terminal_cfg = self._build_terminal_config(raw.get("terminal"))
         dataset_cfg = self._build_dataset_config(raw["dataset"])
         coupling_model_kwargs = dict(raw.get("coupling_model", {}))
         if "coupler" in coupling_model_kwargs:
@@ -399,6 +409,7 @@ class EvalCouplingCLI:
             device=torch.device(coupling_training_cfg.device),
             work_dir=work_dir,
             integration_rule=coupling_training_cfg.integration_rule,
+            terminal_width=terminal_cfg.width,
         )
         evaluator.evaluate(
             test_dataset,

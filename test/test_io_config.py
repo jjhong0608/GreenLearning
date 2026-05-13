@@ -114,6 +114,8 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
         balance_projection="smooth_mask",
         smooth_mask_normalize=False,
         smooth_mask_eps=1e-9,
+        smooth_mask_power=0.5,
+        smooth_mask_diff_power=0.75,
         source_stencil_lift=SourceStencilLiftConfig(
             enabled=True,
             encoder_type="linear",
@@ -135,6 +137,8 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
     assert loaded_cfg.balance_projection == "smooth_mask"
     assert loaded_cfg.smooth_mask_normalize is False
     assert loaded_cfg.smooth_mask_eps == 1e-9
+    assert loaded_cfg.smooth_mask_power == 0.5
+    assert loaded_cfg.smooth_mask_diff_power == 0.75
     assert loaded_cfg.source_stencil_lift.enabled is True
     assert loaded_cfg.source_stencil_lift.encoder_type == "linear"
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "tanh"
@@ -225,6 +229,8 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
     assert loaded_cfg.balance_projection == "symmetric"
     assert loaded_cfg.smooth_mask_normalize is True
     assert loaded_cfg.smooth_mask_eps == 1e-12
+    assert loaded_cfg.smooth_mask_power == 1.0
+    assert loaded_cfg.smooth_mask_diff_power == 1.0
     assert loaded_cfg.source_stencil_lift.enabled is False
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "rms"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.0

@@ -30,6 +30,17 @@ class DatasetConfig:
 
 
 @dataclass
+class TerminalConfig:
+    """Terminal rendering settings for Rich console logs."""
+
+    width: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.width is not None and self.width <= 0:
+            raise ValueError("terminal.width must be positive or null.")
+
+
+@dataclass
 class ModelConfig:
     """Neural network architecture settings."""
 
@@ -80,6 +91,8 @@ class CouplingModelConfig:
     balance_projection: Literal["symmetric", "smooth_mask"] = "symmetric"
     smooth_mask_normalize: bool = True
     smooth_mask_eps: float = 1.0e-12
+    smooth_mask_power: float = 1.0
+    smooth_mask_diff_power: float = 1.0
     source_stencil_lift: SourceStencilLiftConfig = field(
         default_factory=SourceStencilLiftConfig
     )
