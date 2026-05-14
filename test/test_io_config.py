@@ -139,11 +139,52 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
     assert loaded_cfg.smooth_mask_eps == 1e-9
     assert loaded_cfg.smooth_mask_power == 0.5
     assert loaded_cfg.smooth_mask_diff_power == 0.75
+    assert loaded_cfg.smooth_mask_diff_power_trainable is False
+    assert loaded_cfg.smooth_mask_diff_power_min == 0.25
+    assert loaded_cfg.smooth_mask_diff_power_max == 2.0
     assert loaded_cfg.source_stencil_lift.enabled is True
     assert loaded_cfg.source_stencil_lift.encoder_type == "linear"
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "tanh"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.7
     assert loaded_cfg.source_stencil_lift.hidden_dim == 32
+    _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_save_load_trainable_smooth_mask_diff_power_roundtrip(tmp_path):
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=2,
+        activation="tanh",
+        use_bias=True,
+        dropout=0.0,
+        dtype=torch.float64,
+        balance_projection="smooth_mask",
+        smooth_mask_diff_power=0.75,
+        smooth_mask_diff_power_trainable=True,
+        smooth_mask_diff_power_min=0.25,
+        smooth_mask_diff_power_max=2.0,
+    )
+    model = CouplingNet(cfg)
+    assert model.smooth_mask_diff_power_raw is not None
+    with torch.no_grad():
+        model.smooth_mask_diff_power_raw.add_(0.125)
+    expected_q = model.effective_smooth_mask_diff_power()
+    path = tmp_path / "coupling_trainable_q.safetensors"
+
+    from greenonet.io import load_model_with_config, save_model_with_config
+
+    save_model_with_config(model, cfg, path)
+    loaded_model, loaded_cfg = load_model_with_config(path)
+
+    assert isinstance(loaded_model, CouplingNet)
+    assert loaded_cfg == cfg
+    assert loaded_cfg.smooth_mask_diff_power_trainable is True
+    assert loaded_cfg.smooth_mask_diff_power_min == 0.25
+    assert loaded_cfg.smooth_mask_diff_power_max == 2.0
+    assert loaded_model.effective_smooth_mask_diff_power() == expected_q
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -231,6 +272,9 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
     assert loaded_cfg.smooth_mask_eps == 1e-12
     assert loaded_cfg.smooth_mask_power == 1.0
     assert loaded_cfg.smooth_mask_diff_power == 1.0
+    assert loaded_cfg.smooth_mask_diff_power_trainable is False
+    assert loaded_cfg.smooth_mask_diff_power_min == 0.25
+    assert loaded_cfg.smooth_mask_diff_power_max == 2.0
     assert loaded_cfg.source_stencil_lift.enabled is False
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "rms"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.0

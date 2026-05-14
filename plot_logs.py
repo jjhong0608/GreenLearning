@@ -35,7 +35,8 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         rf"\s*\|\s*w_l2=(?P<w_l2>{VALUE_RE})\s+on_l2=(?P<on_l2>True|False)"
         rf"\s+w_energy=(?P<w_energy>{VALUE_RE})\s+on_energy=(?P<on_energy>True|False)"
         rf"\s+w_cross=(?P<w_cross>{VALUE_RE})\s+on_cross=(?P<on_cross>True|False)"
-        rf"(?:\s*\|\s*lr=(?P<lr>{VALUE_RE}))?"
+        rf"(?:\s*\|\s*lr=(?P<lr>{VALUE_RE})"
+        rf"(?:\s+smooth_mask_diff_power=(?P<smooth_mask_diff_power>{VALUE_RE}))?)?"
         rf"(?:\s*\|\s*val\s+loss=(?P<loss_val>{VALUE_RE})"
         rf"\s+l2_cons=(?P<l2_cons_val>{VALUE_RE})"
         rf"\s+energy_cons=(?P<energy_cons_val>{VALUE_RE})"
@@ -67,6 +68,9 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
                 "rel_flux_val": _parse_float(match.group("rflux_val")),
                 "rel_sol_val": _parse_float(match.group("rsol_val")),
                 "lr": _parse_float(match.group("lr")),
+                "smooth_mask_diff_power": _parse_float(
+                    match.group("smooth_mask_diff_power")
+                ),
                 "w_l2": _parse_float(match.group("w_l2")),
                 "on_l2": _parse_bool(match.group("on_l2")),
                 "w_energy": _parse_float(match.group("w_energy")),
@@ -91,6 +95,7 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         "rel_flux_val": [],
         "rel_sol_val": [],
         "lr": [],
+        "smooth_mask_diff_power": [],
         "w_l2": [],
         "on_l2": [],
         "w_energy": [],

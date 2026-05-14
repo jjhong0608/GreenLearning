@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import List, cast
+import math
+from typing import Any, List, MutableMapping, cast
 
 import torch
 from torch import nn
@@ -314,11 +315,52 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             raise ValueError("smooth_mask_power must be positive.")
         if config.smooth_mask_diff_power <= 0.0:
             raise ValueError("smooth_mask_diff_power must be positive.")
+        if config.smooth_mask_diff_power_trainable:
+            if config.balance_projection != "smooth_mask":
+                raise ValueError(
+                    "smooth_mask_diff_power_trainable requires "
+                    "balance_projection='smooth_mask'."
+                )
+            if config.smooth_mask_diff_power_min <= 0.0:
+                raise ValueError("smooth_mask_diff_power_min must be positive.")
+            if config.smooth_mask_diff_power_max <= config.smooth_mask_diff_power_min:
+                raise ValueError(
+                    "smooth_mask_diff_power_max must be greater than "
+                    "smooth_mask_diff_power_min."
+                )
+            if not (
+                config.smooth_mask_diff_power_min
+                <= config.smooth_mask_diff_power
+                <= config.smooth_mask_diff_power_max
+            ):
+                raise ValueError(
+                    "smooth_mask_diff_power must be within "
+                    "[smooth_mask_diff_power_min, smooth_mask_diff_power_max] "
+                    "when smooth_mask_diff_power_trainable is enabled."
+                )
         self.balance_projection = config.balance_projection
         self.smooth_mask_normalize = bool(config.smooth_mask_normalize)
         self.smooth_mask_eps = float(config.smooth_mask_eps)
         self.smooth_mask_power = float(config.smooth_mask_power)
         self.smooth_mask_diff_power = float(config.smooth_mask_diff_power)
+        self.smooth_mask_diff_power_trainable = bool(
+            config.smooth_mask_diff_power_trainable
+        )
+        self.smooth_mask_diff_power_min = float(config.smooth_mask_diff_power_min)
+        self.smooth_mask_diff_power_max = float(config.smooth_mask_diff_power_max)
+        self.smooth_mask_diff_power_raw: nn.Parameter | None
+        if self.smooth_mask_diff_power_trainable:
+            raw_value = self._bounded_power_inverse(
+                value=self.smooth_mask_diff_power,
+                lower=self.smooth_mask_diff_power_min,
+                upper=self.smooth_mask_diff_power_max,
+            )
+            self.smooth_mask_diff_power_raw = nn.Parameter(
+                torch.tensor(raw_value, dtype=config.dtype)
+            )
+        else:
+            self.register_parameter("smooth_mask_diff_power_raw", None)
+            self.smooth_mask_diff_power_raw = None
         if config.source_stencil_lift.enabled and config.branch_input_dim <= 2:
             raise ValueError(
                 "source_stencil_lift requires branch_input_dim > 2 because "
@@ -395,6 +437,63 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         else:
             self.source_stencil_lift = None
 
+    @staticmethod
+    def _bounded_power_inverse(*, value: float, lower: float, upper: float) -> float:
+        ratio = (value - lower) / (upper - lower)
+        eps = 1.0e-12
+        ratio = min(max(ratio, eps), 1.0 - eps)
+        return math.log(ratio / (1.0 - ratio))
+
+    def _bounded_smooth_mask_diff_power(self, raw: torch.Tensor) -> torch.Tensor:
+        span = self.smooth_mask_diff_power_max - self.smooth_mask_diff_power_min
+        return self.smooth_mask_diff_power_min + span * torch.sigmoid(raw)
+
+    def _smooth_mask_diff_power_tensor(self, reference: torch.Tensor) -> torch.Tensor:
+        raw = self.smooth_mask_diff_power_raw
+        if raw is None:
+            return reference.new_tensor(self.smooth_mask_diff_power)
+        bounded = self._bounded_smooth_mask_diff_power(raw)
+        return bounded.to(device=reference.device, dtype=reference.dtype)
+
+    def effective_smooth_mask_diff_power(self) -> float:
+        raw = self.smooth_mask_diff_power_raw
+        if raw is None:
+            return self.smooth_mask_diff_power
+        with torch.no_grad():
+            value = self._bounded_smooth_mask_diff_power(raw.detach())
+        return float(value.cpu().item())
+
+    def smooth_mask_diff_power_parameters(self) -> list[nn.Parameter]:
+        raw = self.smooth_mask_diff_power_raw
+        if raw is None or not raw.requires_grad:
+            return []
+        return [raw]
+
+    def _load_from_state_dict(
+        self,
+        state_dict: MutableMapping[str, torch.Tensor],
+        prefix: str,
+        local_metadata: dict[str, Any],
+        strict: bool,
+        missing_keys: list[str],
+        unexpected_keys: list[str],
+        error_msgs: list[str],
+    ) -> None:
+        raw_key = prefix + "smooth_mask_diff_power_raw"
+        if self.smooth_mask_diff_power_raw is None:
+            state_dict.pop(raw_key, None)
+        elif raw_key not in state_dict:
+            state_dict[raw_key] = self.smooth_mask_diff_power_raw.detach().clone()
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
     def _apply_symmetric_balance_projection(
         self, flux_int: torch.Tensor, rhs_raw: torch.Tensor
     ) -> torch.Tensor:
@@ -465,12 +564,20 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         w_phi = m_phi / denom
         w_psi = m_psi / denom
         alpha_soft = (m_phi * m_psi) / denom
-        if self.smooth_mask_diff_power == 1.0:
+        if (
+            not self.smooth_mask_diff_power_trainable
+            and self.smooth_mask_diff_power == 1.0
+        ):
             beta = alpha_soft
+        elif self.smooth_mask_diff_power_trainable:
+            beta = 0.5 * torch.pow(
+                (2.0 * alpha_soft).clamp_min(self.smooth_mask_eps),
+                self._smooth_mask_diff_power_tensor(alpha_soft),
+            )
         else:
             beta = 0.5 * torch.pow(
                 (2.0 * alpha_soft).clamp_min(0.0),
-                self.smooth_mask_diff_power,
+                self._smooth_mask_diff_power_tensor(alpha_soft),
             )
 
         diff = phi0 - psi0

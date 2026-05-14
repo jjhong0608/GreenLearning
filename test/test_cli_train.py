@@ -183,6 +183,11 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.balance_projection == "symmetric"
         assert coupling_model_cfg.smooth_mask_normalize is True
         assert coupling_model_cfg.smooth_mask_eps == 1e-12
+        assert coupling_model_cfg.smooth_mask_power == 1.0
+        assert coupling_model_cfg.smooth_mask_diff_power == 1.0
+        assert coupling_model_cfg.smooth_mask_diff_power_trainable is False
+        assert coupling_model_cfg.smooth_mask_diff_power_min == 0.25
+        assert coupling_model_cfg.smooth_mask_diff_power_max == 2.0
         assert coupling_model_cfg.source_stencil_lift.enabled is False
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
@@ -201,6 +206,9 @@ class TestTrainCLIDatasetConfig:
                 "smooth_mask_eps": 1e-9,
                 "smooth_mask_power": 0.5,
                 "smooth_mask_diff_power": 0.75,
+                "smooth_mask_diff_power_trainable": True,
+                "smooth_mask_diff_power_min": 0.25,
+                "smooth_mask_diff_power_max": 2.0,
                 "source_stencil_lift": {
                     "enabled": True,
                     "encoder_type": "linear",
@@ -236,6 +244,9 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.smooth_mask_eps == 1e-9
         assert coupling_model_cfg.smooth_mask_power == 0.5
         assert coupling_model_cfg.smooth_mask_diff_power == 0.75
+        assert coupling_model_cfg.smooth_mask_diff_power_trainable is True
+        assert coupling_model_cfg.smooth_mask_diff_power_min == 0.25
+        assert coupling_model_cfg.smooth_mask_diff_power_max == 2.0
         assert source_lift.enabled is True
         assert source_lift.encoder_type == "linear"
         assert source_lift.coefficient_normalization == "tanh"
@@ -357,6 +368,9 @@ class TestTrainCLIDatasetConfig:
             "smooth_mask_eps": 1e-9,
             "smooth_mask_power": 0.5,
             "smooth_mask_diff_power": 0.75,
+            "smooth_mask_diff_power_trainable": True,
+            "smooth_mask_diff_power_min": 0.25,
+            "smooth_mask_diff_power_max": 2.0,
             "source_stencil_lift": EvalCouplingCLI._build_source_stencil_lift_config(
                 {
                     "enabled": True,
@@ -377,6 +391,9 @@ class TestTrainCLIDatasetConfig:
         assert model_cfg.smooth_mask_eps == 1e-9
         assert model_cfg.smooth_mask_power == 0.5
         assert model_cfg.smooth_mask_diff_power == 0.75
+        assert model_cfg.smooth_mask_diff_power_trainable is True
+        assert model_cfg.smooth_mask_diff_power_min == 0.25
+        assert model_cfg.smooth_mask_diff_power_max == 2.0
         assert model_cfg.source_stencil_lift.enabled is True
         assert model_cfg.source_stencil_lift.encoder_type == "linear"
         assert model_cfg.source_stencil_lift.coefficient_normalization == "tanh"

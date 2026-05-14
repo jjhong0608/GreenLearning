@@ -93,6 +93,9 @@ class CouplingModelConfig:
     smooth_mask_eps: float = 1.0e-12
     smooth_mask_power: float = 1.0
     smooth_mask_diff_power: float = 1.0
+    smooth_mask_diff_power_trainable: bool = False
+    smooth_mask_diff_power_min: float = 0.25
+    smooth_mask_diff_power_max: float = 2.0
     source_stencil_lift: SourceStencilLiftConfig = field(
         default_factory=SourceStencilLiftConfig
     )

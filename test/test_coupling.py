@@ -297,7 +297,11 @@ def _make_linear_source_lift(
     return lift
 
 
-def _make_optimizer_test_coupling_net(*, source_lift_enabled: bool) -> CouplingNet:
+def _make_optimizer_test_coupling_net(
+    *,
+    source_lift_enabled: bool,
+    smooth_mask_diff_power_trainable: bool = False,
+) -> CouplingNet:
     return CouplingNet(
         CouplingModelConfig(
             branch_input_dim=5,
@@ -305,6 +309,11 @@ def _make_optimizer_test_coupling_net(*, source_lift_enabled: bool) -> CouplingN
             hidden_dim=8,
             depth=1,
             dtype=torch.float64,
+            balance_projection=(
+                "smooth_mask" if smooth_mask_diff_power_trainable else "symmetric"
+            ),
+            smooth_mask_diff_power=0.75,
+            smooth_mask_diff_power_trainable=smooth_mask_diff_power_trainable,
             source_stencil_lift=SourceStencilLiftConfig(
                 enabled=source_lift_enabled,
                 hidden_dim=4,
@@ -1233,6 +1242,60 @@ def test_smooth_mask_power_and_diff_power_preserve_balance():
     )
 
 
+def test_trainable_smooth_mask_diff_power_initializes_effective_q():
+    torch.set_default_dtype(torch.float64)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        balance_projection="smooth_mask",
+        smooth_mask_diff_power=0.75,
+        smooth_mask_diff_power_trainable=True,
+        smooth_mask_diff_power_min=0.25,
+        smooth_mask_diff_power_max=2.0,
+    )
+
+    model = CouplingNet(cfg)
+
+    raw = model.smooth_mask_diff_power_raw
+    assert raw is not None
+    assert raw.requires_grad
+    assert model.smooth_mask_diff_power_parameters() == [raw]
+    assert model.effective_smooth_mask_diff_power() == pytest.approx(0.75)
+    assert "smooth_mask_diff_power_raw" in model.state_dict()
+
+
+def test_trainable_smooth_mask_diff_power_gets_gradient_and_preserves_balance():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection="smooth_mask",
+        smooth_mask_normalize=True,
+        smooth_mask_diff_power=0.75,
+        smooth_mask_diff_power_trainable=True,
+    )
+    model = CouplingNet(cfg)
+    coords = _make_projection_coords(n)
+    flux_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
+    flux_int[:, 0] = 1.0
+    rhs_raw = torch.zeros((1, 2, n, m), dtype=torch.float64)
+
+    projected = model._apply_balance_projection(flux_int, rhs_raw, coords)
+    loss = projected[:, 0].sum()
+    loss.backward()
+
+    raw = model.smooth_mask_diff_power_raw
+    assert raw is not None
+    assert raw.grad is not None
+    assert abs(raw.grad.item()) > 0.0
+    torch.testing.assert_close(
+        projected[:, 0] + projected[:, 1].transpose(-1, -2),
+        rhs_raw[:, 0, :, 1:-1],
+        atol=1.0e-10,
+        rtol=1.0e-10,
+    )
+
+
 def test_smooth_mask_projection_config_validation():
     with pytest.raises(ValueError, match="Unsupported balance_projection"):
         CouplingNet(CouplingModelConfig(balance_projection="bad"))  # type: ignore[arg-type]
@@ -1242,6 +1305,50 @@ def test_smooth_mask_projection_config_validation():
         CouplingNet(CouplingModelConfig(smooth_mask_power=0.0))
     with pytest.raises(ValueError, match="smooth_mask_diff_power"):
         CouplingNet(CouplingModelConfig(smooth_mask_diff_power=0.0))
+    with pytest.raises(ValueError, match="balance_projection='smooth_mask'"):
+        CouplingNet(
+            CouplingModelConfig(
+                balance_projection="symmetric",
+                smooth_mask_diff_power_trainable=True,
+            )
+        )
+    with pytest.raises(ValueError, match="smooth_mask_diff_power_min"):
+        CouplingNet(
+            CouplingModelConfig(
+                balance_projection="smooth_mask",
+                smooth_mask_diff_power_trainable=True,
+                smooth_mask_diff_power_min=0.0,
+            )
+        )
+    with pytest.raises(ValueError, match="smooth_mask_diff_power_max"):
+        CouplingNet(
+            CouplingModelConfig(
+                balance_projection="smooth_mask",
+                smooth_mask_diff_power_trainable=True,
+                smooth_mask_diff_power_min=0.5,
+                smooth_mask_diff_power_max=0.5,
+            )
+        )
+    with pytest.raises(ValueError, match="within"):
+        CouplingNet(
+            CouplingModelConfig(
+                balance_projection="smooth_mask",
+                smooth_mask_diff_power=0.2,
+                smooth_mask_diff_power_trainable=True,
+                smooth_mask_diff_power_min=0.25,
+                smooth_mask_diff_power_max=2.0,
+            )
+        )
+    with pytest.raises(ValueError, match="within"):
+        CouplingNet(
+            CouplingModelConfig(
+                balance_projection="smooth_mask",
+                smooth_mask_diff_power=2.1,
+                smooth_mask_diff_power_trainable=True,
+                smooth_mask_diff_power_min=0.25,
+                smooth_mask_diff_power_max=2.0,
+            )
+        )
 
 
 def test_coupling_trainer_runs(tmp_path):
@@ -1808,6 +1915,106 @@ def test_coupling_optimizer_keeps_single_group_without_source_lift_lr(tmp_path):
     assert len(optimizer.param_groups) == 1
     assert optimizer.param_groups[0]["lr"] == pytest.approx(2.0e-3)
     assert optimizer.param_groups[0]["weight_decay"] == pytest.approx(3.0e-2)
+
+
+def test_coupling_optimizer_splits_trainable_smooth_mask_diff_power_group(tmp_path):
+    model = _make_optimizer_test_coupling_net(
+        source_lift_enabled=False,
+        smooth_mask_diff_power_trainable=True,
+    )
+    trainer = CouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(learning_rate=2.0e-3, weight_decay=3.0e-2),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    optimizer = trainer._build_optimizer(trainer.config)
+
+    assert isinstance(optimizer, torch.optim.AdamW)
+    assert len(optimizer.param_groups) == 2
+    main_group = next(
+        group for group in optimizer.param_groups if group["name"] == "main"
+    )
+    q_group = next(
+        group
+        for group in optimizer.param_groups
+        if group["name"] == "smooth_mask_diff_power"
+    )
+    assert main_group["lr"] == pytest.approx(2.0e-3)
+    assert main_group["weight_decay"] == pytest.approx(3.0e-2)
+    assert q_group["lr"] == pytest.approx(2.0e-3)
+    assert q_group["weight_decay"] == pytest.approx(0.0)
+
+    raw_q = model.smooth_mask_diff_power_raw
+    assert raw_q is not None
+    q_group_ids = {id(param) for param in q_group["params"]}
+    main_group_ids = {id(param) for param in main_group["params"]}
+    trainable_ids = {
+        id(param) for param in trainer.model.parameters() if param.requires_grad
+    }
+    assert q_group_ids == {id(raw_q)}
+    assert main_group_ids.isdisjoint(q_group_ids)
+    assert main_group_ids | q_group_ids == trainable_ids
+
+
+def test_coupling_optimizer_splits_source_lift_and_trainable_q_groups(tmp_path):
+    model = _make_optimizer_test_coupling_net(
+        source_lift_enabled=True,
+        smooth_mask_diff_power_trainable=True,
+    )
+    trainer = CouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            learning_rate=1.0e-3,
+            source_stencil_lift_learning_rate=1.0e-4,
+            weight_decay=1.0e-2,
+            source_stencil_lift_weight_decay=2.0e-3,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    optimizer = trainer._build_optimizer(trainer.config)
+
+    assert isinstance(optimizer, torch.optim.AdamW)
+    assert len(optimizer.param_groups) == 3
+    main_group = next(
+        group for group in optimizer.param_groups if group["name"] == "main"
+    )
+    source_group = next(
+        group
+        for group in optimizer.param_groups
+        if group["name"] == "source_stencil_lift"
+    )
+    q_group = next(
+        group
+        for group in optimizer.param_groups
+        if group["name"] == "smooth_mask_diff_power"
+    )
+    assert source_group["lr"] == pytest.approx(1.0e-4)
+    assert source_group["weight_decay"] == pytest.approx(2.0e-3)
+    assert q_group["lr"] == pytest.approx(1.0e-3)
+    assert q_group["weight_decay"] == pytest.approx(0.0)
+
+    source_lift = model.source_stencil_lift
+    raw_q = model.smooth_mask_diff_power_raw
+    assert source_lift is not None
+    assert raw_q is not None
+    main_group_ids = {id(param) for param in main_group["params"]}
+    source_group_ids = {id(param) for param in source_group["params"]}
+    q_group_ids = {id(param) for param in q_group["params"]}
+    trainable_ids = {
+        id(param) for param in trainer.model.parameters() if param.requires_grad
+    }
+    assert source_group_ids == {
+        id(param) for param in source_lift.parameters() if param.requires_grad
+    }
+    assert q_group_ids == {id(raw_q)}
+    assert main_group_ids.isdisjoint(source_group_ids)
+    assert main_group_ids.isdisjoint(q_group_ids)
+    assert source_group_ids.isdisjoint(q_group_ids)
+    assert main_group_ids | source_group_ids | q_group_ids == trainable_ids
 
 
 def _manual_global_grad_norm(module: nn.Module) -> torch.Tensor:

@@ -51,6 +51,7 @@ class CouplingTrainer(LoggingMixin):
         "source_lift_corr_g_f",
         "source_lift_rel_diff_g_f",
         "source_lift_g_rms",
+        "smooth_mask_diff_power",
     )
 
     def __init__(
@@ -302,6 +303,12 @@ class CouplingTrainer(LoggingMixin):
         module = getattr(self.model, "_orig_mod", self.model)
         return getattr(module, "source_stencil_lift", None) is not None
 
+    def _smooth_mask_diff_power_metric(self) -> float:
+        module = getattr(self.model, "_orig_mod", self.model)
+        if not isinstance(module, CouplingNet):
+            return float("nan")
+        return module.effective_smooth_mask_diff_power()
+
     def _supports_auxiliary_quadrature(self, axis_coords: torch.Tensor) -> bool:
         samples = int(axis_coords.numel())
         if self.config.integration_rule == "simpson":
@@ -438,6 +445,7 @@ class CouplingTrainer(LoggingMixin):
                 torch.stack((sol[:, 0], sol[:, 1]), dim=1),
                 x_axis,
             ),
+            "smooth_mask_diff_power": self._smooth_mask_diff_power_metric(),
             **source_lift_metrics,
         }
         return loss, metrics
@@ -523,45 +531,55 @@ class CouplingTrainer(LoggingMixin):
         use_source_lift_group = (
             source_lift_lr is not None or source_lift_weight_decay is not None
         )
-        if not use_source_lift_group:
-            return optim.AdamW(
-                self.model.parameters(),
-                lr=optimization_cfg.learning_rate,
-                weight_decay=optimization_cfg.weight_decay,
-            )
-
         module = getattr(self.model, "_orig_mod", self.model)
-        source_lift = getattr(module, "source_stencil_lift", None)
-        if source_lift is None:
-            raise ValueError(
-                "source_stencil_lift learning-rate or weight-decay overrides require "
-                "model.source_stencil_lift to be enabled."
-            )
-        if not isinstance(source_lift, torch.nn.Module):
-            raise ValueError("model.source_stencil_lift must be a torch.nn.Module.")
+        source_lift_params: list[torch.nn.Parameter] = []
+        if use_source_lift_group:
+            source_lift = getattr(module, "source_stencil_lift", None)
+            if source_lift is None:
+                raise ValueError(
+                    "source_stencil_lift learning-rate or weight-decay overrides "
+                    "require model.source_stencil_lift to be enabled."
+                )
+            if not isinstance(source_lift, torch.nn.Module):
+                raise ValueError("model.source_stencil_lift must be a torch.nn.Module.")
 
-        source_lift_params = [
-            param for param in source_lift.parameters() if param.requires_grad
-        ]
-        if not source_lift_params:
-            raise RuntimeError("source_stencil_lift optimizer group is empty.")
+            source_lift_params = [
+                param for param in source_lift.parameters() if param.requires_grad
+            ]
+            if not source_lift_params:
+                raise RuntimeError("source_stencil_lift optimizer group is empty.")
 
-        source_lift_param_ids = {id(param) for param in source_lift_params}
+        smooth_q_params: list[torch.nn.Parameter] = []
+        if isinstance(module, CouplingNet):
+            smooth_q_params = module.smooth_mask_diff_power_parameters()
+
+        excluded_param_ids = {
+            id(param) for param in [*source_lift_params, *smooth_q_params]
+        }
         main_params = [
             param
             for param in self.model.parameters()
-            if param.requires_grad and id(param) not in source_lift_param_ids
+            if param.requires_grad and id(param) not in excluded_param_ids
         ]
         if not main_params:
             raise RuntimeError("main CouplingNet optimizer group is empty.")
 
         main_param_ids = {id(param) for param in main_params}
+        source_lift_param_ids = {id(param) for param in source_lift_params}
+        smooth_q_param_ids = {id(param) for param in smooth_q_params}
         trainable_param_ids = {
             id(param) for param in self.model.parameters() if param.requires_grad
         }
         if main_param_ids & source_lift_param_ids:
             raise RuntimeError("optimizer parameter groups must be disjoint.")
-        if main_param_ids | source_lift_param_ids != trainable_param_ids:
+        if main_param_ids & smooth_q_param_ids:
+            raise RuntimeError("optimizer parameter groups must be disjoint.")
+        if source_lift_param_ids & smooth_q_param_ids:
+            raise RuntimeError("optimizer parameter groups must be disjoint.")
+        if (
+            main_param_ids | source_lift_param_ids | smooth_q_param_ids
+            != trainable_param_ids
+        ):
             raise RuntimeError(
                 "optimizer parameter groups must cover all trainable parameters."
             )
@@ -576,21 +594,34 @@ class CouplingTrainer(LoggingMixin):
             if source_lift_weight_decay is not None
             else optimization_cfg.weight_decay
         )
-        return optim.AdamW(
-            [
-                {
-                    "params": main_params,
-                    "lr": optimization_cfg.learning_rate,
-                    "weight_decay": optimization_cfg.weight_decay,
-                    "name": "main",
-                },
+        parameter_groups: list[dict[str, object]] = [
+            {
+                "params": main_params,
+                "lr": optimization_cfg.learning_rate,
+                "weight_decay": optimization_cfg.weight_decay,
+                "name": "main",
+            }
+        ]
+        if source_lift_params:
+            parameter_groups.append(
                 {
                     "params": source_lift_params,
                     "lr": source_group_lr,
                     "weight_decay": source_group_weight_decay,
                     "name": "source_stencil_lift",
-                },
-            ],
+                }
+            )
+        if smooth_q_params:
+            parameter_groups.append(
+                {
+                    "params": smooth_q_params,
+                    "lr": optimization_cfg.learning_rate,
+                    "weight_decay": 0.0,
+                    "name": "smooth_mask_diff_power",
+                }
+            )
+        return optim.AdamW(
+            parameter_groups,
             lr=optimization_cfg.learning_rate,
             weight_decay=optimization_cfg.weight_decay,
         )
@@ -740,6 +771,9 @@ class CouplingTrainer(LoggingMixin):
             train_metrics = {
                 key: value / max(batch_count, 1) for key, value in accum.items()
             }
+            train_metrics["smooth_mask_diff_power"] = (
+                self._smooth_mask_diff_power_metric()
+            )
             self.loss_history.append(mean_loss)
             phase_history.append(mean_loss)
 
@@ -759,9 +793,9 @@ class CouplingTrainer(LoggingMixin):
                     "epoch %s | train loss=%.4e l2_cons=%.4e energy_cons=%.4e "
                     "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
                     "w_l2=%.4e on_l2=%s w_energy=%.4e on_energy=%s "
-                    "w_cross=%.4e on_cross=%s | lr=%.4e | val loss=%.4e "
-                    "l2_cons=%.4e energy_cons=%.4e cross_cons=%.4e "
-                    "rel_flux=%.4e rel_sol=%.4e"
+                    "w_cross=%.4e on_cross=%s | lr=%.4e "
+                    "smooth_mask_diff_power=%.4e | val loss=%.4e l2_cons=%.4e "
+                    "energy_cons=%.4e cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e"
                 )
                 log_args: tuple[object, ...] = (
                     epoch,
@@ -778,6 +812,7 @@ class CouplingTrainer(LoggingMixin):
                     cross_cfg.weight,
                     cross_cfg.enabled,
                     current_lr,
+                    train_metrics["smooth_mask_diff_power"],
                     val_metrics["loss"],
                     val_metrics["loss_l2_consistency"],
                     val_metrics["loss_energy_consistency"],
