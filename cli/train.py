@@ -4,10 +4,8 @@ import argparse
 import json
 import shutil
 from pathlib import Path
-from typing import Callable
 
 import torch
-from torch import Tensor
 
 from greenonet.config import (
     CompileConfig,
@@ -25,6 +23,7 @@ from greenonet.config import (
     TrainingConfig,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
+from greenonet.coefficients import CoefficientFunction, load_coefficient_functions
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_model import CouplingNet
 from greenonet.coupling_trainer import CouplingTrainer
@@ -96,6 +95,13 @@ class TrainCLI:
             dataset_kwargs["validation_path"] = Path(dataset_kwargs["validation_path"])
         if "test_path" in dataset_kwargs and dataset_kwargs["test_path"] is not None:
             dataset_kwargs["test_path"] = Path(dataset_kwargs["test_path"])
+        if (
+            "coefficient_functions_path" in dataset_kwargs
+            and dataset_kwargs["coefficient_functions_path"] is not None
+        ):
+            dataset_kwargs["coefficient_functions_path"] = Path(
+                dataset_kwargs["coefficient_functions_path"]
+            )
         dataset_cfg = DatasetConfig(**dataset_kwargs)
 
         # model_kwargs = dict(raw["model"])
@@ -257,69 +263,8 @@ class TrainCLI:
         return CouplingLossesConfig(**parsed)
 
     @staticmethod
-    def a_fun(x: Tensor, y: Tensor) -> Tensor:
-        # return (
-        #     1
-        #     + 0.35 * torch.sin(2 * torch.pi * x) * torch.sin(2 * torch.pi * y)
-        #     + 0.25 * torch.sin(10 * torch.pi * x) * torch.sin(8 * torch.pi * y)
-        # )
-        # h = 0.0625
-        # x = x - h
-        # y = y - h
-        return 1 + 0.5 * torch.sin(2 * torch.pi * x) * torch.sin(4 * torch.pi * y)
-        # return 1.0 + 0.5 * torch.sin(2 * torch.pi * (x - y))
-        # return 1.0 + 0.5 * torch.exp(x + y) / math.exp(2.0)
-        # return 1.0 + 0.5 * torch.sin(4 * torch.pi * x) * torch.sin(4 * torch.pi * y)
-
-    @staticmethod
-    def apx_fun(x: Tensor, y: Tensor) -> Tensor:
-        # pi = torch.pi
-        # return 0.7 * pi * torch.cos(2 * pi * x) * torch.sin(
-        #     2 * pi * y
-        # ) + 2.5 * pi * torch.cos(10 * pi * x) * torch.sin(8 * pi * y)
-        # h = 0.0625
-        # x = x - h
-        # y = y - h
-        return torch.pi * torch.cos(2 * torch.pi * x) * torch.sin(4 * torch.pi * y)
-        # return torch.pi * torch.cos(2 * torch.pi * (x - y))
-        # return 0.5 * torch.exp(x + y) / math.exp(2.0)
-        # return (
-        #     2.0 * torch.pi * torch.cos(4 * torch.pi * x) * torch.sin(4 * torch.pi * y)
-        # )
-
-    @staticmethod
-    def apy_fun(x: Tensor, y: Tensor) -> Tensor:
-        # pi = torch.pi
-        # return 0.7 * pi * torch.sin(2 * pi * x) * torch.cos(
-        #     2 * pi * y
-        # ) + 2.0 * pi * torch.sin(10 * pi * x) * torch.cos(8 * pi * y)
-        # h = 0.0625
-        # x = x - h
-        # y = y - h
-        return 2 * torch.pi * torch.sin(2 * torch.pi * x) * torch.cos(4 * torch.pi * y)
-        # return -torch.pi * torch.cos(2 * torch.pi * (x - y))
-        # return 0.5 * torch.exp(x + y) / math.exp(2.0)
-        # return (
-        #     2.0 * torch.pi * torch.sin(4 * torch.pi * x) * torch.cos(4 * torch.pi * y)
-        # )
-
-    @staticmethod
-    def b_fun(x: Tensor, y: Tensor) -> Tensor:
-        return torch.zeros_like(x)
-
-    @staticmethod
-    def c_fun(x: Tensor, y: Tensor) -> Tensor:
-        # return 5 * (1 + 0.3 * torch.cos(6 * torch.pi * x) * torch.cos(6 * torch.pi * y))
-        # h = 0.0625
-        # x = x - h
-        # y = y - h
-        # return 2.5 * (1 + 0.4 * torch.cos(torch.pi * x) * torch.sin(torch.pi * y))
-        # return 2.5 * (1 + 0.4 * torch.sin(torch.pi * x) * torch.cos(torch.pi * y))
-        return torch.zeros_like(x)
-
-    @staticmethod
     def _coeff_from_coords(
-        coords: torch.Tensor, fn: Callable[[Tensor, Tensor], Tensor]
+        coords: torch.Tensor, fn: CoefficientFunction
     ) -> torch.Tensor:
         x = coords[..., 0]
         y = coords[..., 1]
@@ -384,6 +329,7 @@ class TrainCLI:
             pipeline_cfg,
             terminal_cfg,
         ) = self._build_configs(config_path)
+        coeffs = load_coefficient_functions(dataset_cfg.coefficient_functions_path)
 
         work_dir = Path(args.work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -394,11 +340,11 @@ class TrainCLI:
 
         if pipeline_cfg.run_green:
             green_trainer = run_green_o_net(
-                a_fun=self.a_fun,
-                apx_fun=self.apx_fun,
-                apy_fun=self.apy_fun,
-                b_fun=self.b_fun,
-                c_fun=self.c_fun,
+                a_fun=coeffs.a_fun,
+                apx_fun=coeffs.apx_fun,
+                apy_fun=coeffs.apy_fun,
+                b_fun=coeffs.b_fun,
+                c_fun=coeffs.c_fun,
                 activation=model_cfg.activation,
                 work_dir=work_dir,
                 ndata=dataset_cfg.samples_per_line,
@@ -438,11 +384,11 @@ class TrainCLI:
                 n_points_per_line=dataset_cfg.n_points_per_line,
                 dtype=dataset_cfg.dtype,
                 integration_rule=coupling_training_cfg.integration_rule,
-                a_fun=self.a_fun,
-                b_fun=self.b_fun,
-                c_fun=self.c_fun,
-                ap_fun_x=self.apx_fun,
-                ap_fun_y=self.apy_fun,
+                a_fun=coeffs.a_fun,
+                b_fun=coeffs.b_fun,
+                c_fun=coeffs.c_fun,
+                ap_fun_x=coeffs.apx_fun,
+                ap_fun_y=coeffs.apy_fun,
             )
             coupling_val_dataset = None
             if val_dir is not None:
@@ -452,11 +398,11 @@ class TrainCLI:
                     n_points_per_line=dataset_cfg.n_points_per_line,
                     dtype=dataset_cfg.dtype,
                     integration_rule=coupling_training_cfg.integration_rule,
-                    a_fun=self.a_fun,
-                    b_fun=self.b_fun,
-                    c_fun=self.c_fun,
-                    ap_fun_x=self.apx_fun,
-                    ap_fun_y=self.apy_fun,
+                    a_fun=coeffs.a_fun,
+                    b_fun=coeffs.b_fun,
+                    c_fun=coeffs.c_fun,
+                    ap_fun_x=coeffs.apx_fun,
+                    ap_fun_y=coeffs.apy_fun,
                 )
             test_dir = dataset_cfg.test_path
             coupling_test_dataset = None
@@ -467,11 +413,11 @@ class TrainCLI:
                     n_points_per_line=dataset_cfg.n_points_per_line,
                     dtype=dataset_cfg.dtype,
                     integration_rule=coupling_training_cfg.integration_rule,
-                    a_fun=self.a_fun,
-                    b_fun=self.b_fun,
-                    c_fun=self.c_fun,
-                    ap_fun_x=self.apx_fun,
-                    ap_fun_y=self.apy_fun,
+                    a_fun=coeffs.a_fun,
+                    b_fun=coeffs.b_fun,
+                    c_fun=coeffs.c_fun,
+                    ap_fun_x=coeffs.apx_fun,
+                    ap_fun_y=coeffs.apy_fun,
                 )
             if green_kernel is None:
                 (
@@ -487,8 +433,8 @@ class TrainCLI:
                     sample_ap,
                 ) = coupling_train_dataset[0]
                 device = torch.device(coupling_training_cfg.device)
-                sample_b = self._coeff_from_coords(sample_coords, self.b_fun)
-                sample_c = self._coeff_from_coords(sample_coords, self.c_fun)
+                sample_b = self._coeff_from_coords(sample_coords, coeffs.b_fun)
+                sample_c = self._coeff_from_coords(sample_coords, coeffs.c_fun)
                 green_model = maybe_compile_model(
                     green_model.to(device),
                     training_cfg.compile,

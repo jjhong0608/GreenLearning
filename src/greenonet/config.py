@@ -26,6 +26,7 @@ class DatasetConfig:
     training_path: Optional[Path] = None
     validation_path: Optional[Path] = None
     test_path: Optional[Path] = None
+    coefficient_functions_path: Optional[Path] = None
     dtype: torch.dtype = torch.float64
 
 

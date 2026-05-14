@@ -13,6 +13,7 @@
     "training_path": "data/Sinusoidal_Diffusion_Only/fold0/train",
     "validation_path": "data/Sinusoidal_Diffusion_Only/fold0/valid",
     "test_path": "data/Sinusoidal_Diffusion_Only/fold0/valid",
+    "coefficient_functions_path": null,
     "dtype": "float64"
   },
   "terminal": {

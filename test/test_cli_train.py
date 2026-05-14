@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from greenonet.config import CouplingModelConfig
 from greenonet.model import GreenONetModel
@@ -48,6 +49,64 @@ class TestTrainCLIConfigCopy:
         assert json.loads(copied.read_text()) == payload
         assert captured["terminal_width"] == 250
 
+    def test_uses_custom_coefficient_functions_for_green_training(
+        self, tmp_path, monkeypatch
+    ):
+        config_path = tmp_path / "config.json"
+        coeff_path = tmp_path / "custom_coefficients.py"
+        coeff_path.write_text(
+            "\n".join(
+                [
+                    "import torch",
+                    "def a_fun(x, y): return x + y + 10.0",
+                    "def apx_fun(x, y): return torch.ones_like(x) * 20.0",
+                    "def apy_fun(x, y): return torch.ones_like(y) * 30.0",
+                    "def b_fun(x, y): return torch.ones_like(x) * 40.0",
+                    "def c_fun(x, y): return torch.ones_like(y) * 50.0",
+                ]
+            )
+        )
+        payload = self._write_config(config_path)
+        payload["dataset"]["coefficient_functions_path"] = str(coeff_path)
+        config_path.write_text(json.dumps(payload))
+        work_dir = tmp_path / "work"
+        captured = {}
+
+        def _fake_run_green_o_net(*_args, **kwargs):
+            x = torch.tensor([0.25], dtype=torch.float64)
+            y = torch.tensor([0.5], dtype=torch.float64)
+            captured["a"] = kwargs["a_fun"](x, y)
+            captured["apx"] = kwargs["apx_fun"](x, y)
+            captured["apy"] = kwargs["apy_fun"](x, y)
+            captured["b"] = kwargs["b_fun"](x, y)
+            captured["c"] = kwargs["c_fun"](x, y)
+            return SimpleNamespace(model=GreenONetModel(kwargs["model_cfg"]))
+
+        monkeypatch.setattr("cli.train.run_green_o_net", _fake_run_green_o_net)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["train.py", "--config", str(config_path), "--work-dir", str(work_dir)],
+        )
+
+        TrainCLI().run()
+
+        torch.testing.assert_close(
+            captured["a"], torch.tensor([10.75], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            captured["apx"], torch.tensor([20.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            captured["apy"], torch.tensor([30.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            captured["b"], torch.tensor([40.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            captured["c"], torch.tensor([50.0], dtype=torch.float64)
+        )
+
 
 class TestTrainCLIDatasetConfig:
     def test_ignores_domain_block(self, tmp_path):
@@ -66,10 +125,12 @@ class TestTrainCLIDatasetConfig:
         dataset_cfg, *_rest = TrainCLI()._build_configs(config_path)
 
         assert dataset_cfg.step_size == 0.25
+        assert dataset_cfg.coefficient_functions_path is None
         assert not hasattr(dataset_cfg, "domain")
 
     def test_parses_green_validation_dataset_controls(self, tmp_path):
         config_path = tmp_path / "config.json"
+        coefficient_functions_path = tmp_path / "coefficients.py"
         payload = {
             "dataset": {
                 "step_size": 0.25,
@@ -78,6 +139,7 @@ class TestTrainCLIDatasetConfig:
                 "scale_length": [0.05, 0.25],
                 "validation_scale_length": [0.10, 0.20],
                 "validation_sampler_mode": "backward",
+                "coefficient_functions_path": str(coefficient_functions_path),
             },
             "model": {},
             "training": {
@@ -96,6 +158,7 @@ class TestTrainCLIDatasetConfig:
         assert dataset_cfg.scale_length == (0.05, 0.25)
         assert dataset_cfg.validation_scale_length == (0.10, 0.20)
         assert dataset_cfg.validation_sampler_mode == "backward"
+        assert dataset_cfg.coefficient_functions_path == coefficient_functions_path
         assert training_cfg.compute_validation_rel_sol is True
 
     def test_parses_integration_rules(self, tmp_path):
