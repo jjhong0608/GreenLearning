@@ -11,6 +11,7 @@ import torch
 from greenonet.compile_utils import model_state_dict_for_save
 from greenonet.config import (
     CouplingModelConfig,
+    CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
     ModelConfig,
     SourceStencilLiftConfig,
@@ -82,6 +83,11 @@ def _deserialize_config(
         if isinstance(green_response_raw, dict):
             data["green_response_feature"] = GreenResponseFeatureConfig(
                 **green_response_raw
+            )
+        positional_raw = data.get("trunk_positional_encoding")
+        if isinstance(positional_raw, dict):
+            data["trunk_positional_encoding"] = CouplingTrunkPositionalEncodingConfig(
+                **positional_raw
             )
     allowed_keys = {field.name for field in fields(config_cls)}
     filtered = {key: value for key, value in data.items() if key in allowed_keys}

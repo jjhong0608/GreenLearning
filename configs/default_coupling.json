@@ -10,10 +10,10 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/Sinusoidal_Diffusion_Only/train",
-    "validation_path": "data/Sinusoidal_Diffusion_Only/valid",
-    "test_path": "data/Sinusoidal_Diffusion_Only/test",
-    "coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py",
+    "training_path": "data/poisson/train",
+    "validation_path": "data/poisson/valid",
+    "test_path": "data/poisson/test",
+    "coefficient_functions_path": "coefficients/Pure_Poisson.py",
     "dtype": "float64"
   },
   "terminal": {
@@ -50,7 +50,13 @@
       "eps": 1e-12
     },
     "green_response_feature": {
-      "enabled": false
+      "enabled": true
+    },
+    "trunk_positional_encoding": {
+      "enabled": false,
+      "num_frequencies": 4,
+      "max_frequency": 8.0,
+      "include_input": true
     }
   },
   "coupling_training": {
@@ -95,7 +101,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Sinusoidal_Diffusion_Only/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/poisson/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

@@ -17,6 +17,7 @@ from greenonet.config import (
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
     CouplingTrainingConfig,
+    CouplingTrunkPositionalEncodingConfig,
     DatasetConfig,
     GreenResponseFeatureConfig,
     ModelConfig,
@@ -117,6 +118,19 @@ class EvalCouplingCLI:
         if not isinstance(raw_green_response, dict):
             raise TypeError(f"{section_name}.green_response_feature must be an object.")
         return GreenResponseFeatureConfig(**dict(raw_green_response))
+
+    @staticmethod
+    def _build_trunk_positional_encoding_config(
+        raw_positional: object | None,
+        section_name: str,
+    ) -> CouplingTrunkPositionalEncodingConfig:
+        if raw_positional is None:
+            return CouplingTrunkPositionalEncodingConfig()
+        if not isinstance(raw_positional, dict):
+            raise TypeError(
+                f"{section_name}.trunk_positional_encoding must be an object."
+            )
+        return CouplingTrunkPositionalEncodingConfig(**dict(raw_positional))
 
     @classmethod
     def _build_training_config(
@@ -287,11 +301,17 @@ class EvalCouplingCLI:
             green_response_raw,
             "coupling_model",
         )
+        positional_raw = coupling_model_kwargs.pop("trunk_positional_encoding", None)
+        positional_cfg = self._build_trunk_positional_encoding_config(
+            positional_raw,
+            "coupling_model",
+        )
         cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
         coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
         coupling_model_cfg = CouplingModelConfig(
             source_stencil_lift=source_lift_cfg,
             green_response_feature=green_response_cfg,
+            trunk_positional_encoding=positional_cfg,
             **coupling_model_kwargs,
         )
         training_cfg = self._build_training_config(raw.get("training", {}))

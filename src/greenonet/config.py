@@ -85,6 +85,16 @@ class GreenResponseFeatureConfig:
 
 
 @dataclass
+class CouplingTrunkPositionalEncodingConfig:
+    """Optional deterministic Fourier features for CouplingNet trunk coordinates."""
+
+    enabled: bool = False
+    num_frequencies: int = 4
+    max_frequency: float = 8.0
+    include_input: bool = True
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -109,6 +119,9 @@ class CouplingModelConfig:
     )
     green_response_feature: GreenResponseFeatureConfig = field(
         default_factory=GreenResponseFeatureConfig
+    )
+    trunk_positional_encoding: CouplingTrunkPositionalEncodingConfig = field(
+        default_factory=CouplingTrunkPositionalEncodingConfig
     )
 
 

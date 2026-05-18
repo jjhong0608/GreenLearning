@@ -253,6 +253,10 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.smooth_mask_diff_power_max == 2.0
         assert coupling_model_cfg.source_stencil_lift.enabled is False
         assert coupling_model_cfg.green_response_feature.enabled is False
+        assert coupling_model_cfg.trunk_positional_encoding.enabled is False
+        assert coupling_model_cfg.trunk_positional_encoding.num_frequencies == 4
+        assert coupling_model_cfg.trunk_positional_encoding.max_frequency == 8.0
+        assert coupling_model_cfg.trunk_positional_encoding.include_input is True
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
@@ -366,6 +370,58 @@ class TestTrainCLIDatasetConfig:
         config_path.write_text(json.dumps(payload))
 
         with pytest.raises(TypeError, match="coupling_model.green_response_feature"):
+            TrainCLI()._build_configs(config_path)
+
+    def test_parses_trunk_positional_encoding_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "trunk_positional_encoding": {
+                    "enabled": True,
+                    "num_frequencies": 5,
+                    "max_frequency": 16.0,
+                    "include_input": False,
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset_cfg,
+            _model_cfg,
+            _training_cfg,
+            coupling_model_cfg,
+            _coupling_training_cfg,
+            _pipeline_cfg,
+            _terminal_cfg,
+        ) = TrainCLI()._build_configs(config_path)
+
+        positional = coupling_model_cfg.trunk_positional_encoding
+        assert positional.enabled is True
+        assert positional.num_frequencies == 5
+        assert positional.max_frequency == 16.0
+        assert positional.include_input is False
+
+    def test_rejects_non_object_trunk_positional_encoding_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "trunk_positional_encoding": "enabled",
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.trunk_positional_encoding"):
             TrainCLI()._build_configs(config_path)
 
     def test_rejects_non_object_source_stencil_lift_config(self, tmp_path):
@@ -485,6 +541,37 @@ class TestTrainCLIDatasetConfig:
     def test_eval_cli_rejects_non_object_green_response_feature_config(self):
         with pytest.raises(TypeError, match="coupling_model.green_response_feature"):
             EvalCouplingCLI._build_green_response_feature_config(
+                "enabled",
+                "coupling_model",
+            )
+
+    def test_trunk_positional_encoding_defaults(self):
+        cfg = TrainCLI._build_trunk_positional_encoding_config(None, "coupling_model")
+
+        assert cfg.enabled is False
+        assert cfg.num_frequencies == 4
+        assert cfg.max_frequency == 8.0
+        assert cfg.include_input is True
+
+    def test_eval_cli_parses_trunk_positional_encoding_config(self):
+        cfg = EvalCouplingCLI._build_trunk_positional_encoding_config(
+            {
+                "enabled": True,
+                "num_frequencies": 6,
+                "max_frequency": 32.0,
+                "include_input": False,
+            },
+            "coupling_model",
+        )
+
+        assert cfg.enabled is True
+        assert cfg.num_frequencies == 6
+        assert cfg.max_frequency == 32.0
+        assert cfg.include_input is False
+
+    def test_eval_cli_rejects_non_object_trunk_positional_encoding_config(self):
+        with pytest.raises(TypeError, match="coupling_model.trunk_positional_encoding"):
+            EvalCouplingCLI._build_trunk_positional_encoding_config(
                 "enabled",
                 "coupling_model",
             )

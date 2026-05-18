@@ -356,6 +356,53 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 "green_response_feature.enabled=true requires "
                 "source_stencil_lift.enabled=false."
             )
+        positional_cfg = config.trunk_positional_encoding
+        self.trunk_positional_encoding_enabled = bool(positional_cfg.enabled)
+        self.trunk_positional_encoding_include_input = bool(
+            positional_cfg.include_input
+        )
+        self.trunk_positional_encoding_num_frequencies = int(
+            positional_cfg.num_frequencies
+        )
+        self.trunk_positional_encoding_max_frequency = float(
+            positional_cfg.max_frequency
+        )
+        if self.trunk_positional_encoding_enabled:
+            if config.trunk_input_dim != 2:
+                raise ValueError(
+                    "trunk_positional_encoding requires trunk_input_dim == 2."
+                )
+            if self.trunk_positional_encoding_num_frequencies <= 0:
+                raise ValueError(
+                    "trunk_positional_encoding.num_frequencies must be positive."
+                )
+            if self.trunk_positional_encoding_max_frequency <= 0.0:
+                raise ValueError(
+                    "trunk_positional_encoding.max_frequency must be positive."
+                )
+            frequencies = torch.logspace(
+                start=0.0,
+                end=math.log2(self.trunk_positional_encoding_max_frequency),
+                steps=self.trunk_positional_encoding_num_frequencies,
+                base=2.0,
+                dtype=config.dtype,
+            )
+            self.trunk_positional_frequencies: torch.Tensor
+            self.register_buffer(
+                "trunk_positional_frequencies",
+                frequencies,
+                persistent=False,
+            )
+            trunk_input_dim = (
+                2 if self.trunk_positional_encoding_include_input else 0
+            ) + 4 * self.trunk_positional_encoding_num_frequencies
+        else:
+            self.register_buffer(
+                "trunk_positional_frequencies",
+                torch.empty(0, dtype=config.dtype),
+                persistent=False,
+            )
+            trunk_input_dim = config.trunk_input_dim
         self.smooth_mask_diff_power_raw: nn.Parameter | None
         if self.smooth_mask_diff_power_trainable:
             raw_value = self._bounded_power_inverse(
@@ -431,7 +478,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         else:
             self.branch_coefficient = None
         self.trunk = MLP(
-            input_dim=config.trunk_input_dim,
+            input_dim=trunk_input_dim,
             hidden_dim=config.hidden_dim,
             depth=config.depth,
             activation=config.activation,
@@ -477,6 +524,31 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         if raw is None or not raw.requires_grad:
             return []
         return [raw]
+
+    def _encode_trunk_coords(self, coords: torch.Tensor) -> torch.Tensor:
+        if not self.trunk_positional_encoding_enabled:
+            return coords
+        if coords.shape[-1] != 2:
+            raise ValueError("trunk_positional_encoding expects 2D coordinates.")
+        frequencies = self.trunk_positional_frequencies.to(
+            device=coords.device,
+            dtype=coords.dtype,
+        )
+        x = coords[..., 0:1] * frequencies
+        y = coords[..., 1:2] * frequencies
+        scale = 2.0 * math.pi
+        encoded_parts = []
+        if self.trunk_positional_encoding_include_input:
+            encoded_parts.append(coords)
+        encoded_parts.extend(
+            (
+                torch.sin(scale * x),
+                torch.cos(scale * x),
+                torch.sin(scale * y),
+                torch.cos(scale * y),
+            )
+        )
+        return torch.cat(encoded_parts, dim=-1)
 
     def _load_from_state_dict(
         self,
@@ -709,7 +781,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         branch_feat = branch_feat.unsqueeze(-1)
 
         coords_int = coords[:, :, 1:-1, :]
-        trunk_flat = coords_int.reshape(axis * n_lines * (m_points - 2), -1)
+        trunk_inputs = self._encode_trunk_coords(coords_int)
+        trunk_flat = trunk_inputs.reshape(axis * n_lines * (m_points - 2), -1)
         trunk_out = self.trunk(trunk_flat).reshape(axis * n_lines, m_points - 2, -1)
 
         trunk_expanded = trunk_out.unsqueeze(0).expand(b, -1, -1, -1)

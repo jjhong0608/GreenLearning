@@ -16,6 +16,7 @@ from greenonet.config import (
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
     CouplingTrainingConfig,
+    CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
     SourceStencilLiftConfig,
 )
@@ -1012,6 +1013,150 @@ def test_green_response_feature_disabled_rejects_unexpected_feature():
             rhs_tilde=rhs_tilde,
             rhs_norm=rhs_norm,
             green_response_tilde=torch.zeros_like(rhs_tilde),
+        )
+
+
+def test_trunk_positional_encoding_extends_trunk_input_dim():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            enabled=True,
+            num_frequencies=4,
+            max_frequency=8.0,
+            include_input=True,
+        ),
+    )
+
+    model = CouplingNet(cfg)
+    first_layer = model.trunk.net[0]
+
+    assert isinstance(first_layer, nn.Linear)
+    assert first_layer.in_features == 18
+    torch.testing.assert_close(
+        model.trunk_positional_frequencies,
+        torch.tensor([1.0, 2.0, 4.0, 8.0], dtype=torch.float64),
+    )
+
+
+def test_trunk_positional_encoding_can_drop_raw_input():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            enabled=True,
+            num_frequencies=3,
+            max_frequency=4.0,
+            include_input=False,
+        ),
+    )
+
+    model = CouplingNet(cfg)
+    first_layer = model.trunk.net[0]
+
+    assert isinstance(first_layer, nn.Linear)
+    assert first_layer.in_features == 12
+
+
+def test_trunk_positional_encoding_matches_axis_aligned_formula():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            enabled=True,
+            num_frequencies=2,
+            max_frequency=2.0,
+            include_input=True,
+        ),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.tensor([[0.25, 0.5]], dtype=torch.float64)
+
+    encoded = model._encode_trunk_coords(coords)
+
+    frequencies = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    x_proj = 2.0 * torch.pi * coords[:, 0:1] * frequencies
+    y_proj = 2.0 * torch.pi * coords[:, 1:2] * frequencies
+    expected = torch.cat(
+        (
+            coords,
+            torch.sin(x_proj),
+            torch.cos(x_proj),
+            torch.sin(y_proj),
+            torch.cos(y_proj),
+        ),
+        dim=-1,
+    )
+    torch.testing.assert_close(encoded, expected)
+
+
+def test_trunk_positional_encoding_forward_preserves_balance():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(enabled=True),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    coords[0, 0, :, 0] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    coords[0, 0, :, 1] = 0.5
+    coords[1, 0, :, 1] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    coords[1, 0, :, 0] = 0.5
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert projected_flux.shape == rhs_raw.shape
+    torch.testing.assert_close(
+        projected_flux[:, 0, :, 1:-1] + projected_flux[:, 1, :, 1:-1].transpose(-1, -2),
+        rhs_raw[:, 0, :, 1:-1],
+    )
+
+
+def test_trunk_positional_encoding_rejects_invalid_config():
+    with pytest.raises(ValueError, match="num_frequencies"):
+        CouplingNet(
+            CouplingModelConfig(
+                trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+                    enabled=True,
+                    num_frequencies=0,
+                )
+            )
+        )
+    with pytest.raises(ValueError, match="max_frequency"):
+        CouplingNet(
+            CouplingModelConfig(
+                trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+                    enabled=True,
+                    max_frequency=0.0,
+                )
+            )
+        )
+    with pytest.raises(ValueError, match="trunk_input_dim"):
+        CouplingNet(
+            CouplingModelConfig(
+                trunk_input_dim=3,
+                trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+                    enabled=True,
+                ),
+            )
         )
 
 
