@@ -62,6 +62,20 @@ def test_load_coefficient_functions_imports_custom_file(tmp_path: Path) -> None:
     torch.testing.assert_close(coeffs.c_fun(x, y), torch.ones_like(y) * 5.0)
 
 
+def test_sinusoidal_coefficient_example_matches_default() -> None:
+    example_path = Path("configs/sinusoidal_coefficients.py")
+    coeffs = load_coefficient_functions(example_path)
+    default_coeffs = default_coefficient_functions()
+    x = torch.tensor([0.125, 0.25, 0.5], dtype=torch.float64)
+    y = torch.tensor([0.25, 0.375, 0.5], dtype=torch.float64)
+
+    torch.testing.assert_close(coeffs.a_fun(x, y), default_coeffs.a_fun(x, y))
+    torch.testing.assert_close(coeffs.apx_fun(x, y), default_coeffs.apx_fun(x, y))
+    torch.testing.assert_close(coeffs.apy_fun(x, y), default_coeffs.apy_fun(x, y))
+    torch.testing.assert_close(coeffs.b_fun(x, y), default_coeffs.b_fun(x, y))
+    torch.testing.assert_close(coeffs.c_fun(x, y), default_coeffs.c_fun(x, y))
+
+
 def test_load_coefficient_functions_rejects_missing_callable(tmp_path: Path) -> None:
     coeff_path = tmp_path / "missing_coefficients.py"
     coeff_path.write_text(

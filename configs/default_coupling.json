@@ -10,17 +10,17 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/Sinusoidal_Diffusion_Only/fold0/train",
-    "validation_path": "data/Sinusoidal_Diffusion_Only/fold0/valid",
-    "test_path": "data/Sinusoidal_Diffusion_Only/fold0/valid",
-    "coefficient_functions_path": null,
+    "training_path": "data/Sinusoidal_Diffusion_Only/train",
+    "validation_path": "data/Sinusoidal_Diffusion_Only/valid",
+    "test_path": "data/Sinusoidal_Diffusion_Only/test",
+    "coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py",
     "dtype": "float64"
   },
   "terminal": {
-    "width": 305
+    "width": 330
   },
   "coupling_model": {
-    "hidden_dim": 256,
+    "hidden_dim": 128,
     "depth": 4,
     "activation": "rational",
     "use_bias": true,
@@ -33,7 +33,7 @@
     "smooth_mask_eps": 1e-12,
     "smooth_mask_power": 1.0,
     "smooth_mask_diff_power": 1.0,
-    "smooth_mask_diff_power_trainable": true,
+    "smooth_mask_diff_power_trainable": false,
     "smooth_mask_diff_power_min": 0.25,
     "smooth_mask_diff_power_max": 2.0,
     "source_stencil_lift": {
@@ -41,13 +41,16 @@
       "encoder_type": "mlp",
       "coefficient_normalization": "rms",
       "coefficient_tanh_beta": 1.0,
-      "hidden_dim": 32,
+      "hidden_dim": 64,
       "depth": 2,
       "activation": "gelu",
       "use_bias": true,
-      "dropout": 0.05,
+      "dropout": 0.0,
       "use_g_normalization": true,
       "eps": 1e-12
+    },
+    "green_response_feature": {
+      "enabled": false
     }
   },
   "coupling_training": {
@@ -72,7 +75,7 @@
     "epochs": 3000,
     "learning_rate": 0.002,
     "source_stencil_lift_learning_rate": null,
-    "weight_decay": 0.01,
+    "weight_decay": 0.1,
     "source_stencil_lift_weight_decay": null,
     "gradient_clip_max_norm": 1.0,
     "use_lr_schedule": true,
@@ -92,7 +95,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Sinusoidal_Diffusion_Only/green/backward/model.safetensors",
+    "green_pretrained_path": "checkpoints/Sinusoidal_Diffusion_Only/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

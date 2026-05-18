@@ -9,7 +9,12 @@ from typing import Any, cast
 import torch
 
 from greenonet.compile_utils import model_state_dict_for_save
-from greenonet.config import CouplingModelConfig, ModelConfig, SourceStencilLiftConfig
+from greenonet.config import (
+    CouplingModelConfig,
+    GreenResponseFeatureConfig,
+    ModelConfig,
+    SourceStencilLiftConfig,
+)
 
 
 def save_state_dict_safetensors(
@@ -73,6 +78,11 @@ def _deserialize_config(
         source_lift_raw = data.get("source_stencil_lift")
         if isinstance(source_lift_raw, dict):
             data["source_stencil_lift"] = SourceStencilLiftConfig(**source_lift_raw)
+        green_response_raw = data.get("green_response_feature")
+        if isinstance(green_response_raw, dict):
+            data["green_response_feature"] = GreenResponseFeatureConfig(
+                **green_response_raw
+            )
     allowed_keys = {field.name for field in fields(config_cls)}
     filtered = {key: value for key, value in data.items() if key in allowed_keys}
     return config_cls(**filtered)

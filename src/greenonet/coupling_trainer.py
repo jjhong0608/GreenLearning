@@ -309,6 +309,28 @@ class CouplingTrainer(LoggingMixin):
             return float("nan")
         return module.effective_smooth_mask_diff_power()
 
+    def _green_response_feature_enabled(self) -> bool:
+        module = getattr(self.model, "_orig_mod", self.model)
+        enabled = getattr(module, "green_response_feature_enabled", None)
+        if enabled is not None:
+            return bool(enabled)
+        if self.model_cfg is not None:
+            return bool(self.model_cfg.green_response_feature.enabled)
+        return False
+
+    def _green_response_tilde(
+        self,
+        rhs_tilde: torch.Tensor,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if not self._green_response_feature_enabled():
+            return None
+        response = torch.empty_like(rhs_tilde)
+        response[:, 0] = self._integrate(self.green_kernel[0], rhs_tilde[:, 0], x_axis)
+        response[:, 1] = self._integrate(self.green_kernel[1], rhs_tilde[:, 1], y_axis)
+        return response
+
     def _supports_auxiliary_quadrature(self, axis_coords: torch.Tensor) -> bool:
         samples = int(axis_coords.numel())
         if self.config.integration_rule == "simpson":
@@ -365,15 +387,23 @@ class CouplingTrainer(LoggingMixin):
         c_vals = c_vals.to(self.device)
         coords = coords.to(self.device)
 
-        pred_flux = self.model(
-            coords=coords,
-            a_vals=a_vals,
-            b_vals=b_vals,
-            c_vals=c_vals,
-            rhs_raw=rhs_raw,
+        model_inputs = {
+            "coords": coords,
+            "a_vals": a_vals,
+            "b_vals": b_vals,
+            "c_vals": c_vals,
+            "rhs_raw": rhs_raw,
+            "rhs_tilde": rhs_tilde,
+            "rhs_norm": rhs_norm,
+        }
+        green_response_tilde = self._green_response_tilde(
             rhs_tilde=rhs_tilde,
-            rhs_norm=rhs_norm,
-        )  # (B,2,n,m)
+            x_axis=x_axis,
+            y_axis=y_axis,
+        )
+        if green_response_tilde is not None:
+            model_inputs["green_response_tilde"] = green_response_tilde
+        pred_flux = self.model(**model_inputs)  # (B,2,n,m)
 
         phi_x, psi_y, u_phi_x, u_psi_y = self._represented_solutions_from_flux(
             flux=pred_flux,

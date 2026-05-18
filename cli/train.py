@@ -16,6 +16,7 @@ from greenonet.config import (
     CouplingPeriodicCheckpointConfig,
     CouplingTrainingConfig,
     DatasetConfig,
+    GreenResponseFeatureConfig,
     ModelConfig,
     PipelineConfig,
     SourceStencilLiftConfig,
@@ -123,10 +124,16 @@ class TrainCLI:
             source_lift_raw,
             "coupling_model",
         )
+        green_response_raw = coupling_model_kwargs.pop("green_response_feature", None)
+        green_response_cfg = self._build_green_response_feature_config(
+            green_response_raw,
+            "coupling_model",
+        )
         cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
         coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
         coupling_model_cfg = CouplingModelConfig(
             source_stencil_lift=source_lift_cfg,
+            green_response_feature=green_response_cfg,
             **coupling_model_kwargs,
         )
 
@@ -172,6 +179,17 @@ class TrainCLI:
         if not isinstance(raw_source_lift, dict):
             raise TypeError(f"{section_name}.source_stencil_lift must be an object.")
         return SourceStencilLiftConfig(**dict(raw_source_lift))
+
+    @staticmethod
+    def _build_green_response_feature_config(
+        raw_green_response: object | None,
+        section_name: str,
+    ) -> GreenResponseFeatureConfig:
+        if raw_green_response is None:
+            return GreenResponseFeatureConfig()
+        if not isinstance(raw_green_response, dict):
+            raise TypeError(f"{section_name}.green_response_feature must be an object.")
+        return GreenResponseFeatureConfig(**dict(raw_green_response))
 
     @classmethod
     def _build_training_config(

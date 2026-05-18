@@ -252,6 +252,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.smooth_mask_diff_power_min == 0.25
         assert coupling_model_cfg.smooth_mask_diff_power_max == 2.0
         assert coupling_model_cfg.source_stencil_lift.enabled is False
+        assert coupling_model_cfg.green_response_feature.enabled is False
         assert not hasattr(coupling_model_cfg, "use_fourier")
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
@@ -321,6 +322,51 @@ class TestTrainCLIDatasetConfig:
         assert source_lift.dropout == 0.0
         assert source_lift.use_g_normalization is True
         assert source_lift.eps == 1e-12
+
+    def test_parses_green_response_feature_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "green_response_feature": {
+                    "enabled": True,
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset_cfg,
+            _model_cfg,
+            _training_cfg,
+            coupling_model_cfg,
+            _coupling_training_cfg,
+            _pipeline_cfg,
+            _terminal_cfg,
+        ) = TrainCLI()._build_configs(config_path)
+
+        assert coupling_model_cfg.green_response_feature.enabled is True
+
+    def test_rejects_non_object_green_response_feature_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "green_response_feature": "enabled",
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.green_response_feature"):
+            TrainCLI()._build_configs(config_path)
 
     def test_rejects_non_object_source_stencil_lift_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -422,6 +468,26 @@ class TestTrainCLIDatasetConfig:
         assert cfg.dropout == 0.0
         assert cfg.use_g_normalization is True
         assert cfg.eps == 1e-12
+
+    def test_green_response_feature_defaults(self):
+        cfg = TrainCLI._build_green_response_feature_config(None, "coupling_model")
+
+        assert cfg.enabled is False
+
+    def test_eval_cli_parses_green_response_feature_config(self):
+        cfg = EvalCouplingCLI._build_green_response_feature_config(
+            {"enabled": True},
+            "coupling_model",
+        )
+
+        assert cfg.enabled is True
+
+    def test_eval_cli_rejects_non_object_green_response_feature_config(self):
+        with pytest.raises(TypeError, match="coupling_model.green_response_feature"):
+            EvalCouplingCLI._build_green_response_feature_config(
+                "enabled",
+                "coupling_model",
+            )
 
     def test_eval_cli_parses_source_stencil_lift_config(self):
         config_kwargs = {

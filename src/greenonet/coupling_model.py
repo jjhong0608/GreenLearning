@@ -348,6 +348,14 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         )
         self.smooth_mask_diff_power_min = float(config.smooth_mask_diff_power_min)
         self.smooth_mask_diff_power_max = float(config.smooth_mask_diff_power_max)
+        self.green_response_feature_enabled = bool(
+            config.green_response_feature.enabled
+        )
+        if self.green_response_feature_enabled and config.source_stencil_lift.enabled:
+            raise ValueError(
+                "green_response_feature.enabled=true requires "
+                "source_stencil_lift.enabled=false."
+            )
         self.smooth_mask_diff_power_raw: nn.Parameter | None
         if self.smooth_mask_diff_power_trainable:
             raw_value = self._bounded_power_inverse(
@@ -368,11 +376,12 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 "branch_input_dim - 2."
             )
         self.branch_input_dim = config.branch_input_dim
-        self.branch_rhs_input_dim = (
-            config.branch_input_dim - 2
-            if config.source_stencil_lift.enabled
-            else config.branch_input_dim
-        )
+        if config.source_stencil_lift.enabled:
+            self.branch_rhs_input_dim = config.branch_input_dim - 2
+        elif self.green_response_feature_enabled:
+            self.branch_rhs_input_dim = 2 * config.branch_input_dim
+        else:
+            self.branch_rhs_input_dim = config.branch_input_dim
         self.branch_a = MLP(
             input_dim=config.branch_input_dim,
             hidden_dim=config.hidden_dim,
@@ -614,6 +623,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         rhs_raw: torch.Tensor,
         rhs_tilde: torch.Tensor,
         rhs_norm: torch.Tensor,
+        green_response_tilde: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -624,6 +634,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             rhs_raw: (B, 2, n_lines, m_points) raw source
             rhs_tilde: (B, 2, n_lines, m_points) normalized source
             rhs_norm: (B, 2, n_lines) line-wise L2 norms
+            green_response_tilde: optional (B, 2, n_lines, m_points)
+                axial Green response G(rhs_tilde)
         Returns:
             output_flux: (B, 2, n_lines, m_points) axial flux-divergence per
                 axis after projection with zero-padded boundaries.
@@ -645,16 +657,37 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             raise ValueError(
                 f"Expected n_lines + 2 == m_points (got n_lines={n_lines}, m_points={m_points})."
             )
+        if self.green_response_feature_enabled:
+            if green_response_tilde is None:
+                raise ValueError(
+                    "green_response_tilde is required when "
+                    "green_response_feature.enabled=true."
+                )
+            if green_response_tilde.shape != rhs_tilde.shape:
+                raise ValueError(
+                    "green_response_tilde must match rhs_tilde shape "
+                    f"(got {tuple(green_response_tilde.shape)} vs {tuple(rhs_tilde.shape)})."
+                )
+        elif green_response_tilde is not None:
+            raise ValueError(
+                "green_response_tilde was provided but "
+                "green_response_feature.enabled=false."
+            )
 
         if self.source_stencil_lift is None:
             branch_a_in = a_vals.reshape(b * axis * n_lines, m_points)
-            branch_rhs_source = rhs_tilde
+            branch_rhs_source = (
+                torch.cat((rhs_tilde, green_response_tilde), dim=-1)
+                if green_response_tilde is not None
+                else rhs_tilde
+            )
             branch_r_in = branch_rhs_source.reshape(
                 b * axis * n_lines, self.branch_rhs_input_dim
             )
             branch_a_out = self.branch_a(branch_a_in)
             branch_r_out = self.branch_rhs(branch_r_in)
             branch_feat = branch_a_out * branch_r_out
+            # branch_feat = branch_r_out
         else:
             if self.branch_coefficient is None:
                 raise RuntimeError(
@@ -672,6 +705,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             branch_r_out = self.branch_rhs(branch_r_in)
             branch_coefficient_out = self.branch_coefficient(branch_coefficient_in)
             branch_feat = branch_r_out * branch_coefficient_out
+            # branch_feat = branch_r_out
         branch_feat = branch_feat.unsqueeze(-1)
 
         coords_int = coords[:, :, 1:-1, :]

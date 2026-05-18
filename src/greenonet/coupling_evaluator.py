@@ -75,6 +75,23 @@ class CouplingEvaluator(LoggingMixin):
             weighted, x=x_axis, dim=-1, rule=self.integration_rule
         )  # (B,n,m)
 
+    def _green_response_feature_enabled(self) -> bool:
+        module = getattr(self.model, "_orig_mod", self.model)
+        return bool(getattr(module, "green_response_feature_enabled", False))
+
+    def _green_response_tilde(
+        self,
+        rhs_tilde: torch.Tensor,
+        x_axis: torch.Tensor,
+        y_axis: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if not self._green_response_feature_enabled():
+            return None
+        response = torch.empty_like(rhs_tilde)
+        response[:, 0] = self._integrate(self.green_kernel[0], rhs_tilde[:, 0], x_axis)
+        response[:, 1] = self._integrate(self.green_kernel[1], rhs_tilde[:, 1], y_axis)
+        return response
+
     def _relative_l2_integral(
         self,
         pred: torch.Tensor,
@@ -286,15 +303,23 @@ class CouplingEvaluator(LoggingMixin):
         b_vals = b_vals.to(self.device)
         c_vals = c_vals.to(self.device)
 
-        pred_flux = self.model(
-            coords=coords.to(self.device),
-            a_vals=a_vals,
-            b_vals=b_vals,
-            c_vals=c_vals,
-            rhs_raw=rhs_raw.to(self.device),
-            rhs_tilde=rhs_tilde.to(self.device),
-            rhs_norm=rhs_norm.to(self.device),
-        )  # (B,2,n,m)
+        model_inputs = {
+            "coords": coords.to(self.device),
+            "a_vals": a_vals,
+            "b_vals": b_vals,
+            "c_vals": c_vals,
+            "rhs_raw": rhs_raw.to(self.device),
+            "rhs_tilde": rhs_tilde.to(self.device),
+            "rhs_norm": rhs_norm.to(self.device),
+        }
+        green_response_tilde = self._green_response_tilde(
+            rhs_tilde=rhs_tilde,
+            x_axis=x_axis,
+            y_axis=y_axis,
+        )
+        if green_response_tilde is not None:
+            model_inputs["green_response_tilde"] = green_response_tilde
+        pred_flux = self.model(**model_inputs)  # (B,2,n,m)
 
         # pred_flux = flux.clone().to(self.device)
 

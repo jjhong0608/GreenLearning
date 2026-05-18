@@ -16,6 +16,7 @@ from greenonet.config import (
     CouplingModelConfig,
     CouplingPeriodicCheckpointConfig,
     CouplingTrainingConfig,
+    GreenResponseFeatureConfig,
     SourceStencilLiftConfig,
 )
 from greenonet.numerics import line_operator_fd
@@ -92,6 +93,34 @@ class _TrainableFluxModel(nn.Module):
     ) -> torch.Tensor:
         del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
         return self.projected_flux
+
+
+class _InspectGreenResponseModel(nn.Module):
+    def __init__(
+        self,
+        projected_flux: torch.Tensor,
+        *,
+        enabled: bool = True,
+    ) -> None:
+        super().__init__()
+        self.green_response_feature_enabled = enabled
+        self.register_buffer("_projected_flux", projected_flux)
+        self.seen_green_response: torch.Tensor | None = None
+
+    def forward(
+        self,
+        coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+        green_response_tilde: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
+        self.seen_green_response = green_response_tilde
+        return self._projected_flux.clone()
 
 
 class _RawSumFromRhsModel(nn.Module):
@@ -884,6 +913,108 @@ def test_coupling_model_forward():
     assert psi_y.shape == rhs_raw[:, 1].shape
 
 
+def test_green_response_feature_extends_rhs_branch_input_dim():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        green_response_feature=GreenResponseFeatureConfig(enabled=True),
+    )
+
+    model = CouplingNet(cfg)
+
+    assert cfg.green_response_feature.enabled is True
+    assert model.branch_rhs_input_dim == 6
+
+
+def test_green_response_feature_rejects_source_stencil_lift_combination():
+    with pytest.raises(ValueError, match="green_response_feature"):
+        CouplingNet(
+            CouplingModelConfig(
+                branch_input_dim=5,
+                green_response_feature=GreenResponseFeatureConfig(enabled=True),
+                source_stencil_lift=SourceStencilLiftConfig(enabled=True),
+            )
+        )
+
+
+def test_green_response_feature_forward_requires_matching_feature():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        green_response_feature=GreenResponseFeatureConfig(enabled=True),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    with pytest.raises(ValueError, match="green_response_tilde is required"):
+        model(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+        )
+    with pytest.raises(ValueError, match="must match rhs_tilde shape"):
+        model(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+            green_response_tilde=rhs_tilde[..., :-1],
+        )
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+        green_response_tilde=torch.zeros_like(rhs_tilde),
+    )
+    torch.testing.assert_close(
+        projected_flux[:, 0, :, 1:-1] + projected_flux[:, 1, :, 1:-1].transpose(-1, -2),
+        rhs_raw[:, 0, :, 1:-1],
+    )
+
+
+def test_green_response_feature_disabled_rejects_unexpected_feature():
+    model = CouplingNet(CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2))
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    with pytest.raises(ValueError, match="green_response_feature.enabled=false"):
+        model(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+            green_response_tilde=torch.zeros_like(rhs_tilde),
+        )
+
+
 def test_coupling_model_backprop_through_shared_encoder():
     cfg = CouplingModelConfig(
         branch_input_dim=3,
@@ -1483,6 +1614,95 @@ def test_coupling_evaluator_uses_eval_mode_no_grad_and_restores_training(
     assert model.training_states == [False]
     assert model.grad_enabled_states == [False]
     assert (tmp_path / "test" / "metrics.csv").exists()
+
+
+def test_coupling_trainer_green_response_feature_computes_g_rhs_tilde(tmp_path):
+    rhs_tilde = torch.tensor(
+        [[[[1.0, 2.0, 3.0]], [[4.0, 5.0, 6.0]]]],
+        dtype=torch.float64,
+    )
+    x_axis = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    green_kernel = torch.ones((2, 1, 3, 3), dtype=torch.float64)
+    model = _InspectGreenResponseModel(
+        projected_flux=torch.zeros((1, 2, 1, 3), dtype=torch.float64),
+        enabled=True,
+    )
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(integration_rule="trapezoid"),
+        work_dir=tmp_path,
+        green_kernel=green_kernel,
+        model_cfg=CouplingModelConfig(
+            branch_input_dim=3,
+            green_response_feature=GreenResponseFeatureConfig(enabled=True),
+        ),
+    )
+
+    response = trainer._green_response_tilde(rhs_tilde, x_axis, x_axis)
+
+    weights = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
+    expected = torch.empty_like(rhs_tilde)
+    expected[:, 0, 0] = torch.sum(weights * rhs_tilde[:, 0, 0], dim=-1).view(-1, 1)
+    expected[:, 1, 0] = torch.sum(weights * rhs_tilde[:, 1, 0], dim=-1).view(-1, 1)
+    torch.testing.assert_close(response, expected)
+
+
+def test_coupling_trainer_passes_green_response_feature_when_enabled(tmp_path):
+    inputs, _item = _make_coupling_dataset_item()
+    flux_target = inputs[5]
+    model = _InspectGreenResponseModel(projected_flux=torch.zeros_like(flux_target))
+    model_cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        green_response_feature=GreenResponseFeatureConfig(enabled=True),
+    )
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        model_cfg=model_cfg,
+    )
+
+    trainer._step_loss(*inputs)
+
+    assert model.seen_green_response is not None
+    assert model.seen_green_response.shape == inputs[2].shape
+
+
+def test_coupling_trainer_skips_green_response_feature_when_disabled(tmp_path):
+    inputs, _item = _make_coupling_dataset_item()
+    flux_target = inputs[5]
+    model = _InspectGreenResponseModel(
+        projected_flux=torch.zeros_like(flux_target),
+        enabled=False,
+    )
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(epochs=1, batch_size=1),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    trainer._step_loss(*inputs)
+
+    assert model.seen_green_response is None
+
+
+def test_coupling_evaluator_passes_green_response_feature_when_enabled(tmp_path):
+    inputs, _item = _make_coupling_dataset_item()
+    flux_target = inputs[5]
+    model = _InspectGreenResponseModel(projected_flux=torch.zeros_like(flux_target))
+    evaluator = CouplingEvaluator(
+        model=model,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        device=torch.device("cpu"),
+        work_dir=tmp_path,
+    )
+
+    evaluator._evaluate_batch(*inputs)
+
+    assert model.seen_green_response is not None
+    assert model.seen_green_response.shape == inputs[2].shape
 
 
 def test_coupling_trainer_compile_enabled_calls_torch_compile(tmp_path, monkeypatch):

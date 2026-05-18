@@ -1,9 +1,9 @@
 {
   "dataset": {
-    "step_size": 0.00390625,
+    "step_size": 0.0078125,
     "n_points_per_line": 129,
-    "samples_per_line": 50,
-    "validation_samples_per_line": 10,
+    "samples_per_line": 25,
+    "validation_samples_per_line": 5,
     "validation_sampler_mode": "backward",
     "scale_length": [
       0.05,
@@ -16,10 +16,8 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/train",
-    "validation_path": "data/valid",
-    "test_path": "data/test",
-    "dtype": "float64"
+    "dtype": "float64",
+    "coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py"
   },
   "terminal": {
     "width": 250
@@ -34,7 +32,7 @@
     "use_green": true,
     "branch_input_dim": 129,
     "use_fourier": true,
-    "fourier_dim": 32,
+    "fourier_dim": 64,
     "dtype": "float64"
   },
   "training": {

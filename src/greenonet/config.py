@@ -78,6 +78,13 @@ class SourceStencilLiftConfig:
 
 
 @dataclass
+class GreenResponseFeatureConfig:
+    """Optional axial Green response feature for CouplingNet source branch."""
+
+    enabled: bool = False
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -99,6 +106,9 @@ class CouplingModelConfig:
     smooth_mask_diff_power_max: float = 2.0
     source_stencil_lift: SourceStencilLiftConfig = field(
         default_factory=SourceStencilLiftConfig
+    )
+    green_response_feature: GreenResponseFeatureConfig = field(
+        default_factory=GreenResponseFeatureConfig
     )
 
 

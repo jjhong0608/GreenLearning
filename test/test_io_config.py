@@ -1,6 +1,11 @@
 import torch
 
-from greenonet.config import CouplingModelConfig, ModelConfig, SourceStencilLiftConfig
+from greenonet.config import (
+    CouplingModelConfig,
+    GreenResponseFeatureConfig,
+    ModelConfig,
+    SourceStencilLiftConfig,
+)
 from greenonet.coupling_model import CouplingNet
 from greenonet.model import GreenONetModel
 
@@ -93,6 +98,7 @@ def test_save_load_coupling_model_with_config(tmp_path):
     assert loaded_cfg.source_stencil_lift.enabled is False
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "rms"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.0
+    assert loaded_cfg.green_response_feature.enabled is False
     assert not hasattr(loaded_cfg, "use_fourier")
     assert not hasattr(loaded_cfg, "fourier_dim")
     assert not hasattr(loaded_cfg, "fourier_scale")
@@ -147,6 +153,33 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "tanh"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.7
     assert loaded_cfg.source_stencil_lift.hidden_dim == 32
+    _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_save_load_coupling_model_with_green_response_feature_config(tmp_path):
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=2,
+        activation="tanh",
+        use_bias=True,
+        dropout=0.0,
+        dtype=torch.float64,
+        green_response_feature=GreenResponseFeatureConfig(enabled=True),
+    )
+    model = CouplingNet(cfg)
+    path = tmp_path / "coupling_green_response.safetensors"
+
+    from greenonet.io import load_model_with_config, save_model_with_config
+
+    save_model_with_config(model, cfg, path)
+    loaded_model, loaded_cfg = load_model_with_config(path)
+
+    assert isinstance(loaded_model, CouplingNet)
+    assert loaded_cfg == cfg
+    assert loaded_cfg.green_response_feature.enabled is True
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -278,6 +311,7 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
     assert loaded_cfg.source_stencil_lift.enabled is False
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "rms"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.0
+    assert loaded_cfg.green_response_feature.enabled is False
     assert not hasattr(loaded_cfg, "use_fourier")
     assert not hasattr(loaded_cfg, "fourier_dim")
     assert not hasattr(loaded_cfg, "fourier_scale")
