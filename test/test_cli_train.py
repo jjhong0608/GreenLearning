@@ -254,6 +254,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.source_stencil_lift.enabled is False
         assert coupling_model_cfg.green_response_feature.enabled is False
         assert coupling_model_cfg.trunk_positional_encoding.enabled is False
+        assert coupling_model_cfg.trunk_positional_encoding.mode == "fourier"
         assert coupling_model_cfg.trunk_positional_encoding.num_frequencies == 4
         assert coupling_model_cfg.trunk_positional_encoding.max_frequency == 8.0
         assert coupling_model_cfg.trunk_positional_encoding.include_input is True
@@ -381,6 +382,7 @@ class TestTrainCLIDatasetConfig:
             "coupling_model": {
                 "trunk_positional_encoding": {
                     "enabled": True,
+                    "mode": "boundary_algebraic",
                     "num_frequencies": 5,
                     "max_frequency": 16.0,
                     "include_input": False,
@@ -403,6 +405,7 @@ class TestTrainCLIDatasetConfig:
 
         positional = coupling_model_cfg.trunk_positional_encoding
         assert positional.enabled is True
+        assert positional.mode == "boundary_algebraic"
         assert positional.num_frequencies == 5
         assert positional.max_frequency == 16.0
         assert positional.include_input is False
@@ -549,6 +552,7 @@ class TestTrainCLIDatasetConfig:
         cfg = TrainCLI._build_trunk_positional_encoding_config(None, "coupling_model")
 
         assert cfg.enabled is False
+        assert cfg.mode == "fourier"
         assert cfg.num_frequencies == 4
         assert cfg.max_frequency == 8.0
         assert cfg.include_input is True
@@ -557,6 +561,7 @@ class TestTrainCLIDatasetConfig:
         cfg = EvalCouplingCLI._build_trunk_positional_encoding_config(
             {
                 "enabled": True,
+                "mode": "boundary_algebraic",
                 "num_frequencies": 6,
                 "max_frequency": 32.0,
                 "include_input": False,
@@ -565,6 +570,7 @@ class TestTrainCLIDatasetConfig:
         )
 
         assert cfg.enabled is True
+        assert cfg.mode == "boundary_algebraic"
         assert cfg.num_frequencies == 6
         assert cfg.max_frequency == 32.0
         assert cfg.include_input is False

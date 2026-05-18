@@ -1060,6 +1060,45 @@ def test_trunk_positional_encoding_can_drop_raw_input():
     assert first_layer.in_features == 12
 
 
+def test_trunk_positional_encoding_boundary_algebraic_input_dim():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            enabled=True,
+            mode="boundary_algebraic",
+            include_input=True,
+            num_frequencies=0,
+            max_frequency=0.0,
+        ),
+    )
+    model = CouplingNet(cfg)
+    first_layer = model.trunk.net[0]
+
+    assert isinstance(first_layer, nn.Linear)
+    assert first_layer.in_features == 8
+    assert model.trunk_positional_frequencies.numel() == 0
+
+    cfg_without_input = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            enabled=True,
+            mode="boundary_algebraic",
+            include_input=False,
+            num_frequencies=0,
+            max_frequency=0.0,
+        ),
+    )
+    model_without_input = CouplingNet(cfg_without_input)
+    first_layer_without_input = model_without_input.trunk.net[0]
+
+    assert isinstance(first_layer_without_input, nn.Linear)
+    assert first_layer_without_input.in_features == 6
+
+
 def test_trunk_positional_encoding_matches_axis_aligned_formula():
     cfg = CouplingModelConfig(
         branch_input_dim=3,
@@ -1093,12 +1132,51 @@ def test_trunk_positional_encoding_matches_axis_aligned_formula():
     torch.testing.assert_close(encoded, expected)
 
 
-def test_trunk_positional_encoding_forward_preserves_balance():
+def test_trunk_positional_encoding_matches_boundary_algebraic_formula():
     cfg = CouplingModelConfig(
         branch_input_dim=3,
         hidden_dim=8,
         depth=2,
-        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(enabled=True),
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            enabled=True,
+            mode="boundary_algebraic",
+            include_input=True,
+        ),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.tensor([[0.25, 0.5], [1.0, 0.0]], dtype=torch.float64)
+
+    encoded = model._encode_trunk_coords(coords)
+
+    x = coords[:, 0:1]
+    y = coords[:, 1:2]
+    x_boundary = x * (1.0 - x)
+    y_boundary = y * (1.0 - y)
+    expected = torch.cat(
+        (
+            coords,
+            x_boundary,
+            y_boundary,
+            x * y,
+            x * x,
+            y * y,
+            x_boundary * y_boundary,
+        ),
+        dim=-1,
+    )
+    torch.testing.assert_close(encoded, expected)
+
+
+@pytest.mark.parametrize("mode", ["fourier", "boundary_algebraic"])
+def test_trunk_positional_encoding_forward_preserves_balance(mode):
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            enabled=True,
+            mode=mode,
+        ),
     )
     model = CouplingNet(cfg)
     coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
@@ -1131,6 +1209,15 @@ def test_trunk_positional_encoding_forward_preserves_balance():
 
 
 def test_trunk_positional_encoding_rejects_invalid_config():
+    with pytest.raises(ValueError, match="mode"):
+        CouplingNet(
+            CouplingModelConfig(
+                trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+                    enabled=True,
+                    mode="unsupported",
+                )
+            )
+        )
     with pytest.raises(ValueError, match="num_frequencies"):
         CouplingNet(
             CouplingModelConfig(

@@ -86,9 +86,10 @@ class GreenResponseFeatureConfig:
 
 @dataclass
 class CouplingTrunkPositionalEncodingConfig:
-    """Optional deterministic Fourier features for CouplingNet trunk coordinates."""
+    """Optional deterministic features for CouplingNet trunk coordinates."""
 
     enabled: bool = False
+    mode: Literal["fourier", "boundary_algebraic"] = "fourier"
     num_frequencies: int = 4
     max_frequency: float = 8.0
     include_input: bool = True

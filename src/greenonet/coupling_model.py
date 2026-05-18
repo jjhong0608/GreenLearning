@@ -358,6 +358,15 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
         positional_cfg = config.trunk_positional_encoding
         self.trunk_positional_encoding_enabled = bool(positional_cfg.enabled)
+        self.trunk_positional_encoding_mode = str(positional_cfg.mode)
+        if self.trunk_positional_encoding_mode not in {
+            "fourier",
+            "boundary_algebraic",
+        }:
+            raise ValueError(
+                "trunk_positional_encoding.mode must be 'fourier' "
+                "or 'boundary_algebraic'."
+            )
         self.trunk_positional_encoding_include_input = bool(
             positional_cfg.include_input
         )
@@ -367,35 +376,45 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         self.trunk_positional_encoding_max_frequency = float(
             positional_cfg.max_frequency
         )
+        self.trunk_positional_frequencies: torch.Tensor
         if self.trunk_positional_encoding_enabled:
             if config.trunk_input_dim != 2:
                 raise ValueError(
                     "trunk_positional_encoding requires trunk_input_dim == 2."
                 )
-            if self.trunk_positional_encoding_num_frequencies <= 0:
-                raise ValueError(
-                    "trunk_positional_encoding.num_frequencies must be positive."
+            if self.trunk_positional_encoding_mode == "fourier":
+                if self.trunk_positional_encoding_num_frequencies <= 0:
+                    raise ValueError(
+                        "trunk_positional_encoding.num_frequencies must be positive."
+                    )
+                if self.trunk_positional_encoding_max_frequency <= 0.0:
+                    raise ValueError(
+                        "trunk_positional_encoding.max_frequency must be positive."
+                    )
+                frequencies = torch.logspace(
+                    start=0.0,
+                    end=math.log2(self.trunk_positional_encoding_max_frequency),
+                    steps=self.trunk_positional_encoding_num_frequencies,
+                    base=2.0,
+                    dtype=config.dtype,
                 )
-            if self.trunk_positional_encoding_max_frequency <= 0.0:
-                raise ValueError(
-                    "trunk_positional_encoding.max_frequency must be positive."
+                self.register_buffer(
+                    "trunk_positional_frequencies",
+                    frequencies,
+                    persistent=False,
                 )
-            frequencies = torch.logspace(
-                start=0.0,
-                end=math.log2(self.trunk_positional_encoding_max_frequency),
-                steps=self.trunk_positional_encoding_num_frequencies,
-                base=2.0,
-                dtype=config.dtype,
-            )
-            self.trunk_positional_frequencies: torch.Tensor
-            self.register_buffer(
-                "trunk_positional_frequencies",
-                frequencies,
-                persistent=False,
-            )
-            trunk_input_dim = (
-                2 if self.trunk_positional_encoding_include_input else 0
-            ) + 4 * self.trunk_positional_encoding_num_frequencies
+                trunk_input_dim = (
+                    2 if self.trunk_positional_encoding_include_input else 0
+                ) + 4 * self.trunk_positional_encoding_num_frequencies
+            else:
+                self.register_buffer(
+                    "trunk_positional_frequencies",
+                    torch.empty(0, dtype=config.dtype),
+                    persistent=False,
+                )
+                trunk_input_dim = (
+                    2 if self.trunk_positional_encoding_include_input else 0
+                ) + 6
         else:
             self.register_buffer(
                 "trunk_positional_frequencies",
@@ -530,6 +549,11 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             return coords
         if coords.shape[-1] != 2:
             raise ValueError("trunk_positional_encoding expects 2D coordinates.")
+        if self.trunk_positional_encoding_mode == "boundary_algebraic":
+            return self._encode_boundary_algebraic_coords(coords)
+        return self._encode_fourier_trunk_coords(coords)
+
+    def _encode_fourier_trunk_coords(self, coords: torch.Tensor) -> torch.Tensor:
         frequencies = self.trunk_positional_frequencies.to(
             device=coords.device,
             dtype=coords.dtype,
@@ -546,6 +570,26 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 torch.cos(scale * x),
                 torch.sin(scale * y),
                 torch.cos(scale * y),
+            )
+        )
+        return torch.cat(encoded_parts, dim=-1)
+
+    def _encode_boundary_algebraic_coords(self, coords: torch.Tensor) -> torch.Tensor:
+        x = coords[..., 0:1]
+        y = coords[..., 1:2]
+        x_boundary = x * (1.0 - x)
+        y_boundary = y * (1.0 - y)
+        encoded_parts = []
+        if self.trunk_positional_encoding_include_input:
+            encoded_parts.append(coords)
+        encoded_parts.extend(
+            (
+                x_boundary,
+                y_boundary,
+                x * y,
+                x * x,
+                y * y,
+                x_boundary * y_boundary,
             )
         )
         return torch.cat(encoded_parts, dim=-1)

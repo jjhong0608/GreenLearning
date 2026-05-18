@@ -101,6 +101,7 @@ def test_save_load_coupling_model_with_config(tmp_path):
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.0
     assert loaded_cfg.green_response_feature.enabled is False
     assert loaded_cfg.trunk_positional_encoding.enabled is False
+    assert loaded_cfg.trunk_positional_encoding.mode == "fourier"
     assert loaded_cfg.trunk_positional_encoding.num_frequencies == 4
     assert loaded_cfg.trunk_positional_encoding.max_frequency == 8.0
     assert loaded_cfg.trunk_positional_encoding.include_input is True
@@ -201,6 +202,7 @@ def test_save_load_coupling_model_with_trunk_positional_encoding_config(tmp_path
         dtype=torch.float64,
         trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
             enabled=True,
+            mode="boundary_algebraic",
             num_frequencies=3,
             max_frequency=4.0,
             include_input=True,
@@ -217,6 +219,7 @@ def test_save_load_coupling_model_with_trunk_positional_encoding_config(tmp_path
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
     assert loaded_cfg.trunk_positional_encoding.enabled is True
+    assert loaded_cfg.trunk_positional_encoding.mode == "boundary_algebraic"
     assert loaded_cfg.trunk_positional_encoding.num_frequencies == 3
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
@@ -351,6 +354,7 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.0
     assert loaded_cfg.green_response_feature.enabled is False
     assert loaded_cfg.trunk_positional_encoding.enabled is False
+    assert loaded_cfg.trunk_positional_encoding.mode == "fourier"
     assert not hasattr(loaded_cfg, "use_fourier")
     assert not hasattr(loaded_cfg, "fourier_dim")
     assert not hasattr(loaded_cfg, "fourier_scale")

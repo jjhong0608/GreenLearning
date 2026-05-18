@@ -53,7 +53,8 @@
       "enabled": true
     },
     "trunk_positional_encoding": {
-      "enabled": false,
+      "enabled": true,
+      "mode": "fourier",
       "num_frequencies": 4,
       "max_frequency": 8.0,
       "include_input": true
