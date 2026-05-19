@@ -10,14 +10,14 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/poisson/train",
-    "validation_path": "data/poisson/valid",
-    "test_path": "data/poisson/test",
-    "coefficient_functions_path": "coefficients/Pure_Poisson.py",
+    "training_path": "data/Smooth_Variable_Diffusion_Reaction/train",
+    "validation_path": "data/Smooth_Variable_Diffusion_Reaction/valid",
+    "test_path": "data/Smooth_Variable_Diffusion_Reaction/test",
+    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py",
     "dtype": "float64"
   },
   "terminal": {
-    "width": 330
+    "width": 340
   },
   "coupling_model": {
     "hidden_dim": 128,
@@ -49,12 +49,17 @@
       "use_g_normalization": true,
       "eps": 1e-12
     },
+    "coefficient_terms": {
+      "diffusion": true,
+      "convection": false,
+      "reaction": false
+    },
     "green_response_feature": {
-      "enabled": true
+      "enabled": false
     },
     "trunk_positional_encoding": {
-      "enabled": true,
-      "mode": "fourier",
+      "enabled": false,
+      "mode": "boundary_algebraic",
       "num_frequencies": 4,
       "max_frequency": 8.0,
       "include_input": true
@@ -82,7 +87,7 @@
     "epochs": 3000,
     "learning_rate": 0.002,
     "source_stencil_lift_learning_rate": null,
-    "weight_decay": 0.1,
+    "weight_decay": 0.05,
     "source_stencil_lift_weight_decay": null,
     "gradient_clip_max_norm": 1.0,
     "use_lr_schedule": true,
@@ -102,7 +107,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/poisson/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/Smooth_Variable_Diffusion_Reaction/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

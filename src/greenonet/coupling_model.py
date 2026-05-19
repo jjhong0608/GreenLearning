@@ -7,7 +7,11 @@ import torch
 from torch import nn
 
 from greenonet.activations import RationalActivation
-from greenonet.config import CouplingModelConfig, SourceStencilLiftConfig
+from greenonet.config import (
+    CouplingCoefficientTermsConfig,
+    CouplingModelConfig,
+    SourceStencilLiftConfig,
+)
 
 
 class ActivationFactoryMixin:
@@ -356,6 +360,27 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 "green_response_feature.enabled=true requires "
                 "source_stencil_lift.enabled=false."
             )
+        coefficient_terms = config.coefficient_terms
+        default_coefficient_terms = CouplingCoefficientTermsConfig()
+        if (
+            config.source_stencil_lift.enabled
+            and coefficient_terms != default_coefficient_terms
+        ):
+            raise ValueError(
+                "source_stencil_lift.enabled=true only supports default "
+                "coefficient_terms."
+            )
+        self.coefficient_terms_diffusion = bool(coefficient_terms.diffusion)
+        self.coefficient_terms_convection = bool(coefficient_terms.convection)
+        self.coefficient_terms_reaction = bool(coefficient_terms.reaction)
+        active_coefficient_terms = []
+        if self.coefficient_terms_diffusion:
+            active_coefficient_terms.append("diffusion")
+        if self.coefficient_terms_convection:
+            active_coefficient_terms.append("convection")
+        if self.coefficient_terms_reaction:
+            active_coefficient_terms.append("reaction")
+        self.active_coefficient_terms = tuple(active_coefficient_terms)
         positional_cfg = config.trunk_positional_encoding
         self.trunk_positional_encoding_enabled = bool(positional_cfg.enabled)
         self.trunk_positional_encoding_mode = str(positional_cfg.mode)
@@ -448,33 +473,12 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             self.branch_rhs_input_dim = 2 * config.branch_input_dim
         else:
             self.branch_rhs_input_dim = config.branch_input_dim
-        self.branch_a = MLP(
-            input_dim=config.branch_input_dim,
-            hidden_dim=config.hidden_dim,
-            depth=config.depth,
-            activation=config.activation,
-            use_bias=config.use_bias,
-            dropout=config.dropout,
-            last_activation=False,
-        )
-        self.branch_b = MLP(
-            input_dim=config.branch_input_dim,
-            hidden_dim=config.hidden_dim,
-            depth=config.depth,
-            activation=config.activation,
-            use_bias=config.use_bias,
-            dropout=config.dropout,
-            last_activation=False,
-        )
-        self.branch_c = MLP(
-            input_dim=config.branch_input_dim,
-            hidden_dim=config.hidden_dim,
-            depth=config.depth,
-            activation=config.activation,
-            use_bias=config.use_bias,
-            dropout=config.dropout,
-            last_activation=False,
-        )
+        if config.source_stencil_lift.enabled:
+            self.branch_coefficient_input_dim = self.branch_rhs_input_dim
+        else:
+            self.branch_coefficient_input_dim = (
+                len(self.active_coefficient_terms) * config.branch_input_dim
+            )
         self.branch_rhs = MLP(
             input_dim=self.branch_rhs_input_dim,
             hidden_dim=config.hidden_dim,
@@ -484,9 +488,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             dropout=config.dropout,
             last_activation=False,
         )
-        if config.source_stencil_lift.enabled:
+        if config.source_stencil_lift.enabled or self.branch_coefficient_input_dim > 0:
             self.branch_coefficient: MLP | None = MLP(
-                input_dim=self.branch_rhs_input_dim,
+                input_dim=self.branch_coefficient_input_dim,
                 hidden_dim=config.hidden_dim,
                 depth=config.depth,
                 activation=config.activation,
@@ -594,6 +598,23 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         )
         return torch.cat(encoded_parts, dim=-1)
 
+    def _standard_coefficient_branch_input(
+        self,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+    ) -> torch.Tensor | None:
+        active = []
+        if self.coefficient_terms_diffusion:
+            active.append(a_vals)
+        if self.coefficient_terms_convection:
+            active.append(b_vals)
+        if self.coefficient_terms_reaction:
+            active.append(c_vals)
+        if not active:
+            return None
+        return torch.cat(active, dim=-1)
+
     def _load_from_state_dict(
         self,
         state_dict: MutableMapping[str, torch.Tensor],
@@ -609,6 +630,40 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             state_dict.pop(raw_key, None)
         elif raw_key not in state_dict:
             state_dict[raw_key] = self.smooth_mask_diff_power_raw.detach().clone()
+        coefficient_prefix = prefix + "branch_coefficient."
+        legacy_branch_a_prefix = prefix + "branch_a."
+        has_coefficient_state = any(
+            key.startswith(coefficient_prefix) for key in state_dict
+        )
+        has_legacy_branch_a_state = any(
+            key.startswith(legacy_branch_a_prefix) for key in state_dict
+        )
+        if self.branch_coefficient is not None:
+            target_weight = self.branch_coefficient.state_dict().get("net.0.weight")
+            legacy_weight = state_dict.get(legacy_branch_a_prefix + "net.0.weight")
+            can_migrate_legacy_branch_a = (
+                not has_coefficient_state
+                and has_legacy_branch_a_state
+                and target_weight is not None
+                and legacy_weight is not None
+                and target_weight.shape == legacy_weight.shape
+            )
+            if can_migrate_legacy_branch_a:
+                for key in list(state_dict):
+                    if key.startswith(legacy_branch_a_prefix):
+                        migrated_key = (
+                            coefficient_prefix + key[len(legacy_branch_a_prefix) :]
+                        )
+                        state_dict[migrated_key] = state_dict.pop(key)
+            elif has_legacy_branch_a_state:
+                for key in list(state_dict):
+                    if key.startswith(legacy_branch_a_prefix):
+                        state_dict.pop(key)
+        for legacy_prefix in ("branch_b.", "branch_c."):
+            full_prefix = prefix + legacy_prefix
+            for key in list(state_dict):
+                if key.startswith(full_prefix):
+                    state_dict.pop(key)
         super()._load_from_state_dict(
             state_dict,
             prefix,
@@ -769,6 +824,18 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 "coords must be 4D; a/b/c/rhs_raw/rhs_tilde (B,2,n,m); rhs_norm (B,2,n)"
             )
         b, axis, n_lines, m_points = a_vals.shape
+        expected_axis_shape = (b, axis, n_lines, m_points)
+        if (
+            b_vals.shape != expected_axis_shape
+            or c_vals.shape != expected_axis_shape
+            or rhs_raw.shape != expected_axis_shape
+            or rhs_tilde.shape != expected_axis_shape
+        ):
+            raise ValueError("b/c/rhs_raw/rhs_tilde must match a_vals shape.")
+        if rhs_norm.shape != (b, axis, n_lines):
+            raise ValueError(
+                "rhs_norm must have shape (B, 2, n_lines) matching a_vals."
+            )
         if n_lines + 2 != m_points:
             raise ValueError(
                 f"Expected n_lines + 2 == m_points (got n_lines={n_lines}, m_points={m_points})."
@@ -791,7 +858,6 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
 
         if self.source_stencil_lift is None:
-            branch_a_in = a_vals.reshape(b * axis * n_lines, m_points)
             branch_rhs_source = (
                 torch.cat((rhs_tilde, green_response_tilde), dim=-1)
                 if green_response_tilde is not None
@@ -800,10 +866,25 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             branch_r_in = branch_rhs_source.reshape(
                 b * axis * n_lines, self.branch_rhs_input_dim
             )
-            branch_a_out = self.branch_a(branch_a_in)
             branch_r_out = self.branch_rhs(branch_r_in)
-            branch_feat = branch_a_out * branch_r_out
-            # branch_feat = branch_r_out
+            coefficient_input = self._standard_coefficient_branch_input(
+                a_vals,
+                b_vals,
+                c_vals,
+            )
+            if coefficient_input is None:
+                branch_feat = branch_r_out
+            else:
+                if self.branch_coefficient is None:
+                    raise RuntimeError(
+                        "branch_coefficient must be initialized when "
+                        "coefficient_terms are enabled."
+                    )
+                branch_coefficient_in = coefficient_input.reshape(
+                    b * axis * n_lines, self.branch_coefficient_input_dim
+                )
+                branch_coefficient_out = self.branch_coefficient(branch_coefficient_in)
+                branch_feat = branch_coefficient_out * branch_r_out
         else:
             if self.branch_coefficient is None:
                 raise RuntimeError(
@@ -821,7 +902,6 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             branch_r_out = self.branch_rhs(branch_r_in)
             branch_coefficient_out = self.branch_coefficient(branch_coefficient_in)
             branch_feat = branch_r_out * branch_coefficient_out
-            # branch_feat = branch_r_out
         branch_feat = branch_feat.unsqueeze(-1)
 
         coords_int = coords[:, :, 1:-1, :]

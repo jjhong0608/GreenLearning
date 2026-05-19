@@ -1,6 +1,7 @@
 import torch
 
 from greenonet.config import (
+    CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
@@ -99,6 +100,9 @@ def test_save_load_coupling_model_with_config(tmp_path):
     assert loaded_cfg.source_stencil_lift.enabled is False
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "rms"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.0
+    assert loaded_cfg.coefficient_terms.diffusion is True
+    assert loaded_cfg.coefficient_terms.convection is False
+    assert loaded_cfg.coefficient_terms.reaction is False
     assert loaded_cfg.green_response_feature.enabled is False
     assert loaded_cfg.trunk_positional_encoding.enabled is False
     assert loaded_cfg.trunk_positional_encoding.mode == "fourier"
@@ -109,6 +113,59 @@ def test_save_load_coupling_model_with_config(tmp_path):
     assert not hasattr(loaded_cfg, "fourier_dim")
     assert not hasattr(loaded_cfg, "fourier_scale")
     assert not hasattr(loaded_cfg, "fourier_include_input")
+    _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_load_coupling_model_migrates_legacy_branch_a_state(tmp_path):
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=2,
+        activation="tanh",
+        use_bias=True,
+        dropout=0.0,
+        dtype=torch.float64,
+    )
+    model = CouplingNet(cfg)
+    legacy_state = {}
+    for key, value in model.state_dict().items():
+        if key.startswith("branch_coefficient."):
+            legacy_state["branch_a." + key.removeprefix("branch_coefficient.")] = value
+            legacy_state["branch_b." + key.removeprefix("branch_coefficient.")] = (
+                torch.zeros_like(value)
+            )
+            legacy_state["branch_c." + key.removeprefix("branch_coefficient.")] = (
+                torch.ones_like(value)
+            )
+        else:
+            legacy_state[key] = value
+    path = tmp_path / "legacy_branch_a_coupling.pt"
+    torch.save(
+        {
+            "state_dict": legacy_state,
+            "model_type": "coupling",
+            "model_config": {
+                "branch_input_dim": 5,
+                "trunk_input_dim": 2,
+                "hidden_dim": 8,
+                "depth": 2,
+                "activation": "tanh",
+                "use_bias": True,
+                "dropout": 0.0,
+                "dtype": "float64",
+            },
+        },
+        path,
+    )
+
+    from greenonet.io import load_model_with_config
+
+    loaded_model, loaded_cfg = load_model_with_config(path)
+
+    assert isinstance(loaded_model, CouplingNet)
+    assert loaded_cfg == cfg
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -186,6 +243,39 @@ def test_save_load_coupling_model_with_green_response_feature_config(tmp_path):
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
     assert loaded_cfg.green_response_feature.enabled is True
+    _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_save_load_coupling_model_with_coefficient_terms_config(tmp_path):
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=2,
+        activation="tanh",
+        use_bias=True,
+        dropout=0.0,
+        dtype=torch.float64,
+        coefficient_terms=CouplingCoefficientTermsConfig(
+            diffusion=True,
+            convection=True,
+            reaction=True,
+        ),
+    )
+    model = CouplingNet(cfg)
+    path = tmp_path / "coupling_coefficient_terms.safetensors"
+
+    from greenonet.io import load_model_with_config, save_model_with_config
+
+    save_model_with_config(model, cfg, path)
+    loaded_model, loaded_cfg = load_model_with_config(path)
+
+    assert isinstance(loaded_model, CouplingNet)
+    assert loaded_cfg == cfg
+    assert loaded_cfg.coefficient_terms.diffusion is True
+    assert loaded_cfg.coefficient_terms.convection is True
+    assert loaded_cfg.coefficient_terms.reaction is True
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 

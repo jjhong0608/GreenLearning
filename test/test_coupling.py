@@ -11,6 +11,7 @@ from greenonet.coupling_model import CouplingNet, FiveStencilSourceLift
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
     CouplingBestRelSolCheckpointConfig,
+    CouplingCoefficientTermsConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
     CouplingModelConfig,
@@ -678,7 +679,8 @@ def test_coupling_net_source_branch_input_dimension_changes_only_when_enabled():
     )
     disabled_rhs_first = disabled.branch_rhs.net[0]
     enabled_rhs_first = enabled.branch_rhs.net[0]
-    enabled_a_first = enabled.branch_a.net[0]
+    assert disabled.branch_coefficient is not None
+    disabled_coefficient_branch_first = disabled.branch_coefficient.net[0]
     assert enabled.branch_coefficient is not None
     enabled_coefficient_branch_first = enabled.branch_coefficient.net[0]
     enabled_lift_source_first = enabled.source_stencil_lift.source_encoder[0]
@@ -686,17 +688,185 @@ def test_coupling_net_source_branch_input_dimension_changes_only_when_enabled():
 
     assert isinstance(disabled_rhs_first, nn.Linear)
     assert isinstance(enabled_rhs_first, nn.Linear)
-    assert isinstance(enabled_a_first, nn.Linear)
+    assert isinstance(disabled_coefficient_branch_first, nn.Linear)
     assert isinstance(enabled_coefficient_branch_first, nn.Linear)
     assert enabled.source_stencil_lift is not None
     assert isinstance(enabled_lift_source_first, nn.Linear)
     assert isinstance(enabled_lift_coefficient_first, nn.Linear)
     assert disabled_rhs_first.in_features == 5
+    assert disabled_coefficient_branch_first.in_features == 5
     assert enabled_rhs_first.in_features == 3
-    assert enabled_a_first.in_features == 5
     assert enabled_coefficient_branch_first.in_features == 3
     assert enabled_lift_source_first.in_features == 5
     assert enabled_lift_coefficient_first.in_features == 5
+
+
+def test_coupling_net_coefficient_terms_control_branch_input_dimension():
+    default_model = CouplingNet(CouplingModelConfig(branch_input_dim=5, hidden_dim=8))
+    assert default_model.branch_coefficient is not None
+    default_first = default_model.branch_coefficient.net[0]
+    assert isinstance(default_first, nn.Linear)
+    assert default_first.in_features == 5
+
+    diffusion_reaction = CouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=5,
+            hidden_dim=8,
+            coefficient_terms=CouplingCoefficientTermsConfig(
+                diffusion=True,
+                convection=False,
+                reaction=True,
+            ),
+        )
+    )
+    assert diffusion_reaction.branch_coefficient is not None
+    diffusion_reaction_first = diffusion_reaction.branch_coefficient.net[0]
+    assert isinstance(diffusion_reaction_first, nn.Linear)
+    assert diffusion_reaction_first.in_features == 10
+
+    all_terms = CouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=5,
+            hidden_dim=8,
+            coefficient_terms=CouplingCoefficientTermsConfig(
+                diffusion=True,
+                convection=True,
+                reaction=True,
+            ),
+        )
+    )
+    assert all_terms.branch_coefficient is not None
+    all_terms_first = all_terms.branch_coefficient.net[0]
+    assert isinstance(all_terms_first, nn.Linear)
+    assert all_terms_first.in_features == 15
+
+    source_only = CouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=5,
+            hidden_dim=8,
+            coefficient_terms=CouplingCoefficientTermsConfig(
+                diffusion=False,
+                convection=False,
+                reaction=False,
+            ),
+        )
+    )
+    assert source_only.branch_coefficient is None
+    assert source_only.branch_coefficient_input_dim == 0
+
+
+def test_coupling_net_coefficient_terms_concat_in_abc_order():
+    model = CouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=3,
+            hidden_dim=8,
+            coefficient_terms=CouplingCoefficientTermsConfig(
+                diffusion=True,
+                convection=True,
+                reaction=True,
+            ),
+        )
+    )
+    a_vals = torch.full((1, 2, 1, 3), 1.0, dtype=torch.float64)
+    b_vals = torch.full_like(a_vals, 2.0)
+    c_vals = torch.full_like(a_vals, 3.0)
+
+    coefficient_input = model._standard_coefficient_branch_input(
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    expected = torch.cat((a_vals, b_vals, c_vals), dim=-1)
+    assert coefficient_input is not None
+    torch.testing.assert_close(coefficient_input, expected)
+
+
+def test_coupling_net_coefficient_terms_select_enabled_tensors_only():
+    model = CouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=3,
+            hidden_dim=8,
+            coefficient_terms=CouplingCoefficientTermsConfig(
+                diffusion=False,
+                convection=True,
+                reaction=True,
+            ),
+        )
+    )
+    a_vals = torch.full((1, 2, 1, 3), 1.0, dtype=torch.float64)
+    b_vals = torch.full_like(a_vals, 2.0)
+    c_vals = torch.full_like(a_vals, 3.0)
+
+    coefficient_input = model._standard_coefficient_branch_input(
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    expected = torch.cat((b_vals, c_vals), dim=-1)
+    assert coefficient_input is not None
+    torch.testing.assert_close(coefficient_input, expected)
+
+
+def test_coupling_net_source_only_branch_skips_coefficient_branch_backprop():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        coefficient_terms=CouplingCoefficientTermsConfig(
+            diffusion=False,
+            convection=False,
+            reaction=False,
+        ),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1, keepdim=False).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+    loss = projected_flux.square().sum()
+    loss.backward()
+
+    def _has_grad(module: nn.Module) -> bool:
+        return any(
+            parameter.grad is not None
+            and torch.count_nonzero(parameter.grad).item() > 0
+            for parameter in module.parameters()
+        )
+
+    assert projected_flux.shape == (1, 2, 1, 3)
+    assert model.branch_coefficient is None
+    assert _has_grad(model.branch_rhs)
+    assert _has_grad(model.trunk)
+
+
+def test_coupling_net_source_lift_rejects_non_default_coefficient_terms():
+    with pytest.raises(ValueError, match="coefficient_terms"):
+        CouplingNet(
+            CouplingModelConfig(
+                branch_input_dim=5,
+                source_stencil_lift=SourceStencilLiftConfig(enabled=True),
+                coefficient_terms=CouplingCoefficientTermsConfig(
+                    diffusion=True,
+                    convection=True,
+                    reaction=False,
+                ),
+            )
+        )
 
 
 def test_coupling_net_source_lift_rejects_too_short_branch_input():
@@ -772,12 +942,6 @@ def test_coupling_net_enabled_source_lift_uses_separate_source_and_coefficient_b
         def forward(self, rhs_raw: torch.Tensor, a_vals: torch.Tensor) -> torch.Tensor:
             raise AssertionError("CouplingNet should use forward_components")
 
-    class _FailBranch(nn.Module):
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            raise AssertionError(
-                "branch_a should not be used when source lift is enabled"
-            )
-
     class _ExpectBranch(nn.Module):
         def __init__(self, expected_value: float, output_value: float, hidden_dim: int):
             super().__init__()
@@ -821,7 +985,6 @@ def test_coupling_net_enabled_source_lift_uses_separate_source_and_coefficient_b
     )
     model = CouplingNet(cfg)
     model.source_stencil_lift = _InspectSourceLift()  # type: ignore[assignment]
-    model.branch_a = _FailBranch()
     model.branch_rhs = _ExpectBranch(2.0, 5.0, cfg.hidden_dim)
     model.branch_coefficient = _ExpectBranch(3.0, 7.0, cfg.hidden_dim)  # type: ignore[assignment]
     model.trunk = _OnesBranch(cfg.hidden_dim)
@@ -1283,12 +1446,13 @@ def test_coupling_model_backprop_through_shared_encoder():
         )
 
     assert projected_flux.shape == (1, 2, 1, 3)
-    assert _has_grad(model.branch_a)
+    assert model.branch_coefficient is not None
+    assert _has_grad(model.branch_coefficient)
     assert _has_grad(model.branch_rhs)
     assert _has_grad(model.trunk)
 
 
-def test_coupling_model_enabled_source_lift_backprop_skips_branch_a():
+def test_coupling_model_enabled_source_lift_backprop_uses_lifted_coefficient_branch():
     cfg = CouplingModelConfig(
         branch_input_dim=3,
         hidden_dim=8,
@@ -1331,7 +1495,6 @@ def test_coupling_model_enabled_source_lift_backprop_skips_branch_a():
     assert _has_grad(model.branch_rhs)
     assert _has_grad(model.branch_coefficient)
     assert _has_grad(model.trunk)
-    assert not _has_grad(model.branch_a)
 
 
 def _make_projection_coords(n_lines: int, dtype: torch.dtype = torch.float64):
@@ -1359,9 +1522,7 @@ def test_coupling_balance_projection_uses_fixed_half_split():
 
     cfg = CouplingModelConfig(branch_input_dim=5, hidden_dim=8, depth=2)
     model = CouplingNet(cfg)
-    model.branch_a = _ZeroBranch(cfg.hidden_dim)
-    model.branch_b = _ZeroBranch(cfg.hidden_dim)
-    model.branch_c = _ZeroBranch(cfg.hidden_dim)
+    model.branch_coefficient = _ZeroBranch(cfg.hidden_dim)
     model.branch_rhs = _ZeroBranch(cfg.hidden_dim)
     model.trunk = _ZeroBranch(cfg.hidden_dim)
 

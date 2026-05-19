@@ -251,6 +251,9 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.smooth_mask_diff_power_trainable is False
         assert coupling_model_cfg.smooth_mask_diff_power_min == 0.25
         assert coupling_model_cfg.smooth_mask_diff_power_max == 2.0
+        assert coupling_model_cfg.coefficient_terms.diffusion is True
+        assert coupling_model_cfg.coefficient_terms.convection is False
+        assert coupling_model_cfg.coefficient_terms.reaction is False
         assert coupling_model_cfg.source_stencil_lift.enabled is False
         assert coupling_model_cfg.green_response_feature.enabled is False
         assert coupling_model_cfg.trunk_positional_encoding.enabled is False
@@ -355,6 +358,55 @@ class TestTrainCLIDatasetConfig:
         ) = TrainCLI()._build_configs(config_path)
 
         assert coupling_model_cfg.green_response_feature.enabled is True
+
+    def test_parses_coefficient_terms_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "coefficient_terms": {
+                    "diffusion": False,
+                    "convection": True,
+                    "reaction": True,
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset_cfg,
+            _model_cfg,
+            _training_cfg,
+            coupling_model_cfg,
+            _coupling_training_cfg,
+            _pipeline_cfg,
+            _terminal_cfg,
+        ) = TrainCLI()._build_configs(config_path)
+
+        assert coupling_model_cfg.coefficient_terms.diffusion is False
+        assert coupling_model_cfg.coefficient_terms.convection is True
+        assert coupling_model_cfg.coefficient_terms.reaction is True
+
+    def test_rejects_non_object_coefficient_terms_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "coefficient_terms": "diffusion",
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.coefficient_terms"):
+            TrainCLI()._build_configs(config_path)
 
     def test_rejects_non_object_green_response_feature_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -532,6 +584,34 @@ class TestTrainCLIDatasetConfig:
         cfg = TrainCLI._build_green_response_feature_config(None, "coupling_model")
 
         assert cfg.enabled is False
+
+    def test_coefficient_terms_defaults(self):
+        cfg = TrainCLI._build_coefficient_terms_config(None, "coupling_model")
+
+        assert cfg.diffusion is True
+        assert cfg.convection is False
+        assert cfg.reaction is False
+
+    def test_eval_cli_parses_coefficient_terms_config(self):
+        cfg = EvalCouplingCLI._build_coefficient_terms_config(
+            {
+                "diffusion": False,
+                "convection": True,
+                "reaction": True,
+            },
+            "coupling_model",
+        )
+
+        assert cfg.diffusion is False
+        assert cfg.convection is True
+        assert cfg.reaction is True
+
+    def test_eval_cli_rejects_non_object_coefficient_terms_config(self):
+        with pytest.raises(TypeError, match="coupling_model.coefficient_terms"):
+            EvalCouplingCLI._build_coefficient_terms_config(
+                "diffusion",
+                "coupling_model",
+            )
 
     def test_eval_cli_parses_green_response_feature_config(self):
         cfg = EvalCouplingCLI._build_green_response_feature_config(

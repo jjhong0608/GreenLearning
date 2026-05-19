@@ -10,6 +10,7 @@ import torch
 
 from greenonet.compile_utils import model_state_dict_for_save
 from greenonet.config import (
+    CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
@@ -79,6 +80,11 @@ def _deserialize_config(
         source_lift_raw = data.get("source_stencil_lift")
         if isinstance(source_lift_raw, dict):
             data["source_stencil_lift"] = SourceStencilLiftConfig(**source_lift_raw)
+        coefficient_terms_raw = data.get("coefficient_terms")
+        if isinstance(coefficient_terms_raw, dict):
+            data["coefficient_terms"] = CouplingCoefficientTermsConfig(
+                **coefficient_terms_raw
+            )
         green_response_raw = data.get("green_response_feature")
         if isinstance(green_response_raw, dict):
             data["green_response_feature"] = GreenResponseFeatureConfig(

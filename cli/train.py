@@ -10,6 +10,7 @@ import torch
 from greenonet.config import (
     CompileConfig,
     CouplingBestRelSolCheckpointConfig,
+    CouplingCoefficientTermsConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
     CouplingModelConfig,
@@ -125,6 +126,11 @@ class TrainCLI:
             source_lift_raw,
             "coupling_model",
         )
+        coefficient_terms_raw = coupling_model_kwargs.pop("coefficient_terms", None)
+        coefficient_terms_cfg = self._build_coefficient_terms_config(
+            coefficient_terms_raw,
+            "coupling_model",
+        )
         green_response_raw = coupling_model_kwargs.pop("green_response_feature", None)
         green_response_cfg = self._build_green_response_feature_config(
             green_response_raw,
@@ -139,6 +145,7 @@ class TrainCLI:
         coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
         coupling_model_cfg = CouplingModelConfig(
             source_stencil_lift=source_lift_cfg,
+            coefficient_terms=coefficient_terms_cfg,
             green_response_feature=green_response_cfg,
             trunk_positional_encoding=positional_cfg,
             **coupling_model_kwargs,
@@ -197,6 +204,17 @@ class TrainCLI:
         if not isinstance(raw_green_response, dict):
             raise TypeError(f"{section_name}.green_response_feature must be an object.")
         return GreenResponseFeatureConfig(**dict(raw_green_response))
+
+    @staticmethod
+    def _build_coefficient_terms_config(
+        raw_coefficient_terms: object | None,
+        section_name: str,
+    ) -> CouplingCoefficientTermsConfig:
+        if raw_coefficient_terms is None:
+            return CouplingCoefficientTermsConfig()
+        if not isinstance(raw_coefficient_terms, dict):
+            raise TypeError(f"{section_name}.coefficient_terms must be an object.")
+        return CouplingCoefficientTermsConfig(**dict(raw_coefficient_terms))
 
     @staticmethod
     def _build_trunk_positional_encoding_config(

@@ -85,6 +85,15 @@ class GreenResponseFeatureConfig:
 
 
 @dataclass
+class CouplingCoefficientTermsConfig:
+    """Coefficient terms used by the standard CouplingNet branch path."""
+
+    diffusion: bool = True
+    convection: bool = False
+    reaction: bool = False
+
+
+@dataclass
 class CouplingTrunkPositionalEncodingConfig:
     """Optional deterministic features for CouplingNet trunk coordinates."""
 
@@ -117,6 +126,9 @@ class CouplingModelConfig:
     smooth_mask_diff_power_max: float = 2.0
     source_stencil_lift: SourceStencilLiftConfig = field(
         default_factory=SourceStencilLiftConfig
+    )
+    coefficient_terms: CouplingCoefficientTermsConfig = field(
+        default_factory=CouplingCoefficientTermsConfig
     )
     green_response_feature: GreenResponseFeatureConfig = field(
         default_factory=GreenResponseFeatureConfig
