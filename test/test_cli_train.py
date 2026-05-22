@@ -188,6 +188,14 @@ class TestTrainCLIDatasetConfig:
                         "enabled": False,
                         "weight": 2.0,
                     },
+                    "balance_loss": {
+                        "enabled": False,
+                        "weight": 4.0,
+                    },
+                    "symmetric_boundary_loss": {
+                        "enabled": False,
+                        "weight": 5.0,
+                    },
                 },
                 "learning_rate": 5e-4,
                 "source_stencil_lift_learning_rate": 2.5e-5,
@@ -230,6 +238,10 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.losses.energy_consistency.weight == 0.25
         assert coupling_training_cfg.losses.cross_consistency.enabled is False
         assert coupling_training_cfg.losses.cross_consistency.weight == 2.0
+        assert coupling_training_cfg.losses.balance_loss.enabled is False
+        assert coupling_training_cfg.losses.balance_loss.weight == 4.0
+        assert coupling_training_cfg.losses.symmetric_boundary_loss.enabled is False
+        assert coupling_training_cfg.losses.symmetric_boundary_loss.weight == 5.0
         assert coupling_training_cfg.learning_rate == 5e-4
         assert coupling_training_cfg.source_stencil_lift_learning_rate == 2.5e-5
         assert coupling_training_cfg.weight_decay == 1.0e-2
@@ -243,7 +255,8 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.periodic_checkpoint.every_epochs == 4
         assert coupling_training_cfg.best_rel_sol_checkpoint.enabled is True
         assert coupling_training_cfg.compile.enabled is True
-        assert coupling_model_cfg.balance_projection == "symmetric"
+        assert coupling_model_cfg.balance_projection.enabled is True
+        assert coupling_model_cfg.balance_projection.mode == "symmetric"
         assert coupling_model_cfg.smooth_mask_normalize is True
         assert coupling_model_cfg.smooth_mask_eps == 1e-12
         assert coupling_model_cfg.smooth_mask_power == 1.0
@@ -265,6 +278,37 @@ class TestTrainCLIDatasetConfig:
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
         assert not hasattr(coupling_model_cfg, "fourier_include_input")
+
+    def test_parses_balance_projection_object_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "balance_projection": {
+                    "enabled": False,
+                    "mode": "smooth_mask",
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset_cfg,
+            _model_cfg,
+            _training_cfg,
+            coupling_model_cfg,
+            coupling_training_cfg,
+            _pipeline_cfg,
+            _terminal_cfg,
+        ) = TrainCLI()._build_configs(config_path)
+
+        assert coupling_model_cfg.balance_projection.enabled is False
+        assert coupling_model_cfg.balance_projection.mode == "smooth_mask"
+        assert coupling_training_cfg.losses.balance_loss.enabled is False
 
     def test_parses_source_stencil_lift_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -311,7 +355,8 @@ class TestTrainCLIDatasetConfig:
         ) = TrainCLI()._build_configs(config_path)
 
         source_lift = coupling_model_cfg.source_stencil_lift
-        assert coupling_model_cfg.balance_projection == "smooth_mask"
+        assert coupling_model_cfg.balance_projection.enabled is True
+        assert coupling_model_cfg.balance_projection.mode == "smooth_mask"
         assert coupling_model_cfg.smooth_mask_normalize is False
         assert coupling_model_cfg.smooth_mask_eps == 1e-9
         assert coupling_model_cfg.smooth_mask_power == 0.5
@@ -662,6 +707,18 @@ class TestTrainCLIDatasetConfig:
                 "coupling_model",
             )
 
+    def test_eval_cli_parses_balance_projection_object_config(self):
+        cfg = EvalCouplingCLI._build_balance_projection_config(
+            {
+                "enabled": False,
+                "mode": "smooth_mask",
+            },
+            "coupling_model",
+        )
+
+        assert cfg.enabled is False
+        assert cfg.mode == "smooth_mask"
+
     def test_eval_cli_parses_source_stencil_lift_config(self):
         config_kwargs = {
             "branch_input_dim": 5,
@@ -688,7 +745,8 @@ class TestTrainCLIDatasetConfig:
             **config_kwargs,
         )
 
-        assert model_cfg.balance_projection == "smooth_mask"
+        assert model_cfg.balance_projection.enabled is True
+        assert model_cfg.balance_projection.mode == "smooth_mask"
         assert model_cfg.smooth_mask_normalize is False
         assert model_cfg.smooth_mask_eps == 1e-9
         assert model_cfg.smooth_mask_power == 0.5

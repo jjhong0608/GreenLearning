@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import cos, pi
 from pathlib import Path
-from typing import List
+from typing import Callable, List, cast
 
 import torch
 from torch import optim
@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.nn.functional import pad
 
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
+from greenonet.coupling_data import CouplingBoundaryItem, split_coupling_batch
 from greenonet.coupling_model import CouplingNet
 from greenonet.config import (
     CouplingModelConfig,
@@ -24,18 +25,7 @@ from greenonet.io import (
 )
 
 
-CouplingBatch = tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]
+CouplingBatch = tuple[object, ...]
 
 
 class CouplingTrainer(LoggingMixin):
@@ -46,6 +36,8 @@ class CouplingTrainer(LoggingMixin):
         "loss_l2_consistency",
         "loss_energy_consistency",
         "loss_cross_consistency",
+        "loss_balance_loss",
+        "loss_symmetric_boundary_loss",
         "rel_flux",
         "rel_sol",
         "source_lift_corr_g_f",
@@ -75,12 +67,17 @@ class CouplingTrainer(LoggingMixin):
         )
         self.device = torch.device(config.device)
         self.model.to(self.device)
-        self.model = maybe_compile_model(
-            self.model,
-            self.config.compile,
-            logger=self.logger,
-            model_name="CouplingNet",
+        self.model = cast(
+            CouplingNet,
+            maybe_compile_model(
+                self.model,
+                self.config.compile,
+                logger=self.logger,
+                model_name="CouplingNet",
+            ),
         )
+        self._validate_balance_loss_config()
+        self._validate_symmetric_boundary_loss_config()
         self.green_kernel = green_kernel.to(self.device)  # (2, n, m, m)
         self.loss_history: List[float] = []
         self.stage_loss_history: dict[str, List[float]] = {}
@@ -264,6 +261,168 @@ class CouplingTrainer(LoggingMixin):
         ).mean()
         return loss_cross_x + loss_cross_y
 
+    def _balance_loss(
+        self,
+        phi_x: torch.Tensor,
+        psi_y: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        x_axis: torch.Tensor,
+    ) -> torch.Tensor:
+        rhs_common = rhs_raw[:, 0, :, 1:-1]
+        phi_common = phi_x[:, :, 1:-1]
+        psi_common = psi_y[:, :, 1:-1].transpose(-1, -2)
+        if phi_common.shape != rhs_common.shape:
+            raise ValueError("phi and rhs_raw must define the same common grid.")
+        if psi_common.shape != rhs_common.shape:
+            raise ValueError("psi and rhs_raw must define the same common grid.")
+
+        x_inner = x_axis[1:-1]
+        residual = rhs_common - (phi_common + psi_common)
+        loss_balance = integrate(
+            residual.pow(2),
+            x=x_inner,
+            dim=-1,
+            rule=self.config.integration_rule,
+        )
+        loss_balance = integrate(
+            loss_balance,
+            x=x_inner,
+            dim=-1,
+            rule=self.config.integration_rule,
+        )
+        return loss_balance.mean()
+
+    @staticmethod
+    def _boundary_payload_to_device(
+        boundary_batch: CouplingBoundaryItem,
+        device: torch.device,
+    ) -> CouplingBoundaryItem:
+        return cast(
+            CouplingBoundaryItem,
+            tuple(tensor.to(device) for tensor in boundary_batch),
+        )
+
+    def _raw_flux_at_coords(
+        self,
+        eval_coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+    ) -> torch.Tensor:
+        module = getattr(self.model, "_orig_mod", self.model)
+        raw_fn = getattr(module, "raw_flux_at_coords", None)
+        if not callable(raw_fn):
+            raise ValueError(
+                "symmetric_boundary_loss requires model.raw_flux_at_coords."
+            )
+        raw_flux_fn = cast(Callable[..., torch.Tensor], raw_fn)
+        return raw_flux_fn(
+            eval_coords=eval_coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+        )
+
+    def _symmetric_boundary_loss(
+        self,
+        coords: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        boundary_batch: CouplingBoundaryItem | None,
+    ) -> torch.Tensor:
+        if boundary_batch is None:
+            raise ValueError(
+                "symmetric_boundary_loss requires Coupling boundary payload."
+            )
+        x_axis = coords[0, 0, :, 0]
+        y_axis = coords[1, 0, :, 1]
+        x_inner = x_axis[1:-1]
+        y_inner = y_axis[1:-1]
+        if not self._supports_auxiliary_quadrature(
+            x_inner
+        ) or not self._supports_auxiliary_quadrature(y_inner):
+            raise ValueError(
+                "symmetric_boundary_loss requires enough interior boundary samples "
+                "for the configured integration rule."
+            )
+
+        (
+            boundary_coords,
+            boundary_rhs_raw,
+            boundary_rhs_tilde,
+            boundary_rhs_norm,
+            boundary_a_vals,
+            boundary_b_vals,
+            boundary_c_vals,
+        ) = self._boundary_payload_to_device(boundary_batch, self.device)
+
+        endpoint_raw = self._raw_flux_at_coords(
+            eval_coords=coords[:, :, (0, -1), :],
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+        )
+        boundary_raw = self._raw_flux_at_coords(
+            eval_coords=boundary_coords[:, :, 1:-1, :],
+            a_vals=boundary_a_vals,
+            b_vals=boundary_b_vals,
+            c_vals=boundary_c_vals,
+            rhs_raw=boundary_rhs_raw,
+            rhs_tilde=boundary_rhs_tilde,
+            rhs_norm=boundary_rhs_norm,
+        )
+
+        phi_boundary = boundary_raw[:, 0]
+        psi_on_phi_boundary = endpoint_raw[:, 1].transpose(-1, -2)
+        f_phi_boundary = torch.stack(
+            (rhs_raw[:, 1, :, 0], rhs_raw[:, 1, :, -1]),
+            dim=1,
+        )
+        if phi_boundary.shape != psi_on_phi_boundary.shape:
+            raise ValueError("phi boundary raw tensors must have matching shapes.")
+        if phi_boundary.shape != f_phi_boundary.shape:
+            raise ValueError("phi boundary source must match raw tensor shape.")
+        phi_res = (phi_boundary - psi_on_phi_boundary) + f_phi_boundary
+        phi_loss = integrate(
+            phi_res.pow(2),
+            x=x_inner,
+            dim=-1,
+            rule=self.config.integration_rule,
+        ).mean()
+
+        phi_on_psi_boundary = endpoint_raw[:, 0].transpose(-1, -2)
+        psi_boundary = boundary_raw[:, 1]
+        f_psi_boundary = torch.stack(
+            (rhs_raw[:, 0, :, 0], rhs_raw[:, 0, :, -1]),
+            dim=1,
+        )
+        if phi_on_psi_boundary.shape != psi_boundary.shape:
+            raise ValueError("psi boundary raw tensors must have matching shapes.")
+        if psi_boundary.shape != f_psi_boundary.shape:
+            raise ValueError("psi boundary source must match raw tensor shape.")
+        psi_res = (phi_on_psi_boundary - psi_boundary) - f_psi_boundary
+        psi_loss = integrate(
+            psi_res.pow(2),
+            x=y_inner,
+            dim=-1,
+            rule=self.config.integration_rule,
+        ).mean()
+
+        return 0.5 * (phi_loss + psi_loss)
+
     @staticmethod
     def _effective_weight(enabled: bool, weight: float) -> float:
         return weight if enabled else 0.0
@@ -271,6 +430,63 @@ class CouplingTrainer(LoggingMixin):
     @classmethod
     def _metric_accumulator(cls, fill_value: float) -> dict[str, float]:
         return {key: fill_value for key in cls._METRIC_KEYS}
+
+    def _balance_projection_enabled(self) -> bool:
+        module = getattr(self.model, "_orig_mod", self.model)
+        enabled = getattr(module, "balance_projection_enabled", None)
+        if enabled is not None:
+            return bool(enabled)
+        if self.model_cfg is not None:
+            projection = self.model_cfg.balance_projection
+            projection_enabled = getattr(projection, "enabled", None)
+            if projection_enabled is not None:
+                return bool(projection_enabled)
+        return True
+
+    def _balance_projection_mode(self) -> str:
+        module = getattr(self.model, "_orig_mod", self.model)
+        mode = getattr(module, "balance_projection_mode", None)
+        if mode is None:
+            mode = getattr(module, "balance_projection", None)
+        if mode is not None:
+            return str(mode)
+        if self.model_cfg is not None:
+            projection = self.model_cfg.balance_projection
+            projection_mode = getattr(projection, "mode", None)
+            if projection_mode is not None:
+                return str(projection_mode)
+        return "symmetric"
+
+    def _validate_balance_loss_config(self) -> None:
+        balance_cfg = self.config.losses.balance_loss
+        if balance_cfg.enabled and self._balance_projection_enabled():
+            raise ValueError(
+                "coupling_training.losses.balance_loss requires "
+                "coupling_model.balance_projection.enabled=false."
+            )
+
+    def _validate_symmetric_boundary_loss_config(self) -> None:
+        boundary_cfg = self.config.losses.symmetric_boundary_loss
+        if not boundary_cfg.enabled:
+            return
+        if not self._balance_projection_enabled() or (
+            self._balance_projection_mode() != "symmetric"
+        ):
+            raise ValueError(
+                "coupling_training.losses.symmetric_boundary_loss requires "
+                "coupling_model.balance_projection.enabled=true and "
+                "mode='symmetric'."
+            )
+        if self._source_lift_enabled():
+            raise ValueError(
+                "coupling_training.losses.symmetric_boundary_loss does not support "
+                "source_stencil_lift.enabled=true in v1."
+            )
+        if self._green_response_feature_enabled():
+            raise ValueError(
+                "coupling_training.losses.symmetric_boundary_loss does not support "
+                "green_response_feature.enabled=true in v1."
+            )
 
     def _source_lift_metrics(
         self, rhs_raw: torch.Tensor, a_vals: torch.Tensor
@@ -372,6 +588,7 @@ class CouplingTrainer(LoggingMixin):
         a_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
+        boundary_batch: CouplingBoundaryItem | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         # coords: (2, n, m, 2), rhs/sol/flux_target: (B,2,n,m)
         x_axis = coords[0, 0, :, 0].to(self.device)
@@ -447,11 +664,38 @@ class CouplingTrainer(LoggingMixin):
         l2_cfg = self.config.losses.l2_consistency
         energy_cfg = self.config.losses.energy_consistency
         cross_cfg = self.config.losses.cross_consistency
+        balance_cfg = self.config.losses.balance_loss
+        symmetric_boundary_cfg = self.config.losses.symmetric_boundary_loss
         w_l2 = self._effective_weight(l2_cfg.enabled, l2_cfg.weight)
         w_energy = self._effective_weight(energy_cfg.enabled, energy_cfg.weight)
         w_cross = self._effective_weight(cross_cfg.enabled, cross_cfg.weight)
+        w_balance = self._effective_weight(balance_cfg.enabled, balance_cfg.weight)
+        w_symmetric_boundary = self._effective_weight(
+            symmetric_boundary_cfg.enabled,
+            symmetric_boundary_cfg.weight,
+        )
 
         loss_energy_consistency = loss_energy_final
+        loss_balance_loss = torch.zeros_like(loss_cons)
+        loss_symmetric_boundary_loss = torch.zeros_like(loss_cons)
+        if w_balance != 0.0:
+            loss_balance_loss = self._balance_loss(
+                phi_x=phi_x,
+                psi_y=psi_y,
+                rhs_raw=rhs_raw,
+                x_axis=x_axis,
+            )
+        if w_symmetric_boundary != 0.0:
+            loss_symmetric_boundary_loss = self._symmetric_boundary_loss(
+                coords=coords,
+                rhs_raw=rhs_raw,
+                rhs_tilde=rhs_tilde,
+                rhs_norm=rhs_norm,
+                a_vals=a_vals,
+                b_vals=b_vals,
+                c_vals=c_vals,
+                boundary_batch=boundary_batch,
+            )
 
         loss = torch.zeros((), dtype=loss_cons.dtype, device=loss_cons.device)
         if w_l2 != 0.0:
@@ -460,6 +704,10 @@ class CouplingTrainer(LoggingMixin):
             loss = loss + w_energy * loss_energy_consistency
         if w_cross != 0.0:
             loss = loss + w_cross * loss_cross_consistency
+        if w_balance != 0.0:
+            loss = loss + w_balance * loss_balance_loss
+        if w_symmetric_boundary != 0.0:
+            loss = loss + w_symmetric_boundary * loss_symmetric_boundary_loss
 
         source_lift_metrics = self._source_lift_metrics(rhs_raw, a_vals)
         metrics = {
@@ -467,6 +715,10 @@ class CouplingTrainer(LoggingMixin):
             "loss_l2_consistency": float(loss_cons.detach().item()),
             "loss_energy_consistency": float(loss_energy_consistency.detach().item()),
             "loss_cross_consistency": float(loss_cross_consistency.detach().item()),
+            "loss_balance_loss": float(loss_balance_loss.detach().item()),
+            "loss_symmetric_boundary_loss": float(
+                loss_symmetric_boundary_loss.detach().item()
+            ),
             "rel_flux": self._relative_l2_integral(
                 pred_flux_target.detach(), flux_target, x_axis
             ),
@@ -709,18 +961,19 @@ class CouplingTrainer(LoggingMixin):
             with torch.no_grad():
                 accum = self._metric_accumulator(0.0)
                 batch_count = 0
-                for (
-                    coords,
-                    rhs_raw,
-                    rhs_tilde,
-                    rhs_norm,
-                    sol,
-                    flux,
-                    a_vals,
-                    b_vals,
-                    c_vals,
-                    ap,
-                ) in loader:
+                for batch in loader:
+                    (
+                        coords,
+                        rhs_raw,
+                        rhs_tilde,
+                        rhs_norm,
+                        sol,
+                        flux,
+                        a_vals,
+                        b_vals,
+                        c_vals,
+                        ap,
+                    ), boundary_batch = split_coupling_batch(tuple(batch))
                     del ap
                     _, metrics = self._step_loss(
                         coords,
@@ -732,6 +985,7 @@ class CouplingTrainer(LoggingMixin):
                         a_vals,
                         b_vals,
                         c_vals,
+                        boundary_batch,
                     )
                     for key in accum:
                         accum[key] += metrics.get(key, 0.0)
@@ -764,18 +1018,19 @@ class CouplingTrainer(LoggingMixin):
             epoch_losses: List[float] = []
             accum = self._metric_accumulator(0.0)
             batch_count = 0
-            for (
-                coords,
-                rhs_raw,
-                rhs_tilde,
-                rhs_norm,
-                sol,
-                flux,
-                a_vals,
-                b_vals,
-                c_vals,
-                ap,
-            ) in train_loader:
+            for batch in train_loader:
+                (
+                    coords,
+                    rhs_raw,
+                    rhs_tilde,
+                    rhs_norm,
+                    sol,
+                    flux,
+                    a_vals,
+                    b_vals,
+                    c_vals,
+                    ap,
+                ), boundary_batch = split_coupling_batch(tuple(batch))
                 del ap
                 optimizer.zero_grad()
                 loss, metrics = self._step_loss(
@@ -788,8 +1043,9 @@ class CouplingTrainer(LoggingMixin):
                     a_vals,
                     b_vals,
                     c_vals,
+                    boundary_batch,
                 )
-                loss.backward()
+                loss.backward()  # type: ignore[no-untyped-call]
                 self._clip_gradients_if_enabled(optimization_cfg)
                 optimizer.step()
                 epoch_losses.append(loss.detach().item())
@@ -819,13 +1075,19 @@ class CouplingTrainer(LoggingMixin):
                 l2_cfg = self.config.losses.l2_consistency
                 energy_cfg = self.config.losses.energy_consistency
                 cross_cfg = self.config.losses.cross_consistency
+                balance_cfg = self.config.losses.balance_loss
+                symmetric_boundary_cfg = self.config.losses.symmetric_boundary_loss
                 log_message = (
                     "epoch %s | train loss=%.4e l2_cons=%.4e energy_cons=%.4e "
-                    "cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e | "
+                    "cross_cons=%.4e balance_loss=%.4e symmetric_boundary_loss=%.4e "
+                    "rel_flux=%.4e rel_sol=%.4e | "
                     "w_l2=%.4e on_l2=%s w_energy=%.4e on_energy=%s "
-                    "w_cross=%.4e on_cross=%s | lr=%.4e "
+                    "w_cross=%.4e on_cross=%s w_balance_loss=%.4e "
+                    "on_balance_loss=%s w_symmetric_boundary_loss=%.4e "
+                    "on_symmetric_boundary_loss=%s | lr=%.4e "
                     "smooth_mask_diff_power=%.4e | val loss=%.4e l2_cons=%.4e "
-                    "energy_cons=%.4e cross_cons=%.4e rel_flux=%.4e rel_sol=%.4e"
+                    "energy_cons=%.4e cross_cons=%.4e balance_loss=%.4e "
+                    "symmetric_boundary_loss=%.4e rel_flux=%.4e rel_sol=%.4e"
                 )
                 log_args: tuple[object, ...] = (
                     epoch,
@@ -833,6 +1095,8 @@ class CouplingTrainer(LoggingMixin):
                     train_metrics["loss_l2_consistency"],
                     train_metrics["loss_energy_consistency"],
                     train_metrics["loss_cross_consistency"],
+                    train_metrics["loss_balance_loss"],
+                    train_metrics["loss_symmetric_boundary_loss"],
                     train_metrics["rel_flux"],
                     train_metrics["rel_sol"],
                     l2_cfg.weight,
@@ -841,12 +1105,18 @@ class CouplingTrainer(LoggingMixin):
                     energy_cfg.enabled,
                     cross_cfg.weight,
                     cross_cfg.enabled,
+                    balance_cfg.weight,
+                    balance_cfg.enabled,
+                    symmetric_boundary_cfg.weight,
+                    symmetric_boundary_cfg.enabled,
                     current_lr,
                     train_metrics["smooth_mask_diff_power"],
                     val_metrics["loss"],
                     val_metrics["loss_l2_consistency"],
                     val_metrics["loss_energy_consistency"],
                     val_metrics["loss_cross_consistency"],
+                    val_metrics["loss_balance_loss"],
+                    val_metrics["loss_symmetric_boundary_loss"],
                     val_metrics["rel_flux"],
                     val_metrics["rel_sol"],
                 )
@@ -912,18 +1182,19 @@ class CouplingTrainer(LoggingMixin):
             accum = self._metric_accumulator(0.0)
             batch_count = 0
             with torch.no_grad():
-                for (
-                    coords,
-                    rhs_raw,
-                    rhs_tilde,
-                    rhs_norm,
-                    sol,
-                    flux,
-                    a_vals,
-                    b_vals,
-                    c_vals,
-                    ap,
-                ) in loader:
+                for batch in loader:
+                    (
+                        coords,
+                        rhs_raw,
+                        rhs_tilde,
+                        rhs_norm,
+                        sol,
+                        flux,
+                        a_vals,
+                        b_vals,
+                        c_vals,
+                        ap,
+                    ), boundary_batch = split_coupling_batch(tuple(batch))
                     del ap
                     _loss, metrics = self._step_loss(
                         coords,
@@ -935,6 +1206,7 @@ class CouplingTrainer(LoggingMixin):
                         a_vals,
                         b_vals,
                         c_vals,
+                        boundary_batch,
                     )
                     for key in accum:
                         accum[key] += metrics.get(key, 0.0)

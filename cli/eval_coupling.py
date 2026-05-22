@@ -10,6 +10,7 @@ import torch
 from torch import Tensor
 
 from greenonet.config import (
+    BalanceProjectionConfig,
     CompileConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
@@ -141,8 +142,18 @@ class EvalCouplingCLI:
         if not isinstance(raw_positional, dict):
             raise TypeError(
                 f"{section_name}.trunk_positional_encoding must be an object."
-            )
+        )
         return CouplingTrunkPositionalEncodingConfig(**dict(raw_positional))
+
+    @staticmethod
+    def _build_balance_projection_config(
+        raw_balance_projection: object | None,
+        section_name: str,
+    ) -> BalanceProjectionConfig:
+        try:
+            return BalanceProjectionConfig.from_raw(raw_balance_projection)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"{section_name}.{exc}") from exc
 
     @classmethod
     def _build_training_config(
@@ -221,11 +232,18 @@ class EvalCouplingCLI:
             raise TypeError(f"{section_name}.losses must be an object.")
 
         loss_kwargs = dict(raw_losses)
+        defaults = CouplingLossesConfig()
         parsed: dict[str, CouplingLossTermConfig] = {}
-        for key in ("l2_consistency", "energy_consistency", "cross_consistency"):
+        for key in (
+            "l2_consistency",
+            "energy_consistency",
+            "cross_consistency",
+            "balance_loss",
+            "symmetric_boundary_loss",
+        ):
             raw_term = loss_kwargs.pop(key, None)
             if raw_term is None:
-                parsed[key] = CouplingLossTermConfig()
+                parsed[key] = getattr(defaults, key)
             elif isinstance(raw_term, dict):
                 parsed[key] = CouplingLossTermConfig(**raw_term)
             else:
@@ -323,9 +341,15 @@ class EvalCouplingCLI:
             positional_raw,
             "coupling_model",
         )
+        balance_projection_raw = coupling_model_kwargs.pop("balance_projection", None)
+        balance_projection_cfg = self._build_balance_projection_config(
+            balance_projection_raw,
+            "coupling_model",
+        )
         cm_dtype = coupling_model_kwargs.pop("dtype", "float64")
         coupling_model_kwargs["dtype"] = getattr(torch, cm_dtype)
         coupling_model_cfg = CouplingModelConfig(
+            balance_projection=balance_projection_cfg,
             source_stencil_lift=source_lift_cfg,
             coefficient_terms=coefficient_terms_cfg,
             green_response_feature=green_response_cfg,
@@ -436,18 +460,10 @@ class EvalCouplingCLI:
             model_name="GreenONetModel",
         )
 
-        (
-            sample_coords,
-            _,
-            _,
-            _,
-            _,
-            _,
-            sample_kappa,
-            _,
-            _,
-            sample_ap,
-        ) = test_dataset[0]
+        sample = test_dataset[0]
+        sample_coords = sample[0]
+        sample_kappa = sample[6]
+        sample_ap = sample[9]
         sample_b = self._coeff_from_coords(sample_coords, b_fun)
         sample_c = self._coeff_from_coords(sample_coords, c_fun)
         green_kernel = self._compute_green_kernel(

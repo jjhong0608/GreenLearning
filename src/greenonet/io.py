@@ -10,6 +10,7 @@ import torch
 
 from greenonet.compile_utils import model_state_dict_for_save
 from greenonet.config import (
+    BalanceProjectionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
@@ -77,6 +78,11 @@ def _deserialize_config(
     if "dtype" in data and isinstance(data["dtype"], str):
         data["dtype"] = _parse_dtype(data["dtype"])
     if config_cls is CouplingModelConfig:
+        balance_projection_raw = data.get("balance_projection")
+        if isinstance(balance_projection_raw, (dict, str)):
+            data["balance_projection"] = BalanceProjectionConfig.from_raw(
+                balance_projection_raw
+            )
         source_lift_raw = data.get("source_stencil_lift")
         if isinstance(source_lift_raw, dict):
             data["source_stencil_lift"] = SourceStencilLiftConfig(**source_lift_raw)

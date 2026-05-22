@@ -21,4 +21,4 @@ def b_fun(x: Tensor, y: Tensor) -> Tensor:
 
 
 def c_fun(x: Tensor, y: Tensor) -> Tensor:
-    return 1 + 0.5 * torch.cos(2 * torch.pi * x) * torch.cos(2 * torch.pi * y)
+    return 0.5 * (1 + 0.5 * torch.cos(2 * torch.pi * x) * torch.cos(2 * torch.pi * y))

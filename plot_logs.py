@@ -30,17 +30,25 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         rf"\s+l2_cons=(?P<l2_cons_tr>{VALUE_RE})"
         rf"\s+energy_cons=(?P<energy_cons_tr>{VALUE_RE})"
         rf"\s+cross_cons=(?P<cross_cons_tr>{VALUE_RE})"
+        rf"(?:\s+balance_loss=(?P<balance_loss_tr>{VALUE_RE}))?"
+        rf"(?:\s+symmetric_boundary_loss=(?P<symmetric_boundary_loss_tr>{VALUE_RE}))?"
         rf"\s+rel_flux=(?P<rflux_tr>{VALUE_RE})"
         rf"\s+rel_sol=(?P<rsol_tr>{VALUE_RE})"
         rf"\s*\|\s*w_l2=(?P<w_l2>{VALUE_RE})\s+on_l2=(?P<on_l2>True|False)"
         rf"\s+w_energy=(?P<w_energy>{VALUE_RE})\s+on_energy=(?P<on_energy>True|False)"
         rf"\s+w_cross=(?P<w_cross>{VALUE_RE})\s+on_cross=(?P<on_cross>True|False)"
+        rf"(?:\s+w_balance_loss=(?P<w_balance_loss>{VALUE_RE})"
+        rf"\s+on_balance_loss=(?P<on_balance_loss>True|False))?"
+        rf"(?:\s+w_symmetric_boundary_loss=(?P<w_symmetric_boundary_loss>{VALUE_RE})"
+        rf"\s+on_symmetric_boundary_loss=(?P<on_symmetric_boundary_loss>True|False))?"
         rf"(?:\s*\|\s*lr=(?P<lr>{VALUE_RE})"
         rf"(?:\s+smooth_mask_diff_power=(?P<smooth_mask_diff_power>{VALUE_RE}))?)?"
         rf"(?:\s*\|\s*val\s+loss=(?P<loss_val>{VALUE_RE})"
         rf"\s+l2_cons=(?P<l2_cons_val>{VALUE_RE})"
         rf"\s+energy_cons=(?P<energy_cons_val>{VALUE_RE})"
         rf"\s+cross_cons=(?P<cross_cons_val>{VALUE_RE})"
+        rf"(?:\s+balance_loss=(?P<balance_loss_val>{VALUE_RE}))?"
+        rf"(?:\s+symmetric_boundary_loss=(?P<symmetric_boundary_loss_val>{VALUE_RE}))?"
         rf"\s+rel_flux=(?P<rflux_val>{VALUE_RE})"
         rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE}))?",
         re.IGNORECASE,
@@ -59,12 +67,20 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
                 "l2_cons_train": _parse_float(match.group("l2_cons_tr")),
                 "energy_cons_train": _parse_float(match.group("energy_cons_tr")),
                 "cross_cons_train": _parse_float(match.group("cross_cons_tr")),
+                "balance_loss_train": _parse_float(match.group("balance_loss_tr")),
+                "symmetric_boundary_loss_train": _parse_float(
+                    match.group("symmetric_boundary_loss_tr")
+                ),
                 "rel_flux_train": _parse_float(match.group("rflux_tr")),
                 "rel_sol_train": _parse_float(match.group("rsol_tr")),
                 "loss_val": _parse_float(match.group("loss_val")),
                 "l2_cons_val": _parse_float(match.group("l2_cons_val")),
                 "energy_cons_val": _parse_float(match.group("energy_cons_val")),
                 "cross_cons_val": _parse_float(match.group("cross_cons_val")),
+                "balance_loss_val": _parse_float(match.group("balance_loss_val")),
+                "symmetric_boundary_loss_val": _parse_float(
+                    match.group("symmetric_boundary_loss_val")
+                ),
                 "rel_flux_val": _parse_float(match.group("rflux_val")),
                 "rel_sol_val": _parse_float(match.group("rsol_val")),
                 "lr": _parse_float(match.group("lr")),
@@ -77,6 +93,14 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
                 "on_energy": _parse_bool(match.group("on_energy")),
                 "w_cross": _parse_float(match.group("w_cross")),
                 "on_cross": _parse_bool(match.group("on_cross")),
+                "w_balance_loss": _parse_float(match.group("w_balance_loss")),
+                "on_balance_loss": _parse_bool(match.group("on_balance_loss")),
+                "w_symmetric_boundary_loss": _parse_float(
+                    match.group("w_symmetric_boundary_loss")
+                ),
+                "on_symmetric_boundary_loss": _parse_bool(
+                    match.group("on_symmetric_boundary_loss")
+                ),
             }
         )
 
@@ -86,12 +110,16 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         "l2_cons_train": [],
         "energy_cons_train": [],
         "cross_cons_train": [],
+        "balance_loss_train": [],
+        "symmetric_boundary_loss_train": [],
         "rel_flux_train": [],
         "rel_sol_train": [],
         "loss_val": [],
         "l2_cons_val": [],
         "energy_cons_val": [],
         "cross_cons_val": [],
+        "balance_loss_val": [],
+        "symmetric_boundary_loss_val": [],
         "rel_flux_val": [],
         "rel_sol_val": [],
         "lr": [],
@@ -102,6 +130,10 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         "on_energy": [],
         "w_cross": [],
         "on_cross": [],
+        "w_balance_loss": [],
+        "on_balance_loss": [],
+        "w_symmetric_boundary_loss": [],
+        "on_symmetric_boundary_loss": [],
     }
 
     offset = 0.0
@@ -144,17 +176,28 @@ def make_fig_losses(data_by_log: Dict[str, Dict[str, List[float]]], font: Dict) 
         "l2_cons": "#d62728",
         "energy_cons": "#2ca02c",
         "cross_cons": "#ff7f0e",
+        "balance_loss": "#9467bd",
+        "symmetric_boundary_loss": "#17becf",
     }
     labels = {
         "loss": "Total Loss",
         "l2_cons": "L2 Consistency",
         "energy_cons": "Energy Consistency",
         "cross_cons": "Cross Consistency",
+        "balance_loss": "Balance Loss",
+        "symmetric_boundary_loss": "Symmetric Boundary Loss",
     }
 
     for log_name, metrics in data_by_log.items():
         epochs = metrics["epoch"]
-        for key in ("loss", "l2_cons", "energy_cons", "cross_cons"):
+        for key in (
+            "loss",
+            "l2_cons",
+            "energy_cons",
+            "cross_cons",
+            "balance_loss",
+            "symmetric_boundary_loss",
+        ):
             for split, dash in (("train", "solid"), ("val", "dot")):
                 metric_key = f"{key}_{split}"
                 if metric_key not in metrics:

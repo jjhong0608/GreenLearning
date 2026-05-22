@@ -10,14 +10,14 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/Smooth_Variable_Diffusion_Reaction/train",
-    "validation_path": "data/Smooth_Variable_Diffusion_Reaction/valid",
-    "test_path": "data/Smooth_Variable_Diffusion_Reaction/test",
-    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py",
+    "training_path": "data/Pure_Poisson/train",
+    "validation_path": "data/Pure_Poisson/valid",
+    "test_path": "data/Pure_Poisson/test",
+    "coefficient_functions_path": "coefficients/Pure_Poisson.py",
     "dtype": "float64"
   },
   "terminal": {
-    "width": 340
+    "width": 345
   },
   "coupling_model": {
     "hidden_dim": 128,
@@ -28,7 +28,10 @@
     "branch_input_dim": 129,
     "trunk_input_dim": 2,
     "dtype": "float64",
-    "balance_projection": "smooth_mask",
+    "balance_projection": {
+      "enabled": true,
+      "mode": "smooth_mask"
+    },
     "smooth_mask_normalize": true,
     "smooth_mask_eps": 1e-12,
     "smooth_mask_power": 1.0,
@@ -50,7 +53,7 @@
       "eps": 1e-12
     },
     "coefficient_terms": {
-      "diffusion": true,
+      "diffusion": false,
       "convection": false,
       "reaction": false
     },
@@ -66,7 +69,7 @@
     }
   },
   "coupling_training": {
-    "batch_size": 200,
+    "batch_size": 400,
     "log_interval": 1,
     "device": "cuda:1",
     "losses": {
@@ -79,6 +82,14 @@
         "weight": 1.0
       },
       "cross_consistency": {
+        "enabled": false,
+        "weight": 1.0
+      },
+      "balance_loss": {
+        "enabled": false,
+        "weight": 1.0
+      },
+      "symmetric_boundary_loss": {
         "enabled": false,
         "weight": 1.0
       }
@@ -107,7 +118,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Smooth_Variable_Diffusion_Reaction/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/poisson/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

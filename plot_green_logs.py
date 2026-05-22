@@ -8,18 +8,25 @@ from typing import Dict, List
 import plotly.graph_objs as go
 
 
+NUMBER_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+TOKEN_PATTERN = re.compile(
+    rf"\|\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>{NUMBER_PATTERN})"
+)
+
+
+def _parse_metric_tokens(text: str) -> Dict[str, float]:
+    return {m.group("key"): float(m.group("value")) for m in TOKEN_PATTERN.finditer(text)}
+
+
 def parse_green_log(path: Path) -> Dict[str, List[float]]:
-    """Parse GreenONet training log for loss, rel_sol, rel_green (Adam + LBFGS)."""
+    """Parse GreenONet training log for loss and Green reconstruction metrics."""
     pattern_epoch = re.compile(
-        r"Epoch\s+(?P<epoch>\d+).*?loss=(?P<loss>[-+eE0-9\.]+)"
-        r"(?:[^|]*?\|\s*rel_sol=(?P<rel_sol>[-+eE0-9\.]+))?"
-        r"(?:[^|]*?\|\s*rel_green=(?P<rel_green>[-+eE0-9\.]+))?",
+        rf"Epoch\s+(?P<epoch>\d+):\s*loss=(?P<loss>{NUMBER_PATTERN})(?P<rest>.*)",
         re.IGNORECASE,
     )
     pattern_lbfgs = re.compile(
-        r"LBFGS\s+epoch\s+(?P<epoch>\d+)[^|]*?last\s+loss:\s+(?P<loss>[-+eE0-9\.]+)"
-        r"(?:[^|]*?\|\s*rel_sol=(?P<rel_sol>[-+eE0-9\.]+))?"
-        r"(?:[^|]*?\|\s*rel_green=(?P<rel_green>[-+eE0-9\.]+))?",
+        rf"LBFGS\s+epoch\s+(?P<epoch>\d+)\s+last\s+loss:\s*"
+        rf"(?P<loss>{NUMBER_PATTERN})(?P<rest>.*)",
         re.IGNORECASE,
     )
     entries: List[Dict[str, float]] = []
@@ -30,33 +37,46 @@ def parse_green_log(path: Path) -> Dict[str, List[float]]:
         if m:
             epoch = int(m.group("epoch"))
             last_adam = max(last_adam, epoch)
+            tokens = _parse_metric_tokens(m.group("rest"))
+            train_rel_sol = tokens.get("train_rel_sol", tokens.get("rel_sol", float("nan")))
             entries.append(
                 {
                     "epoch": epoch,
                     "loss": float(m.group("loss")),
-                    "rel_sol": float(m.group("rel_sol")) if m.group("rel_sol") else float("nan"),
-                    "rel_green": float(m.group("rel_green")) if m.group("rel_green") else float("nan"),
+                    "train_rel_sol": train_rel_sol,
+                    "val_rel_sol": tokens.get("val_rel_sol", float("nan")),
+                    "rel_green": tokens.get("rel_green", float("nan")),
                 }
             )
             continue
         m2 = pattern_lbfgs.search(line)
         if m2:
             epoch = last_adam + int(m2.group("epoch"))
+            tokens = _parse_metric_tokens(m2.group("rest"))
+            train_rel_sol = tokens.get("train_rel_sol", tokens.get("rel_sol", float("nan")))
             entries.append(
                 {
                     "epoch": epoch,
                     "loss": float(m2.group("loss")),
-                    "rel_sol": float(m2.group("rel_sol")) if m2.group("rel_sol") else float("nan"),
-                    "rel_green": float(m2.group("rel_green")) if m2.group("rel_green") else float("nan"),
+                    "train_rel_sol": train_rel_sol,
+                    "val_rel_sol": tokens.get("val_rel_sol", float("nan")),
+                    "rel_green": tokens.get("rel_green", float("nan")),
                 }
             )
 
     entries = sorted(entries, key=lambda e: e["epoch"])
-    metrics: Dict[str, List[float]] = {"epoch": [], "loss": [], "rel_sol": [], "rel_green": []}
+    metrics: Dict[str, List[float]] = {
+        "epoch": [],
+        "loss": [],
+        "train_rel_sol": [],
+        "val_rel_sol": [],
+        "rel_green": [],
+    }
     for e in entries:
         metrics["epoch"].append(e["epoch"])
         metrics["loss"].append(e["loss"])
-        metrics["rel_sol"].append(e["rel_sol"])
+        metrics["train_rel_sol"].append(e["train_rel_sol"])
+        metrics["val_rel_sol"].append(e["val_rel_sol"])
         metrics["rel_green"].append(e["rel_green"])
     return metrics
 
@@ -71,7 +91,13 @@ def _mask_nan(values: List[float], floor: float = 1e-16) -> List[float | None]:
     return out
 
 
-def make_fig(metric_key: str, label: str, data_by_log: Dict[str, Dict[str, List[float]]], font: Dict) -> go.Figure:
+def make_fig(
+    metric_key: str,
+    label: str,
+    data_by_log: Dict[str, Dict[str, List[float]]],
+    font: Dict,
+    theme: str,
+) -> go.Figure:
     fig = go.Figure()
     colors = [
         "#1f77b4",
@@ -104,7 +130,7 @@ def make_fig(metric_key: str, label: str, data_by_log: Dict[str, Dict[str, List[
         yaxis_title=label,
         yaxis_type="log",
         yaxis=dict(exponentformat="power"),
-        template="plotly_white",
+        template=theme,
         font=font,
         legend=dict(
             x=1.0,
@@ -149,6 +175,12 @@ def main() -> None:
         default="Times New Roman",
         help="Font family for the plots.",
     )
+    parser.add_argument(
+        "--theme",
+        type=str,
+        default="plotly_white",
+        help="Plotly template name for the plots.",
+    )
     args = parser.parse_args()
 
     data_by_log: Dict[str, Dict[str, List[float]]] = {}
@@ -169,12 +201,32 @@ def main() -> None:
 
     font = {"family": args.font_family, "size": 20}
 
-    fig_loss = make_fig("loss", "Training Loss", data_by_log, font)
-    fig_rel_sol = make_fig("rel_sol", "Relative error of represented solution", data_by_log, font)
-    fig_rel_green = make_fig("rel_green", "Relative error of Green's function", data_by_log, font)
+    fig_loss = make_fig("loss", "Training Loss", data_by_log, font, args.theme)
+    fig_train_rel_sol = make_fig(
+        "train_rel_sol",
+        "Training relative error of represented solution",
+        data_by_log,
+        font,
+        args.theme,
+    )
+    fig_val_rel_sol = make_fig(
+        "val_rel_sol",
+        "Validation relative error of represented solution",
+        data_by_log,
+        font,
+        args.theme,
+    )
+    fig_rel_green = make_fig(
+        "rel_green",
+        "Relative error of Green's function",
+        data_by_log,
+        font,
+        args.theme,
+    )
 
     save_fig(fig_loss, args.outdir / "loss")
-    save_fig(fig_rel_sol, args.outdir / "rel_sol")
+    save_fig(fig_train_rel_sol, args.outdir / "train_rel_sol")
+    save_fig(fig_val_rel_sol, args.outdir / "val_rel_sol")
     save_fig(fig_rel_green, args.outdir / "rel_green")
 
 

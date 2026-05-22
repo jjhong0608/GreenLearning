@@ -8,50 +8,91 @@ from typing import Dict, Iterable, List, Tuple
 import plotly.graph_objs as go
 
 
+VALUE_RE = r"(?:nan|inf|-inf|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+
+
+def _parse_float(value: str | None, default: float = float("nan")) -> float:
+    if value is None:
+        return default
+    return float(value)
+
+
 def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
+    pattern_current = re.compile(
+        rf"epoch\s+(?P<epoch>\d+).*?\|\s*train\s+loss=(?P<loss_tr>{VALUE_RE})"
+        rf"\s+l2_cons=(?P<l2_cons_tr>{VALUE_RE})"
+        rf"\s+energy_cons=(?P<energy_cons_tr>{VALUE_RE})"
+        rf"\s+cross_cons=(?P<cross_cons_tr>{VALUE_RE})"
+        rf"(?:\s+balance_loss=(?P<balance_loss_tr>{VALUE_RE}))?"
+        rf"(?:\s+symmetric_boundary_loss=(?P<symmetric_boundary_loss_tr>{VALUE_RE}))?"
+        rf"\s+rel_flux=(?P<rflux_tr>{VALUE_RE})"
+        rf"\s+rel_sol=(?P<rsol_tr>{VALUE_RE})"
+        rf"(?:.*?\|\s*val\s+loss=(?P<loss_val>{VALUE_RE})"
+        rf"\s+l2_cons=(?P<l2_cons_val>{VALUE_RE})"
+        rf"\s+energy_cons=(?P<energy_cons_val>{VALUE_RE})"
+        rf"\s+cross_cons=(?P<cross_cons_val>{VALUE_RE})"
+        rf"(?:\s+balance_loss=(?P<balance_loss_val>{VALUE_RE}))?"
+        rf"(?:\s+symmetric_boundary_loss=(?P<symmetric_boundary_loss_val>{VALUE_RE}))?"
+        rf"\s+rel_flux=(?P<rflux_val>{VALUE_RE})"
+        rf"\s+rel_sol=(?P<rsol_val>{VALUE_RE}))?",
+        re.IGNORECASE,
+    )
     pattern_epoch = re.compile(
         r"Epoch\s+(?P<epoch>\d+).*?"
-        r"train[^|]*?loss=(?P<loss_tr>[-+eE0-9\.]+)"
-        r"[^|]*?cons=(?P<cons_tr>[-+eE0-9\.]+)"
-        r"[^|]*?rel_flux=(?P<rflux_tr>[-+eE0-9\.]+)"
-        r"[^|]*?rel_sol=(?P<rsol_tr>[-+eE0-9\.]+)"
-        r"(?:.*?\|\s*val[^|]*?cons=(?P<cons_val>[-+eE0-9\.]+)"
-        r"[^|]*?rel_flux=(?P<rflux_val>[-+eE0-9\.]+)"
-        r"[^|]*?rel_sol=(?P<rsol_val>[-+eE0-9\.]+))?",
+        rf"train[^|]*?loss=(?P<loss_tr>{VALUE_RE})"
+        rf"[^|]*?cons=(?P<cons_tr>{VALUE_RE})"
+        rf"[^|]*?rel_flux=(?P<rflux_tr>{VALUE_RE})"
+        rf"[^|]*?rel_sol=(?P<rsol_tr>{VALUE_RE})"
+        rf"(?:.*?\|\s*val(?:[^|]*?loss=(?P<loss_val>{VALUE_RE}))?"
+        rf"[^|]*?cons=(?P<cons_val>{VALUE_RE})"
+        rf"[^|]*?rel_flux=(?P<rflux_val>{VALUE_RE})"
+        rf"[^|]*?rel_sol=(?P<rsol_val>{VALUE_RE}))?",
         re.IGNORECASE,
     )
     pattern_lbfgs = re.compile(
         r"(?:Coupling\s+)?LBFGS\s+epoch\s+(?P<epoch>\d+).*?"
-        r"last\s+loss:\s*(?P<loss_tr>[-+eE0-9\.]+)"
-        r".*?cons=(?P<cons_tr>[-+eE0-9\.]+)"
-        r".*?rel_flux=(?P<rflux_tr>[-+eE0-9\.]+)"
-        r".*?rel_sol=(?P<rsol_tr>[-+eE0-9\.]+)"
-        r"(?:.*?\|\s*val[^|]*?cons=(?P<cons_val>[-+eE0-9\.]+)"
-        r"[^|]*?rel_flux=(?P<rflux_val>[-+eE0-9\.]+)"
-        r"[^|]*?rel_sol=(?P<rsol_val>[-+eE0-9\.]+))?",
+        rf"last\s+loss:\s*(?P<loss_tr>{VALUE_RE})"
+        rf".*?cons=(?P<cons_tr>{VALUE_RE})"
+        rf".*?rel_flux=(?P<rflux_tr>{VALUE_RE})"
+        rf".*?rel_sol=(?P<rsol_tr>{VALUE_RE})"
+        rf"(?:.*?\|\s*val(?:[^|]*?loss=(?P<loss_val>{VALUE_RE}))?"
+        rf"[^|]*?cons=(?P<cons_val>{VALUE_RE})"
+        rf"[^|]*?rel_flux=(?P<rflux_val>{VALUE_RE})"
+        rf"[^|]*?rel_sol=(?P<rsol_val>{VALUE_RE}))?",
         re.IGNORECASE,
     )
     entries: List[Dict[str, float]] = []
 
     for line in lines:
+        match = pattern_current.search(line)
+        if match:
+            entries.append(
+                {
+                    "raw_epoch": _parse_float(match.group("epoch")),
+                    "loss_train": _parse_float(match.group("loss_tr")),
+                    "loss_val": _parse_float(match.group("loss_val")),
+                    "cons_train": _parse_float(match.group("energy_cons_tr")),
+                    "rel_flux_train": _parse_float(match.group("rflux_tr")),
+                    "rel_sol_train": _parse_float(match.group("rsol_tr")),
+                    "cons_val": _parse_float(match.group("energy_cons_val")),
+                    "rel_flux_val": _parse_float(match.group("rflux_val")),
+                    "rel_sol_val": _parse_float(match.group("rsol_val")),
+                }
+            )
+            continue
         match = pattern_epoch.search(line)
         if match:
             entries.append(
                 {
-                    "raw_epoch": float(match.group("epoch")),
-                    "loss_train": float(match.group("loss_tr")),
-                    "cons_train": float(match.group("cons_tr")),
-                    "rel_flux_train": float(match.group("rflux_tr")),
-                    "rel_sol_train": float(match.group("rsol_tr")),
-                    "cons_val": float(match.group("cons_val"))
-                    if match.group("cons_val")
-                    else float("nan"),
-                    "rel_flux_val": float(match.group("rflux_val"))
-                    if match.group("rflux_val")
-                    else float("nan"),
-                    "rel_sol_val": float(match.group("rsol_val"))
-                    if match.group("rsol_val")
-                    else float("nan"),
+                    "raw_epoch": _parse_float(match.group("epoch")),
+                    "loss_train": _parse_float(match.group("loss_tr")),
+                    "loss_val": _parse_float(match.group("loss_val")),
+                    "cons_train": _parse_float(match.group("cons_tr")),
+                    "rel_flux_train": _parse_float(match.group("rflux_tr")),
+                    "rel_sol_train": _parse_float(match.group("rsol_tr")),
+                    "cons_val": _parse_float(match.group("cons_val")),
+                    "rel_flux_val": _parse_float(match.group("rflux_val")),
+                    "rel_sol_val": _parse_float(match.group("rsol_val")),
                 }
             )
             continue
@@ -59,20 +100,15 @@ def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
         if match:
             entries.append(
                 {
-                    "raw_epoch": float(match.group("epoch")),
-                    "loss_train": float(match.group("loss_tr")),
-                    "cons_train": float(match.group("cons_tr")),
-                    "rel_flux_train": float(match.group("rflux_tr")),
-                    "rel_sol_train": float(match.group("rsol_tr")),
-                    "cons_val": float(match.group("cons_val"))
-                    if match.group("cons_val")
-                    else float("nan"),
-                    "rel_flux_val": float(match.group("rflux_val"))
-                    if match.group("rflux_val")
-                    else float("nan"),
-                    "rel_sol_val": float(match.group("rsol_val"))
-                    if match.group("rsol_val")
-                    else float("nan"),
+                    "raw_epoch": _parse_float(match.group("epoch")),
+                    "loss_train": _parse_float(match.group("loss_tr")),
+                    "loss_val": _parse_float(match.group("loss_val")),
+                    "cons_train": _parse_float(match.group("cons_tr")),
+                    "rel_flux_train": _parse_float(match.group("rflux_tr")),
+                    "rel_sol_train": _parse_float(match.group("rsol_tr")),
+                    "cons_val": _parse_float(match.group("cons_val")),
+                    "rel_flux_val": _parse_float(match.group("rflux_val")),
+                    "rel_sol_val": _parse_float(match.group("rsol_val")),
                 }
             )
     return entries
@@ -84,6 +120,7 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
     metrics: Dict[str, List[float]] = {
         "epoch": [],
         "loss_train": [],
+        "loss_val": [],
         "cons_train": [],
         "rel_flux_train": [],
         "rel_sol_train": [],
@@ -105,6 +142,7 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
 
         metrics["epoch"].append(effective_epoch)
         metrics["loss_train"].append(entry["loss_train"])
+        metrics["loss_val"].append(entry["loss_val"])
         metrics["cons_train"].append(entry["cons_train"])
         metrics["rel_flux_train"].append(entry["rel_flux_train"])
         metrics["rel_sol_train"].append(entry["rel_sol_train"])
@@ -124,6 +162,10 @@ def _mask_nan(values: List[float], floor: float = 1e-16) -> List[float | None]:
     return out
 
 
+def _has_visible_values(values: List[float | None]) -> bool:
+    return any(value is not None for value in values)
+
+
 def _color_cycle() -> List[str]:
     return [
         "#1f77b4",
@@ -139,7 +181,7 @@ def _color_cycle() -> List[str]:
 
 
 def make_fig_loss(
-    series: List[Tuple[str, Dict[str, List[float]]]], font: Dict
+    series: List[Tuple[str, Dict[str, List[float]]]], font: Dict, theme: str
 ) -> go.Figure:
     fig = go.Figure()
     colors = _color_cycle()
@@ -147,26 +189,29 @@ def make_fig_loss(
         epochs = metrics["epoch"]
         color = colors[idx % len(colors)]
         for split, dash in (("train", "solid"), ("val", "dot")):
-            key = f"cons_{split}"
+            key = f"loss_{split}"
             if key not in metrics:
+                continue
+            y_vals = _mask_nan(metrics[key])
+            if not _has_visible_values(y_vals):
                 continue
             fig.add_trace(
                 go.Scatter(
                     x=epochs,
-                    y=_mask_nan(metrics[key]),
+                    y=y_vals,
                     mode="lines",
-                    name=f"{label} Consistency ({split})",
+                    name=f"{label} Loss ({split})",
                     line=dict(color=color, dash=dash),
                     connectgaps=True,
                 )
             )
     fig.update_layout(
-        title="Consistency Loss",
+        title="Training vs Validation Loss",
         xaxis_title="Epoch",
         yaxis_title="Loss",
         yaxis_type="log",
         yaxis=dict(exponentformat="power"),
-        template="plotly_white",
+        template=theme,
         font=font,
         legend=dict(
             x=1.0,
@@ -184,6 +229,7 @@ def make_fig_error(
     metric_key: str,
     title: str,
     font: Dict,
+    theme: str,
 ) -> go.Figure:
     fig = go.Figure()
     colors = _color_cycle()
@@ -210,7 +256,7 @@ def make_fig_error(
         yaxis_title="Error",
         yaxis_type="log",
         yaxis=dict(exponentformat="power"),
-        template="plotly_white",
+        template=theme,
         font=font,
         legend=dict(
             x=1.0,
@@ -271,6 +317,12 @@ def main() -> None:
         default="Times New Roman",
         help="Font family for the plots.",
     )
+    parser.add_argument(
+        "--theme",
+        type=str,
+        default="plotly_white",
+        help="Plotly template name for the plots.",
+    )
     args = parser.parse_args()
 
     if args.labels and len(args.labels) != len(args.logs):
@@ -290,12 +342,20 @@ def main() -> None:
 
     font = {"family": args.font_family, "size": 14}
 
-    fig_loss = make_fig_loss(series, font)
+    fig_loss = make_fig_loss(series, font, args.theme)
     fig_sol = make_fig_error(
-        series, metric_key="rel_sol", title="Solution Error", font=font
+        series,
+        metric_key="rel_sol",
+        title="Solution Error",
+        font=font,
+        theme=args.theme,
     )
     fig_flux = make_fig_error(
-        series, metric_key="rel_flux", title="Flux-Divergence Error", font=font
+        series,
+        metric_key="rel_flux",
+        title="Flux-Divergence Error",
+        font=font,
+        theme=args.theme,
     )
 
     save_fig(fig_loss, args.outdir / "losses")

@@ -17,7 +17,7 @@ def _pad_flux(arr: np.ndarray) -> np.ndarray:
 
 
 class CouplingDataset(
-    Dataset[  # type: ignore[misc]
+    Dataset[
         Tuple[
             torch.Tensor,  # coords
             torch.Tensor,  # rhs_raw
@@ -29,6 +29,7 @@ class CouplingDataset(
             torch.Tensor,  # b
             torch.Tensor,  # c
             torch.Tensor,  # ap
+            tuple[torch.Tensor, ...],  # boundary payload
         ]
     ]
 ):
@@ -44,6 +45,12 @@ class CouplingDataset(
         flux: (2, n_lines, m_points)  # x/y axial flux divergence targets
         kappa, b, c: (2, n_lines, m_points)
         ap: (2, n_lines, m_points)
+        boundary payload:
+            boundary_coords: (2, 2, m_points, 2)
+            boundary_rhs_raw: (2, 2, m_points)
+            boundary_rhs_tilde: (2, 2, m_points)
+            boundary_rhs_norm: (2, 2)
+            boundary_kappa/b/c: (2, 2, m_points)
     """
 
     def __init__(
@@ -101,6 +108,41 @@ class CouplingDataset(
         return torch.from_numpy(stacked)
 
     @staticmethod
+    def _boundary_coords(lines: AxialLines, dtype: torch.dtype) -> torch.Tensor:
+        x_coords = lines.xaxial_lines[0].x_coordinates.to(dtype=dtype)
+        y_coords = lines.yaxial_lines[0].y_coordinates.to(dtype=dtype)
+        x_boundary = torch.stack(
+            (
+                torch.stack((x_coords, torch.zeros_like(x_coords)), dim=-1),
+                torch.stack((x_coords, torch.ones_like(x_coords)), dim=-1),
+            ),
+            dim=0,
+        )
+        y_boundary = torch.stack(
+            (
+                torch.stack((torch.zeros_like(y_coords), y_coords), dim=-1),
+                torch.stack((torch.ones_like(y_coords), y_coords), dim=-1),
+            ),
+            dim=0,
+        )
+        return torch.stack((x_boundary, y_boundary), dim=0)
+
+    @staticmethod
+    def _sample_boundary_lines(
+        array: np.ndarray, lines: AxialLines, axis: int
+    ) -> torch.Tensor:
+        grid_res = array.shape[0] - 1
+        if axis == 0:
+            x_coords = lines.xaxial_lines[0].x_coordinates.cpu().numpy()
+            x_idx = np.round(x_coords * grid_res).astype(int)
+            samples = [array[0, x_idx], array[grid_res, x_idx]]
+        else:
+            y_coords = lines.yaxial_lines[0].y_coordinates.cpu().numpy()
+            y_idx = np.round(y_coords * grid_res).astype(int)
+            samples = [array[y_idx, 0], array[y_idx, grid_res]]
+        return torch.from_numpy(np.stack(samples, axis=0))
+
+    @staticmethod
     def _sample_lines_fun(
         fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         lines: AxialLines,
@@ -120,6 +162,27 @@ class CouplingDataset(
                 samples.append(fun(x, y))
         return torch.stack(samples, dim=0).to(dtype=dtype)
 
+    @staticmethod
+    def _sample_boundary_lines_fun(
+        fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        lines: AxialLines,
+        axis: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if axis == 0:
+            x = lines.xaxial_lines[0].x_coordinates
+            samples = [
+                fun(x, torch.zeros_like(x)),
+                fun(x, torch.ones_like(x)),
+            ]
+        else:
+            y = lines.yaxial_lines[0].y_coordinates
+            samples = [
+                fun(torch.zeros_like(y), y),
+                fun(torch.ones_like(y), y),
+            ]
+        return torch.stack(samples, dim=0).to(dtype=dtype)
+
     def __getitem__(
         self, index: int
     ) -> Tuple[
@@ -133,6 +196,7 @@ class CouplingDataset(
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
+        tuple[torch.Tensor, ...],
     ]:
         data = np.load(self.files[index])
         sol = data["sol"]
@@ -153,12 +217,17 @@ class CouplingDataset(
 
         rhs_x = self._sample_lines(rhs, lines, axis=0)
         rhs_y = self._sample_lines(rhs, lines, axis=1)
+        rhs_boundary_x = self._sample_boundary_lines(rhs, lines, axis=0)
+        rhs_boundary_y = self._sample_boundary_lines(rhs, lines, axis=1)
         sol_x = self._sample_lines(sol, lines, axis=0)
         sol_y = self._sample_lines(sol, lines, axis=1)
         flux_x = self._sample_lines(uxx, lines, axis=0)
         flux_y = self._sample_lines(uyy, lines, axis=1)
 
         rhs_t = torch.stack((rhs_x, rhs_y), dim=0).to(dtype=self.dtype)
+        boundary_rhs_t = torch.stack((rhs_boundary_x, rhs_boundary_y), dim=0).to(
+            dtype=self.dtype
+        )
         sol_t = torch.stack((sol_x, sol_y), dim=0).to(dtype=self.dtype)
         flux_t = torch.stack((flux_x, flux_y), dim=0).to(dtype=self.dtype)
 
@@ -188,6 +257,28 @@ class CouplingDataset(
         )
         rhs_norm = torch.stack((rhs_norm_x, rhs_norm_y), dim=0)  # (2, n_lines)
         rhs_tilde = rhs_t / rhs_norm.unsqueeze(-1)
+        boundary_norm_x = (
+            integrate(
+                boundary_rhs_t[0].pow(2),
+                x=x_axis,
+                dim=-1,
+                rule=self.integration_rule,
+            )
+            .sqrt()
+            .clamp_min(eps)
+        )
+        boundary_norm_y = (
+            integrate(
+                boundary_rhs_t[1].pow(2),
+                x=y_axis,
+                dim=-1,
+                rule=self.integration_rule,
+            )
+            .sqrt()
+            .clamp_min(eps)
+        )
+        boundary_rhs_norm = torch.stack((boundary_norm_x, boundary_norm_y), dim=0)
+        boundary_rhs_tilde = boundary_rhs_t / boundary_rhs_norm.unsqueeze(-1)
         if self.a_fun is not None:
             kappa_x = self._sample_lines_fun(
                 self.a_fun, lines, axis=0, dtype=self.dtype
@@ -196,20 +287,44 @@ class CouplingDataset(
                 self.a_fun, lines, axis=1, dtype=self.dtype
             )
             kappa_t = torch.stack((kappa_x, kappa_y), dim=0)
+            boundary_kappa_x = self._sample_boundary_lines_fun(
+                self.a_fun, lines, axis=0, dtype=self.dtype
+            )
+            boundary_kappa_y = self._sample_boundary_lines_fun(
+                self.a_fun, lines, axis=1, dtype=self.dtype
+            )
+            boundary_kappa_t = torch.stack((boundary_kappa_x, boundary_kappa_y), dim=0)
         else:
             kappa_t = torch.ones_like(rhs_t)
+            boundary_kappa_t = torch.ones_like(boundary_rhs_t)
         if self.b_fun is not None:
             b_x = self._sample_lines_fun(self.b_fun, lines, axis=0, dtype=self.dtype)
             b_y = self._sample_lines_fun(self.b_fun, lines, axis=1, dtype=self.dtype)
             b_t = torch.stack((b_x, b_y), dim=0)
+            boundary_b_x = self._sample_boundary_lines_fun(
+                self.b_fun, lines, axis=0, dtype=self.dtype
+            )
+            boundary_b_y = self._sample_boundary_lines_fun(
+                self.b_fun, lines, axis=1, dtype=self.dtype
+            )
+            boundary_b_t = torch.stack((boundary_b_x, boundary_b_y), dim=0)
         else:
             b_t = torch.zeros_like(rhs_t)
+            boundary_b_t = torch.zeros_like(boundary_rhs_t)
         if self.c_fun is not None:
             c_x = self._sample_lines_fun(self.c_fun, lines, axis=0, dtype=self.dtype)
             c_y = self._sample_lines_fun(self.c_fun, lines, axis=1, dtype=self.dtype)
             c_t = torch.stack((c_x, c_y), dim=0)
+            boundary_c_x = self._sample_boundary_lines_fun(
+                self.c_fun, lines, axis=0, dtype=self.dtype
+            )
+            boundary_c_y = self._sample_boundary_lines_fun(
+                self.c_fun, lines, axis=1, dtype=self.dtype
+            )
+            boundary_c_t = torch.stack((boundary_c_x, boundary_c_y), dim=0)
         else:
             c_t = torch.zeros_like(rhs_t)
+            boundary_c_t = torch.zeros_like(boundary_rhs_t)
         if self.ap_fun_x is not None and self.ap_fun_y is not None:
             ap_x = self._sample_lines_fun(
                 self.ap_fun_x, lines, axis=0, dtype=self.dtype
@@ -221,6 +336,15 @@ class CouplingDataset(
         else:
             ap_t = torch.zeros_like(rhs_t)
         coords = coords.to(dtype=self.dtype)
+        boundary_payload = (
+            self._boundary_coords(lines, dtype=self.dtype),
+            boundary_rhs_t,
+            boundary_rhs_tilde,
+            boundary_rhs_norm,
+            boundary_kappa_t,
+            boundary_b_t,
+            boundary_c_t,
+        )
         return (
             coords,
             rhs_t,
@@ -232,10 +356,21 @@ class CouplingDataset(
             b_t,
             c_t,
             ap_t,
+            boundary_payload,
         )
 
 
-CouplingItem = Tuple[
+CouplingBoundaryItem = Tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]
+
+CouplingCoreItem = Tuple[
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
@@ -248,17 +383,54 @@ CouplingItem = Tuple[
     torch.Tensor,
 ]
 
+CouplingItem = Tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    CouplingBoundaryItem,
+]
 
-def coupling_collate_fn(batch: Sequence[CouplingItem]) -> CouplingItem:
+
+def split_coupling_batch(
+    batch: tuple[object, ...],
+) -> tuple[CouplingCoreItem, CouplingBoundaryItem | None]:
+    if len(batch) == 10:
+        return batch, None  # type: ignore[return-value]
+    if len(batch) == 11:
+        core = batch[:10]
+        boundary = batch[10]
+        if not isinstance(boundary, tuple) or len(boundary) != 7:
+            raise ValueError("Coupling boundary payload must contain seven tensors.")
+        return core, boundary  # type: ignore[return-value]
+    raise ValueError(f"Expected Coupling batch with 10 or 11 fields, got {len(batch)}.")
+
+
+def coupling_collate_fn(batch: Sequence[tuple[object, ...]]) -> tuple[object, ...]:
+    first_core, first_boundary = split_coupling_batch(tuple(batch[0]))
+    del first_core
+    has_boundary = first_boundary is not None
+    split_items = [split_coupling_batch(tuple(item)) for item in batch]
+    if any((boundary is not None) != has_boundary for _core, boundary in split_items):
+        raise ValueError(
+            "Cannot collate mixed Coupling items with and without boundary payload."
+        )
+    core_items = [core for core, _boundary in split_items]
     coords, rhs_raw, rhs_tilde, rhs_norm, sol, flux, kappa, b_vals, c_vals, ap = zip(
-        *batch
+        *core_items
     )
     coords_packed = coords[0]
 
     def stack(fields: Sequence[torch.Tensor]) -> torch.Tensor:
         return torch.stack(list(fields), dim=0)
 
-    return (
+    collated = (
         coords_packed,
         stack(rhs_raw),
         stack(rhs_tilde),
@@ -270,3 +442,30 @@ def coupling_collate_fn(batch: Sequence[CouplingItem]) -> CouplingItem:
         stack(c_vals),
         stack(ap),
     )
+    if not has_boundary:
+        return collated
+
+    boundary_items: list[CouplingBoundaryItem] = []
+    for _core, boundary in split_items:
+        if boundary is None:
+            continue
+        boundary_items.append(boundary)
+    (
+        boundary_coords,
+        boundary_rhs,
+        boundary_tilde,
+        boundary_norm,
+        boundary_a,
+        boundary_b,
+        boundary_c,
+    ) = zip(*boundary_items)
+    boundary_payload = (
+        boundary_coords[0],
+        stack(boundary_rhs),
+        stack(boundary_tilde),
+        stack(boundary_norm),
+        stack(boundary_a),
+        stack(boundary_b),
+        stack(boundary_c),
+    )
+    return (*collated, boundary_payload)

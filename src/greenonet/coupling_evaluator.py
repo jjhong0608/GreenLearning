@@ -11,7 +11,11 @@ from torch.nn.functional import pad
 
 from greenonet.numerics import IntegrationRule, integrate, line_operator_fd
 from greenonet.logging_mixin import LoggingMixin
-from greenonet.coupling_data import coupling_collate_fn, CouplingDataset
+from greenonet.coupling_data import (
+    CouplingDataset,
+    coupling_collate_fn,
+    split_coupling_batch,
+)
 
 
 def _render_heatmap_task(task: dict[str, Any]) -> None:
@@ -390,7 +394,8 @@ class CouplingEvaluator(LoggingMixin):
                             b_vals,
                             c_vals,
                             ap,
-                        ) = batch
+                        ), _boundary_batch = split_coupling_batch(tuple(batch))
+                        del ap
                         tensors = self._evaluate_batch(
                             coords,
                             rhs_raw,

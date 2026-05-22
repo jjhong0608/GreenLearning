@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 import torch
 
@@ -105,6 +105,56 @@ class CouplingTrunkPositionalEncodingConfig:
 
 
 @dataclass
+class BalanceProjectionConfig:
+    """CouplingNet output balance projection settings."""
+
+    enabled: bool = True
+    mode: Literal["symmetric", "smooth_mask"] = "symmetric"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("balance_projection.enabled must be a boolean.")
+        if self.mode not in {"symmetric", "smooth_mask"}:
+            raise ValueError(
+                "balance_projection.mode must be 'symmetric' or 'smooth_mask'."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: BalanceProjectionConfig | str | dict[str, Any] | None,
+    ) -> BalanceProjectionConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, str):
+            return cls(
+                enabled=True,
+                mode=cast(Literal["symmetric", "smooth_mask"], raw),
+            )
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "mode"})
+            if unknown:
+                raise TypeError(
+                    "balance_projection has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            enabled = data.get("enabled", True)
+            mode = data.get("mode", "symmetric")
+            if not isinstance(enabled, bool):
+                raise TypeError("balance_projection.enabled must be a boolean.")
+            if not isinstance(mode, str):
+                raise TypeError("balance_projection.mode must be a string.")
+            return cls(
+                enabled=enabled,
+                mode=cast(Literal["symmetric", "smooth_mask"], mode),
+            )
+        raise TypeError("balance_projection must be a string or an object.")
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -116,7 +166,9 @@ class CouplingModelConfig:
     use_bias: bool = True
     dropout: float = 0.0
     dtype: torch.dtype = torch.float64
-    balance_projection: Literal["symmetric", "smooth_mask"] = "symmetric"
+    balance_projection: (
+        BalanceProjectionConfig | Literal["symmetric", "smooth_mask"] | dict[str, Any]
+    ) = field(default_factory=BalanceProjectionConfig)
     smooth_mask_normalize: bool = True
     smooth_mask_eps: float = 1.0e-12
     smooth_mask_power: float = 1.0
@@ -137,6 +189,11 @@ class CouplingModelConfig:
         default_factory=CouplingTrunkPositionalEncodingConfig
     )
 
+    def __post_init__(self) -> None:
+        self.balance_projection = BalanceProjectionConfig.from_raw(
+            self.balance_projection
+        )
+
 
 @dataclass
 class CompileConfig:
@@ -153,6 +210,10 @@ class CouplingLossTermConfig:
     weight: float = 1.0
 
 
+def _disabled_loss_term_config() -> CouplingLossTermConfig:
+    return CouplingLossTermConfig(enabled=False, weight=1.0)
+
+
 @dataclass
 class CouplingLossesConfig:
     """Nested CouplingNet loss settings."""
@@ -165,6 +226,12 @@ class CouplingLossesConfig:
     )
     cross_consistency: CouplingLossTermConfig = field(
         default_factory=CouplingLossTermConfig
+    )
+    balance_loss: CouplingLossTermConfig = field(
+        default_factory=_disabled_loss_term_config
+    )
+    symmetric_boundary_loss: CouplingLossTermConfig = field(
+        default_factory=_disabled_loss_term_config
     )
 
 

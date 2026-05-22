@@ -8,6 +8,7 @@ from torch import nn
 
 from greenonet.activations import RationalActivation
 from greenonet.config import (
+    BalanceProjectionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     SourceStencilLiftConfig,
@@ -309,10 +310,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
         torch.set_default_dtype(config.dtype)
-        if config.balance_projection not in {"symmetric", "smooth_mask"}:
-            raise ValueError(
-                f"Unsupported balance_projection: {config.balance_projection}"
-            )
+        balance_projection = BalanceProjectionConfig.from_raw(config.balance_projection)
         if config.smooth_mask_eps <= 0.0:
             raise ValueError("smooth_mask_eps must be positive.")
         if config.smooth_mask_power <= 0.0:
@@ -320,10 +318,14 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         if config.smooth_mask_diff_power <= 0.0:
             raise ValueError("smooth_mask_diff_power must be positive.")
         if config.smooth_mask_diff_power_trainable:
-            if config.balance_projection != "smooth_mask":
+            if (
+                not balance_projection.enabled
+                or balance_projection.mode != "smooth_mask"
+            ):
                 raise ValueError(
                     "smooth_mask_diff_power_trainable requires "
-                    "balance_projection='smooth_mask'."
+                    "balance_projection.enabled=true and "
+                    "balance_projection.mode='smooth_mask'."
                 )
             if config.smooth_mask_diff_power_min <= 0.0:
                 raise ValueError("smooth_mask_diff_power_min must be positive.")
@@ -342,7 +344,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                     "[smooth_mask_diff_power_min, smooth_mask_diff_power_max] "
                     "when smooth_mask_diff_power_trainable is enabled."
                 )
-        self.balance_projection = config.balance_projection
+        self.balance_projection_enabled = bool(balance_projection.enabled)
+        self.balance_projection = balance_projection.mode
+        self.balance_projection_mode = balance_projection.mode
         self.smooth_mask_normalize = bool(config.smooth_mask_normalize)
         self.smooth_mask_eps = float(config.smooth_mask_eps)
         self.smooth_mask_power = float(config.smooth_mask_power)
@@ -785,9 +789,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
         raise ValueError(f"Unsupported balance_projection: {self.balance_projection}")
 
-    def forward(
+    def raw_flux_at_coords(
         self,
-        coords: torch.Tensor,
+        eval_coords: torch.Tensor,
         a_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
@@ -796,23 +800,9 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         rhs_norm: torch.Tensor,
         green_response_tilde: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """
-        Args:
-            coords: (2, n_lines, m_points, 2) (interior trunk uses coords[:, :, 1:-1])
-            a_vals: (B, 2, n_lines, m_points)
-            b_vals: (B, 2, n_lines, m_points)
-            c_vals: (B, 2, n_lines, m_points)
-            rhs_raw: (B, 2, n_lines, m_points) raw source
-            rhs_tilde: (B, 2, n_lines, m_points) normalized source
-            rhs_norm: (B, 2, n_lines) line-wise L2 norms
-            green_response_tilde: optional (B, 2, n_lines, m_points)
-                axial Green response G(rhs_tilde)
-        Returns:
-            output_flux: (B, 2, n_lines, m_points) axial flux-divergence per
-                axis after projection with zero-padded boundaries.
-        """
+        """Evaluate raw CouplingNet flux-divergence at arbitrary trunk coordinates."""
         if (
-            coords.dim() != 4
+            eval_coords.dim() != 4
             or a_vals.dim() != 4
             or b_vals.dim() != 4
             or c_vals.dim() != 4
@@ -821,9 +811,14 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             or rhs_norm.dim() != 3
         ):
             raise ValueError(
-                "coords must be 4D; a/b/c/rhs_raw/rhs_tilde (B,2,n,m); rhs_norm (B,2,n)"
+                "eval_coords must be 4D; a/b/c/rhs_raw/rhs_tilde (B,2,n,m); rhs_norm (B,2,n)"
             )
         b, axis, n_lines, m_points = a_vals.shape
+        if eval_coords.shape[:2] != (axis, n_lines) or eval_coords.shape[-1] != 2:
+            raise ValueError(
+                "eval_coords must have shape (2, n_lines, k_points, 2) "
+                "matching a_vals."
+            )
         expected_axis_shape = (b, axis, n_lines, m_points)
         if (
             b_vals.shape != expected_axis_shape
@@ -836,7 +831,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             raise ValueError(
                 "rhs_norm must have shape (B, 2, n_lines) matching a_vals."
             )
-        if n_lines + 2 != m_points:
+        if self.source_stencil_lift is not None and n_lines + 2 != m_points:
             raise ValueError(
                 f"Expected n_lines + 2 == m_points (got n_lines={n_lines}, m_points={m_points})."
             )
@@ -904,19 +899,62 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             branch_feat = branch_r_out * branch_coefficient_out
         branch_feat = branch_feat.unsqueeze(-1)
 
-        coords_int = coords[:, :, 1:-1, :]
-        trunk_inputs = self._encode_trunk_coords(coords_int)
-        trunk_flat = trunk_inputs.reshape(axis * n_lines * (m_points - 2), -1)
-        trunk_out = self.trunk(trunk_flat).reshape(axis * n_lines, m_points - 2, -1)
+        k_points = eval_coords.shape[2]
+        trunk_inputs = self._encode_trunk_coords(eval_coords)
+        trunk_flat = trunk_inputs.reshape(axis * n_lines * k_points, -1)
+        trunk_out = self.trunk(trunk_flat).reshape(axis * n_lines, k_points, -1)
 
         trunk_expanded = trunk_out.unsqueeze(0).expand(b, -1, -1, -1)
-        trunk_expanded = trunk_expanded.reshape(b * axis * n_lines, m_points - 2, -1)
+        trunk_expanded = trunk_expanded.reshape(b * axis * n_lines, k_points, -1)
         combined = torch.bmm(trunk_expanded, branch_feat)
-        flux_tilde = combined.reshape(b, axis, n_lines, m_points - 2)
+        flux_tilde = combined.reshape(b, axis, n_lines, k_points)
 
         norm_exp = rhs_norm.unsqueeze(-1)
-        raw_int = flux_tilde * norm_exp
-        projected_int = self._apply_balance_projection(raw_int, rhs_raw, coords)
+        return flux_tilde * norm_exp
+
+    def forward(
+        self,
+        coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+        green_response_tilde: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            coords: (2, n_lines, m_points, 2) (interior trunk uses coords[:, :, 1:-1])
+            a_vals: (B, 2, n_lines, m_points)
+            b_vals: (B, 2, n_lines, m_points)
+            c_vals: (B, 2, n_lines, m_points)
+            rhs_raw: (B, 2, n_lines, m_points) raw source
+            rhs_tilde: (B, 2, n_lines, m_points) normalized source
+            rhs_norm: (B, 2, n_lines) line-wise L2 norms
+            green_response_tilde: optional (B, 2, n_lines, m_points)
+                axial Green response G(rhs_tilde)
+        Returns:
+            output_flux: (B, 2, n_lines, m_points) axial flux-divergence per
+                axis after optional projection with zero-padded boundaries.
+        """
+        if coords.dim() != 4:
+            raise ValueError("coords must have shape (2, n_lines, m_points, 2).")
+        raw_int = self.raw_flux_at_coords(
+            eval_coords=coords[:, :, 1:-1, :],
+            a_vals=a_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            rhs_raw=rhs_raw,
+            rhs_tilde=rhs_tilde,
+            rhs_norm=rhs_norm,
+            green_response_tilde=green_response_tilde,
+        )
+        b, axis, n_lines, m_points = a_vals.shape
+        if self.balance_projection_enabled:
+            projected_int = self._apply_balance_projection(raw_int, rhs_raw, coords)
+        else:
+            projected_int = raw_int
 
         output_flux = torch.zeros(
             b,

@@ -203,7 +203,8 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
 
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
-    assert loaded_cfg.balance_projection == "smooth_mask"
+    assert loaded_cfg.balance_projection.enabled is True
+    assert loaded_cfg.balance_projection.mode == "smooth_mask"
     assert loaded_cfg.smooth_mask_normalize is False
     assert loaded_cfg.smooth_mask_eps == 1e-9
     assert loaded_cfg.smooth_mask_power == 0.5
@@ -216,6 +217,34 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
     assert loaded_cfg.source_stencil_lift.coefficient_normalization == "tanh"
     assert loaded_cfg.source_stencil_lift.coefficient_tanh_beta == 1.7
     assert loaded_cfg.source_stencil_lift.hidden_dim == 32
+    _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_save_load_coupling_model_with_balance_projection_object_config(tmp_path):
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        trunk_input_dim=2,
+        hidden_dim=8,
+        depth=2,
+        dtype=torch.float64,
+        balance_projection={
+            "enabled": False,
+            "mode": "smooth_mask",
+        },
+    )
+    model = CouplingNet(cfg)
+    path = tmp_path / "coupling_raw_projection.safetensors"
+
+    from greenonet.io import load_model_with_config, save_model_with_config
+
+    save_model_with_config(model, cfg, path)
+    loaded_model, loaded_cfg = load_model_with_config(path)
+
+    assert isinstance(loaded_model, CouplingNet)
+    assert loaded_cfg == cfg
+    assert loaded_cfg.balance_projection.enabled is False
+    assert loaded_cfg.balance_projection.mode == "smooth_mask"
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -431,7 +460,8 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
 
     assert isinstance(loaded_model, CouplingNet)
     assert loaded_cfg == cfg
-    assert loaded_cfg.balance_projection == "symmetric"
+    assert loaded_cfg.balance_projection.enabled is True
+    assert loaded_cfg.balance_projection.mode == "symmetric"
     assert loaded_cfg.smooth_mask_normalize is True
     assert loaded_cfg.smooth_mask_eps == 1e-12
     assert loaded_cfg.smooth_mask_power == 1.0

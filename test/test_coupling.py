@@ -5,11 +5,12 @@ import pytest
 import torch
 from torch import nn
 
-from greenonet.coupling_data import CouplingDataset
+from greenonet.coupling_data import CouplingDataset, coupling_collate_fn
 from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.coupling_model import CouplingNet, FiveStencilSourceLift
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
+    BalanceProjectionConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
     CouplingLossTermConfig,
@@ -150,6 +151,67 @@ class _RawSumFromRhsModel(nn.Module):
         return projected_flux
 
 
+class _BoundaryRawFluxModel(nn.Module):
+    def __init__(
+        self,
+        projected_flux: torch.Tensor,
+        *,
+        endpoint_phi: float = 1.0,
+        endpoint_psi: float = 0.0,
+        boundary_phi: float = 1.0,
+        boundary_psi: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.balance_projection_enabled = True
+        self.balance_projection_mode = "symmetric"
+        self.projected_flux = nn.Parameter(projected_flux.clone())
+        self.endpoint_phi = endpoint_phi
+        self.endpoint_psi = endpoint_psi
+        self.boundary_phi = boundary_phi
+        self.boundary_psi = boundary_psi
+        self.raw_calls = 0
+
+    def forward(
+        self,
+        coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+    ) -> torch.Tensor:
+        del coords, a_vals, b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
+        return self.projected_flux
+
+    def raw_flux_at_coords(
+        self,
+        eval_coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        rhs_tilde: torch.Tensor,
+        rhs_norm: torch.Tensor,
+    ) -> torch.Tensor:
+        del b_vals, c_vals, rhs_raw, rhs_tilde, rhs_norm
+        self.raw_calls += 1
+        bsz, axis, n_lines, _m_points = a_vals.shape
+        k_points = eval_coords.shape[2]
+        raw = torch.zeros(
+            (bsz, axis, n_lines, k_points),
+            dtype=a_vals.dtype,
+            device=a_vals.device,
+        )
+        if k_points == 2:
+            raw[:, 0] = self.endpoint_phi
+            raw[:, 1] = self.endpoint_psi
+        else:
+            raw[:, 0] = self.boundary_phi
+            raw[:, 1] = self.boundary_psi
+        return raw
+
+
 def _flux_from_q_common(
     q: torch.Tensor, common: torch.Tensor | None = None
 ) -> torch.Tensor:
@@ -262,6 +324,45 @@ def _make_coupling_dataset_item(
     return inputs, item
 
 
+def _make_boundary_batch(
+    coords: torch.Tensor,
+    *,
+    batch: int = 1,
+) -> tuple[torch.Tensor, ...]:
+    x_axis = coords[0, 0, :, 0]
+    y_axis = coords[1, 0, :, 1]
+    x_boundary = torch.stack(
+        (
+            torch.stack((x_axis, torch.zeros_like(x_axis)), dim=-1),
+            torch.stack((x_axis, torch.ones_like(x_axis)), dim=-1),
+        ),
+        dim=0,
+    )
+    y_boundary = torch.stack(
+        (
+            torch.stack((torch.zeros_like(y_axis), y_axis), dim=-1),
+            torch.stack((torch.ones_like(y_axis), y_axis), dim=-1),
+        ),
+        dim=0,
+    )
+    boundary_coords = torch.stack((x_boundary, y_boundary), dim=0)
+    boundary_rhs_raw = torch.zeros((batch, 2, 2, x_axis.numel()), dtype=coords.dtype)
+    boundary_rhs_tilde = boundary_rhs_raw.clone()
+    boundary_rhs_norm = torch.ones((batch, 2, 2), dtype=coords.dtype)
+    boundary_a_vals = torch.ones_like(boundary_rhs_raw)
+    boundary_b_vals = torch.zeros_like(boundary_rhs_raw)
+    boundary_c_vals = torch.zeros_like(boundary_rhs_raw)
+    return (
+        boundary_coords,
+        boundary_rhs_raw,
+        boundary_rhs_tilde,
+        boundary_rhs_norm,
+        boundary_a_vals,
+        boundary_b_vals,
+        boundary_c_vals,
+    )
+
+
 def _losses_config(
     *,
     l2_enabled: bool = True,
@@ -270,6 +371,10 @@ def _losses_config(
     energy_weight: float = 1.0,
     cross_enabled: bool = True,
     cross_weight: float = 1.0,
+    balance_enabled: bool = False,
+    balance_weight: float = 1.0,
+    symmetric_boundary_enabled: bool = False,
+    symmetric_boundary_weight: float = 1.0,
 ) -> CouplingLossesConfig:
     return CouplingLossesConfig(
         l2_consistency=CouplingLossTermConfig(
@@ -284,7 +389,22 @@ def _losses_config(
             enabled=cross_enabled,
             weight=cross_weight,
         ),
+        balance_loss=CouplingLossTermConfig(
+            enabled=balance_enabled,
+            weight=balance_weight,
+        ),
+        symmetric_boundary_loss=CouplingLossTermConfig(
+            enabled=symmetric_boundary_enabled,
+            weight=symmetric_boundary_weight,
+        ),
     )
+
+
+def test_coupling_losses_default_disables_symmetric_boundary_loss():
+    losses = CouplingLossesConfig()
+
+    assert losses.symmetric_boundary_loss.enabled is False
+    assert losses.symmetric_boundary_loss.weight == 1.0
 
 
 def _axis_field_from_canonical_full(full_field: torch.Tensor) -> torch.Tensor:
@@ -1015,7 +1135,19 @@ def test_coupling_dataset_shapes(tmp_path):
         step_size=0.5,
         n_points_per_line=3,
     )
-    coords, rhs_raw, rhs_tilde, rhs_norm, sol, flux, kappa, b_vals, c_vals, ap = ds[0]
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux,
+        kappa,
+        b_vals,
+        c_vals,
+        ap,
+        boundary,
+    ) = ds[0]
     assert coords.shape[0] == 2
     assert rhs_raw.shape[0] == 2 and rhs_raw.shape[-1] == 3
     assert rhs_tilde.shape == rhs_raw.shape
@@ -1026,6 +1158,84 @@ def test_coupling_dataset_shapes(tmp_path):
     assert b_vals.shape == rhs_raw.shape
     assert c_vals.shape == rhs_raw.shape
     assert ap.shape == rhs_raw.shape
+    (
+        boundary_coords,
+        boundary_rhs_raw,
+        boundary_rhs_tilde,
+        boundary_rhs_norm,
+        boundary_kappa,
+        boundary_b_vals,
+        boundary_c_vals,
+    ) = boundary
+    assert boundary_coords.shape == (2, 2, rhs_raw.shape[-1], 2)
+    assert boundary_rhs_raw.shape == (2, 2, rhs_raw.shape[-1])
+    assert boundary_rhs_tilde.shape == boundary_rhs_raw.shape
+    assert boundary_rhs_norm.shape == (2, 2)
+    assert boundary_kappa.shape == boundary_rhs_raw.shape
+    assert boundary_b_vals.shape == boundary_rhs_raw.shape
+    assert boundary_c_vals.shape == boundary_rhs_raw.shape
+
+
+def test_coupling_dataset_boundary_payload_samples_exact_edges(tmp_path):
+    grid = np.linspace(0.0, 1.0, 257)
+    xx, yy = np.meshgrid(grid, grid, indexing="xy")
+    sol = xx + yy
+    rhs = 10.0 * xx + yy
+    uxx = np.ones((255, 255))
+    uyy = np.ones((255, 255))
+    np.savez(tmp_path / "sample_boundary.npz", sol=sol, rhs=rhs, uxx=uxx, uyy=uyy)
+
+    ds = CouplingDataset(
+        data_dir=tmp_path,
+        step_size=0.5,
+        n_points_per_line=5,
+        integration_rule="trapezoid",
+    )
+    _coords, *_core, boundary = ds[0]
+    (
+        boundary_coords,
+        boundary_rhs_raw,
+        boundary_rhs_tilde,
+        boundary_rhs_norm,
+        _boundary_kappa,
+        _boundary_b_vals,
+        _boundary_c_vals,
+    ) = boundary
+
+    x_axis = torch.linspace(0.0, 1.0, 5, dtype=boundary_rhs_raw.dtype)
+    y_axis = torch.linspace(0.0, 1.0, 5, dtype=boundary_rhs_raw.dtype)
+    assert torch.allclose(boundary_coords[0, 0, :, 1], torch.zeros_like(x_axis))
+    assert torch.allclose(boundary_coords[0, 1, :, 1], torch.ones_like(x_axis))
+    assert torch.allclose(boundary_coords[1, 0, :, 0], torch.zeros_like(y_axis))
+    assert torch.allclose(boundary_coords[1, 1, :, 0], torch.ones_like(y_axis))
+    assert torch.allclose(boundary_rhs_raw[0, 0], 10.0 * x_axis)
+    assert torch.allclose(boundary_rhs_raw[0, 1], 10.0 * x_axis + 1.0)
+    assert torch.allclose(boundary_rhs_raw[1, 0], y_axis)
+    assert torch.allclose(boundary_rhs_raw[1, 1], 10.0 + y_axis)
+    assert torch.allclose(
+        boundary_rhs_tilde,
+        boundary_rhs_raw / boundary_rhs_norm.unsqueeze(-1),
+    )
+
+
+def test_coupling_collate_supports_boundary_and_legacy_payloads(tmp_path):
+    _make_npz(tmp_path)
+    ds = CouplingDataset(
+        data_dir=tmp_path,
+        step_size=0.5,
+        n_points_per_line=3,
+    )
+    item = ds[0]
+
+    collated = coupling_collate_fn([item, item])
+    assert len(collated) == 11
+    boundary = collated[10]
+    assert isinstance(boundary, tuple)
+    assert boundary[1].shape[0] == 2
+
+    legacy_item = item[:10]
+    legacy_collated = coupling_collate_fn([legacy_item, legacy_item])
+    assert len(legacy_collated) == 10
 
 
 def test_coupling_dataset_trapezoid_rhs_norm(tmp_path):
@@ -1075,6 +1285,66 @@ def test_coupling_model_forward():
     psi_y = projected_flux[:, 1]
     assert phi_x.shape == rhs_raw[:, 0].shape
     assert psi_y.shape == rhs_raw[:, 1].shape
+
+
+def test_coupling_model_raw_flux_helper_accepts_arbitrary_eval_coords(monkeypatch):
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        dtype=torch.float64,
+    )
+    model = CouplingNet(cfg)
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        _sol,
+        _flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=2, n_lines=3, m_points=5)
+    a_vals[:] = 1.0
+
+    def fail_projection(*_args, **_kwargs):
+        raise AssertionError("raw helper must not apply projection")
+
+    monkeypatch.setattr(model, "_apply_balance_projection", fail_projection)
+    raw = model.raw_flux_at_coords(
+        eval_coords=coords[:, :, (0, -1), :],
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert raw.shape == (2, 2, 3, 2)
+
+    boundary = _make_boundary_batch(coords, batch=2)
+    (
+        boundary_coords,
+        boundary_rhs_raw,
+        boundary_rhs_tilde,
+        boundary_rhs_norm,
+        boundary_a_vals,
+        boundary_b_vals,
+        boundary_c_vals,
+    ) = boundary
+    boundary_raw = model.raw_flux_at_coords(
+        eval_coords=boundary_coords[:, :, 1:-1, :],
+        a_vals=boundary_a_vals,
+        b_vals=boundary_b_vals,
+        c_vals=boundary_c_vals,
+        rhs_raw=boundary_rhs_raw,
+        rhs_tilde=boundary_rhs_tilde,
+        rhs_norm=boundary_rhs_norm,
+    )
+
+    assert boundary_raw.shape == (2, 2, 2, 3)
 
 
 def test_green_response_feature_extends_rhs_branch_input_dim():
@@ -1556,6 +1826,76 @@ def test_coupling_balance_projection_uses_fixed_half_split():
     )
 
 
+def test_balance_projection_config_normalizes_legacy_and_object():
+    legacy_cfg = CouplingModelConfig(balance_projection="smooth_mask")
+    object_cfg = CouplingModelConfig(
+        balance_projection={"enabled": False, "mode": "smooth_mask"}
+    )
+
+    assert isinstance(legacy_cfg.balance_projection, BalanceProjectionConfig)
+    assert legacy_cfg.balance_projection.enabled is True
+    assert legacy_cfg.balance_projection.mode == "smooth_mask"
+    assert isinstance(object_cfg.balance_projection, BalanceProjectionConfig)
+    assert object_cfg.balance_projection.enabled is False
+    assert object_cfg.balance_projection.mode == "smooth_mask"
+
+
+def test_coupling_forward_returns_raw_output_when_projection_disabled():
+    class _ZeroBranch(nn.Module):
+        def __init__(self, hidden_dim: int) -> None:
+            super().__init__()
+            self.hidden_dim = hidden_dim
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.zeros(
+                (x.shape[0], self.hidden_dim), dtype=x.dtype, device=x.device
+            )
+
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        balance_projection=BalanceProjectionConfig(enabled=False, mode="smooth_mask"),
+    )
+    model = CouplingNet(cfg)
+    model.branch_coefficient = _ZeroBranch(cfg.hidden_dim)
+    model.branch_rhs = _ZeroBranch(cfg.hidden_dim)
+    model.trunk = _ZeroBranch(cfg.hidden_dim)
+
+    def _raise_if_called(
+        flux_int: torch.Tensor,
+        rhs_raw: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> torch.Tensor:
+        del flux_int, rhs_raw, coords
+        raise AssertionError("balance projection should not run in raw mode")
+
+    model._apply_balance_projection = _raise_if_called  # type: ignore[method-assign]
+
+    coords = torch.zeros((2, 3, 5, 2), dtype=torch.float64)
+    zeros = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    rhs_raw = zeros.clone()
+    rhs_raw[:, 0, :, 1:-1] = 3.0
+    rhs_norm = torch.ones((1, 2, 3), dtype=torch.float64)
+
+    raw_flux = model(
+        coords=coords,
+        a_vals=zeros,
+        b_vals=zeros,
+        c_vals=zeros,
+        rhs_raw=rhs_raw,
+        rhs_tilde=zeros,
+        rhs_norm=rhs_norm,
+    )
+
+    assert model.balance_projection_enabled is False
+    assert model.balance_projection == "smooth_mask"
+    torch.testing.assert_close(
+        raw_flux[:, :, :, 1:-1],
+        torch.zeros_like(raw_flux[:, :, :, 1:-1]),
+    )
+
+
 def test_symmetric_balance_projection_matches_old_formula_directly():
     torch.set_default_dtype(torch.float64)
     n = 3
@@ -1821,7 +2161,7 @@ def test_trainable_smooth_mask_diff_power_gets_gradient_and_preserves_balance():
 
 
 def test_smooth_mask_projection_config_validation():
-    with pytest.raises(ValueError, match="Unsupported balance_projection"):
+    with pytest.raises(ValueError, match="balance_projection.mode"):
         CouplingNet(CouplingModelConfig(balance_projection="bad"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="smooth_mask_eps"):
         CouplingNet(CouplingModelConfig(smooth_mask_eps=0.0))
@@ -1829,10 +2169,20 @@ def test_smooth_mask_projection_config_validation():
         CouplingNet(CouplingModelConfig(smooth_mask_power=0.0))
     with pytest.raises(ValueError, match="smooth_mask_diff_power"):
         CouplingNet(CouplingModelConfig(smooth_mask_diff_power=0.0))
-    with pytest.raises(ValueError, match="balance_projection='smooth_mask'"):
+    with pytest.raises(ValueError, match="balance_projection.enabled=true"):
         CouplingNet(
             CouplingModelConfig(
                 balance_projection="symmetric",
+                smooth_mask_diff_power_trainable=True,
+            )
+        )
+    with pytest.raises(ValueError, match="balance_projection.enabled=true"):
+        CouplingNet(
+            CouplingModelConfig(
+                balance_projection=BalanceProjectionConfig(
+                    enabled=False,
+                    mode="smooth_mask",
+                ),
                 smooth_mask_diff_power_trainable=True,
             )
         )
@@ -1905,6 +2255,8 @@ def test_coupling_trainer_runs(tmp_path):
     assert "loss_l2_consistency" in metrics
     assert "loss_energy_consistency" in metrics
     assert "loss_cross_consistency" in metrics
+    assert "loss_balance_loss" in metrics
+    assert "loss_symmetric_boundary_loss" in metrics
 
 
 def test_coupling_trainer_validation_uses_eval_mode_and_restores_training(tmp_path):
@@ -1976,6 +2328,8 @@ def test_coupling_validation_metrics_are_deterministic_with_dropout(tmp_path):
         "loss_l2_consistency",
         "loss_energy_consistency",
         "loss_cross_consistency",
+        "loss_balance_loss",
+        "loss_symmetric_boundary_loss",
         "rel_flux",
         "rel_sol",
     ):
@@ -2392,6 +2746,360 @@ def test_step_loss_ignores_raw_split_sum_without_balance_loss(tmp_path):
     )
 
     assert abs(loss.item()) < 1e-12
+
+
+def test_balance_loss_matches_raw_common_grid_residual(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    rhs_raw[:, 0, :, 1:-1] = 3.0
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    projected_flux[:, 0, :, 1:-1] = 1.0
+    projected_flux[:, 1, :, 1:-1] = 1.0
+    model = _DummyFluxModel(projected_flux=projected_flux)
+    model.balance_projection_enabled = False
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_enabled=False,
+                energy_enabled=False,
+                cross_enabled=False,
+                balance_enabled=True,
+                balance_weight=2.0,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    assert metrics["loss_balance_loss"] == pytest.approx(0.25)
+    assert loss.item() == pytest.approx(0.5)
+
+
+def test_balance_loss_requires_projection_disabled(tmp_path):
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="balance_loss"):
+        CouplingTrainer(
+            model=_DummyFluxModel(projected_flux=projected_flux),  # type: ignore[arg-type]
+            config=CouplingTrainingConfig(
+                losses=_losses_config(
+                    l2_enabled=False,
+                    energy_enabled=False,
+                    cross_enabled=False,
+                    balance_enabled=True,
+                ),
+                epochs=1,
+                batch_size=1,
+            ),
+            work_dir=tmp_path,
+            green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        )
+
+
+def test_step_loss_matches_weighted_sum_with_balance_loss(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    a_vals[:] = 1.0
+    rhs_raw[:, 0, :, 1:-1] = 3.0
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+    projected_flux[:, 0, :, 1:-1] = 1.0
+    projected_flux[:, 1, :, 1:-1] = 0.25
+    model = _DummyFluxModel(projected_flux=projected_flux)
+    model.balance_projection_enabled = False
+    trainer = CouplingTrainer(
+        model=model,  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_enabled=True,
+                l2_weight=0.5,
+                energy_enabled=True,
+                energy_weight=2.0,
+                cross_enabled=True,
+                cross_weight=3.0,
+                balance_enabled=True,
+                balance_weight=4.0,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    )
+
+    expected = (
+        0.5 * metrics["loss_l2_consistency"]
+        + 2.0 * metrics["loss_energy_consistency"]
+        + 3.0 * metrics["loss_cross_consistency"]
+        + 4.0 * metrics["loss_balance_loss"]
+    )
+    assert loss.item() == pytest.approx(expected)
+
+
+def test_symmetric_boundary_loss_matches_raw_boundary_residual(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        _sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    projected_flux = torch.zeros_like(flux_target)
+    trainer = CouplingTrainer(
+        model=_BoundaryRawFluxModel(projected_flux=projected_flux),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_enabled=False,
+                energy_enabled=False,
+                cross_enabled=False,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    loss = trainer._symmetric_boundary_loss(
+        coords=coords,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        boundary_batch=_make_boundary_batch(coords),
+    )
+
+    assert loss.item() == pytest.approx(0.5)
+
+
+def test_step_loss_matches_weighted_sum_with_symmetric_boundary_loss(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    a_vals[:] = 1.0
+    projected_flux = torch.zeros_like(flux_target)
+    trainer = CouplingTrainer(
+        model=_BoundaryRawFluxModel(projected_flux=projected_flux),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_enabled=False,
+                energy_enabled=False,
+                cross_enabled=False,
+                symmetric_boundary_enabled=True,
+                symmetric_boundary_weight=2.0,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    loss, metrics = trainer._step_loss(
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+        _make_boundary_batch(coords),
+    )
+
+    assert metrics["loss_symmetric_boundary_loss"] == pytest.approx(0.5)
+    assert loss.item() == pytest.approx(1.0)
+
+
+def test_symmetric_boundary_loss_requires_boundary_payload(tmp_path):
+    (
+        coords,
+        rhs_raw,
+        rhs_tilde,
+        rhs_norm,
+        sol,
+        flux_target,
+        a_vals,
+        b_vals,
+        c_vals,
+    ) = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    trainer = CouplingTrainer(
+        model=_BoundaryRawFluxModel(projected_flux=torch.zeros_like(flux_target)),  # type: ignore[arg-type]
+        config=CouplingTrainingConfig(
+            losses=_losses_config(
+                l2_enabled=False,
+                energy_enabled=False,
+                cross_enabled=False,
+                symmetric_boundary_enabled=True,
+            ),
+            epochs=1,
+            batch_size=1,
+        ),
+        work_dir=tmp_path,
+        green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+    )
+
+    with pytest.raises(ValueError, match="symmetric_boundary_loss"):
+        trainer._step_loss(
+            coords,
+            rhs_raw,
+            rhs_tilde,
+            rhs_norm,
+            sol,
+            flux_target,
+            a_vals,
+            b_vals,
+            c_vals,
+        )
+
+
+def test_symmetric_boundary_loss_requires_symmetric_projection(tmp_path):
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+
+    model = _DummyFluxModel(projected_flux=projected_flux)
+    model.balance_projection_enabled = False
+    model.balance_projection_mode = "symmetric"
+    with pytest.raises(ValueError, match="symmetric_boundary_loss"):
+        CouplingTrainer(
+            model=model,  # type: ignore[arg-type]
+            config=CouplingTrainingConfig(
+                losses=_losses_config(
+                    l2_enabled=False,
+                    energy_enabled=False,
+                    cross_enabled=False,
+                    symmetric_boundary_enabled=True,
+                ),
+                epochs=1,
+                batch_size=1,
+            ),
+            work_dir=tmp_path,
+            green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        )
+
+    model = _DummyFluxModel(projected_flux=projected_flux)
+    model.balance_projection_enabled = True
+    model.balance_projection_mode = "smooth_mask"
+    with pytest.raises(ValueError, match="symmetric_boundary_loss"):
+        CouplingTrainer(
+            model=model,  # type: ignore[arg-type]
+            config=CouplingTrainingConfig(
+                losses=_losses_config(
+                    l2_enabled=False,
+                    energy_enabled=False,
+                    cross_enabled=False,
+                    symmetric_boundary_enabled=True,
+                ),
+                epochs=1,
+                batch_size=1,
+            ),
+            work_dir=tmp_path,
+            green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        )
+
+
+def test_symmetric_boundary_loss_rejects_unsupported_branch_paths(tmp_path):
+    projected_flux = torch.zeros((1, 2, 3, 5), dtype=torch.float64)
+
+    model = _DummyFluxModel(projected_flux=projected_flux)
+    model.balance_projection_enabled = True
+    model.balance_projection_mode = "symmetric"
+    model.source_stencil_lift = nn.Identity()
+    with pytest.raises(ValueError, match="source_stencil_lift"):
+        CouplingTrainer(
+            model=model,  # type: ignore[arg-type]
+            config=CouplingTrainingConfig(
+                losses=_losses_config(
+                    l2_enabled=False,
+                    energy_enabled=False,
+                    cross_enabled=False,
+                    symmetric_boundary_enabled=True,
+                ),
+                epochs=1,
+                batch_size=1,
+            ),
+            work_dir=tmp_path,
+            green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        )
+
+    model = _DummyFluxModel(projected_flux=projected_flux)
+    model.balance_projection_enabled = True
+    model.balance_projection_mode = "symmetric"
+    model.green_response_feature_enabled = True
+    with pytest.raises(ValueError, match="green_response_feature"):
+        CouplingTrainer(
+            model=model,  # type: ignore[arg-type]
+            config=CouplingTrainingConfig(
+                losses=_losses_config(
+                    l2_enabled=False,
+                    energy_enabled=False,
+                    cross_enabled=False,
+                    symmetric_boundary_enabled=True,
+                ),
+                epochs=1,
+                batch_size=1,
+            ),
+            work_dir=tmp_path,
+            green_kernel=torch.ones((2, 3, 5, 5), dtype=torch.float64),
+        )
 
 
 def test_single_stage_optimization_resolution_uses_shared_config(tmp_path):
@@ -3292,3 +4000,5 @@ def test_evaluate_reports_all_three_loss_components(tmp_path):
     assert "loss_l2_consistency" in metrics
     assert "loss_energy_consistency" in metrics
     assert "loss_cross_consistency" in metrics
+    assert "loss_balance_loss" in metrics
+    assert "loss_symmetric_boundary_loss" in metrics
