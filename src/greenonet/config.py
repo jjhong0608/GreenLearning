@@ -105,11 +105,51 @@ class CouplingTrunkPositionalEncodingConfig:
 
 
 @dataclass
+class Axis1DTrunkConfig:
+    """Shared 1D trunk with boundary-aware transverse branch settings."""
+
+    enabled: bool = False
+    boundary_aware_modes: int = 4
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("axis_1d_trunk.enabled must be a boolean.")
+        if not isinstance(self.boundary_aware_modes, int) or isinstance(
+            self.boundary_aware_modes,
+            bool,
+        ):
+            raise TypeError("axis_1d_trunk.boundary_aware_modes must be an integer.")
+        if self.boundary_aware_modes <= 0:
+            raise ValueError("axis_1d_trunk.boundary_aware_modes must be positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: Axis1DTrunkConfig | dict[str, Any] | None,
+    ) -> Axis1DTrunkConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "boundary_aware_modes"})
+            if unknown:
+                raise TypeError(
+                    "axis_1d_trunk has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("axis_1d_trunk must be an object.")
+
+
+@dataclass
 class BalanceProjectionConfig:
     """CouplingNet output balance projection settings."""
 
     enabled: bool = True
     mode: Literal["symmetric", "smooth_mask"] = "symmetric"
+    mask: Literal["quadratic", "sin"] = "quadratic"
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -118,6 +158,8 @@ class BalanceProjectionConfig:
             raise ValueError(
                 "balance_projection.mode must be 'symmetric' or 'smooth_mask'."
             )
+        if self.mask not in {"quadratic", "sin"}:
+            raise ValueError("balance_projection.mask must be 'quadratic' or 'sin'.")
 
     @classmethod
     def from_raw(
@@ -135,7 +177,7 @@ class BalanceProjectionConfig:
             )
         if isinstance(raw, dict):
             data = dict(raw)
-            unknown = sorted(set(data) - {"enabled", "mode"})
+            unknown = sorted(set(data) - {"enabled", "mode", "mask"})
             if unknown:
                 raise TypeError(
                     "balance_projection has unknown keys: "
@@ -143,13 +185,17 @@ class BalanceProjectionConfig:
                 )
             enabled = data.get("enabled", True)
             mode = data.get("mode", "symmetric")
+            mask = data.get("mask", "quadratic")
             if not isinstance(enabled, bool):
                 raise TypeError("balance_projection.enabled must be a boolean.")
             if not isinstance(mode, str):
                 raise TypeError("balance_projection.mode must be a string.")
+            if not isinstance(mask, str):
+                raise TypeError("balance_projection.mask must be a string.")
             return cls(
                 enabled=enabled,
                 mode=cast(Literal["symmetric", "smooth_mask"], mode),
+                mask=cast(Literal["quadratic", "sin"], mask),
             )
         raise TypeError("balance_projection must be a string or an object.")
 
@@ -188,11 +234,15 @@ class CouplingModelConfig:
     trunk_positional_encoding: CouplingTrunkPositionalEncodingConfig = field(
         default_factory=CouplingTrunkPositionalEncodingConfig
     )
+    axis_1d_trunk: Axis1DTrunkConfig | dict[str, Any] = field(
+        default_factory=Axis1DTrunkConfig
+    )
 
     def __post_init__(self) -> None:
         self.balance_projection = BalanceProjectionConfig.from_raw(
             self.balance_projection
         )
+        self.axis_1d_trunk = Axis1DTrunkConfig.from_raw(self.axis_1d_trunk)
 
 
 @dataclass

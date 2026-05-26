@@ -10,6 +10,7 @@ from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.coupling_model import CouplingNet, FiveStencilSourceLift
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
+    Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
@@ -1680,6 +1681,177 @@ def test_trunk_positional_encoding_rejects_invalid_config():
         )
 
 
+def test_axis_1d_trunk_config_defaults():
+    cfg = CouplingModelConfig()
+
+    assert cfg.axis_1d_trunk.enabled is False
+    assert cfg.axis_1d_trunk.boundary_aware_modes == 4
+
+
+def test_axis_1d_trunk_extends_model_with_shared_1d_trunk():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            boundary_aware_modes=3,
+        ),
+    )
+
+    model = CouplingNet(cfg)
+    trunk_first = model.trunk.net[0]
+    assert model.branch_transverse is not None
+    transverse_first = model.branch_transverse.net[0]
+
+    assert isinstance(trunk_first, nn.Linear)
+    assert isinstance(transverse_first, nn.Linear)
+    assert trunk_first.in_features == 1
+    assert transverse_first.in_features == 6
+    torch.testing.assert_close(
+        model.axis_1d_boundary_modes,
+        torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64),
+    )
+
+
+def test_axis_1d_boundary_sincos_excludes_raw_coordinate():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            boundary_aware_modes=2,
+        ),
+    )
+    model = CouplingNet(cfg)
+    t = torch.tensor([0.25, 0.5], dtype=torch.float64)
+
+    encoded = model._encode_axis_boundary_sincos(t)
+
+    modes = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    angles = torch.pi * t.unsqueeze(-1) * modes
+    expected = torch.stack((torch.sin(angles), torch.cos(angles)), dim=-1).reshape(
+        2,
+        4,
+    )
+    torch.testing.assert_close(encoded, expected)
+    assert encoded.shape[-1] == 4
+
+
+class _OnesBranch(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.ones((x.shape[0], 1), dtype=x.dtype, device=x.device)
+
+
+class _IdentityTrunk(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+
+
+def test_axis_1d_trunk_uses_axis_coordinates_with_shared_trunk():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=1,
+        depth=1,
+        balance_projection=BalanceProjectionConfig(enabled=False),
+        coefficient_terms=CouplingCoefficientTermsConfig(
+            diffusion=False,
+            convection=False,
+            reaction=False,
+        ),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            boundary_aware_modes=2,
+        ),
+    )
+    model = CouplingNet(cfg)
+    model.branch_rhs = _OnesBranch()
+    model.branch_transverse = _OnesBranch()
+    model.trunk = _IdentityTrunk()
+
+    coords = torch.zeros((2, 2, 3, 2), dtype=torch.float64)
+    coords[0, :, :, 0] = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float64)
+    coords[0, 0, :, 1] = 0.2
+    coords[0, 1, :, 1] = 0.8
+    coords[1, :, :, 1] = torch.tensor([0.0, 0.6, 1.0], dtype=torch.float64)
+    coords[1, 0, :, 0] = 0.3
+    coords[1, 1, :, 0] = 0.7
+    a_vals = torch.ones(1, 2, 2, 3, dtype=torch.float64)
+    b_vals = torch.zeros_like(a_vals)
+    c_vals = torch.zeros_like(a_vals)
+    rhs_raw = torch.ones_like(a_vals)
+    rhs_tilde = torch.ones_like(a_vals)
+    rhs_norm = torch.ones(1, 2, 2, dtype=torch.float64)
+
+    raw = model.raw_flux_at_coords(
+        coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    torch.testing.assert_close(raw[0, 0], coords[0, :, :, 0])
+    torch.testing.assert_close(raw[0, 1], coords[1, :, :, 1])
+
+
+def test_axis_1d_trunk_forward_preserves_balance():
+    cfg = CouplingModelConfig(
+        branch_input_dim=3,
+        hidden_dim=8,
+        depth=2,
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            boundary_aware_modes=2,
+        ),
+    )
+    model = CouplingNet(cfg)
+    coords = torch.zeros((2, 1, 3, 2), dtype=torch.float64)
+    coords[0, 0, :, 0] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    coords[0, 0, :, 1] = 0.5
+    coords[1, 0, :, 1] = torch.linspace(0.0, 1.0, 3, dtype=torch.float64)
+    coords[1, 0, :, 0] = 0.5
+    a_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    b_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    c_vals = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_raw = torch.randn(1, 2, 1, 3, dtype=torch.float64)
+    rhs_norm = torch.linalg.norm(rhs_raw, dim=-1).clamp_min(1e-6)
+    rhs_tilde = rhs_raw / rhs_norm.unsqueeze(-1)
+
+    projected_flux = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert projected_flux.shape == rhs_raw.shape
+    torch.testing.assert_close(
+        projected_flux[:, 0, :, 1:-1] + projected_flux[:, 1, :, 1:-1].transpose(-1, -2),
+        rhs_raw[:, 0, :, 1:-1],
+    )
+
+
+def test_axis_1d_trunk_rejects_invalid_config():
+    with pytest.raises(ValueError, match="boundary_aware_modes"):
+        Axis1DTrunkConfig(boundary_aware_modes=0)
+    with pytest.raises(ValueError, match="trunk_positional_encoding"):
+        CouplingNet(
+            CouplingModelConfig(
+                axis_1d_trunk=Axis1DTrunkConfig(enabled=True),
+                trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+                    enabled=True,
+                ),
+            )
+        )
+
+
 def test_coupling_model_backprop_through_shared_encoder():
     cfg = CouplingModelConfig(
         branch_input_dim=3,
@@ -1829,15 +2001,26 @@ def test_coupling_balance_projection_uses_fixed_half_split():
 def test_balance_projection_config_normalizes_legacy_and_object():
     legacy_cfg = CouplingModelConfig(balance_projection="smooth_mask")
     object_cfg = CouplingModelConfig(
-        balance_projection={"enabled": False, "mode": "smooth_mask"}
+        balance_projection={"enabled": False, "mode": "smooth_mask", "mask": "sin"}
     )
 
     assert isinstance(legacy_cfg.balance_projection, BalanceProjectionConfig)
     assert legacy_cfg.balance_projection.enabled is True
     assert legacy_cfg.balance_projection.mode == "smooth_mask"
+    assert legacy_cfg.balance_projection.mask == "quadratic"
     assert isinstance(object_cfg.balance_projection, BalanceProjectionConfig)
     assert object_cfg.balance_projection.enabled is False
     assert object_cfg.balance_projection.mode == "smooth_mask"
+    assert object_cfg.balance_projection.mask == "sin"
+
+
+def test_balance_projection_config_rejects_invalid_mask():
+    with pytest.raises(ValueError, match="balance_projection.mask"):
+        BalanceProjectionConfig(enabled=True, mode="smooth_mask", mask="bad")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="balance_projection.mask"):
+        BalanceProjectionConfig.from_raw(
+            {"enabled": True, "mode": "smooth_mask", "mask": 1}
+        )
 
 
 def test_coupling_forward_returns_raw_output_when_projection_disabled():
@@ -2028,6 +2211,100 @@ def test_smooth_mask_components_apply_power_without_moving_center():
     assert m_phi[0, 0, 0].item() > base[0].item()
     assert m_phi[0, 1, 0].item() == pytest.approx(1.0)
     assert m_psi[0, 0, 1].item() == pytest.approx(1.0)
+
+
+def test_smooth_mask_sin_components_match_sine_formula_and_ignore_normalize():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    coords = _make_projection_coords(n)
+    flux_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
+    cfg_normalized = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection={
+            "enabled": True,
+            "mode": "smooth_mask",
+            "mask": "sin",
+        },
+        smooth_mask_normalize=True,
+    )
+    cfg_unnormalized = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection={
+            "enabled": True,
+            "mode": "smooth_mask",
+            "mask": "sin",
+        },
+        smooth_mask_normalize=False,
+    )
+    model_normalized = CouplingNet(cfg_normalized)
+    model_unnormalized = CouplingNet(cfg_unnormalized)
+
+    m_phi, m_psi = model_normalized._smooth_mask_components(coords, flux_int)
+    m_phi_no_norm, m_psi_no_norm = model_unnormalized._smooth_mask_components(
+        coords, flux_int
+    )
+
+    axis_inner = torch.linspace(0.0, 1.0, m, dtype=torch.float64)[1:-1]
+    expected = torch.sin(torch.pi * axis_inner)
+    torch.testing.assert_close(m_phi[0, :, 0], expected)
+    torch.testing.assert_close(m_psi[0, 0, :], expected)
+    torch.testing.assert_close(m_phi, m_phi_no_norm)
+    torch.testing.assert_close(m_psi, m_psi_no_norm)
+
+
+def test_smooth_mask_sin_components_apply_power():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection={
+            "enabled": True,
+            "mode": "smooth_mask",
+            "mask": "sin",
+        },
+        smooth_mask_power=2.0,
+    )
+    model = CouplingNet(cfg)
+    coords = _make_projection_coords(n)
+    flux_int = torch.zeros((1, 2, n, n), dtype=torch.float64)
+
+    m_phi, m_psi = model._smooth_mask_components(coords, flux_int)
+
+    axis_inner = torch.linspace(0.0, 1.0, m, dtype=torch.float64)[1:-1]
+    expected = torch.sin(torch.pi * axis_inner).pow(2)
+    torch.testing.assert_close(m_phi[0, :, 0], expected)
+    torch.testing.assert_close(m_psi[0, 0, :], expected)
+
+
+def test_smooth_mask_sin_projection_preserves_balance():
+    torch.set_default_dtype(torch.float64)
+    n = 3
+    m = n + 2
+    cfg = CouplingModelConfig(
+        branch_input_dim=m,
+        balance_projection={
+            "enabled": True,
+            "mode": "smooth_mask",
+            "mask": "sin",
+        },
+    )
+    model = CouplingNet(cfg)
+    flux_int = torch.randn(2, 2, n, n, dtype=torch.float64)
+    rhs_raw = torch.randn(2, 2, n, m, dtype=torch.float64)
+    coords = _make_projection_coords(n)
+
+    projected = model._apply_balance_projection(flux_int, rhs_raw, coords)
+
+    phi = projected[:, 0]
+    psi = projected[:, 1].transpose(-1, -2)
+    torch.testing.assert_close(
+        phi + psi,
+        rhs_raw[:, 0, :, 1:-1],
+        atol=1.0e-10,
+        rtol=1.0e-10,
+    )
 
 
 def test_smooth_mask_diff_power_keeps_split_and_increases_boundary_difference():

@@ -8,6 +8,7 @@ from torch import nn
 
 from greenonet.activations import RationalActivation
 from greenonet.config import (
+    Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
@@ -347,6 +348,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         self.balance_projection_enabled = bool(balance_projection.enabled)
         self.balance_projection = balance_projection.mode
         self.balance_projection_mode = balance_projection.mode
+        self.smooth_mask_name = balance_projection.mask
         self.smooth_mask_normalize = bool(config.smooth_mask_normalize)
         self.smooth_mask_eps = float(config.smooth_mask_eps)
         self.smooth_mask_power = float(config.smooth_mask_power)
@@ -385,8 +387,33 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         if self.coefficient_terms_reaction:
             active_coefficient_terms.append("reaction")
         self.active_coefficient_terms = tuple(active_coefficient_terms)
+        axis_1d_trunk = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
+        self.axis_1d_trunk_enabled = bool(axis_1d_trunk.enabled)
+        self.axis_1d_boundary_aware_modes = int(axis_1d_trunk.boundary_aware_modes)
+        self.axis_1d_boundary_modes: torch.Tensor
+        if self.axis_1d_trunk_enabled:
+            self.register_buffer(
+                "axis_1d_boundary_modes",
+                torch.arange(
+                    1,
+                    self.axis_1d_boundary_aware_modes + 1,
+                    dtype=config.dtype,
+                ),
+                persistent=False,
+            )
+        else:
+            self.register_buffer(
+                "axis_1d_boundary_modes",
+                torch.empty(0, dtype=config.dtype),
+                persistent=False,
+            )
         positional_cfg = config.trunk_positional_encoding
         self.trunk_positional_encoding_enabled = bool(positional_cfg.enabled)
+        if self.axis_1d_trunk_enabled and self.trunk_positional_encoding_enabled:
+            raise ValueError(
+                "axis_1d_trunk.enabled=true requires "
+                "trunk_positional_encoding.enabled=false."
+            )
         self.trunk_positional_encoding_mode = str(positional_cfg.mode)
         if self.trunk_positional_encoding_mode not in {
             "fourier",
@@ -444,6 +471,13 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 trunk_input_dim = (
                     2 if self.trunk_positional_encoding_include_input else 0
                 ) + 6
+        elif self.axis_1d_trunk_enabled:
+            self.register_buffer(
+                "trunk_positional_frequencies",
+                torch.empty(0, dtype=config.dtype),
+                persistent=False,
+            )
+            trunk_input_dim = 1
         else:
             self.register_buffer(
                 "trunk_positional_frequencies",
@@ -504,6 +538,18 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
         else:
             self.branch_coefficient = None
+        if self.axis_1d_trunk_enabled:
+            self.branch_transverse: MLP | None = MLP(
+                input_dim=2 * self.axis_1d_boundary_aware_modes,
+                hidden_dim=config.hidden_dim,
+                depth=config.depth,
+                activation=config.activation,
+                use_bias=config.use_bias,
+                dropout=config.dropout,
+                last_activation=False,
+            )
+        else:
+            self.branch_transverse = None
         self.trunk = MLP(
             input_dim=trunk_input_dim,
             hidden_dim=config.hidden_dim,
@@ -601,6 +647,38 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             )
         )
         return torch.cat(encoded_parts, dim=-1)
+
+    def _encode_axis_boundary_sincos(self, t: torch.Tensor) -> torch.Tensor:
+        modes = self.axis_1d_boundary_modes.to(device=t.device, dtype=t.dtype)
+        if modes.numel() <= 0:
+            raise ValueError("axis_1d_trunk.boundary_aware_modes must be positive.")
+        angles = math.pi * t.unsqueeze(-1) * modes
+        paired = torch.stack((torch.sin(angles), torch.cos(angles)), dim=-1)
+        return paired.reshape(*t.shape, 2 * modes.numel())
+
+    def _axis_1d_trunk_coords(self, eval_coords: torch.Tensor) -> torch.Tensor:
+        if eval_coords.shape[0] != 2 or eval_coords.shape[-1] != 2:
+            raise ValueError(
+                "axis_1d_trunk expects eval_coords with shape "
+                "(2, n_lines, k_points, 2)."
+            )
+        trunk_coords = eval_coords.new_empty((*eval_coords.shape[:-1], 1))
+        trunk_coords[0, ..., 0] = eval_coords[0, ..., 0]
+        trunk_coords[1, ..., 0] = eval_coords[1, ..., 1]
+        return trunk_coords
+
+    def _axis_1d_transverse_features(self, eval_coords: torch.Tensor) -> torch.Tensor:
+        if eval_coords.shape[0] != 2 or eval_coords.shape[-1] != 2:
+            raise ValueError(
+                "axis_1d_trunk expects eval_coords with shape "
+                "(2, n_lines, k_points, 2)."
+            )
+        if eval_coords.shape[2] <= 0:
+            raise ValueError("axis_1d_trunk requires at least one eval point.")
+        transverse = eval_coords.new_empty(eval_coords.shape[:2])
+        transverse[0] = eval_coords[0, :, 0, 1]
+        transverse[1] = eval_coords[1, :, 0, 0]
+        return self._encode_axis_boundary_sincos(transverse)
 
     def _standard_coefficient_branch_input(
         self,
@@ -722,11 +800,19 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
                 f"y_inner={y_inner.numel()}."
             )
 
-        m_phi = y_inner * (1.0 - y_inner)
-        m_psi = x_inner * (1.0 - x_inner)
-        if self.smooth_mask_normalize:
-            m_phi = 4.0 * m_phi
-            m_psi = 4.0 * m_psi
+        if self.smooth_mask_name == "quadratic":
+            m_phi = y_inner * (1.0 - y_inner)
+            m_psi = x_inner * (1.0 - x_inner)
+            if self.smooth_mask_normalize:
+                m_phi = 4.0 * m_phi
+                m_psi = 4.0 * m_psi
+        elif self.smooth_mask_name == "sin":
+            m_phi = torch.sin(math.pi * y_inner)
+            m_psi = torch.sin(math.pi * x_inner)
+        else:
+            raise ValueError(
+                "balance_projection.mask must be 'quadratic' or 'sin'."
+            )
         if self.smooth_mask_power != 1.0:
             m_phi = torch.pow(m_phi.clamp_min(0.0), self.smooth_mask_power)
             m_psi = torch.pow(m_psi.clamp_min(0.0), self.smooth_mask_power)
@@ -897,10 +983,27 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
             branch_r_out = self.branch_rhs(branch_r_in)
             branch_coefficient_out = self.branch_coefficient(branch_coefficient_in)
             branch_feat = branch_r_out * branch_coefficient_out
+        if self.axis_1d_trunk_enabled:
+            if self.branch_transverse is None:
+                raise RuntimeError(
+                    "branch_transverse must be initialized when "
+                    "axis_1d_trunk is enabled."
+                )
+            transverse_inputs = self._axis_1d_transverse_features(eval_coords)
+            transverse_out = self.branch_transverse(
+                transverse_inputs.reshape(axis * n_lines, -1)
+            )
+            transverse_out = transverse_out.unsqueeze(0).expand(b, -1, -1)
+            transverse_out = transverse_out.reshape(b * axis * n_lines, -1)
+            branch_feat = branch_feat * transverse_out
         branch_feat = branch_feat.unsqueeze(-1)
 
         k_points = eval_coords.shape[2]
-        trunk_inputs = self._encode_trunk_coords(eval_coords)
+        trunk_inputs = (
+            self._axis_1d_trunk_coords(eval_coords)
+            if self.axis_1d_trunk_enabled
+            else self._encode_trunk_coords(eval_coords)
+        )
         trunk_flat = trunk_inputs.reshape(axis * n_lines * k_points, -1)
         trunk_out = self.trunk(trunk_flat).reshape(axis * n_lines, k_points, -1)
 

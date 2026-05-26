@@ -59,6 +59,13 @@ class ExactGreenFunction:
     def forward(self) -> Tensor:
         return self._green_function(self.x, self.a)
 
+    def poisson(self) -> Tensor:
+        xi = self.x.unsqueeze(0)
+        x = self.x.unsqueeze(1)
+        g_left = x * (1 - xi)
+        g_right = xi * (1 - x)
+        return torch.where(x < xi, g_left, g_right)
+
     def __call__(self) -> Tensor:
         return self.forward()
 

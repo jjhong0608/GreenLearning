@@ -10,6 +10,7 @@ import torch
 from torch import Tensor
 
 from greenonet.config import (
+    Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CompileConfig,
     CouplingBestRelSolCheckpointConfig,
@@ -144,6 +145,16 @@ class EvalCouplingCLI:
                 f"{section_name}.trunk_positional_encoding must be an object."
         )
         return CouplingTrunkPositionalEncodingConfig(**dict(raw_positional))
+
+    @staticmethod
+    def _build_axis_1d_trunk_config(
+        raw_axis_1d_trunk: object | None,
+        section_name: str,
+    ) -> Axis1DTrunkConfig:
+        try:
+            return Axis1DTrunkConfig.from_raw(raw_axis_1d_trunk)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"{section_name}.{exc}") from exc
 
     @staticmethod
     def _build_balance_projection_config(
@@ -341,6 +352,11 @@ class EvalCouplingCLI:
             positional_raw,
             "coupling_model",
         )
+        axis_1d_trunk_raw = coupling_model_kwargs.pop("axis_1d_trunk", None)
+        axis_1d_trunk_cfg = self._build_axis_1d_trunk_config(
+            axis_1d_trunk_raw,
+            "coupling_model",
+        )
         balance_projection_raw = coupling_model_kwargs.pop("balance_projection", None)
         balance_projection_cfg = self._build_balance_projection_config(
             balance_projection_raw,
@@ -354,6 +370,7 @@ class EvalCouplingCLI:
             coefficient_terms=coefficient_terms_cfg,
             green_response_feature=green_response_cfg,
             trunk_positional_encoding=positional_cfg,
+            axis_1d_trunk=axis_1d_trunk_cfg,
             **coupling_model_kwargs,
         )
         training_cfg = self._build_training_config(raw.get("training", {}))

@@ -257,6 +257,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_training_cfg.compile.enabled is True
         assert coupling_model_cfg.balance_projection.enabled is True
         assert coupling_model_cfg.balance_projection.mode == "symmetric"
+        assert coupling_model_cfg.balance_projection.mask == "quadratic"
         assert coupling_model_cfg.smooth_mask_normalize is True
         assert coupling_model_cfg.smooth_mask_eps == 1e-12
         assert coupling_model_cfg.smooth_mask_power == 1.0
@@ -289,6 +290,7 @@ class TestTrainCLIDatasetConfig:
                 "balance_projection": {
                     "enabled": False,
                     "mode": "smooth_mask",
+                    "mask": "sin",
                 },
             },
             "coupling_training": {},
@@ -308,6 +310,7 @@ class TestTrainCLIDatasetConfig:
 
         assert coupling_model_cfg.balance_projection.enabled is False
         assert coupling_model_cfg.balance_projection.mode == "smooth_mask"
+        assert coupling_model_cfg.balance_projection.mask == "sin"
         assert coupling_training_cfg.losses.balance_loss.enabled is False
 
     def test_parses_source_stencil_lift_config(self, tmp_path):
@@ -357,6 +360,7 @@ class TestTrainCLIDatasetConfig:
         source_lift = coupling_model_cfg.source_stencil_lift
         assert coupling_model_cfg.balance_projection.enabled is True
         assert coupling_model_cfg.balance_projection.mode == "smooth_mask"
+        assert coupling_model_cfg.balance_projection.mask == "quadratic"
         assert coupling_model_cfg.smooth_mask_normalize is False
         assert coupling_model_cfg.smooth_mask_eps == 1e-9
         assert coupling_model_cfg.smooth_mask_power == 0.5
@@ -524,6 +528,54 @@ class TestTrainCLIDatasetConfig:
         with pytest.raises(TypeError, match="coupling_model.trunk_positional_encoding"):
             TrainCLI()._build_configs(config_path)
 
+    def test_parses_axis_1d_trunk_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "axis_1d_trunk": {
+                    "enabled": True,
+                    "boundary_aware_modes": 5,
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset_cfg,
+            _model_cfg,
+            _training_cfg,
+            coupling_model_cfg,
+            _coupling_training_cfg,
+            _pipeline_cfg,
+            _terminal_cfg,
+        ) = TrainCLI()._build_configs(config_path)
+
+        axis_1d_trunk = coupling_model_cfg.axis_1d_trunk
+        assert axis_1d_trunk.enabled is True
+        assert axis_1d_trunk.boundary_aware_modes == 5
+
+    def test_rejects_non_object_axis_1d_trunk_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "axis_1d_trunk": "enabled",
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        with pytest.raises(TypeError, match="coupling_model.axis_1d_trunk"):
+            TrainCLI()._build_configs(config_path)
+
     def test_rejects_non_object_source_stencil_lift_config(self, tmp_path):
         config_path = tmp_path / "config.json"
         payload = {
@@ -682,6 +734,31 @@ class TestTrainCLIDatasetConfig:
         assert cfg.max_frequency == 8.0
         assert cfg.include_input is True
 
+    def test_axis_1d_trunk_defaults(self):
+        cfg = TrainCLI._build_axis_1d_trunk_config(None, "coupling_model")
+
+        assert cfg.enabled is False
+        assert cfg.boundary_aware_modes == 4
+
+    def test_eval_cli_parses_axis_1d_trunk_config(self):
+        cfg = EvalCouplingCLI._build_axis_1d_trunk_config(
+            {
+                "enabled": True,
+                "boundary_aware_modes": 6,
+            },
+            "coupling_model",
+        )
+
+        assert cfg.enabled is True
+        assert cfg.boundary_aware_modes == 6
+
+    def test_eval_cli_rejects_non_object_axis_1d_trunk_config(self):
+        with pytest.raises(TypeError, match="coupling_model.axis_1d_trunk"):
+            EvalCouplingCLI._build_axis_1d_trunk_config(
+                "enabled",
+                "coupling_model",
+            )
+
     def test_eval_cli_parses_trunk_positional_encoding_config(self):
         cfg = EvalCouplingCLI._build_trunk_positional_encoding_config(
             {
@@ -712,12 +789,14 @@ class TestTrainCLIDatasetConfig:
             {
                 "enabled": False,
                 "mode": "smooth_mask",
+                "mask": "sin",
             },
             "coupling_model",
         )
 
         assert cfg.enabled is False
         assert cfg.mode == "smooth_mask"
+        assert cfg.mask == "sin"
 
     def test_eval_cli_parses_source_stencil_lift_config(self):
         config_kwargs = {
@@ -747,6 +826,7 @@ class TestTrainCLIDatasetConfig:
 
         assert model_cfg.balance_projection.enabled is True
         assert model_cfg.balance_projection.mode == "smooth_mask"
+        assert model_cfg.balance_projection.mask == "quadratic"
         assert model_cfg.smooth_mask_normalize is False
         assert model_cfg.smooth_mask_eps == 1e-9
         assert model_cfg.smooth_mask_power == 0.5

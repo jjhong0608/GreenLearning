@@ -1,6 +1,7 @@
 import torch
 
 from greenonet.config import (
+    Axis1DTrunkConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
@@ -205,6 +206,7 @@ def test_save_load_coupling_model_with_source_stencil_lift_config(tmp_path):
     assert loaded_cfg == cfg
     assert loaded_cfg.balance_projection.enabled is True
     assert loaded_cfg.balance_projection.mode == "smooth_mask"
+    assert loaded_cfg.balance_projection.mask == "quadratic"
     assert loaded_cfg.smooth_mask_normalize is False
     assert loaded_cfg.smooth_mask_eps == 1e-9
     assert loaded_cfg.smooth_mask_power == 0.5
@@ -231,6 +233,7 @@ def test_save_load_coupling_model_with_balance_projection_object_config(tmp_path
         balance_projection={
             "enabled": False,
             "mode": "smooth_mask",
+            "mask": "sin",
         },
     )
     model = CouplingNet(cfg)
@@ -245,6 +248,7 @@ def test_save_load_coupling_model_with_balance_projection_object_config(tmp_path
     assert loaded_cfg == cfg
     assert loaded_cfg.balance_projection.enabled is False
     assert loaded_cfg.balance_projection.mode == "smooth_mask"
+    assert loaded_cfg.balance_projection.mask == "sin"
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -340,6 +344,36 @@ def test_save_load_coupling_model_with_trunk_positional_encoding_config(tmp_path
     assert loaded_cfg.trunk_positional_encoding.enabled is True
     assert loaded_cfg.trunk_positional_encoding.mode == "boundary_algebraic"
     assert loaded_cfg.trunk_positional_encoding.num_frequencies == 3
+    _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        activation="tanh",
+        use_bias=True,
+        dropout=0.0,
+        dtype=torch.float64,
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            boundary_aware_modes=3,
+        ),
+    )
+    model = CouplingNet(cfg)
+    path = tmp_path / "coupling_axis_1d_trunk.safetensors"
+
+    from greenonet.io import load_model_with_config, save_model_with_config
+
+    save_model_with_config(model, cfg, path)
+    loaded_model, loaded_cfg = load_model_with_config(path)
+
+    assert isinstance(loaded_model, CouplingNet)
+    assert loaded_cfg == cfg
+    assert loaded_cfg.axis_1d_trunk.enabled is True
+    assert loaded_cfg.axis_1d_trunk.boundary_aware_modes == 3
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
@@ -462,6 +496,7 @@ def test_load_coupling_model_with_legacy_removed_config_fields(tmp_path):
     assert loaded_cfg == cfg
     assert loaded_cfg.balance_projection.enabled is True
     assert loaded_cfg.balance_projection.mode == "symmetric"
+    assert loaded_cfg.balance_projection.mask == "quadratic"
     assert loaded_cfg.smooth_mask_normalize is True
     assert loaded_cfg.smooth_mask_eps == 1e-12
     assert loaded_cfg.smooth_mask_power == 1.0
