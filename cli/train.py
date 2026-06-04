@@ -368,6 +368,18 @@ class TrainCLI:
         return fn(x, y)
 
     @staticmethod
+    def _convection_from_coords(
+        coords: torch.Tensor,
+        bx_fun: CoefficientFunction,
+        by_fun: CoefficientFunction,
+    ) -> torch.Tensor:
+        if coords.shape[0] != 2:
+            raise ValueError("Expected coords first dimension to contain x/y axes.")
+        bx = bx_fun(coords[0, ..., 0], coords[0, ..., 1])
+        by = by_fun(coords[1, ..., 0], coords[1, ..., 1])
+        return torch.stack((bx, by), dim=0)
+
+    @staticmethod
     def _compute_green_kernel(
         model: GreenONetModel,
         coords: torch.Tensor,
@@ -409,11 +421,11 @@ class TrainCLI:
                 b_vals=b_vals.to(device),
                 c_vals=c_vals.to(device),
             )  # (2,n,m,m)
-        from greenonet.greens import ExactGreenFunction
-        kernel_class = ExactGreenFunction(torch.linspace(0, 1, m_points, device=device), a=a_vals.to(device))
+        # from greenonet.greens import ExactGreenFunction
+        # kernel_class = ExactGreenFunction(torch.linspace(0, 1, m_points, device=device), a=a_vals.to(device))
         # kernel0 = kernel_class().squeeze(0)
-        kernel0 = kernel_class.poisson().unsqueeze(0).unsqueeze(0).expand_as(kernel)
-        return kernel0.cpu()
+        # kernel0 = kernel_class.poisson().unsqueeze(0).unsqueeze(0).expand_as(kernel)
+        return kernel.cpu()
 
     def run(self) -> None:
         args = self.parser.parse_args()
@@ -441,7 +453,8 @@ class TrainCLI:
                 a_fun=coeffs.a_fun,
                 apx_fun=coeffs.apx_fun,
                 apy_fun=coeffs.apy_fun,
-                b_fun=coeffs.b_fun,
+                bx_fun=coeffs.bx_fun,
+                by_fun=coeffs.by_fun,
                 c_fun=coeffs.c_fun,
                 activation=model_cfg.activation,
                 work_dir=work_dir,
@@ -483,7 +496,8 @@ class TrainCLI:
                 dtype=dataset_cfg.dtype,
                 integration_rule=coupling_training_cfg.integration_rule,
                 a_fun=coeffs.a_fun,
-                b_fun=coeffs.b_fun,
+                bx_fun=coeffs.bx_fun,
+                by_fun=coeffs.by_fun,
                 c_fun=coeffs.c_fun,
                 ap_fun_x=coeffs.apx_fun,
                 ap_fun_y=coeffs.apy_fun,
@@ -497,7 +511,8 @@ class TrainCLI:
                     dtype=dataset_cfg.dtype,
                     integration_rule=coupling_training_cfg.integration_rule,
                     a_fun=coeffs.a_fun,
-                    b_fun=coeffs.b_fun,
+                    bx_fun=coeffs.bx_fun,
+                    by_fun=coeffs.by_fun,
                     c_fun=coeffs.c_fun,
                     ap_fun_x=coeffs.apx_fun,
                     ap_fun_y=coeffs.apy_fun,
@@ -512,7 +527,8 @@ class TrainCLI:
                     dtype=dataset_cfg.dtype,
                     integration_rule=coupling_training_cfg.integration_rule,
                     a_fun=coeffs.a_fun,
-                    b_fun=coeffs.b_fun,
+                    bx_fun=coeffs.bx_fun,
+                    by_fun=coeffs.by_fun,
                     c_fun=coeffs.c_fun,
                     ap_fun_x=coeffs.apx_fun,
                     ap_fun_y=coeffs.apy_fun,
@@ -523,7 +539,11 @@ class TrainCLI:
                 sample_kappa = sample[6]
                 sample_ap = sample[9]
                 device = torch.device(coupling_training_cfg.device)
-                sample_b = self._coeff_from_coords(sample_coords, coeffs.b_fun)
+                sample_b = self._convection_from_coords(
+                    sample_coords,
+                    bx_fun=coeffs.bx_fun,
+                    by_fun=coeffs.by_fun,
+                )
                 sample_c = self._coeff_from_coords(sample_coords, coeffs.c_fun)
                 green_model = maybe_compile_model(
                     green_model.to(device),

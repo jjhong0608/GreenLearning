@@ -1219,6 +1219,53 @@ def test_coupling_dataset_boundary_payload_samples_exact_edges(tmp_path):
     )
 
 
+def test_coupling_dataset_samples_directional_convection_functions(tmp_path):
+    _make_npz(tmp_path)
+
+    def bx_fun(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return 10.0 + x + 0.0 * y
+
+    def by_fun(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return 20.0 + y + 0.0 * x
+
+    ds = CouplingDataset(
+        data_dir=tmp_path,
+        step_size=0.5,
+        n_points_per_line=5,
+        bx_fun=bx_fun,
+        by_fun=by_fun,
+        integration_rule="trapezoid",
+    )
+
+    _coords, *_core, b_vals, _c_vals, _ap, boundary = ds[0]
+    boundary_b_vals = boundary[5]
+    axis = torch.linspace(0.0, 1.0, 5, dtype=b_vals.dtype)
+
+    torch.testing.assert_close(b_vals[0, 0], 10.0 + axis)
+    torch.testing.assert_close(b_vals[1, 0], 20.0 + axis)
+    torch.testing.assert_close(boundary_b_vals[0, 0], 10.0 + axis)
+    torch.testing.assert_close(boundary_b_vals[0, 1], 10.0 + axis)
+    torch.testing.assert_close(boundary_b_vals[1, 0], 20.0 + axis)
+    torch.testing.assert_close(boundary_b_vals[1, 1], 20.0 + axis)
+
+
+def test_coupling_dataset_rejects_mixed_directional_and_legacy_convection(tmp_path):
+    _make_npz(tmp_path)
+
+    def zeros(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(x + y)
+
+    with pytest.raises(ValueError, match="bx_fun/by_fun"):
+        CouplingDataset(
+            data_dir=tmp_path,
+            step_size=0.5,
+            n_points_per_line=5,
+            b_fun=zeros,
+            bx_fun=zeros,
+            by_fun=zeros,
+        )
+
+
 def test_coupling_collate_supports_boundary_and_legacy_payloads(tmp_path):
     _make_npz(tmp_path)
     ds = CouplingDataset(

@@ -62,6 +62,8 @@ class CouplingDataset(
         integration_rule: IntegrationRule = "simpson",
         a_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         b_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        bx_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        by_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         c_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         ap_fun_x: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         ap_fun_y: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
@@ -75,10 +77,33 @@ class CouplingDataset(
         self.step_size = step_size
         self.n_points_per_line = n_points_per_line
         self.a_fun = a_fun
-        self.b_fun = b_fun
+        self.bx_fun, self.by_fun = self._resolve_convection_functions(
+            bx_fun=bx_fun,
+            by_fun=by_fun,
+            b_fun=b_fun,
+        )
         self.c_fun = c_fun
         self.ap_fun_x = ap_fun_x
         self.ap_fun_y = ap_fun_y
+
+    @staticmethod
+    def _resolve_convection_functions(
+        bx_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None,
+        by_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None,
+        b_fun: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None,
+    ) -> tuple[
+        Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None,
+        Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None,
+    ]:
+        if bx_fun is not None or by_fun is not None:
+            if bx_fun is None or by_fun is None:
+                raise ValueError("Both bx_fun and by_fun must be provided together.")
+            if b_fun is not None:
+                raise ValueError("Use either bx_fun/by_fun or legacy b_fun, not both.")
+            return bx_fun, by_fun
+        if b_fun is None:
+            return None, None
+        return b_fun, b_fun
 
     def __len__(self) -> int:
         return len(self.files)
@@ -297,15 +322,15 @@ class CouplingDataset(
         else:
             kappa_t = torch.ones_like(rhs_t)
             boundary_kappa_t = torch.ones_like(boundary_rhs_t)
-        if self.b_fun is not None:
-            b_x = self._sample_lines_fun(self.b_fun, lines, axis=0, dtype=self.dtype)
-            b_y = self._sample_lines_fun(self.b_fun, lines, axis=1, dtype=self.dtype)
+        if self.bx_fun is not None and self.by_fun is not None:
+            b_x = self._sample_lines_fun(self.bx_fun, lines, axis=0, dtype=self.dtype)
+            b_y = self._sample_lines_fun(self.by_fun, lines, axis=1, dtype=self.dtype)
             b_t = torch.stack((b_x, b_y), dim=0)
             boundary_b_x = self._sample_boundary_lines_fun(
-                self.b_fun, lines, axis=0, dtype=self.dtype
+                self.bx_fun, lines, axis=0, dtype=self.dtype
             )
             boundary_b_y = self._sample_boundary_lines_fun(
-                self.b_fun, lines, axis=1, dtype=self.dtype
+                self.by_fun, lines, axis=1, dtype=self.dtype
             )
             boundary_b_t = torch.stack((boundary_b_x, boundary_b_y), dim=0)
         else:

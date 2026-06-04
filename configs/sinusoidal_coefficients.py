@@ -16,7 +16,11 @@ def apy_fun(x: Tensor, y: Tensor) -> Tensor:
     return 2 * torch.pi * torch.sin(2 * torch.pi * x) * torch.cos(4 * torch.pi * y)
 
 
-def b_fun(x: Tensor, y: Tensor) -> Tensor:
+def bx_fun(x: Tensor, y: Tensor) -> Tensor:
+    return torch.zeros_like(x)
+
+
+def by_fun(x: Tensor, y: Tensor) -> Tensor:
     return torch.zeros_like(x)
 
 

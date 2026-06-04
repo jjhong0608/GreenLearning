@@ -293,6 +293,7 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMix
         b_coeff = (ap_x + b_x) * a_recip.pow(2)
 
         return (
+            # envelope_b * remain_b * learned_output * torch.zeros_like(learned_output)
             envelope_b * remain_b * learned_output
             + b_coeff * (igreen_b + envelope_b * bias_term_b)
             + a_recip * green_b

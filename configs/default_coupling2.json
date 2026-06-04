@@ -10,14 +10,14 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/Convection_Diffusion_Reaction/train",
-    "validation_path": "data/Convection_Diffusion_Reaction/valid",
-    "test_path": "data/Convection_Diffusion_Reaction/test",
-    "coefficient_functions_path": "coefficients/Convection_Diffusion_Reaction.py",
+    "training_path": "data/Sinusoidal_Diffusion_Only/train",
+    "validation_path": "data/Sinusoidal_Diffusion_Only/valid",
+    "test_path": "data/Sinusoidal_Diffusion_Only/test",
+    "coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py",
     "dtype": "float64"
   },
   "terminal": {
-    "width": 365
+    "width": 345
   },
   "coupling_model": {
     "hidden_dim": 128,
@@ -55,8 +55,8 @@
     },
     "coefficient_terms": {
       "diffusion": true,
-      "convection": true,
-      "reaction": true
+      "convection": false,
+      "reaction": false
     },
     "green_response_feature": {
       "enabled": false
@@ -123,7 +123,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Convection_Diffusion_Reaction/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/Sinusoidal_Diffusion_Only/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

@@ -16,7 +16,11 @@ def apy_fun(x: Tensor, y: Tensor) -> Tensor:
     return torch.zeros_like(x)
 
 
-def b_fun(x: Tensor, y: Tensor) -> Tensor:
+def bx_fun(x: Tensor, y: Tensor) -> Tensor:
+    return torch.zeros_like(x)
+
+
+def by_fun(x: Tensor, y: Tensor) -> Tensor:
     return torch.zeros_like(x)
 
 

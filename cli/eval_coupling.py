@@ -273,6 +273,18 @@ class EvalCouplingCLI:
         return fn(x, y)
 
     @staticmethod
+    def _convection_from_coords(
+        coords: torch.Tensor,
+        bx_fun: Callable[[Tensor, Tensor], Tensor],
+        by_fun: Callable[[Tensor, Tensor], Tensor],
+    ) -> torch.Tensor:
+        if coords.shape[0] != 2:
+            raise ValueError("Expected coords first dimension to contain x/y axes.")
+        bx = bx_fun(coords[0, ..., 0], coords[0, ..., 1])
+        by = by_fun(coords[1, ..., 0], coords[1, ..., 1])
+        return torch.stack((bx, by), dim=0)
+
+    @staticmethod
     def _compute_green_kernel(
         model: GreenONetModel,
         coords: torch.Tensor,
@@ -426,7 +438,10 @@ class EvalCouplingCLI:
             return 0.5 * torch.pi * torch.sin(torch.pi * x) * torch.cos(torch.pi * y)
             return 2 * y
 
-        def b_fun(x: Tensor, y: Tensor) -> Tensor:
+        def bx_fun(x: Tensor, y: Tensor) -> Tensor:
+            return torch.zeros_like(x)
+
+        def by_fun(x: Tensor, y: Tensor) -> Tensor:
             return torch.zeros_like(x)
 
         def c_fun(x: Tensor, y: Tensor) -> Tensor:
@@ -443,7 +458,8 @@ class EvalCouplingCLI:
             dtype=dataset_cfg.dtype,
             integration_rule=coupling_training_cfg.integration_rule,
             a_fun=a_fun,
-            b_fun=b_fun,
+            bx_fun=bx_fun,
+            by_fun=by_fun,
             c_fun=c_fun,
             ap_fun_x=apx_fun,
             ap_fun_y=apy_fun,
@@ -481,7 +497,11 @@ class EvalCouplingCLI:
         sample_coords = sample[0]
         sample_kappa = sample[6]
         sample_ap = sample[9]
-        sample_b = self._coeff_from_coords(sample_coords, b_fun)
+        sample_b = self._convection_from_coords(
+            sample_coords,
+            bx_fun=bx_fun,
+            by_fun=by_fun,
+        )
         sample_c = self._coeff_from_coords(sample_coords, c_fun)
         green_kernel = self._compute_green_kernel(
             green_model,

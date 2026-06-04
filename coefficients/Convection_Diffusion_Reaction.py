@@ -17,11 +17,11 @@ def apy_fun(x: Tensor, y: Tensor) -> Tensor:
 
 
 def bx_fun(x: Tensor, y: Tensor) -> Tensor:
-    return torch.zeros_like(x)
+    return 0.25 * torch.sin(torch.pi * x) * torch.sin(torch.pi * y)
 
 
 def by_fun(x: Tensor, y: Tensor) -> Tensor:
-    return torch.zeros_like(x)
+    return -0.25 * torch.sin(torch.pi * x) * torch.sin(torch.pi * y)
 
 
 def c_fun(x: Tensor, y: Tensor) -> Tensor:

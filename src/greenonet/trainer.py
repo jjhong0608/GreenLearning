@@ -221,7 +221,8 @@ class Trainer(LoggingMixin):
             for axis in range(axes):
                 for line in range(n_lines):
                     gf = ExactGreenFunction(x_axis, a=a_val[b_idx, axis, line])
-                    exact_kernel[b_idx, axis, line] = gf()
+                    # exact_kernel[b_idx, axis, line] = gf()
+                    exact_kernel[b_idx, axis, line] = gf.poisson()
 
         num = (prediction - exact_kernel).pow(2)
         den = exact_kernel.pow(2)

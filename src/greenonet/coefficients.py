@@ -21,7 +21,8 @@ class CoefficientFunctions:
     a_fun: CoefficientFunction
     apx_fun: CoefficientFunction
     apy_fun: CoefficientFunction
-    b_fun: CoefficientFunction
+    bx_fun: CoefficientFunction
+    by_fun: CoefficientFunction
     c_fun: CoefficientFunction
 
 
@@ -37,7 +38,11 @@ def apy_fun(x: Tensor, y: Tensor) -> Tensor:
     return 2 * torch.pi * torch.sin(2 * torch.pi * x) * torch.cos(4 * torch.pi * y)
 
 
-def b_fun(x: Tensor, y: Tensor) -> Tensor:
+def bx_fun(x: Tensor, y: Tensor) -> Tensor:
+    return torch.zeros_like(x)
+
+
+def by_fun(x: Tensor, y: Tensor) -> Tensor:
     return torch.zeros_like(x)
 
 
@@ -50,7 +55,8 @@ def default_coefficient_functions() -> CoefficientFunctions:
         a_fun=a_fun,
         apx_fun=apx_fun,
         apy_fun=apy_fun,
-        b_fun=b_fun,
+        bx_fun=bx_fun,
+        by_fun=by_fun,
         c_fun=c_fun,
     )
 
@@ -78,14 +84,55 @@ def _get_coefficient_function(module: ModuleType, name: str) -> CoefficientFunct
     return cast(CoefficientFunction, value)
 
 
+def _get_optional_coefficient_function(
+    module: ModuleType, name: str
+) -> CoefficientFunction | None:
+    value = getattr(module, name, None)
+    if value is None:
+        return None
+    if not callable(value):
+        raise TypeError(f"Coefficient functions entry '{name}' must be callable.")
+    return cast(CoefficientFunction, value)
+
+
+def _get_convection_functions(
+    module: ModuleType,
+) -> tuple[CoefficientFunction, CoefficientFunction]:
+    bx = _get_optional_coefficient_function(module, "bx_fun")
+    by = _get_optional_coefficient_function(module, "by_fun")
+    legacy_b = _get_optional_coefficient_function(module, "b_fun")
+
+    if bx is not None or by is not None:
+        if bx is None or by is None:
+            raise ValueError(
+                "Coefficient functions file must define both 'bx_fun' and "
+                "'by_fun', or define only legacy 'b_fun'."
+            )
+        if legacy_b is not None:
+            raise ValueError(
+                "Coefficient functions file must not define both directional "
+                "'bx_fun'/'by_fun' and legacy 'b_fun'."
+            )
+        return bx, by
+
+    if legacy_b is None:
+        raise ValueError(
+            "Coefficient functions file is missing callable 'bx_fun'/'by_fun' "
+            "or legacy 'b_fun'."
+        )
+    return legacy_b, legacy_b
+
+
 def load_coefficient_functions(path: Path | None) -> CoefficientFunctions:
     if path is None:
         return default_coefficient_functions()
     module = _load_module_from_path(path)
+    bx_loaded, by_loaded = _get_convection_functions(module)
     return CoefficientFunctions(
         a_fun=_get_coefficient_function(module, "a_fun"),
         apx_fun=_get_coefficient_function(module, "apx_fun"),
         apy_fun=_get_coefficient_function(module, "apy_fun"),
-        b_fun=_get_coefficient_function(module, "b_fun"),
+        bx_fun=bx_loaded,
+        by_fun=by_loaded,
         c_fun=_get_coefficient_function(module, "c_fun"),
     )

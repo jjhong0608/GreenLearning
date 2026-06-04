@@ -23,7 +23,8 @@ def test_default_coefficient_functions_match_previous_train_cli_formulas() -> No
     torch.testing.assert_close(coeffs.a_fun(x, y), expected_a)
     torch.testing.assert_close(coeffs.apx_fun(x, y), expected_apx)
     torch.testing.assert_close(coeffs.apy_fun(x, y), expected_apy)
-    torch.testing.assert_close(coeffs.b_fun(x, y), torch.zeros_like(x))
+    torch.testing.assert_close(coeffs.bx_fun(x, y), torch.zeros_like(x))
+    torch.testing.assert_close(coeffs.by_fun(x, y), torch.zeros_like(x))
     torch.testing.assert_close(coeffs.c_fun(x, y), torch.zeros_like(x))
 
 
@@ -45,7 +46,8 @@ def test_load_coefficient_functions_imports_custom_file(tmp_path: Path) -> None:
                 "def a_fun(x, y): return x + y + 1.0",
                 "def apx_fun(x, y): return torch.ones_like(x) * 2.0",
                 "def apy_fun(x, y): return torch.ones_like(y) * 3.0",
-                "def b_fun(x, y): return torch.ones_like(x) * 4.0",
+                "def bx_fun(x, y): return torch.ones_like(x) * 4.0",
+                "def by_fun(x, y): return torch.ones_like(y) * 6.0",
                 "def c_fun(x, y): return torch.ones_like(y) * 5.0",
             ]
         )
@@ -58,8 +60,32 @@ def test_load_coefficient_functions_imports_custom_file(tmp_path: Path) -> None:
     torch.testing.assert_close(coeffs.a_fun(x, y), x + y + 1.0)
     torch.testing.assert_close(coeffs.apx_fun(x, y), torch.ones_like(x) * 2.0)
     torch.testing.assert_close(coeffs.apy_fun(x, y), torch.ones_like(y) * 3.0)
-    torch.testing.assert_close(coeffs.b_fun(x, y), torch.ones_like(x) * 4.0)
+    torch.testing.assert_close(coeffs.bx_fun(x, y), torch.ones_like(x) * 4.0)
+    torch.testing.assert_close(coeffs.by_fun(x, y), torch.ones_like(y) * 6.0)
     torch.testing.assert_close(coeffs.c_fun(x, y), torch.ones_like(y) * 5.0)
+
+
+def test_load_coefficient_functions_supports_legacy_b_fun(tmp_path: Path) -> None:
+    coeff_path = tmp_path / "legacy_coefficients.py"
+    coeff_path.write_text(
+        "\n".join(
+            [
+                "import torch",
+                "def a_fun(x, y): return x + y + 1.0",
+                "def apx_fun(x, y): return torch.ones_like(x) * 2.0",
+                "def apy_fun(x, y): return torch.ones_like(y) * 3.0",
+                "def b_fun(x, y): return x - y",
+                "def c_fun(x, y): return torch.ones_like(y) * 5.0",
+            ]
+        )
+    )
+    x = torch.tensor([0.25, 0.5], dtype=torch.float64)
+    y = torch.tensor([0.5, 0.75], dtype=torch.float64)
+
+    coeffs = load_coefficient_functions(coeff_path)
+
+    torch.testing.assert_close(coeffs.bx_fun(x, y), x - y)
+    torch.testing.assert_close(coeffs.by_fun(x, y), x - y)
 
 
 def test_sinusoidal_coefficient_example_matches_default() -> None:
@@ -72,7 +98,8 @@ def test_sinusoidal_coefficient_example_matches_default() -> None:
     torch.testing.assert_close(coeffs.a_fun(x, y), default_coeffs.a_fun(x, y))
     torch.testing.assert_close(coeffs.apx_fun(x, y), default_coeffs.apx_fun(x, y))
     torch.testing.assert_close(coeffs.apy_fun(x, y), default_coeffs.apy_fun(x, y))
-    torch.testing.assert_close(coeffs.b_fun(x, y), default_coeffs.b_fun(x, y))
+    torch.testing.assert_close(coeffs.bx_fun(x, y), default_coeffs.bx_fun(x, y))
+    torch.testing.assert_close(coeffs.by_fun(x, y), default_coeffs.by_fun(x, y))
     torch.testing.assert_close(coeffs.c_fun(x, y), default_coeffs.c_fun(x, y))
 
 
@@ -108,4 +135,46 @@ def test_load_coefficient_functions_rejects_non_callable(tmp_path: Path) -> None
     )
 
     with pytest.raises(TypeError, match="b_fun"):
+        load_coefficient_functions(coeff_path)
+
+
+def test_load_coefficient_functions_rejects_one_sided_directional_b(
+    tmp_path: Path,
+) -> None:
+    coeff_path = tmp_path / "one_sided_coefficients.py"
+    coeff_path.write_text(
+        "\n".join(
+            [
+                "def a_fun(x, y): return x",
+                "def apx_fun(x, y): return x",
+                "def apy_fun(x, y): return y",
+                "def bx_fun(x, y): return x",
+                "def c_fun(x, y): return y",
+            ]
+        )
+    )
+
+    with pytest.raises(ValueError, match="bx_fun.*by_fun"):
+        load_coefficient_functions(coeff_path)
+
+
+def test_load_coefficient_functions_rejects_mixed_directional_and_legacy_b(
+    tmp_path: Path,
+) -> None:
+    coeff_path = tmp_path / "mixed_coefficients.py"
+    coeff_path.write_text(
+        "\n".join(
+            [
+                "def a_fun(x, y): return x",
+                "def apx_fun(x, y): return x",
+                "def apy_fun(x, y): return y",
+                "def bx_fun(x, y): return x",
+                "def by_fun(x, y): return y",
+                "def b_fun(x, y): return x + y",
+                "def c_fun(x, y): return y",
+            ]
+        )
+    )
+
+    with pytest.raises(ValueError, match="legacy 'b_fun'"):
         load_coefficient_functions(coeff_path)

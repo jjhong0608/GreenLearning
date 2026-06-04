@@ -93,7 +93,8 @@ class TestRunGreenONet:
             return 0.5 + 0.0 * x + 0.0 * y
 
         def fake_generate_dataset(self, **kwargs):
-            captured["b_fun"] = kwargs["b_fun"]
+            captured["bx_fun"] = kwargs["bx_fun"]
+            captured["by_fun"] = kwargs["by_fun"]
             captured["c_fun"] = kwargs["c_fun"]
 
             n_lines = len(self.axial_lines.xaxial_lines)
@@ -150,7 +151,8 @@ class TestRunGreenONet:
             terminal_width=210,
         )
 
-        assert captured["b_fun"] is b_fun
+        assert captured["bx_fun"] is b_fun
+        assert captured["by_fun"] is b_fun
         assert captured["c_fun"] is c_fun
         assert captured["trainer_terminal_width"] == 210
         logging.getLogger("GreenONetRunner").handlers.clear()

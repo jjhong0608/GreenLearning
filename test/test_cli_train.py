@@ -61,7 +61,8 @@ class TestTrainCLIConfigCopy:
                     "def a_fun(x, y): return x + y + 10.0",
                     "def apx_fun(x, y): return torch.ones_like(x) * 20.0",
                     "def apy_fun(x, y): return torch.ones_like(y) * 30.0",
-                    "def b_fun(x, y): return torch.ones_like(x) * 40.0",
+                    "def bx_fun(x, y): return torch.ones_like(x) * 40.0",
+                    "def by_fun(x, y): return torch.ones_like(y) * 60.0",
                     "def c_fun(x, y): return torch.ones_like(y) * 50.0",
                 ]
             )
@@ -78,7 +79,8 @@ class TestTrainCLIConfigCopy:
             captured["a"] = kwargs["a_fun"](x, y)
             captured["apx"] = kwargs["apx_fun"](x, y)
             captured["apy"] = kwargs["apy_fun"](x, y)
-            captured["b"] = kwargs["b_fun"](x, y)
+            captured["bx"] = kwargs["bx_fun"](x, y)
+            captured["by"] = kwargs["by_fun"](x, y)
             captured["c"] = kwargs["c_fun"](x, y)
             return SimpleNamespace(model=GreenONetModel(kwargs["model_cfg"]))
 
@@ -101,10 +103,41 @@ class TestTrainCLIConfigCopy:
             captured["apy"], torch.tensor([30.0], dtype=torch.float64)
         )
         torch.testing.assert_close(
-            captured["b"], torch.tensor([40.0], dtype=torch.float64)
+            captured["bx"], torch.tensor([40.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            captured["by"], torch.tensor([60.0], dtype=torch.float64)
         )
         torch.testing.assert_close(
             captured["c"], torch.tensor([50.0], dtype=torch.float64)
+        )
+
+    def test_convection_from_coords_uses_axis_specific_functions(self):
+        coords = torch.tensor(
+            [
+                [[[0.0, 0.25], [1.0, 0.25]]],
+                [[[0.5, 0.0], [0.5, 1.0]]],
+            ],
+            dtype=torch.float64,
+        )
+
+        def bx_fun(x, y):
+            return 10.0 + x + 0.0 * y
+
+        def by_fun(x, y):
+            return 20.0 + y + 0.0 * x
+
+        b_vals = TrainCLI._convection_from_coords(coords, bx_fun, by_fun)
+
+        torch.testing.assert_close(
+            b_vals,
+            torch.tensor(
+                [
+                    [[10.0, 11.0]],
+                    [[20.0, 21.0]],
+                ],
+                dtype=torch.float64,
+            ),
         )
 
 

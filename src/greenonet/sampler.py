@@ -117,7 +117,7 @@ class ForwardSampler:
         x: Tensor,
         a_fun: Callable[[Tensor], Tensor],
         ap_fun: Callable[[Tensor], Tensor],
-        b_fun: Callable[[Tensor], Tensor],
+        b_line_fun: Callable[[Tensor], Tensor],
         c_fun: Callable[[Tensor], Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Generate a single axial sample: returns (u, f, a, ap, b, c)."""
@@ -137,7 +137,7 @@ class ForwardSampler:
 
         a_val = a_fun(x)
         ap_val = ap_fun(x)
-        b_val = b_fun(x)
+        b_val = b_line_fun(x)
         c_val = c_fun(x)
 
         dv_dx = ap_val * du_dx + a_val * du_dxx
@@ -157,11 +157,13 @@ class ForwardSampler:
         axial_line: XAxialLine,
         a_fun: Callable[[Tensor], Tensor],
         ap_fun: Callable[[Tensor], Tensor],
-        b_fun: Callable[[Tensor], Tensor],
+        b_line_fun: Callable[[Tensor], Tensor],
         c_fun: Callable[[Tensor], Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         x = axial_line.x_coordinates
-        u, f, a, ap, b, c = self.generate_sample(x, a_fun, ap_fun, b_fun, c_fun)
+        u, f, a, ap, b, c = self.generate_sample(
+            x, a_fun, ap_fun, b_line_fun, c_fun
+        )
         coords = axial_line.coordinates.to(device=self.device, dtype=self.dtype)
         return u, f, a, ap, b, c, coords
 
@@ -170,26 +172,66 @@ class ForwardSampler:
         axial_line: YAxialLine,
         a_fun: Callable[[Tensor], Tensor],
         ap_fun: Callable[[Tensor], Tensor],
-        b_fun: Callable[[Tensor], Tensor],
+        b_line_fun: Callable[[Tensor], Tensor],
         c_fun: Callable[[Tensor], Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         y = axial_line.y_coordinates
-        u, f, a, ap, b, c = self.generate_sample(y, a_fun, ap_fun, b_fun, c_fun)
+        u, f, a, ap, b, c = self.generate_sample(
+            y, a_fun, ap_fun, b_line_fun, c_fun
+        )
         coords = axial_line.coordinates.to(device=self.device, dtype=self.dtype)
         return u, f, a, ap, b, c, coords
+
+    @staticmethod
+    def _resolve_convection_functions(
+        bx_fun: Callable[[Tensor, Tensor], Tensor] | None,
+        by_fun: Callable[[Tensor, Tensor], Tensor] | None,
+        b_fun: Callable[[Tensor, Tensor], Tensor] | None,
+        b_fun_y: Callable[[Tensor, Tensor], Tensor] | None,
+    ) -> tuple[
+        Callable[[Tensor, Tensor], Tensor],
+        Callable[[Tensor, Tensor], Tensor],
+    ]:
+        def zeros(x: Tensor, y: Tensor) -> Tensor:
+            return torch.zeros_like(x)
+
+        if bx_fun is not None or by_fun is not None:
+            if bx_fun is None or by_fun is None:
+                raise ValueError("Both bx_fun and by_fun must be provided together.")
+            if b_fun is not None or b_fun_y is not None:
+                raise ValueError(
+                    "Use either bx_fun/by_fun or legacy b_fun/b_fun_y, not both."
+                )
+            return bx_fun, by_fun
+
+        if b_fun_y is not None and b_fun is None:
+            raise ValueError("Legacy b_fun_y requires legacy b_fun.")
+        if b_fun is None:
+            return zeros, zeros
+        return b_fun, b_fun_y if b_fun_y is not None else b_fun
 
     def generate_dataset(
         self,
         a_fun: Callable[[Tensor, Tensor], Tensor],
         ap_fun: Callable[[Tensor, Tensor], Tensor],
-        b_fun: Callable[[Tensor, Tensor], Tensor],
-        c_fun: Callable[[Tensor, Tensor], Tensor],
+        b_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
+        c_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
         a_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
         ap_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
         b_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
         c_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
+        bx_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
+        by_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
     ) -> TrainingData:
         """Generate stacked TrainingData for all x- and y-axis lines."""
+        bx_src, by_src = self._resolve_convection_functions(
+            bx_fun=bx_fun, by_fun=by_fun, b_fun=b_fun, b_fun_y=b_fun_y
+        )
+
+        def zeros(x: Tensor, y: Tensor) -> Tensor:
+            return torch.zeros_like(x)
+
+        c_src_base = c_fun or zeros
         x_entries = []
         for x_line in self.axial_lines.xaxial_lines:
             a_line = lambda x, y_const=x_line.y_coordinate: a_fun(  # noqa: E731
@@ -198,10 +240,10 @@ class ForwardSampler:
             ap_line = lambda x, y_const=x_line.y_coordinate: ap_fun(  # noqa: E731
                 x, torch.full_like(x, y_const)
             )
-            b_line = lambda x, y_const=x_line.y_coordinate: b_fun(  # noqa: E731
+            b_line = lambda x, y_const=x_line.y_coordinate: bx_src(  # noqa: E731
                 x, torch.full_like(x, y_const)
             )
-            c_line = lambda x, y_const=x_line.y_coordinate: c_fun(  # noqa: E731
+            c_line = lambda x, y_const=x_line.y_coordinate: c_src_base(  # noqa: E731
                 x, torch.full_like(x, y_const)
             )
             for _ in range(self.data_size_per_each_line):
@@ -215,15 +257,14 @@ class ForwardSampler:
         for y_line in self.axial_lines.yaxial_lines:
             a_src = a_fun_y if a_fun_y is not None else a_fun
             ap_src = ap_fun_y if ap_fun_y is not None else ap_fun
-            b_src = b_fun_y if b_fun_y is not None else b_fun
-            c_src = c_fun_y if c_fun_y is not None else c_fun
+            c_src = c_fun_y if c_fun_y is not None else c_src_base
             a_line = lambda y, x_const=y_line.x_coordinate: a_src(  # noqa: E731
                 torch.full_like(y, x_const), y
             )
             ap_line = lambda y, x_const=y_line.x_coordinate: ap_src(  # noqa: E731
                 torch.full_like(y, x_const), y
             )
-            b_line = lambda y, x_const=y_line.x_coordinate: b_src(  # noqa: E731
+            b_line = lambda y, x_const=y_line.x_coordinate: by_src(  # noqa: E731
                 torch.full_like(y, x_const), y
             )
             c_line = lambda y, x_const=y_line.x_coordinate: c_src(  # noqa: E731

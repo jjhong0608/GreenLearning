@@ -17,7 +17,7 @@
     "sampler_mode": "backward",
     "use_operator_learning": true,
     "dtype": "float64",
-    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py"
+    "coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py"
   },
   "terminal": {
     "width": 250
@@ -32,7 +32,7 @@
     "use_green": true,
     "branch_input_dim": 129,
     "use_fourier": true,
-    "fourier_dim": 64,
+    "fourier_dim": 32,
     "dtype": "float64"
   },
   "training": {

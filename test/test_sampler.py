@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from greenonet.axial import make_square_axial_lines
@@ -92,3 +93,56 @@ class TestForwardSamplerDataset:
         assert torch.allclose(data.AP[0], data.AP[1])
         assert torch.allclose(data.B[0], data.B[1])
         assert torch.allclose(data.C[0], data.C[1])
+
+    def test_directional_convection_functions_are_sampled_by_axis(self) -> None:
+        lines = make_square_axial_lines(step_size=0.5)
+        sampler = ForwardSampler(
+            axial_lines=lines,
+            data_size_per_each_line=1,
+            scale_length=0.1,
+            deterministic=True,
+        )
+
+        def zeros(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return torch.zeros_like(x + y)
+
+        def ones(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return torch.ones_like(x + y)
+
+        def bx_fun(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return torch.full_like(x + y, 2.0)
+
+        def by_fun(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return torch.full_like(x + y, 3.0)
+
+        data = sampler.generate_dataset(
+            a_fun=ones,
+            ap_fun=zeros,
+            bx_fun=bx_fun,
+            by_fun=by_fun,
+            c_fun=zeros,
+        )
+
+        torch.testing.assert_close(data.B[0, 0], torch.full_like(data.B[0, 0], 2.0))
+        torch.testing.assert_close(data.B[0, 1], torch.full_like(data.B[0, 1], 3.0))
+
+    def test_rejects_mixed_directional_and_legacy_convection(self) -> None:
+        sampler = ForwardSampler(
+            axial_lines=make_square_axial_lines(step_size=0.5),
+            data_size_per_each_line=1,
+            scale_length=0.1,
+            deterministic=True,
+        )
+
+        def zeros(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return torch.zeros_like(x + y)
+
+        with pytest.raises(ValueError, match="bx_fun/by_fun"):
+            sampler.generate_dataset(
+                a_fun=zeros,
+                ap_fun=zeros,
+                b_fun=zeros,
+                bx_fun=zeros,
+                by_fun=zeros,
+                c_fun=zeros,
+            )

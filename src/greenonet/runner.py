@@ -62,6 +62,8 @@ class GreenONetRunner(LoggingMixin):
         b_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
         c_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
         b_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
+        bx_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
+        by_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
         c_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
         step_size: float | None = None,
         n_points_per_line: int | None = None,
@@ -119,19 +121,23 @@ class GreenONetRunner(LoggingMixin):
         def zeros(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
             return torch.zeros_like(x)
 
-        b_fun = b_fun or zeros
         c_fun = c_fun or zeros
-        b_fun_y = b_fun_y or b_fun
         c_fun_y = c_fun_y or c_fun
+        bx_fun, by_fun = ForwardSampler._resolve_convection_functions(
+            bx_fun=bx_fun,
+            by_fun=by_fun,
+            b_fun=b_fun,
+            b_fun_y=b_fun_y,
+        )
 
         data = sampler.generate_dataset(
             a_fun=a_fun,
             ap_fun=apx_fun,
-            b_fun=b_fun,
+            bx_fun=bx_fun,
+            by_fun=by_fun,
             c_fun=c_fun,
             a_fun_y=a_fun,
             ap_fun_y=apy_fun,
-            b_fun_y=b_fun_y,
             c_fun_y=c_fun_y,
         )
         dataset = AxialDataset(data)
@@ -163,11 +169,11 @@ class GreenONetRunner(LoggingMixin):
             validation_data = validation_sampler.generate_dataset(
                 a_fun=a_fun,
                 ap_fun=apx_fun,
-                b_fun=b_fun,
+                bx_fun=bx_fun,
+                by_fun=by_fun,
                 c_fun=c_fun,
                 a_fun_y=a_fun,
                 ap_fun_y=apy_fun,
-                b_fun_y=b_fun_y,
                 c_fun_y=c_fun_y,
             )
             validation_dataset = AxialDataset(validation_data)
@@ -219,6 +225,8 @@ def run_green_o_net(
     b_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
     c_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
     b_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
+    bx_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
+    by_fun: Callable[[Tensor, Tensor], Tensor] | None = None,
     c_fun_y: Callable[[Tensor, Tensor], Tensor] | None = None,
     step_size: float | None = None,
     n_points_per_line: int | None = None,
@@ -235,6 +243,8 @@ def run_green_o_net(
         b_fun=b_fun,
         c_fun=c_fun,
         b_fun_y=b_fun_y,
+        bx_fun=bx_fun,
+        by_fun=by_fun,
         c_fun_y=c_fun_y,
         activation=activation,
         ndata=ndata,
