@@ -9,7 +9,7 @@ from greenonet.sampler import TrainingData
 
 
 class AxialDataset(
-    Dataset[  # type: ignore[misc]
+    Dataset[
         Tuple[
             torch.Tensor,
             torch.Tensor,

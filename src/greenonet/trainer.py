@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import List
+from typing import Any, List, cast
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -288,6 +288,9 @@ class Trainer(LoggingMixin):
                     rel_sol_min = rel_sol_batch_min
                     rel_sol_max = rel_sol_batch_max
                 else:
+                    assert rel_sol_sum_sq is not None
+                    assert rel_sol_min is not None
+                    assert rel_sol_max is not None
                     rel_sol_sum = rel_sol_sum + rel_sol_batch_sum
                     rel_sol_sum_sq = rel_sol_sum_sq + rel_sol_batch_sum_sq
                     rel_sol_min = torch.minimum(rel_sol_min, rel_sol_batch_min)
@@ -404,6 +407,9 @@ class Trainer(LoggingMixin):
                     rel_sol_min = rel_sol_batch_min
                     rel_sol_max = rel_sol_batch_max
                 else:
+                    assert rel_sol_sum_sq is not None
+                    assert rel_sol_min is not None
+                    assert rel_sol_max is not None
                     rel_sol_sum = rel_sol_sum + rel_sol_batch_sum
                     rel_sol_sum_sq = rel_sol_sum_sq + rel_sol_batch_sum_sq
                     rel_sol_min = torch.minimum(rel_sol_min, rel_sol_batch_min)
@@ -414,6 +420,9 @@ class Trainer(LoggingMixin):
                     rel_green_min = rel_green_batch_min
                     rel_green_max = rel_green_batch_max
                 else:
+                    assert rel_green_sum_sq is not None
+                    assert rel_green_min is not None
+                    assert rel_green_max is not None
                     rel_green_sum = rel_green_sum + rel_green_batch_sum
                     rel_green_sum_sq = rel_green_sum_sq + rel_green_batch_sum_sq
                     rel_green_min = torch.minimum(rel_green_min, rel_green_batch_min)
@@ -736,7 +745,7 @@ class Trainer(LoggingMixin):
                     trunk_grid=trunk_grid,
                     integration_rule=self.config.integration_rule,
                 )
-                loss.backward()
+                cast(Any, loss).backward()
                 optimizer.step()
 
                 epoch_losses.append(loss.detach().item())
@@ -869,10 +878,10 @@ class Trainer(LoggingMixin):
                             trunk_grid=trunk_grid,
                             integration_rule=self.config.integration_rule,
                         )
-                        loss.backward()
+                        cast(Any, loss).backward()
                         return loss
 
-                    loss = lbfgs_optimizer.step(closure)
+                    loss = cast(Any, lbfgs_optimizer).step(closure)
                     lbfgs_losses.append(loss.item())
 
                 if lbfgs_losses:

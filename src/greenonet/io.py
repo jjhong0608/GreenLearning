@@ -69,7 +69,7 @@ def _serialize_config(config: ModelConfig | CouplingModelConfig) -> dict[str, An
 
 def _parse_dtype(value: str) -> torch.dtype:
     name = value.replace("torch.", "")
-    return getattr(torch, name)
+    return cast(torch.dtype, getattr(torch, name))
 
 
 def _deserialize_config(
@@ -179,7 +179,8 @@ def load_model_with_config(
     try:
         from safetensors import safe_open
 
-        with safe_open(
+        safe_open_any = cast(Any, safe_open)
+        with safe_open_any(
             str(path), framework="pt", device=map_location or "cpu"
         ) as handle:
             metadata = handle.metadata()
@@ -212,9 +213,9 @@ def load_model_with_config(
         )
         from greenonet.model import GreenONetModel
 
-        model = GreenONetModel(green_config)
-        model.load_state_dict(state)
-        return model, green_config
+        green_model = GreenONetModel(green_config)
+        green_model.load_state_dict(state)
+        return green_model, green_config
     if model_type == "coupling":
         coupling_config = cast(
             CouplingModelConfig,
@@ -222,7 +223,7 @@ def load_model_with_config(
         )
         from greenonet.coupling_model import CouplingNet
 
-        model = CouplingNet(coupling_config)
-        model.load_state_dict(state)
-        return model, coupling_config
+        coupling_model = CouplingNet(coupling_config)
+        coupling_model.load_state_dict(state)
+        return coupling_model, coupling_config
     raise ValueError(f"Unknown model_type '{model_type}' in checkpoint metadata.")

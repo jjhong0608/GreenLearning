@@ -4,7 +4,7 @@ import torch
 from torch import Tensor, nn
 
 
-class FastPolyval(nn.Module):  # type: ignore[misc]
+class FastPolyval(nn.Module):
     """Polynomial evaluation with Horner's method; coefficients are learnable parameters."""
 
     def __init__(self, coeffs: Tensor) -> None:
@@ -18,7 +18,7 @@ class FastPolyval(nn.Module):  # type: ignore[misc]
         return result
 
 
-class FastPolyvalWithoutConstant(nn.Module):  # type: ignore[misc]
+class FastPolyvalWithoutConstant(nn.Module):
     """Horner's method without constant term; multiplies by x once more at the end."""
 
     def __init__(self, coeffs: Tensor) -> None:
@@ -33,7 +33,7 @@ class FastPolyvalWithoutConstant(nn.Module):  # type: ignore[misc]
         return result * x
 
 
-class RationalActivation(nn.Module):  # type: ignore[misc]
+class RationalActivation(nn.Module):
     """Rational activation used in the original GreenONet codebase."""
 
     def __init__(self) -> None:

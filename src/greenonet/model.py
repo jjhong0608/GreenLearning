@@ -27,7 +27,7 @@ class ActivationFactoryMixin:
         raise ValueError(f"Unsupported activation: {name}")
 
 
-class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+class MLP(nn.Module, ActivationFactoryMixin):
     """Generic MLP used for branch and trunk networks."""
 
     def __init__(
@@ -58,7 +58,7 @@ class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         return cast(torch.Tensor, self.net(x))
 
 
-class FourierFeatures(nn.Module):  # type: ignore[misc]
+class FourierFeatures(nn.Module):
     """Fourier feature mapping for coordinate inputs."""
 
     def __init__(
@@ -131,7 +131,7 @@ class StructuredGreenKernelMixin:
         raise ValueError(f"Samples must be 3D or 4D, got {samples.dim()}D")
 
 
-class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMixin):  # type: ignore[misc]
+class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMixin):
     """DeepONet-style branch/trunk model with analytic Green wrapping."""
 
     EPS = 1e-12

@@ -33,7 +33,7 @@ class ActivationFactoryMixin:
         raise ValueError(f"Unsupported activation: {name}")
 
 
-class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+class MLP(nn.Module, ActivationFactoryMixin):
     def __init__(
         self,
         input_dim: int,
@@ -62,7 +62,7 @@ class MLP(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
         return cast(torch.Tensor, self.net(x))
 
 
-class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):
     """Input-side learned scalar branch lift from source/coefficient stencils."""
 
     stencil_positions: int = 5
@@ -300,7 +300,7 @@ class FiveStencilSourceLift(nn.Module, ActivationFactoryMixin):  # type: ignore[
         return lifted
 
 
-class CouplingNet(nn.Module, ActivationFactoryMixin):  # type: ignore[misc]
+class CouplingNet(nn.Module, ActivationFactoryMixin):
     """MIONet-style model: four branches (a, b, c, rhs) and one trunk (coords).
 
     The network ingests the full stack of axial lines per batch (both x- and y-lines)

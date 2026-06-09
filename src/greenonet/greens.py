@@ -7,7 +7,7 @@ from torch.nn.functional import pad
 from greenonet.numerics import IntegrationRule, integrate
 
 
-class EllipticGreenFunction(nn.Module):  # type: ignore[misc]
+class EllipticGreenFunction(nn.Module):
     """Lightweight analytic surrogate for Poisson's Green function on the unit square."""
 
     def forward(self, coords: Tensor) -> Tensor:
@@ -18,7 +18,7 @@ class EllipticGreenFunction(nn.Module):  # type: ignore[misc]
         return where(x < y, lt, rt)
 
 
-class IntegrationEllipticGreenFunction(nn.Module):  # type: ignore[misc]
+class IntegrationEllipticGreenFunction(nn.Module):
     """Antiderivative-like term to mimic integral effects in the original model."""
 
     def forward(self, coords: Tensor) -> Tensor:
