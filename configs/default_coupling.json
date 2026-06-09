@@ -10,10 +10,10 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/Diffusion_Reaction_Ver2/train",
-    "validation_path": "data/Diffusion_Reaction_Ver2/valid",
-    "test_path": "data/Diffusion_Reaction_Ver2/test",
-    "coefficient_functions_path": "coefficients/Diffusion_Reaction_Ver2.py",
+    "training_path": "data/Divergence_Free_Convection_Diffusion_900_samples/train",
+    "validation_path": "data/Divergence_Free_Convection_Diffusion_900_samples/valid",
+    "test_path": "data/Divergence_Free_Convection_Diffusion_900_samples/test",
+    "coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion.py",
     "dtype": "float64"
   },
   "terminal": {
@@ -55,7 +55,7 @@
     },
     "coefficient_terms": {
       "diffusion": true,
-      "convection": false,
+      "convection": true,
       "reaction": true
     },
     "green_response_feature": {
@@ -74,7 +74,7 @@
     }
   },
   "coupling_training": {
-    "batch_size": 200,
+    "batch_size": 400,
     "log_interval": 1,
     "device": "cuda:1",
     "losses": {
@@ -123,7 +123,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Diffusion_Reaction_Ver2/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/Divergence_Free_Convection_Diffusion/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

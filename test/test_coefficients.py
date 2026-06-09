@@ -103,6 +103,38 @@ def test_sinusoidal_coefficient_example_matches_default() -> None:
     torch.testing.assert_close(coeffs.c_fun(x, y), default_coeffs.c_fun(x, y))
 
 
+def test_divergence_free_convection_diffusion_example() -> None:
+    coeffs = load_coefficient_functions(
+        Path("coefficients/Divergence_Free_Convection_Diffusion.py")
+    )
+    x = torch.tensor([0.125, 0.25, 0.5], dtype=torch.float64, requires_grad=True)
+    y = torch.tensor([0.25, 0.375, 0.5], dtype=torch.float64, requires_grad=True)
+    amplitude = 2.0
+
+    expected_a = 1 + 0.5 * torch.sin(2 * torch.pi * x) * torch.sin(2 * torch.pi * y)
+    expected_apx = torch.pi * torch.cos(2 * torch.pi * x) * torch.sin(2 * torch.pi * y)
+    expected_apy = (
+        torch.pi * torch.sin(2 * torch.pi * x) * torch.cos(2 * torch.pi * y)
+    )
+    expected_bx = (
+        amplitude * torch.pi * torch.sin(torch.pi * x) * torch.cos(torch.pi * y)
+    )
+    expected_by = (
+        -amplitude * torch.pi * torch.cos(torch.pi * x) * torch.sin(torch.pi * y)
+    )
+
+    torch.testing.assert_close(coeffs.a_fun(x, y), expected_a)
+    torch.testing.assert_close(coeffs.apx_fun(x, y), expected_apx)
+    torch.testing.assert_close(coeffs.apy_fun(x, y), expected_apy)
+    torch.testing.assert_close(coeffs.bx_fun(x, y), expected_bx)
+    torch.testing.assert_close(coeffs.by_fun(x, y), expected_by)
+    torch.testing.assert_close(coeffs.c_fun(x, y), torch.zeros_like(x))
+
+    dbx_dx = torch.autograd.grad(coeffs.bx_fun(x, y).sum(), x, create_graph=True)[0]
+    dby_dy = torch.autograd.grad(coeffs.by_fun(x, y).sum(), y)[0]
+    torch.testing.assert_close(dbx_dx + dby_dy, torch.zeros_like(x))
+
+
 def test_load_coefficient_functions_rejects_missing_callable(tmp_path: Path) -> None:
     coeff_path = tmp_path / "missing_coefficients.py"
     coeff_path.write_text(

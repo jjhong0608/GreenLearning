@@ -17,7 +17,7 @@
     "sampler_mode": "backward",
     "use_operator_learning": true,
     "dtype": "float64",
-    "coefficient_functions_path": "coefficients/Diffusion_Reaction_Ver2.py"
+    "coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion.py"
   },
   "terminal": {
     "width": 250
