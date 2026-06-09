@@ -60,6 +60,7 @@ class GreenArtifactRequest:
     config: Path
     outdir: Path
     coefficients: Path | None = None
+    device: str | None = None
     eval_seed: int = 12345
     eval_split: EvalSplit = "validation_like"
     eval_samples_per_line: int | None = None
@@ -189,7 +190,8 @@ class GreenArtifactExporter:
         coeff_path = self.request.coefficients or dataset_cfg.coefficient_functions_path
         coeffs = load_coefficient_functions(coeff_path)
 
-        device = self._resolve_device(training_cfg.device)
+        device_name = self.request.device or training_cfg.device
+        device = self._resolve_device(device_name)
         model = self._load_model(model_cfg)
         model.to(device)
         model.eval()

@@ -95,7 +95,7 @@ def make_fig(
     metric_key: str,
     label: str,
     data_by_log: Dict[str, Dict[str, List[float]]],
-    font: Dict,
+    font: Dict[str, object],
     theme: str,
 ) -> go.Figure:
     fig = go.Figure()
@@ -149,14 +149,18 @@ _warned_static = False
 def save_fig(fig: go.Figure, base_path: Path) -> None:
     global _warned_static
     base_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(str(base_path.with_suffix(".html")))
+    fig.write_json(str(base_path.with_suffix(".json")), pretty=True)
     try:
         fig.write_image(str(base_path.with_suffix(".png")))
         fig.write_image(str(base_path.with_suffix(".pdf")))
     except Exception:
         if not _warned_static:
-            print("Static export skipped (requires kaleido + Chrome); HTML saved instead.")
+            print(
+                "Static export skipped (requires kaleido + Chrome); "
+                "HTML/JSON saved instead."
+            )
             _warned_static = True
-    fig.write_html(str(base_path.with_suffix(".html")))
 
 
 def main() -> None:

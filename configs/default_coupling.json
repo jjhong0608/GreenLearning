@@ -10,9 +10,9 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/Divergence_Free_Convection_Diffusion_900_samples/train",
-    "validation_path": "data/Divergence_Free_Convection_Diffusion_900_samples/valid",
-    "test_path": "data/Divergence_Free_Convection_Diffusion_900_samples/test",
+    "training_path": "data/Divergence_Free_Convection_Diffusion_1300_samples/train",
+    "validation_path": "data/Divergence_Free_Convection_Diffusion_1300_samples/valid",
+    "test_path": "data/Divergence_Free_Convection_Diffusion_1300_samples/test",
     "coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion.py",
     "dtype": "float64"
   },

@@ -1,9 +1,10 @@
 import math
 from pathlib import Path
 
+import plotly.graph_objs as go
 import plotly.io as pio
 
-from plot_green_logs import make_fig, parse_green_log
+from plot_green_logs import make_fig, parse_green_log, save_fig
 
 
 def test_parse_green_log_current_adam_and_lbfgs_metrics(tmp_path: Path) -> None:
@@ -73,3 +74,22 @@ def test_make_fig_applies_plotly_theme() -> None:
 
     assert fig.layout.template == pio.templates["plotly_dark"]
     assert fig.layout.yaxis.type == "log"
+
+
+def test_save_fig_writes_json_when_static_export_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail_write_image(self: go.Figure, path: str) -> None:
+        del self, path
+        raise RuntimeError("no static backend")
+
+    monkeypatch.setattr(go.Figure, "write_image", fail_write_image)
+    fig = go.Figure(data=[go.Scatter(x=[1, 2], y=[3, 4])])
+
+    save_fig(fig, tmp_path / "loss")
+
+    assert (tmp_path / "loss.html").exists()
+    assert (tmp_path / "loss.json").exists()
+    assert not (tmp_path / "loss.png").exists()
+    assert not (tmp_path / "loss.pdf").exists()

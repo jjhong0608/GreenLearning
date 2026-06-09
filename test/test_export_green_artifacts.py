@@ -22,6 +22,7 @@ from greenonet.model import GreenONetModel
 def _write_config(
     path: Path,
     coefficient_path: Path | None = None,
+    training_device: str = "cpu",
 ) -> None:
     dataset: dict[str, object] = {
         "step_size": 0.5,
@@ -58,7 +59,7 @@ def _write_config(
             "batch_size": 2,
             "log_interval": 1,
             "compute_validation_rel_sol": True,
-            "device": "cpu",
+            "device": training_device,
             "integration_rule": "trapezoid",
             "compile": {"enabled": False},
         },
@@ -160,6 +161,7 @@ def test_export_green_artifacts_smoke_diffusion_only(
     ]
     assert saved_summary["eval_seed"] == 7
     assert saved_summary["eval_sampling"]["samples_per_line"] == 1
+    assert saved_summary["device"] == "cpu"
 
 
 def test_export_green_artifacts_seed_reproduces_generated_eval_data(
@@ -188,6 +190,33 @@ def test_export_green_artifacts_seed_reproduces_generated_eval_data(
     data_b = np.load(tmp_path / "run_b" / "data" / "generated_eval_data.npz")
     np.testing.assert_allclose(data_a["source"], data_b["source"])
     np.testing.assert_allclose(data_a["solution"], data_b["solution"])
+
+
+def test_export_green_artifacts_device_override_beats_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    checkpoint_path = tmp_path / "green.safetensors"
+    config_path = tmp_path / "config.json"
+    outdir = tmp_path / "artifacts"
+    _write_checkpoint(checkpoint_path)
+    _write_config(config_path, training_device="cuda")
+
+    summary = export_green_artifacts(
+        GreenArtifactRequest(
+            checkpoint=checkpoint_path,
+            config=config_path,
+            outdir=outdir,
+            device="cpu",
+            line_indices=(0,),
+            xi_fractions=(0.5,),
+        )
+    )
+
+    assert summary["device"] == "cpu"
+    saved_summary = json.loads((outdir / "summary.json").read_text())
+    assert saved_summary["device"] == "cpu"
 
 
 def test_export_green_artifacts_marks_rel_green_invalid_for_reaction(

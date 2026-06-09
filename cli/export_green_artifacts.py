@@ -48,6 +48,15 @@ class ExportGreenArtifactsCLI:
             help="Optional coefficient function file override.",
         )
         parser.add_argument(
+            "--device",
+            type=str,
+            default=None,
+            help=(
+                "Optional torch device override, e.g. cpu, cuda, or cuda:0. "
+                "Defaults to training.device in the config."
+            ),
+        )
+        parser.add_argument(
             "--eval-seed",
             type=int,
             default=12345,
@@ -156,6 +165,7 @@ class ExportGreenArtifactsCLI:
             config=args.config,
             outdir=args.outdir,
             coefficients=args.coefficients,
+            device=args.device,
             eval_seed=args.eval_seed,
             eval_split=cast(EvalSplit, args.eval_split),
             eval_samples_per_line=args.eval_samples_per_line,
