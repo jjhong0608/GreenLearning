@@ -54,6 +54,20 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 
 ## Evaluation
 
+- Exporting paper-oriented GreenNet checkpoint artifacts:
+  ```
+  PYTHONPATH=src python cli/export_green_artifacts.py \
+    --checkpoint checkpoints/run_green_net/model.safetensors \
+    --config checkpoints/run_green_net/config_used.json \
+    --outdir checkpoints/run_green_net/green_artifacts \
+    --eval-seed 12345 \
+    --eval-split validation_like \
+    --eval-samples-per-line 10 \
+    --line-indices 0 32 64 96 128 \
+    --xi-fractions 0.25 0.5 0.75 \
+    --theme plotly_white
+  ```
+  The exporter reloads the GreenONet checkpoint, regenerates evaluation source/solution samples from the config's Green sampler distribution, and writes `summary.json`, metric CSVs, selected raw arrays, Green-kernel heatmaps, fixed-`xi` one-dimensional Green slices, coefficient slices, and axial reconstruction figures. Every Plotly figure is saved as `.html`, editable Plotly `.json`, `.png`, and `.pdf`; if static export fails because Kaleido/Chrome is unavailable, `.html` and `.json` are still written. Use `--eval-seed` and the saved metadata to distinguish same-distribution evaluation from reusing the exact training samples. The paper-facing `rel_green` metric is exported only for diffusion-only/no-convection/no-reaction runs; convection or reaction runs record a skip reason and should be interpreted through reconstruction metrics and figures.
 - Plotting GreenONet logs: `python plot_green_logs.py --logs checkpoints/run_green_net/training.log --outdir plots_green --theme plotly_white` (supports multiple logs, `--labels`, and Plotly templates via `--theme`; outputs `loss`, `train_rel_sol`, `val_rel_sol`, and `rel_green` figures as HTML plus PNG/PDF if available).
 - Plotting CouplingNet logs with train/validation total loss plus separate error figures: `python plot_coupling_logs.py --logs checkpoints/coupling_run/training.log checkpoints/coupling_run_2/training.log --labels run1 run2 --outdir plots_coupling --theme plotly_white`.
 - Plotting recent Coupling logs from the current `_run_training_phase - epoch ...` format: `python plot_logs.py --logs checkpoints/test_diffusion/coupling/single_unknown/backward/training.log --outdir plots_coupling_recent`. This plots total loss, L2 consistency, energy consistency, cross consistency, optional `balance_loss`, optional `symmetric_boundary_loss`, `rel_flux`, and `rel_sol` from the current Coupling trainer log lines and ignores compile/checkpoint noise lines.
