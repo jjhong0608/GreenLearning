@@ -1,8 +1,9 @@
 from pathlib import Path
 
+import plotly.graph_objs as go
 import plotly.io as pio
 
-from plot_coupling_logs import make_fig_error, make_fig_loss, parse_log
+from plot_coupling_logs import make_fig_loss, make_fig_metric, parse_log, save_fig
 
 
 def test_parse_log_epochs_and_metrics(tmp_path: Path) -> None:
@@ -20,7 +21,8 @@ def test_parse_log_epochs_and_metrics(tmp_path: Path) -> None:
     assert metrics["epoch"] == [1.0, 2.0, 3.0]
     assert metrics["loss_train"] == [1.0, 0.5, 0.4]
     assert metrics["loss_val"][0] != metrics["loss_val"][0]
-    assert metrics["cons_train"] == [1.0, 0.5, 0.4]
+    assert all(value != value for value in metrics["l2_cons_train"])
+    assert metrics["energy_cons_train"] == [1.0, 0.5, 0.4]
     assert metrics["rel_flux_val"] == [2.5, 2.0, 1.9]
 
 
@@ -66,8 +68,10 @@ def test_parse_log_current_coupling_format_with_train_and_val_loss(
     assert metrics["epoch"] == [1.0, 2.0]
     assert metrics["loss_train"] == [2.6421e-02, 2.6358e-02]
     assert metrics["loss_val"] == [2.7298e-02, 2.7019e-02]
-    assert metrics["cons_train"] == [2.6421e-02, 2.6358e-02]
-    assert metrics["cons_val"] == [2.7298e-02, 2.7019e-02]
+    assert metrics["l2_cons_train"] == [3.4491e-04, 3.4396e-04]
+    assert metrics["l2_cons_val"] == [3.5841e-04, 3.5399e-04]
+    assert metrics["energy_cons_train"] == [2.6421e-02, 2.6358e-02]
+    assert metrics["energy_cons_val"] == [2.7298e-02, 2.7019e-02]
     assert metrics["rel_flux_train"] == [2.8326e-01, 2.8305e-01]
     assert metrics["rel_sol_val"] == [3.8722e-01, 3.8492e-01]
 
@@ -77,8 +81,10 @@ def test_coupling_figures_apply_plotly_theme() -> None:
         "epoch": [1.0, 2.0],
         "loss_train": [1.2, 0.7],
         "loss_val": [1.5, 0.9],
-        "cons_train": [1.0, 0.5],
-        "cons_val": [1.5, 0.8],
+        "l2_cons_train": [0.8, 0.4],
+        "l2_cons_val": [0.9, 0.45],
+        "energy_cons_train": [1.0, 0.5],
+        "energy_cons_val": [1.5, 0.8],
         "rel_sol_train": [0.3, 0.2],
         "rel_sol_val": [0.4, 0.25],
     }
@@ -86,10 +92,12 @@ def test_coupling_figures_apply_plotly_theme() -> None:
     font = {"family": "Times New Roman", "size": 14}
 
     fig_loss = make_fig_loss(series, font, "plotly_dark")
-    fig_error = make_fig_error(
+    fig_error = make_fig_metric(
         series,
         metric_key="rel_sol",
         title="Solution Error",
+        yaxis_title="Error",
+        log_scale=True,
         font=font,
         theme="plotly_dark",
     )
@@ -100,3 +108,22 @@ def test_coupling_figures_apply_plotly_theme() -> None:
         "run Loss (train)",
         "run Loss (val)",
     ]
+
+
+def test_save_fig_writes_json_when_static_export_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail_write_image(self: go.Figure, path: str) -> None:
+        del self, path
+        raise RuntimeError("no static backend")
+
+    monkeypatch.setattr(go.Figure, "write_image", fail_write_image)
+    fig = go.Figure(data=[go.Scatter(x=[1.0, 2.0], y=[3.0, 4.0])])
+
+    save_fig(fig, tmp_path / "loss")
+
+    assert (tmp_path / "loss.html").exists()
+    assert (tmp_path / "loss.json").exists()
+    assert not (tmp_path / "loss.png").exists()
+    assert not (tmp_path / "loss.pdf").exists()

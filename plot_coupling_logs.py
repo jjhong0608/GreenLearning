@@ -7,6 +7,8 @@ from typing import Dict, Iterable, List, Tuple
 
 import plotly.graph_objs as go
 
+from greenonet.plotly_io import save_plotly_figure
+
 
 VALUE_RE = r"(?:nan|inf|-inf|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
 
@@ -71,10 +73,12 @@ def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
                     "raw_epoch": _parse_float(match.group("epoch")),
                     "loss_train": _parse_float(match.group("loss_tr")),
                     "loss_val": _parse_float(match.group("loss_val")),
-                    "cons_train": _parse_float(match.group("energy_cons_tr")),
+                    "l2_cons_train": _parse_float(match.group("l2_cons_tr")),
+                    "energy_cons_train": _parse_float(match.group("energy_cons_tr")),
                     "rel_flux_train": _parse_float(match.group("rflux_tr")),
                     "rel_sol_train": _parse_float(match.group("rsol_tr")),
-                    "cons_val": _parse_float(match.group("energy_cons_val")),
+                    "l2_cons_val": _parse_float(match.group("l2_cons_val")),
+                    "energy_cons_val": _parse_float(match.group("energy_cons_val")),
                     "rel_flux_val": _parse_float(match.group("rflux_val")),
                     "rel_sol_val": _parse_float(match.group("rsol_val")),
                 }
@@ -87,10 +91,12 @@ def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
                     "raw_epoch": _parse_float(match.group("epoch")),
                     "loss_train": _parse_float(match.group("loss_tr")),
                     "loss_val": _parse_float(match.group("loss_val")),
-                    "cons_train": _parse_float(match.group("cons_tr")),
+                    "l2_cons_train": float("nan"),
+                    "energy_cons_train": _parse_float(match.group("cons_tr")),
                     "rel_flux_train": _parse_float(match.group("rflux_tr")),
                     "rel_sol_train": _parse_float(match.group("rsol_tr")),
-                    "cons_val": _parse_float(match.group("cons_val")),
+                    "l2_cons_val": float("nan"),
+                    "energy_cons_val": _parse_float(match.group("cons_val")),
                     "rel_flux_val": _parse_float(match.group("rflux_val")),
                     "rel_sol_val": _parse_float(match.group("rsol_val")),
                 }
@@ -103,10 +109,12 @@ def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
                     "raw_epoch": _parse_float(match.group("epoch")),
                     "loss_train": _parse_float(match.group("loss_tr")),
                     "loss_val": _parse_float(match.group("loss_val")),
-                    "cons_train": _parse_float(match.group("cons_tr")),
+                    "l2_cons_train": float("nan"),
+                    "energy_cons_train": _parse_float(match.group("cons_tr")),
                     "rel_flux_train": _parse_float(match.group("rflux_tr")),
                     "rel_sol_train": _parse_float(match.group("rsol_tr")),
-                    "cons_val": _parse_float(match.group("cons_val")),
+                    "l2_cons_val": float("nan"),
+                    "energy_cons_val": _parse_float(match.group("cons_val")),
                     "rel_flux_val": _parse_float(match.group("rflux_val")),
                     "rel_sol_val": _parse_float(match.group("rsol_val")),
                 }
@@ -121,10 +129,12 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         "epoch": [],
         "loss_train": [],
         "loss_val": [],
-        "cons_train": [],
+        "l2_cons_train": [],
+        "energy_cons_train": [],
         "rel_flux_train": [],
         "rel_sol_train": [],
-        "cons_val": [],
+        "l2_cons_val": [],
+        "energy_cons_val": [],
         "rel_flux_val": [],
         "rel_sol_val": [],
     }
@@ -143,10 +153,12 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
         metrics["epoch"].append(effective_epoch)
         metrics["loss_train"].append(entry["loss_train"])
         metrics["loss_val"].append(entry["loss_val"])
-        metrics["cons_train"].append(entry["cons_train"])
+        metrics["l2_cons_train"].append(entry["l2_cons_train"])
+        metrics["energy_cons_train"].append(entry["energy_cons_train"])
         metrics["rel_flux_train"].append(entry["rel_flux_train"])
         metrics["rel_sol_train"].append(entry["rel_sol_train"])
-        metrics["cons_val"].append(entry["cons_val"])
+        metrics["l2_cons_val"].append(entry["l2_cons_val"])
+        metrics["energy_cons_val"].append(entry["energy_cons_val"])
         metrics["rel_flux_val"].append(entry["rel_flux_val"])
         metrics["rel_sol_val"].append(entry["rel_sol_val"])
     return metrics
@@ -181,7 +193,7 @@ def _color_cycle() -> List[str]:
 
 
 def make_fig_loss(
-    series: List[Tuple[str, Dict[str, List[float]]]], font: Dict, theme: str
+    series: List[Tuple[str, Dict[str, List[float]]]], font: Dict[str, object], theme: str
 ) -> go.Figure:
     fig = go.Figure()
     colors = _color_cycle()
@@ -224,11 +236,13 @@ def make_fig_loss(
     return fig
 
 
-def make_fig_error(
+def make_fig_metric(
     series: List[Tuple[str, Dict[str, List[float]]]],
     metric_key: str,
     title: str,
-    font: Dict,
+    yaxis_title: str,
+    log_scale: bool,
+    font: Dict[str, object],
     theme: str,
 ) -> go.Figure:
     fig = go.Figure()
@@ -253,8 +267,8 @@ def make_fig_error(
     fig.update_layout(
         title=title,
         xaxis_title="Epoch",
-        yaxis_title="Error",
-        yaxis_type="log",
+        yaxis_title=yaxis_title,
+        yaxis_type="log" if log_scale else "linear",
         yaxis=dict(exponentformat="power"),
         template=theme,
         font=font,
@@ -269,22 +283,8 @@ def make_fig_error(
     return fig
 
 
-_warned_static = False
-
-
 def save_fig(fig: go.Figure, base_path: Path) -> None:
-    global _warned_static
-    base_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fig.write_image(str(base_path.with_suffix(".png")))
-        fig.write_image(str(base_path.with_suffix(".pdf")))
-    except Exception:
-        if not _warned_static:
-            print(
-                "Static export skipped (requires kaleido + Chrome); HTML saved instead."
-            )
-            _warned_static = True
-    fig.write_html(str(base_path.with_suffix(".html")))
+    save_plotly_figure(fig, base_path)
 
 
 def main() -> None:
@@ -343,24 +343,48 @@ def main() -> None:
     font = {"family": args.font_family, "size": 14}
 
     fig_loss = make_fig_loss(series, font, args.theme)
-    fig_sol = make_fig_error(
+    fig_l2 = make_fig_metric(
         series,
-        metric_key="rel_sol",
-        title="Solution Error",
+        metric_key="l2_cons",
+        title="L2 Consistency",
+        yaxis_title="L2 Consistency",
+        log_scale=True,
         font=font,
         theme=args.theme,
     )
-    fig_flux = make_fig_error(
+    fig_energy = make_fig_metric(
+        series,
+        metric_key="energy_cons",
+        title="Energy Consistency",
+        yaxis_title="Energy Consistency",
+        log_scale=True,
+        font=font,
+        theme=args.theme,
+    )
+    fig_flux = make_fig_metric(
         series,
         metric_key="rel_flux",
-        title="Flux-Divergence Error",
+        title="Flux-Divergence Relative Error",
+        yaxis_title="Relative Error",
+        log_scale=True,
+        font=font,
+        theme=args.theme,
+    )
+    fig_sol = make_fig_metric(
+        series,
+        metric_key="rel_sol",
+        title="Solution Relative Error",
+        yaxis_title="Relative Error",
+        log_scale=True,
         font=font,
         theme=args.theme,
     )
 
-    save_fig(fig_loss, args.outdir / "losses")
-    save_fig(fig_sol, args.outdir / "errors_solution")
-    save_fig(fig_flux, args.outdir / "errors_flux")
+    save_fig(fig_loss, args.outdir / "loss")
+    save_fig(fig_l2, args.outdir / "l2_consistency")
+    save_fig(fig_energy, args.outdir / "energy_consistency")
+    save_fig(fig_flux, args.outdir / "rel_flux")
+    save_fig(fig_sol, args.outdir / "rel_sol")
 
 
 if __name__ == "__main__":

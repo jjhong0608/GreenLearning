@@ -64,7 +64,7 @@ Philosophy: Treat search as unlimited resource.
 - When you use `class`, you should consider MixIn structure.
 - Use dataclasses and MixIn structure when sharing behaviors
 - For drawing the graph, use `Plotly` library instaed of `matplotlib`.
-- To excute Python, first search a virtual environment in `.venv` directory in the project directory.
+- To excute Python, use conda environment `~/.conda/envs/green_net/bin/python`
 
 
 # Repository Guidelines
@@ -76,7 +76,13 @@ $$
 $$
 with Dirichlet boundary condition. Your model is constructed by inspired Axial Green's Function Method (AGM). This method repsents the solution as the integration of the one-dimensional Green's function with source term. For this method, the governing equation should be decomposed along axes. The paper about AGM named `Axial Green s function method for multi‐dimensional elliptic boundary value.pdf` is in `refenreces` folder. Your model is based on the paper named `DD29_proceedings_revision_v1.pdf` in `references` folder. The code already work is in `/home/jjhong0608/Documents/GreenONet`
 
+## Caution
+
+- You should read `memory.md` before you conduct work.
+- After your work, you should update `memory.md`.
+
 ## Project Structures
+
 - `src/` hosts the core code.
 - `cli/` hosts CLIs
 - `configs/` stores JSON style configuration file for training.
