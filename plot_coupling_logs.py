@@ -12,6 +12,7 @@ from greenonet.plotly_io import save_plotly_figure
 
 
 VALUE_RE = r"(?:nan|inf|-inf|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+LOG_Y_FLOOR = 1e-16
 
 
 def _parse_float(value: str | None, default: float = float("nan")) -> float:
@@ -165,13 +166,17 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
     return metrics
 
 
-def _mask_nan(values: List[float], floor: float = 1e-16) -> List[float | None]:
+def _log_plot_y(value: float) -> float:
+    return max(value, LOG_Y_FLOOR)
+
+
+def _mask_nan(values: List[float]) -> List[float | None]:
     out: List[float | None] = []
     for v in values:
         if v != v:
             out.append(None)
         else:
-            out.append(max(v, floor))
+            out.append(_log_plot_y(v))
     return out
 
 
@@ -183,8 +188,8 @@ def _format_annotation_value(value: float) -> str:
     return f"{value:.3e}"
 
 
-def _annotation_y(value: float, *, log_scale: bool, floor: float = 1e-16) -> float:
-    return max(value, floor) if log_scale else value
+def _annotation_y(value: float, *, log_scale: bool) -> float:
+    return _log_plot_y(value) if log_scale else value
 
 
 def _finite_points(
@@ -212,7 +217,7 @@ def _add_last_min_annotations(
         return
 
     last_idx, last_epoch, last_value = points[-1]
-    min_idx, min_epoch, min_value = min(points, key=lambda item: item[2])
+    min_idx, min_epoch, min_value = min(points, key=lambda item: (item[2], -item[0]))
     annotations = []
     if min_idx == last_idx:
         annotations.append(

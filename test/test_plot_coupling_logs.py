@@ -3,7 +3,13 @@ from pathlib import Path
 import plotly.graph_objs as go
 import plotly.io as pio
 
-from plot_coupling_logs import make_fig_loss, make_fig_metric, parse_log, save_fig
+from plot_coupling_logs import (
+    LOG_Y_FLOOR,
+    make_fig_loss,
+    make_fig_metric,
+    parse_log,
+    save_fig,
+)
 
 
 def test_parse_log_epochs_and_metrics(tmp_path: Path) -> None:
@@ -135,6 +141,31 @@ def test_coupling_figures_optionally_annotate_last_and_min_values() -> None:
     assert any("run (train)<br>last 3.000e-01" == text for text in annotation_texts)
     assert any("run (train)<br>min 2.000e-01" == text for text in annotation_texts)
     assert any("run (val)<br>last/min 1.000e-01" == text for text in annotation_texts)
+
+
+def test_log_scale_annotations_use_same_floor_as_trace_values() -> None:
+    metrics = {
+        "epoch": [1.0, 2.0],
+        "rel_sol_train": [0.0, 0.0],
+    }
+    series = [("run", metrics)]
+    font = {"family": "Times New Roman", "size": 14}
+
+    fig = make_fig_metric(
+        series,
+        metric_key="rel_sol",
+        title="Solution Error",
+        yaxis_title="Error",
+        log_scale=True,
+        font=font,
+        theme="plotly_white",
+        show_annotations=True,
+    )
+
+    assert list(fig.data[0].y) == [LOG_Y_FLOOR, LOG_Y_FLOOR]
+    assert len(fig.layout.annotations) == 1
+    assert fig.layout.annotations[0].y == LOG_Y_FLOOR
+    assert fig.layout.annotations[0].text == "run (train)<br>last/min 0.000e+00"
 
 
 def test_save_fig_writes_json_when_static_export_fails(
