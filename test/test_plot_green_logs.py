@@ -76,6 +76,22 @@ def test_make_fig_applies_plotly_theme() -> None:
     assert fig.layout.yaxis.type == "log"
 
 
+def test_make_fig_adds_only_last_annotation_when_enabled() -> None:
+    fig = make_fig(
+        "loss",
+        "Training Loss",
+        {"run": {"epoch": [1, 2, 3], "loss": [1.0, 0.5, 0.2]}},
+        {"family": "Times New Roman", "size": 14},
+        "plotly_white",
+        show_annotations=True,
+    )
+
+    annotation_texts = [annotation.text for annotation in fig.layout.annotations]
+    assert len(annotation_texts) == 1
+    assert annotation_texts[0] == "loss last<br>2.000e-01<br>ep 3"
+    assert all("min" not in annotation.text for annotation in fig.layout.annotations)
+
+
 def test_save_fig_writes_json_when_static_export_fails(
     tmp_path: Path,
     monkeypatch,

@@ -192,6 +192,11 @@ def _annotation_y(value: float, *, log_scale: bool) -> float:
     return _log_plot_y(value) if log_scale else value
 
 
+def _annotation_axis_y(value: float, *, log_scale: bool) -> float:
+    plot_value = _log_plot_y(value) if log_scale else value
+    return math.log10(plot_value) if log_scale else plot_value
+
+
 def _finite_points(
     epochs: List[float],
     values: List[float],
@@ -203,12 +208,79 @@ def _finite_points(
     return points
 
 
+def _annotation_offsets(kind: str, split: str) -> tuple[int, int, str]:
+    is_val = split == "val"
+    if kind == "last":
+        return (46, 30 if is_val else -30, "left")
+    return (0, -46, "center")
+
+
+def _xaxis_config(
+    series: List[Tuple[str, Dict[str, List[float]]]],
+    show_annotations: bool,
+) -> dict[str, object]:
+    config: dict[str, object] = {"title": "Epoch"}
+    if not show_annotations:
+        return config
+
+    epochs = [
+        epoch
+        for _, metrics in series
+        for epoch in metrics.get("epoch", [])
+        if math.isfinite(epoch)
+    ]
+    if not epochs:
+        return config
+    min_epoch = min(epochs)
+    max_epoch = max(epochs)
+    span = max(max_epoch - min_epoch, 1.0)
+    config["range"] = [min_epoch, max_epoch + 0.12 * span]
+    return config
+
+
+def _add_point_annotation(
+    fig: go.Figure,
+    *,
+    x: float,
+    y: float,
+    text: str,
+    color: str,
+    kind: str,
+    split: str,
+) -> None:
+    ax, ay, xanchor = _annotation_offsets(kind, split)
+    fig.add_annotation(
+        x=x,
+        y=y,
+        xref="x",
+        yref="y",
+        text=text,
+        showarrow=True,
+        arrowhead=2,
+        arrowsize=0.8,
+        arrowwidth=1,
+        arrowcolor=color,
+        ax=ax,
+        ay=ay,
+        xanchor=xanchor,
+        yanchor="middle",
+        align="center",
+        bordercolor=color,
+        borderwidth=1,
+        borderpad=3,
+        bgcolor="rgba(255,255,255,0.9)",
+        font=dict(size=10, color=color),
+    )
+
+
 def _add_last_min_annotations(
     fig: go.Figure,
     *,
     epochs: List[float],
     values: List[float],
-    trace_label: str,
+    marker_label: str,
+    annotation_label: str,
+    split: str,
     color: str,
     log_scale: bool,
 ) -> None:
@@ -218,52 +290,79 @@ def _add_last_min_annotations(
 
     last_idx, last_epoch, last_value = points[-1]
     min_idx, min_epoch, min_value = min(points, key=lambda item: (item[2], -item[0]))
-    annotations = []
-    if min_idx == last_idx:
-        annotations.append(
-            (
-                last_epoch,
-                last_value,
-                f"{trace_label}<br>last/min {_format_annotation_value(last_value)}",
-                32,
-            )
-        )
-    else:
-        annotations.extend(
-            [
-                (
-                    last_epoch,
-                    last_value,
-                    f"{trace_label}<br>last {_format_annotation_value(last_value)}",
-                    32,
-                ),
-                (
-                    min_epoch,
-                    min_value,
-                    f"{trace_label}<br>min {_format_annotation_value(min_value)}",
-                    -38,
-                ),
-            ]
+    marker_x = [last_epoch]
+    last_y = _annotation_y(last_value, log_scale=log_scale)
+    min_y = _annotation_y(min_value, log_scale=log_scale)
+    last_annotation_y = _annotation_axis_y(last_value, log_scale=log_scale)
+    min_annotation_y = _annotation_axis_y(min_value, log_scale=log_scale)
+    marker_y = [last_y]
+    marker_text = [
+        f"{marker_label}<br>last {_format_annotation_value(last_value)}<br>"
+        f"epoch {last_epoch:g}"
+    ]
+    if min_idx != last_idx:
+        marker_x.append(min_epoch)
+        marker_y.append(min_y)
+        marker_text.append(
+            f"{marker_label}<br>min {_format_annotation_value(min_value)}<br>"
+            f"epoch {min_epoch:g}"
         )
 
-    for epoch, value, text, yshift in annotations:
-        fig.add_annotation(
-            x=epoch,
-            y=_annotation_y(value, log_scale=log_scale),
-            text=text,
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1,
-            arrowwidth=1,
-            arrowcolor=color,
-            ax=0,
-            ay=yshift,
-            bordercolor=color,
-            borderwidth=1,
-            borderpad=4,
-            bgcolor="rgba(255,255,255,0.85)",
-            font=dict(size=11, color=color),
+    fig.add_trace(
+        go.Scatter(
+            x=marker_x,
+            y=marker_y,
+            mode="markers",
+            marker=dict(color=color, size=7, symbol="circle-open", line=dict(width=2)),
+            name=f"{marker_label} markers",
+            text=marker_text,
+            hovertemplate="%{text}<extra></extra>",
+            showlegend=False,
         )
+    )
+
+    if min_idx == last_idx:
+        _add_point_annotation(
+            fig,
+            x=last_epoch,
+            y=last_annotation_y,
+            text=(
+                f"{annotation_label} last/min<br>"
+                f"{_format_annotation_value(last_value)}<br>"
+                f"ep {last_epoch:g}"
+            ),
+            color=color,
+            kind="last",
+            split=split,
+        )
+        return
+
+    _add_point_annotation(
+        fig,
+        x=last_epoch,
+        y=last_annotation_y,
+        text=(
+            f"{annotation_label} last<br>"
+            f"{_format_annotation_value(last_value)}<br>"
+            f"ep {last_epoch:g}"
+        ),
+        color=color,
+        kind="last",
+        split=split,
+    )
+    _add_point_annotation(
+        fig,
+        x=min_epoch,
+        y=min_annotation_y,
+        text=(
+            f"{annotation_label} min<br>"
+            f"{_format_annotation_value(min_value)}<br>"
+            f"ep {min_epoch:g}"
+        ),
+        color=color,
+        kind="min",
+        split=split,
+    )
 
 
 def _color_cycle() -> List[str]:
@@ -310,17 +409,20 @@ def make_fig_loss(
                 )
             )
             if show_annotations:
+                annotation_label = split if len(series) == 1 else f"{label} {split}"
                 _add_last_min_annotations(
                     fig,
                     epochs=epochs,
                     values=metrics[key],
-                    trace_label=trace_name,
+                    marker_label=trace_name,
+                    annotation_label=annotation_label,
+                    split=split,
                     color=color,
                     log_scale=True,
                 )
     fig.update_layout(
         title="Training vs Validation Loss",
-        xaxis_title="Epoch",
+        xaxis=_xaxis_config(series, show_annotations),
         yaxis_title="Loss",
         yaxis_type="log",
         yaxis=dict(exponentformat="power"),
@@ -371,17 +473,20 @@ def make_fig_metric(
                 )
             )
             if show_annotations:
+                annotation_label = split if len(series) == 1 else f"{label} {split}"
                 _add_last_min_annotations(
                     fig,
                     epochs=epochs,
                     values=metrics[key],
-                    trace_label=trace_name,
+                    marker_label=trace_name,
+                    annotation_label=annotation_label,
+                    split=split,
                     color=color,
                     log_scale=log_scale,
                 )
     fig.update_layout(
         title=title,
-        xaxis_title="Epoch",
+        xaxis=_xaxis_config(series, show_annotations),
         yaxis_title=yaxis_title,
         yaxis_type="log" if log_scale else "linear",
         yaxis=dict(exponentformat="power"),

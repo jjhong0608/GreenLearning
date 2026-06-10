@@ -688,6 +688,14 @@ class CouplingArtifactExporter:
         }
 
     @staticmethod
+    def _interior_grid(grid: Tensor) -> Tensor:
+        if grid.ndim != 2:
+            return grid
+        if grid.shape[0] <= 2 or grid.shape[1] <= 2:
+            return grid
+        return grid[1:-1, 1:-1]
+
+    @staticmethod
     def _line_grid(values: Tensor, *, transpose: bool = False) -> Tensor:
         grid = pad(values[:, 1:-1], pad=(1, 1, 1, 1), value=0.0)
         return grid.transpose(-1, -2) if transpose else grid
@@ -838,14 +846,15 @@ class CouplingArtifactExporter:
     def _write_sample_figures(self, evaluation: SampleEvaluation) -> list[str]:
         stem = f"sample_{evaluation.sample_id:04d}_{evaluation.file_stem}"
         written: list[str] = []
-        figure_specs: list[tuple[str, str, Tensor, str, bool]] = [
-            ("solution", "f", evaluation.source_grid, "Source f", False),
-            ("solution", "u", evaluation.solution_grids["u"], "Exact solution u", False),
+        figure_specs: list[tuple[str, str, Tensor, str, bool, bool]] = [
+            ("solution", "f", evaluation.source_grid, "Source f", False, False),
+            ("solution", "u", evaluation.solution_grids["u"], "Exact solution u", False, False),
             (
                 "solution",
                 "u_pred",
                 evaluation.solution_grids["u_pred"],
                 "Predicted solution u_pred",
+                False,
                 False,
             ),
             (
@@ -854,12 +863,14 @@ class CouplingArtifactExporter:
                 evaluation.solution_grids["u_pred_x"],
                 "Predicted solution u_pred_x",
                 False,
+                False,
             ),
             (
                 "solution",
                 "u_pred_y",
                 evaluation.solution_grids["u_pred_y"],
                 "Predicted solution u_pred_y",
+                False,
                 False,
             ),
             (
@@ -868,6 +879,7 @@ class CouplingArtifactExporter:
                 evaluation.solution_grids["u_error"],
                 "Signed error u_pred - u",
                 True,
+                False,
             ),
             (
                 "solution",
@@ -875,6 +887,7 @@ class CouplingArtifactExporter:
                 evaluation.solution_grids["u_pred_x_error"],
                 "Signed error u_pred_x - u",
                 True,
+                False,
             ),
             (
                 "solution",
@@ -882,6 +895,7 @@ class CouplingArtifactExporter:
                 evaluation.solution_grids["u_pred_y_error"],
                 "Signed error u_pred_y - u",
                 True,
+                False,
             ),
             (
                 "solution",
@@ -889,15 +903,17 @@ class CouplingArtifactExporter:
                 evaluation.solution_grids["u_pred_x_minus_u_pred_y"],
                 "Mismatch u_pred_x - u_pred_y",
                 True,
+                False,
             ),
-            ("phi_psi", "phi", evaluation.flux_grids["phi"], "Exact phi", False),
-            ("phi_psi", "psi", evaluation.flux_grids["psi"], "Exact psi", False),
+            ("phi_psi", "phi", evaluation.flux_grids["phi"], "Exact phi", False, True),
+            ("phi_psi", "psi", evaluation.flux_grids["psi"], "Exact psi", False, True),
             (
                 "phi_psi",
                 "phi_pred",
                 evaluation.flux_grids["phi_pred"],
                 "Predicted phi_pred",
                 False,
+                True,
             ),
             (
                 "phi_psi",
@@ -905,12 +921,14 @@ class CouplingArtifactExporter:
                 evaluation.flux_grids["psi_pred"],
                 "Predicted psi_pred",
                 False,
+                True,
             ),
             (
                 "phi_psi",
                 "phi_error",
                 evaluation.flux_grids["phi_error"],
                 "Signed error phi_pred - phi",
+                True,
                 True,
             ),
             (
@@ -919,6 +937,7 @@ class CouplingArtifactExporter:
                 evaluation.flux_grids["psi_error"],
                 "Signed error psi_pred - psi",
                 True,
+                True,
             ),
             (
                 "balance",
@@ -926,6 +945,7 @@ class CouplingArtifactExporter:
                 evaluation.flux_grids["phi_plus_psi"],
                 "phi + psi",
                 False,
+                True,
             ),
             (
                 "balance",
@@ -933,12 +953,14 @@ class CouplingArtifactExporter:
                 evaluation.flux_grids["balance_residual"],
                 "Balance residual f - phi - psi",
                 True,
+                True,
             ),
         ]
-        for directory, name, grid, title, signed in figure_specs:
+        for directory, name, grid, title, signed, crop_boundary in figure_specs:
+            plot_grid = self._interior_grid(grid) if crop_boundary else grid
             base_path = self.request.outdir / "figures" / directory / f"{stem}_{name}"
             save_plotly_figure(
-                self._heatmap(title, grid, self.request.theme, signed=signed),
+                self._heatmap(title, plot_grid, self.request.theme, signed=signed),
                 base_path,
                 logger=self.logger,
             )

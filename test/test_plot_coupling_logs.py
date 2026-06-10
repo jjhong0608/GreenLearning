@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import plotly.graph_objs as go
@@ -138,9 +139,14 @@ def test_coupling_figures_optionally_annotate_last_and_min_values() -> None:
     )
 
     annotation_texts = [annotation.text for annotation in fig.layout.annotations]
-    assert any("run (train)<br>last 3.000e-01" == text for text in annotation_texts)
-    assert any("run (train)<br>min 2.000e-01" == text for text in annotation_texts)
-    assert any("run (val)<br>last/min 1.000e-01" == text for text in annotation_texts)
+    assert "train last<br>3.000e-01<br>ep 3" in annotation_texts
+    assert "train min<br>2.000e-01<br>ep 2" in annotation_texts
+    assert "val last/min<br>1.000e-01<br>ep 3" in annotation_texts
+    assert all(annotation.xref == "x" for annotation in fig.layout.annotations)
+    assert all(annotation.yref == "y" for annotation in fig.layout.annotations)
+    assert all(annotation.showarrow for annotation in fig.layout.annotations)
+    assert len(fig.data) == 4
+    assert all(trace.showlegend is False for trace in fig.data[1::2])
 
 
 def test_log_scale_annotations_use_same_floor_as_trace_values() -> None:
@@ -163,9 +169,12 @@ def test_log_scale_annotations_use_same_floor_as_trace_values() -> None:
     )
 
     assert list(fig.data[0].y) == [LOG_Y_FLOOR, LOG_Y_FLOOR]
+    assert list(fig.data[1].y) == [LOG_Y_FLOOR]
     assert len(fig.layout.annotations) == 1
-    assert fig.layout.annotations[0].y == LOG_Y_FLOOR
-    assert fig.layout.annotations[0].text == "run (train)<br>last/min 0.000e+00"
+    assert fig.layout.annotations[0].xref == "x"
+    assert fig.layout.annotations[0].yref == "y"
+    assert fig.layout.annotations[0].y == math.log10(LOG_Y_FLOOR)
+    assert fig.layout.annotations[0].text == "train last/min<br>0.000e+00<br>ep 2"
 
 
 def test_save_fig_writes_json_when_static_export_fails(

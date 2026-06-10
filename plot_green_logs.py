@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import math
 from pathlib import Path
 from typing import Dict, List
 
@@ -12,6 +13,7 @@ NUMBER_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 TOKEN_PATTERN = re.compile(
     rf"\|\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>{NUMBER_PATTERN})"
 )
+LOG_Y_FLOOR = 1e-16
 
 
 def _parse_metric_tokens(text: str) -> Dict[str, float]:
@@ -91,12 +93,143 @@ def _mask_nan(values: List[float], floor: float = 1e-16) -> List[float | None]:
     return out
 
 
+def _finite_points(
+    epochs: List[float],
+    values: List[float],
+) -> list[tuple[int, float, float]]:
+    points: list[tuple[int, float, float]] = []
+    for idx, (epoch, value) in enumerate(zip(epochs, values)):
+        if math.isfinite(epoch) and math.isfinite(value):
+            points.append((idx, epoch, value))
+    return points
+
+
+def _format_annotation_value(value: float) -> str:
+    return f"{value:.3e}"
+
+
+def _annotation_y(value: float, *, log_scale: bool) -> float:
+    del log_scale
+    return max(value, LOG_Y_FLOOR)
+
+
+def _annotation_axis_y(value: float, *, log_scale: bool) -> float:
+    value = max(value, LOG_Y_FLOOR)
+    return math.log10(value) if log_scale else value
+
+
+def _annotation_offsets(split: str) -> tuple[int, int, str]:
+    is_val = split == "val"
+    return (46, 30 if is_val else -30, "left")
+
+
+def _add_point_annotation(
+    fig: go.Figure,
+    *,
+    x: float,
+    y: float,
+    text: str,
+    color: str,
+    split: str,
+) -> None:
+    ax, ay, xanchor = _annotation_offsets(split)
+    fig.add_annotation(
+        x=x,
+        y=y,
+        xref="x",
+        yref="y",
+        text=text,
+        showarrow=True,
+        arrowhead=2,
+        arrowsize=0.8,
+        arrowwidth=1,
+        arrowcolor=color,
+        ax=ax,
+        ay=ay,
+        xanchor=xanchor,
+        yanchor="middle",
+        align="center",
+        bordercolor=color,
+        borderwidth=1,
+        borderpad=3,
+        bgcolor="rgba(255,255,255,0.9)",
+        font=dict(size=10, color=color),
+    )
+
+
+def _add_last_annotation(
+    fig: go.Figure,
+    *,
+    epochs: List[float],
+    values: List[float],
+    color: str,
+    marker_label: str,
+    annotation_label: str,
+    split: str,
+    log_scale: bool,
+) -> None:
+    points = _finite_points(epochs, values)
+    if not points:
+        return
+
+    _, last_epoch, last_value = points[-1]
+    y_values = [_annotation_y(last_value, log_scale=log_scale)]
+    fig.add_trace(
+        go.Scatter(
+            x=[last_epoch],
+            y=y_values,
+            mode="markers",
+            marker=dict(color=color, size=7, symbol="circle-open", line=dict(width=2)),
+            name=f"{marker_label} marker",
+            text=[f"{marker_label}<br>last {_format_annotation_value(last_value)}<br>epoch {last_epoch:g}"],
+            hovertemplate="%{text}<extra></extra>",
+            showlegend=False,
+        )
+    )
+    _add_point_annotation(
+        fig,
+        x=last_epoch,
+        y=_annotation_axis_y(last_value, log_scale=log_scale),
+        text=(
+            f"{annotation_label} last<br>"
+            f"{_format_annotation_value(last_value)}<br>"
+            f"ep {last_epoch:g}"
+        ),
+        color=color,
+        split=split,
+    )
+
+
+def _xaxis_config(
+    series: List[tuple[str, Dict[str, List[float]]]],
+    show_annotations: bool,
+) -> dict[str, object]:
+    config: dict[str, object] = {"title": "Epoch"}
+    if not show_annotations:
+        return config
+
+    epochs = [
+        epoch
+        for _, metrics in series
+        for epoch in metrics.get("epoch", [])
+        if math.isfinite(epoch)
+    ]
+    if not epochs:
+        return config
+    min_epoch = min(epochs)
+    max_epoch = max(epochs)
+    span = max(max_epoch - min_epoch, 1.0)
+    config["range"] = [min_epoch, max_epoch + 0.12 * span]
+    return config
+
+
 def make_fig(
     metric_key: str,
     label: str,
     data_by_log: Dict[str, Dict[str, List[float]]],
     font: Dict[str, object],
     theme: str,
+    show_annotations: bool = False,
 ) -> go.Figure:
     fig = go.Figure()
     colors = [
@@ -114,6 +247,7 @@ def make_fig(
     for idx, (log_name, metrics) in enumerate(data_by_log.items()):
         epochs = metrics["epoch"]
         y_vals = _mask_nan(metrics[metric_key])
+        split = "val" if metric_key.startswith("val_") else "train"
         fig.add_trace(
             go.Scatter(
                 x=epochs,
@@ -124,11 +258,26 @@ def make_fig(
                 connectgaps=True,
             )
         )
+        if show_annotations:
+            annotation_label = (
+                metric_key if len(data_by_log) == 1 else f"{log_name} {metric_key}"
+            )
+            _add_last_annotation(
+                fig,
+                epochs=epochs,
+                values=metrics[metric_key],
+                color=colors[idx % len(colors)],
+                marker_label=log_name,
+                annotation_label=annotation_label,
+                split=split,
+                log_scale=True,
+            )
     fig.update_layout(
         title=label,
         xaxis_title="Epoch",
         yaxis_title=label,
         yaxis_type="log",
+        xaxis=_xaxis_config(list(data_by_log.items()), show_annotations),
         yaxis=dict(exponentformat="power"),
         template=theme,
         font=font,
@@ -185,6 +334,11 @@ def main() -> None:
         default="plotly_white",
         help="Plotly template name for the plots.",
     )
+    parser.add_argument(
+        "--show-annotations",
+        action="store_true",
+        help="Annotate each trace with its last value.",
+    )
     args = parser.parse_args()
 
     data_by_log: Dict[str, Dict[str, List[float]]] = {}
@@ -205,13 +359,21 @@ def main() -> None:
 
     font = {"family": args.font_family, "size": 20}
 
-    fig_loss = make_fig("loss", "Training Loss", data_by_log, font, args.theme)
+    fig_loss = make_fig(
+        "loss",
+        "Training Loss",
+        data_by_log,
+        font,
+        args.theme,
+        args.show_annotations,
+    )
     fig_train_rel_sol = make_fig(
         "train_rel_sol",
         "Training relative error of represented solution",
         data_by_log,
         font,
         args.theme,
+        args.show_annotations,
     )
     fig_val_rel_sol = make_fig(
         "val_rel_sol",
@@ -219,6 +381,7 @@ def main() -> None:
         data_by_log,
         font,
         args.theme,
+        args.show_annotations,
     )
     fig_rel_green = make_fig(
         "rel_green",
@@ -226,6 +389,7 @@ def main() -> None:
         data_by_log,
         font,
         args.theme,
+        args.show_annotations,
     )
 
     save_fig(fig_loss, args.outdir / "loss")
