@@ -108,6 +108,33 @@ def test_coupling_figures_apply_plotly_theme() -> None:
         "run Loss (train)",
         "run Loss (val)",
     ]
+    assert len(fig_loss.layout.annotations) == 0
+
+
+def test_coupling_figures_optionally_annotate_last_and_min_values() -> None:
+    metrics = {
+        "epoch": [1.0, 2.0, 3.0],
+        "rel_sol_train": [0.5, 0.2, 0.3],
+        "rel_sol_val": [0.7, 0.4, 0.1],
+    }
+    series = [("run", metrics)]
+    font = {"family": "Times New Roman", "size": 14}
+
+    fig = make_fig_metric(
+        series,
+        metric_key="rel_sol",
+        title="Solution Error",
+        yaxis_title="Error",
+        log_scale=True,
+        font=font,
+        theme="plotly_white",
+        show_annotations=True,
+    )
+
+    annotation_texts = [annotation.text for annotation in fig.layout.annotations]
+    assert any("run (train)<br>last 3.000e-01" == text for text in annotation_texts)
+    assert any("run (train)<br>min 2.000e-01" == text for text in annotation_texts)
+    assert any("run (val)<br>last/min 1.000e-01" == text for text in annotation_texts)
 
 
 def test_save_fig_writes_json_when_static_export_fails(

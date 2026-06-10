@@ -20,7 +20,7 @@
     "width": 365
   },
   "coupling_model": {
-    "hidden_dim": 128,
+    "hidden_dim": 256,
     "depth": 4,
     "activation": "rational",
     "use_bias": true,
@@ -74,7 +74,7 @@
     }
   },
   "coupling_training": {
-    "batch_size": 400,
+    "batch_size": 200,
     "log_interval": 1,
     "device": "cuda:1",
     "losses": {

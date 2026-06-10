@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -178,6 +179,88 @@ def _has_visible_values(values: List[float | None]) -> bool:
     return any(value is not None for value in values)
 
 
+def _format_annotation_value(value: float) -> str:
+    return f"{value:.3e}"
+
+
+def _annotation_y(value: float, *, log_scale: bool, floor: float = 1e-16) -> float:
+    return max(value, floor) if log_scale else value
+
+
+def _finite_points(
+    epochs: List[float],
+    values: List[float],
+) -> list[tuple[int, float, float]]:
+    points: list[tuple[int, float, float]] = []
+    for idx, (epoch, value) in enumerate(zip(epochs, values)):
+        if math.isfinite(epoch) and math.isfinite(value):
+            points.append((idx, epoch, value))
+    return points
+
+
+def _add_last_min_annotations(
+    fig: go.Figure,
+    *,
+    epochs: List[float],
+    values: List[float],
+    trace_label: str,
+    color: str,
+    log_scale: bool,
+) -> None:
+    points = _finite_points(epochs, values)
+    if not points:
+        return
+
+    last_idx, last_epoch, last_value = points[-1]
+    min_idx, min_epoch, min_value = min(points, key=lambda item: item[2])
+    annotations = []
+    if min_idx == last_idx:
+        annotations.append(
+            (
+                last_epoch,
+                last_value,
+                f"{trace_label}<br>last/min {_format_annotation_value(last_value)}",
+                32,
+            )
+        )
+    else:
+        annotations.extend(
+            [
+                (
+                    last_epoch,
+                    last_value,
+                    f"{trace_label}<br>last {_format_annotation_value(last_value)}",
+                    32,
+                ),
+                (
+                    min_epoch,
+                    min_value,
+                    f"{trace_label}<br>min {_format_annotation_value(min_value)}",
+                    -38,
+                ),
+            ]
+        )
+
+    for epoch, value, text, yshift in annotations:
+        fig.add_annotation(
+            x=epoch,
+            y=_annotation_y(value, log_scale=log_scale),
+            text=text,
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1,
+            arrowwidth=1,
+            arrowcolor=color,
+            ax=0,
+            ay=yshift,
+            bordercolor=color,
+            borderwidth=1,
+            borderpad=4,
+            bgcolor="rgba(255,255,255,0.85)",
+            font=dict(size=11, color=color),
+        )
+
+
 def _color_cycle() -> List[str]:
     return [
         "#1f77b4",
@@ -193,7 +276,10 @@ def _color_cycle() -> List[str]:
 
 
 def make_fig_loss(
-    series: List[Tuple[str, Dict[str, List[float]]]], font: Dict[str, object], theme: str
+    series: List[Tuple[str, Dict[str, List[float]]]],
+    font: Dict[str, object],
+    theme: str,
+    show_annotations: bool = False,
 ) -> go.Figure:
     fig = go.Figure()
     colors = _color_cycle()
@@ -207,16 +293,26 @@ def make_fig_loss(
             y_vals = _mask_nan(metrics[key])
             if not _has_visible_values(y_vals):
                 continue
+            trace_name = f"{label} Loss ({split})"
             fig.add_trace(
                 go.Scatter(
                     x=epochs,
                     y=y_vals,
                     mode="lines",
-                    name=f"{label} Loss ({split})",
+                    name=trace_name,
                     line=dict(color=color, dash=dash),
                     connectgaps=True,
                 )
             )
+            if show_annotations:
+                _add_last_min_annotations(
+                    fig,
+                    epochs=epochs,
+                    values=metrics[key],
+                    trace_label=trace_name,
+                    color=color,
+                    log_scale=True,
+                )
     fig.update_layout(
         title="Training vs Validation Loss",
         xaxis_title="Epoch",
@@ -244,6 +340,7 @@ def make_fig_metric(
     log_scale: bool,
     font: Dict[str, object],
     theme: str,
+    show_annotations: bool = False,
 ) -> go.Figure:
     fig = go.Figure()
     colors = _color_cycle()
@@ -254,16 +351,29 @@ def make_fig_metric(
             key = f"{metric_key}_{split}"
             if key not in metrics:
                 continue
+            y_vals = _mask_nan(metrics[key])
+            if not _has_visible_values(y_vals):
+                continue
+            trace_name = f"{label} ({split})"
             fig.add_trace(
                 go.Scatter(
                     x=epochs,
-                    y=_mask_nan(metrics[key]),
+                    y=y_vals,
                     mode="lines",
-                    name=f"{label} ({split})",
+                    name=trace_name,
                     line=dict(color=color, dash=dash),
                     connectgaps=True,
                 )
             )
+            if show_annotations:
+                _add_last_min_annotations(
+                    fig,
+                    epochs=epochs,
+                    values=metrics[key],
+                    trace_label=trace_name,
+                    color=color,
+                    log_scale=log_scale,
+                )
     fig.update_layout(
         title=title,
         xaxis_title="Epoch",
@@ -323,6 +433,11 @@ def main() -> None:
         default="plotly_white",
         help="Plotly template name for the plots.",
     )
+    parser.add_argument(
+        "--show-annotations",
+        action="store_true",
+        help="Annotate each trace with its last value and minimum value.",
+    )
     args = parser.parse_args()
 
     if args.labels and len(args.labels) != len(args.logs):
@@ -342,7 +457,7 @@ def main() -> None:
 
     font = {"family": args.font_family, "size": 14}
 
-    fig_loss = make_fig_loss(series, font, args.theme)
+    fig_loss = make_fig_loss(series, font, args.theme, args.show_annotations)
     fig_l2 = make_fig_metric(
         series,
         metric_key="l2_cons",
@@ -351,6 +466,7 @@ def main() -> None:
         log_scale=True,
         font=font,
         theme=args.theme,
+        show_annotations=args.show_annotations,
     )
     fig_energy = make_fig_metric(
         series,
@@ -360,6 +476,7 @@ def main() -> None:
         log_scale=True,
         font=font,
         theme=args.theme,
+        show_annotations=args.show_annotations,
     )
     fig_flux = make_fig_metric(
         series,
@@ -369,6 +486,7 @@ def main() -> None:
         log_scale=True,
         font=font,
         theme=args.theme,
+        show_annotations=args.show_annotations,
     )
     fig_sol = make_fig_metric(
         series,
@@ -378,6 +496,7 @@ def main() -> None:
         log_scale=True,
         font=font,
         theme=args.theme,
+        show_annotations=args.show_annotations,
     )
 
     save_fig(fig_loss, args.outdir / "loss")
