@@ -10,6 +10,7 @@ from greenonet.activations import RationalActivation
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     SourceStencilLiftConfig,
@@ -387,6 +388,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
         if self.coefficient_terms_reaction:
             active_coefficient_terms.append("reaction")
         self.active_coefficient_terms = tuple(active_coefficient_terms)
+        branch_fusion = CouplingBranchFusionConfig.from_raw(config.branch_fusion)
+        self.branch_fusion_mode = branch_fusion.mode
         axis_1d_trunk = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
         self.axis_1d_trunk_enabled = bool(axis_1d_trunk.enabled)
         self.axis_1d_boundary_aware_modes = int(axis_1d_trunk.boundary_aware_modes)
@@ -550,6 +553,28 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
             )
         else:
             self.branch_transverse = None
+        branch_component_count = 1
+        if self.branch_coefficient is not None:
+            branch_component_count += 1
+        if self.axis_1d_trunk_enabled:
+            branch_component_count += 1
+        self.branch_fuser: nn.Linear | None
+        self.branch_fuser_activation: nn.Module
+        self.branch_fuser_dropout: nn.Module
+        if self.branch_fusion_mode == "product_fuser":
+            self.branch_fuser = nn.Linear(
+                (branch_component_count + 1) * config.hidden_dim,
+                config.hidden_dim,
+                bias=config.use_bias,
+            )
+            self.branch_fuser_activation = self.build_activation(config.activation)
+            self.branch_fuser_dropout = (
+                nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()
+            )
+        else:
+            self.branch_fuser = None
+            self.branch_fuser_activation = nn.Identity()
+            self.branch_fuser_dropout = nn.Identity()
         self.trunk = MLP(
             input_dim=trunk_input_dim,
             hidden_dim=config.hidden_dim,
@@ -696,6 +721,27 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
         if not active:
             return None
         return torch.cat(active, dim=-1)
+
+    def _fuse_branch_components(self, components: list[torch.Tensor]) -> torch.Tensor:
+        if not components:
+            raise ValueError("At least one branch component is required.")
+        product_feature = components[0]
+        for component in components[1:]:
+            product_feature = product_feature * component
+        if self.branch_fusion_mode == "product":
+            return product_feature
+        if self.branch_fusion_mode == "product_fuser":
+            if self.branch_fuser is None:
+                raise RuntimeError(
+                    "branch_fuser must be initialized when "
+                    "branch_fusion.mode='product_fuser'."
+                )
+            fused = self.branch_fuser(
+                torch.cat(components + [product_feature], dim=-1)
+            )
+            fused = cast(torch.Tensor, self.branch_fuser_activation(fused))
+            return cast(torch.Tensor, self.branch_fuser_dropout(fused))
+        raise ValueError(f"Unsupported branch_fusion mode: {self.branch_fusion_mode}")
 
     def _load_from_state_dict(
         self,
@@ -948,14 +994,13 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
                 b * axis * n_lines, self.branch_rhs_input_dim
             )
             branch_r_out = self.branch_rhs(branch_r_in)
+            branch_components = [branch_r_out]
             coefficient_input = self._standard_coefficient_branch_input(
                 a_vals,
                 b_vals,
                 c_vals,
             )
-            if coefficient_input is None:
-                branch_feat = branch_r_out
-            else:
+            if coefficient_input is not None:
                 if self.branch_coefficient is None:
                     raise RuntimeError(
                         "branch_coefficient must be initialized when "
@@ -965,7 +1010,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
                     b * axis * n_lines, self.branch_coefficient_input_dim
                 )
                 branch_coefficient_out = self.branch_coefficient(branch_coefficient_in)
-                branch_feat = branch_coefficient_out * branch_r_out
+                branch_components.append(branch_coefficient_out)
         else:
             if self.branch_coefficient is None:
                 raise RuntimeError(
@@ -982,7 +1027,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
             )
             branch_r_out = self.branch_rhs(branch_r_in)
             branch_coefficient_out = self.branch_coefficient(branch_coefficient_in)
-            branch_feat = branch_r_out * branch_coefficient_out
+            branch_components = [branch_r_out, branch_coefficient_out]
         if self.axis_1d_trunk_enabled:
             if self.branch_transverse is None:
                 raise RuntimeError(
@@ -995,7 +1040,8 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
             )
             transverse_out = transverse_out.unsqueeze(0).expand(b, -1, -1)
             transverse_out = transverse_out.reshape(b * axis * n_lines, -1)
-            branch_feat = branch_feat * transverse_out
+            branch_components.append(transverse_out)
+        branch_feat = self._fuse_branch_components(branch_components)
         branch_feat = branch_feat.unsqueeze(-1)
 
         k_points = eval_coords.shape[2]

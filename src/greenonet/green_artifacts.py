@@ -1023,6 +1023,12 @@ class GreenArtifactExporter:
             xaxis_title="xi",
             yaxis_title="x",
             template=self.request.theme,
+            xaxis=dict(constrain="domain"),
+            yaxis=dict(
+                scaleanchor="x",
+                scaleratio=1,
+                constrain="domain",
+            ),
         )
         save_plotly_figure(fig, base_path, self.logger)
 

@@ -58,6 +58,9 @@
       "convection": true,
       "reaction": true
     },
+    "branch_fusion": {
+      "mode": "product"
+    },
     "green_response_feature": {
       "enabled": false
     },

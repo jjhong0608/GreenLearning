@@ -12,6 +12,7 @@ from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    CouplingBranchFusionConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
     CouplingLossTermConfig,
@@ -928,6 +929,166 @@ def test_coupling_net_coefficient_terms_select_enabled_tensors_only():
     expected = torch.cat((b_vals, c_vals), dim=-1)
     assert coefficient_input is not None
     torch.testing.assert_close(coefficient_input, expected)
+
+
+def test_coupling_branch_fusion_config_defaults_and_validation():
+    cfg = CouplingModelConfig()
+
+    assert cfg.branch_fusion.mode == "product"
+    assert CouplingBranchFusionConfig.from_raw({"mode": "product_fuser"}).mode == (
+        "product_fuser"
+    )
+    with pytest.raises(ValueError, match="branch_fusion.mode"):
+        CouplingBranchFusionConfig(mode="bad")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="branch_fusion"):
+        CouplingBranchFusionConfig.from_raw("product")  # type: ignore[arg-type]
+
+
+def test_coupling_model_product_fusion_preserves_forward_shape():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        balance_projection=BalanceProjectionConfig(enabled=False),
+    )
+    model = CouplingNet(cfg)
+    inputs = _make_step_loss_inputs(batch=2, n_lines=3, m_points=5)
+    coords, rhs_raw, rhs_tilde, rhs_norm, _sol, _flux, a_vals, b_vals, c_vals = inputs
+
+    output = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert model.branch_fusion_mode == "product"
+    assert model.branch_fuser is None
+    assert output.shape == (2, 2, 3, 5)
+
+
+def test_coupling_model_product_fuser_forward_shape_and_input_dim():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        balance_projection=BalanceProjectionConfig(enabled=False),
+        branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
+    )
+    model = CouplingNet(cfg)
+    inputs = _make_step_loss_inputs(batch=2, n_lines=3, m_points=5)
+    coords, rhs_raw, rhs_tilde, rhs_norm, _sol, _flux, a_vals, b_vals, c_vals = inputs
+
+    output = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert model.branch_fuser is not None
+    assert model.branch_fuser.in_features == 3 * cfg.hidden_dim
+    assert output.shape == (2, 2, 3, 5)
+
+
+def test_coupling_model_product_fuser_supports_source_only_branch():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        balance_projection=BalanceProjectionConfig(enabled=False),
+        coefficient_terms=CouplingCoefficientTermsConfig(
+            diffusion=False,
+            convection=False,
+            reaction=False,
+        ),
+        branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
+    )
+    model = CouplingNet(cfg)
+    inputs = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    coords, rhs_raw, rhs_tilde, rhs_norm, _sol, _flux, a_vals, b_vals, c_vals = inputs
+
+    output = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert model.branch_coefficient is None
+    assert model.branch_fuser is not None
+    assert model.branch_fuser.in_features == 2 * cfg.hidden_dim
+    assert output.shape == (1, 2, 3, 5)
+
+
+def test_coupling_model_product_fuser_includes_axis_1d_transverse_branch():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        balance_projection=BalanceProjectionConfig(enabled=False),
+        branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            boundary_aware_modes=2,
+        ),
+    )
+    model = CouplingNet(cfg)
+    inputs = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    coords, rhs_raw, rhs_tilde, rhs_norm, _sol, _flux, a_vals, b_vals, c_vals = inputs
+
+    output = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert model.branch_transverse is not None
+    assert model.branch_fuser is not None
+    assert model.branch_fuser.in_features == 4 * cfg.hidden_dim
+    assert output.shape == (1, 2, 3, 5)
+
+
+def test_coupling_model_product_fuser_supports_source_stencil_lift_path():
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=1,
+        balance_projection=BalanceProjectionConfig(enabled=False),
+        source_stencil_lift=SourceStencilLiftConfig(enabled=True),
+        branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
+    )
+    model = CouplingNet(cfg)
+    inputs = _make_step_loss_inputs(batch=1, n_lines=3, m_points=5)
+    coords, rhs_raw, rhs_tilde, rhs_norm, _sol, _flux, a_vals, b_vals, c_vals = inputs
+
+    output = model(
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        rhs_raw=rhs_raw,
+        rhs_tilde=rhs_tilde,
+        rhs_norm=rhs_norm,
+    )
+
+    assert model.source_stencil_lift is not None
+    assert model.branch_fuser is not None
+    assert model.branch_fuser.in_features == 3 * cfg.hidden_dim
+    assert output.shape == (1, 2, 3, 5)
 
 
 def test_coupling_net_source_only_branch_skips_coefficient_branch_backprop():

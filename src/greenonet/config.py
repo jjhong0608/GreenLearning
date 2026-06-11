@@ -94,6 +94,41 @@ class CouplingCoefficientTermsConfig:
 
 
 @dataclass
+class CouplingBranchFusionConfig:
+    """Branch feature fusion mode for CouplingNet."""
+
+    mode: Literal["product", "product_fuser"] = "product"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, str):
+            raise TypeError("branch_fusion.mode must be a string.")
+        if self.mode not in {"product", "product_fuser"}:
+            raise ValueError(
+                "branch_fusion.mode must be 'product' or 'product_fuser'."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: CouplingBranchFusionConfig | dict[str, Any] | None,
+    ) -> CouplingBranchFusionConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"mode"})
+            if unknown:
+                raise TypeError(
+                    "branch_fusion has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("branch_fusion must be an object.")
+
+
+@dataclass
 class CouplingTrunkPositionalEncodingConfig:
     """Optional deterministic features for CouplingNet trunk coordinates."""
 
@@ -228,6 +263,9 @@ class CouplingModelConfig:
     coefficient_terms: CouplingCoefficientTermsConfig = field(
         default_factory=CouplingCoefficientTermsConfig
     )
+    branch_fusion: CouplingBranchFusionConfig | dict[str, Any] = field(
+        default_factory=CouplingBranchFusionConfig
+    )
     green_response_feature: GreenResponseFeatureConfig = field(
         default_factory=GreenResponseFeatureConfig
     )
@@ -242,6 +280,7 @@ class CouplingModelConfig:
         self.balance_projection = BalanceProjectionConfig.from_raw(
             self.balance_projection
         )
+        self.branch_fusion = CouplingBranchFusionConfig.from_raw(self.branch_fusion)
         self.axis_1d_trunk = Axis1DTrunkConfig.from_raw(self.axis_1d_trunk)
 
 

@@ -13,6 +13,7 @@ from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CompileConfig,
+    CouplingBranchFusionConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
     CouplingLossesConfig,
@@ -132,6 +133,16 @@ class EvalCouplingCLI:
         if not isinstance(raw_coefficient_terms, dict):
             raise TypeError(f"{section_name}.coefficient_terms must be an object.")
         return CouplingCoefficientTermsConfig(**dict(raw_coefficient_terms))
+
+    @staticmethod
+    def _build_branch_fusion_config(
+        raw_branch_fusion: object | None,
+        section_name: str,
+    ) -> CouplingBranchFusionConfig:
+        try:
+            return CouplingBranchFusionConfig.from_raw(raw_branch_fusion)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"{section_name}.{exc}") from exc
 
     @staticmethod
     def _build_trunk_positional_encoding_config(
@@ -354,6 +365,11 @@ class EvalCouplingCLI:
             coefficient_terms_raw,
             "coupling_model",
         )
+        branch_fusion_raw = coupling_model_kwargs.pop("branch_fusion", None)
+        branch_fusion_cfg = self._build_branch_fusion_config(
+            branch_fusion_raw,
+            "coupling_model",
+        )
         green_response_raw = coupling_model_kwargs.pop("green_response_feature", None)
         green_response_cfg = self._build_green_response_feature_config(
             green_response_raw,
@@ -380,6 +396,7 @@ class EvalCouplingCLI:
             balance_projection=balance_projection_cfg,
             source_stencil_lift=source_lift_cfg,
             coefficient_terms=coefficient_terms_cfg,
+            branch_fusion=branch_fusion_cfg,
             green_response_feature=green_response_cfg,
             trunk_positional_encoding=positional_cfg,
             axis_1d_trunk=axis_1d_trunk_cfg,

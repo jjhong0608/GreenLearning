@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from greenonet.config import CouplingModelConfig
+from greenonet.config import CouplingBranchFusionConfig, CouplingModelConfig
 from greenonet.model import GreenONetModel
 from cli.eval_coupling import EvalCouplingCLI
 from cli.train import TrainCLI
@@ -301,6 +301,7 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.coefficient_terms.diffusion is True
         assert coupling_model_cfg.coefficient_terms.convection is False
         assert coupling_model_cfg.coefficient_terms.reaction is False
+        assert coupling_model_cfg.branch_fusion.mode == "product"
         assert coupling_model_cfg.source_stencil_lift.enabled is False
         assert coupling_model_cfg.green_response_feature.enabled is False
         assert coupling_model_cfg.trunk_positional_encoding.enabled is False
@@ -345,6 +346,34 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.balance_projection.mode == "smooth_mask"
         assert coupling_model_cfg.balance_projection.mask == "sin"
         assert coupling_training_cfg.losses.balance_loss.enabled is False
+
+    def test_parses_branch_fusion_object_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "branch_fusion": {
+                    "mode": "product_fuser",
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset_cfg,
+            _model_cfg,
+            _training_cfg,
+            coupling_model_cfg,
+            _coupling_training_cfg,
+            _pipeline_cfg,
+            _terminal_cfg,
+        ) = TrainCLI()._build_configs(config_path)
+
+        assert coupling_model_cfg.branch_fusion.mode == "product_fuser"
 
     def test_parses_source_stencil_lift_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -721,6 +750,33 @@ class TestTrainCLIDatasetConfig:
         assert cfg.diffusion is True
         assert cfg.convection is False
         assert cfg.reaction is False
+
+    def test_branch_fusion_defaults(self):
+        cfg = TrainCLI._build_branch_fusion_config(None, "coupling_model")
+
+        assert cfg.mode == "product"
+
+    def test_eval_cli_parses_branch_fusion_config(self):
+        cfg = EvalCouplingCLI._build_branch_fusion_config(
+            {"mode": "product_fuser"},
+            "coupling_model",
+        )
+
+        assert cfg == CouplingBranchFusionConfig(mode="product_fuser")
+
+    def test_eval_cli_rejects_non_object_branch_fusion_config(self):
+        with pytest.raises(TypeError, match="coupling_model.branch_fusion"):
+            EvalCouplingCLI._build_branch_fusion_config(
+                "product_fuser",
+                "coupling_model",
+            )
+
+    def test_eval_cli_rejects_invalid_branch_fusion_mode(self):
+        with pytest.raises(ValueError, match="coupling_model.branch_fusion.mode"):
+            EvalCouplingCLI._build_branch_fusion_config(
+                {"mode": "concat_fuser"},
+                "coupling_model",
+            )
 
     def test_eval_cli_parses_coefficient_terms_config(self):
         cfg = EvalCouplingCLI._build_coefficient_terms_config(

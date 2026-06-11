@@ -12,6 +12,7 @@ from greenonet.compile_utils import model_state_dict_for_save
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
@@ -91,6 +92,11 @@ def _deserialize_config(
         if isinstance(coefficient_terms_raw, dict):
             data["coefficient_terms"] = CouplingCoefficientTermsConfig(
                 **coefficient_terms_raw
+            )
+        branch_fusion_raw = data.get("branch_fusion")
+        if isinstance(branch_fusion_raw, dict):
+            data["branch_fusion"] = CouplingBranchFusionConfig.from_raw(
+                branch_fusion_raw
             )
         green_response_raw = data.get("green_response_feature")
         if isinstance(green_response_raw, dict):

@@ -2,6 +2,7 @@ import torch
 
 from greenonet.config import (
     Axis1DTrunkConfig,
+    CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
@@ -104,6 +105,7 @@ def test_save_load_coupling_model_with_config(tmp_path):
     assert loaded_cfg.coefficient_terms.diffusion is True
     assert loaded_cfg.coefficient_terms.convection is False
     assert loaded_cfg.coefficient_terms.reaction is False
+    assert loaded_cfg.branch_fusion.mode == "product"
     assert loaded_cfg.green_response_feature.enabled is False
     assert loaded_cfg.trunk_positional_encoding.enabled is False
     assert loaded_cfg.trunk_positional_encoding.mode == "fourier"
@@ -374,6 +376,32 @@ def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
     assert loaded_cfg == cfg
     assert loaded_cfg.axis_1d_trunk.enabled is True
     assert loaded_cfg.axis_1d_trunk.boundary_aware_modes == 3
+    _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_save_load_coupling_model_with_branch_fusion_config(tmp_path):
+    torch.manual_seed(0)
+    cfg = CouplingModelConfig(
+        branch_input_dim=5,
+        hidden_dim=8,
+        depth=2,
+        activation="tanh",
+        use_bias=True,
+        dropout=0.0,
+        dtype=torch.float64,
+        branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
+    )
+    model = CouplingNet(cfg)
+    path = tmp_path / "coupling_branch_fusion.safetensors"
+
+    from greenonet.io import load_model_with_config, save_model_with_config
+
+    save_model_with_config(model, cfg, path)
+    loaded_model, loaded_cfg = load_model_with_config(path)
+
+    assert isinstance(loaded_model, CouplingNet)
+    assert loaded_cfg == cfg
+    assert loaded_cfg.branch_fusion.mode == "product_fuser"
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
