@@ -122,6 +122,7 @@ def test_export_green_artifacts_smoke_diffusion_only(
     )
 
     assert summary["rel_green_valid"] is True
+    assert summary["rel_green_reference"] == "diffusion"
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_line_metrics.csv").exists()
     assert (outdir / "metrics" / "sample_metrics.csv").exists()
@@ -256,8 +257,53 @@ def test_export_green_artifacts_marks_rel_green_invalid_for_reaction(
     )
 
     assert summary["rel_green_valid"] is False
+    assert summary["rel_green_reference"] is None
     assert summary["rel_green"] is None
-    assert "nonzero" in str(summary["rel_green_skip_reason"])
+    assert "reaction" in str(summary["rel_green_skip_reason"])
+
+
+def test_export_green_artifacts_uses_convection_diffusion_reference(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    coefficient_path = tmp_path / "convection_coefficients.py"
+    coefficient_path.write_text(
+        "\n".join(
+            [
+                "import torch",
+                "def a_fun(x, y): return torch.ones_like(x)",
+                "def apx_fun(x, y): return torch.zeros_like(x)",
+                "def apy_fun(x, y): return torch.zeros_like(x)",
+                "def bx_fun(x, y): return torch.ones_like(x)",
+                "def by_fun(x, y): return 2.0 * torch.ones_like(x)",
+                "def c_fun(x, y): return torch.zeros_like(x)",
+            ]
+        )
+    )
+    checkpoint_path = tmp_path / "green.safetensors"
+    config_path = tmp_path / "config.json"
+    outdir = tmp_path / "artifacts"
+    _write_checkpoint(checkpoint_path)
+    _write_config(config_path, coefficient_path=coefficient_path)
+
+    summary = export_green_artifacts(
+        GreenArtifactRequest(
+            checkpoint=checkpoint_path,
+            config=config_path,
+            outdir=outdir,
+            eval_seed=7,
+            line_indices=(0,),
+            xi_fractions=(0.5,),
+        )
+    )
+
+    assert summary["rel_green_valid"] is True
+    assert summary["rel_green_reference"] == "convection_diffusion"
+    assert summary["rel_green"] is not None
+
+    saved_summary = json.loads((outdir / "summary.json").read_text())
+    assert saved_summary["rel_green_reference"] == "convection_diffusion"
 
 
 def test_exporter_reconstruction_metric_shape(

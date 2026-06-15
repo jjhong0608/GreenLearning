@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
+import pytest
 import torch
 
 from greenonet.config import (
@@ -20,6 +21,7 @@ from greenonet.coupling_artifacts import (
 from greenonet.coupling_model import CouplingNet
 from greenonet.io import save_model_with_config
 from greenonet.model import GreenONetModel
+from cli.export_coupling_artifacts import ExportCouplingArtifactsCLI
 
 
 def _patch_static_export(monkeypatch) -> None:
@@ -216,6 +218,75 @@ def test_coupling_artifact_helpers_keep_signed_differences(tmp_path: Path) -> No
     )
 
 
+def test_coupling_artifact_default_selection_uses_rel_sol_quantiles(
+    tmp_path: Path,
+) -> None:
+    request = CouplingArtifactRequest(
+        config=tmp_path / "config.json",
+        coupling_checkpoint=tmp_path / "coupling.safetensors",
+        green_checkpoint=tmp_path / "green.safetensors",
+        outdir=tmp_path / "artifacts",
+    )
+    exporter = CouplingArtifactExporter(request)
+    metric_rows = [
+        {"sample_id": 0, "rel_sol": 0.5},
+        {"sample_id": 1, "rel_sol": 0.1},
+        {"sample_id": 2, "rel_sol": 0.7},
+        {"sample_id": 3, "rel_sol": 0.3},
+        {"sample_id": 4, "rel_sol": 0.9},
+    ]
+
+    selected, roles, policy = exporter._select_sample_indices(metric_rows)
+
+    assert policy == "rel_sol_quantiles"
+    assert roles == {"min": 1, "q25": 3, "q50": 0, "q75": 2, "max": 4}
+    assert selected == (1, 3, 0, 2, 4)
+
+
+def test_coupling_artifact_explicit_selection_overrides_quantiles(
+    tmp_path: Path,
+) -> None:
+    request = CouplingArtifactRequest(
+        config=tmp_path / "config.json",
+        coupling_checkpoint=tmp_path / "coupling.safetensors",
+        green_checkpoint=tmp_path / "green.safetensors",
+        outdir=tmp_path / "artifacts",
+        selected_samples=(2, 0, 2),
+    )
+    exporter = CouplingArtifactExporter(request)
+    metric_rows = [
+        {"sample_id": 0, "rel_sol": 0.5},
+        {"sample_id": 1, "rel_sol": 0.1},
+        {"sample_id": 2, "rel_sol": 0.7},
+    ]
+
+    selected, roles, policy = exporter._select_sample_indices(metric_rows)
+
+    assert policy == "explicit"
+    assert roles == {}
+    assert selected == (2, 0)
+
+
+def test_export_coupling_artifacts_cli_rejects_removed_max_samples_option() -> None:
+    parser = ExportCouplingArtifactsCLI().parser
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "--config",
+                "config.json",
+                "--coupling-checkpoint",
+                "coupling.safetensors",
+                "--green-checkpoint",
+                "green.safetensors",
+                "--outdir",
+                "artifacts",
+                "--max-samples",
+                "3",
+            ]
+        )
+
+
 def test_export_coupling_artifacts_smoke(
     tmp_path: Path,
     monkeypatch,
@@ -242,13 +313,20 @@ def test_export_coupling_artifacts_smoke(
             green_checkpoint=green_checkpoint,
             outdir=outdir,
             device="cpu",
-            selected_samples=(0,),
             theme="plotly_white",
         )
     )
 
     assert summary["device"] == "cpu"
     assert summary["selected_samples"] == [0]
+    assert summary["selected_sample_policy"] == "rel_sol_quantiles"
+    assert summary["selected_sample_roles"] == {
+        "min": 0,
+        "q25": 0,
+        "q50": 0,
+        "q75": 0,
+        "max": 0,
+    }
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_sample_metrics.csv").exists()
     assert (outdir / "metrics" / "aggregate_metrics.csv").exists()
@@ -274,5 +352,6 @@ def test_export_coupling_artifacts_smoke(
     assert np.nanmax(selected["bx"]) == 10.0
     assert np.nanmax(selected["by"]) == 20.0
     saved_summary = json.loads((outdir / "summary.json").read_text())
+    assert saved_summary["selected_sample_policy"] == "rel_sol_quantiles"
     assert saved_summary["source_grid_policy"] == ["npz_rhs_resampled_to_model_grid"]
     assert saved_summary["coefficients"] == str(coefficient_path)

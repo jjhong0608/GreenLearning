@@ -69,13 +69,10 @@ class ExportCouplingArtifactsCLI:
             type=int,
             nargs="*",
             default=None,
-            help="Selected test sample indices. Defaults to the first max samples.",
-        )
-        parser.add_argument(
-            "--max-samples",
-            type=int,
-            default=3,
-            help="Number of leading samples to plot when selected samples are omitted.",
+            help=(
+                "Selected test sample indices. If omitted, samples are selected "
+                "from rel_sol quantiles: min, q25, q50, q75, max."
+            ),
         )
         parser.add_argument(
             "--plot-workers",
@@ -134,7 +131,6 @@ class ExportCouplingArtifactsCLI:
                 if args.selected_samples is None
                 else tuple(int(item) for item in args.selected_samples)
             ),
-            max_samples=args.max_samples,
             plot_workers=args.plot_workers,
             save_generated_data=bool(args.save_generated_data),
         )

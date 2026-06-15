@@ -10,10 +10,10 @@
     "deterministic": true,
     "sampler_mode": "backward",
     "use_operator_learning": true,
-    "training_path": "data/Divergence_Free_Convection_Diffusion_1300_samples/train",
-    "validation_path": "data/Divergence_Free_Convection_Diffusion_1300_samples/valid",
-    "test_path": "data/Divergence_Free_Convection_Diffusion_1300_samples/test",
-    "coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion.py",
+    "training_path": "data/Divergence_Free_Convection_Diffusion2/train",
+    "validation_path": "data/Divergence_Free_Convection_Diffusion2/valid",
+    "test_path": "data/Divergence_Free_Convection_Diffusion2/test",
+    "coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion2.py",
     "dtype": "float64"
   },
   "terminal": {
@@ -59,7 +59,7 @@
       "reaction": true
     },
     "branch_fusion": {
-      "mode": "product"
+      "mode": "product_fuser"
     },
     "green_response_feature": {
       "enabled": false
@@ -126,7 +126,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Divergence_Free_Convection_Diffusion/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/Divergence_Free_Convection_Diffusion2/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

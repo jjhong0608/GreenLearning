@@ -51,7 +51,6 @@ class CouplingArtifactRequest:
     device: str | None = None
     theme: str = "plotly_white"
     selected_samples: tuple[int, ...] | None = None
-    max_samples: int | None = 3
     plot_workers: int = 1
     save_generated_data: bool = True
 
@@ -312,7 +311,6 @@ class CouplingArtifactExporter:
             ap_fun_x=coeffs.apx_fun,
             ap_fun_y=coeffs.apy_fun,
         )
-        selected_indices = self._select_sample_indices(len(dataset))
 
         coupling_model = self._load_coupling_model(configs.coupling_model)
         green_model = self._load_green_model(configs.green_model)
@@ -341,8 +339,6 @@ class CouplingArtifactExporter:
         metric_rows: list[dict[str, object]] = []
         balance_rows: list[dict[str, object]] = []
         boundary_rows: list[dict[str, object]] = []
-        selected_records: list[SampleEvaluation] = []
-        figure_paths: list[str] = []
         source_policies: set[str] = set()
         was_training = coupling_model.training
         try:
@@ -368,9 +364,23 @@ class CouplingArtifactExporter:
                     metric_rows.append(sample_metrics["sample"])
                     balance_rows.append(sample_metrics["balance"])
                     boundary_rows.append(sample_metrics["boundary"])
-                    if sample_id in selected_indices:
-                        selected_records.append(evaluation)
-                        figure_paths.extend(self._write_sample_figures(evaluation))
+                selected_indices, selected_roles, selected_policy = (
+                    self._select_sample_indices(metric_rows)
+                )
+                selected_records: list[SampleEvaluation] = []
+                figure_paths: list[str] = []
+                for sample_id in selected_indices:
+                    evaluation = self._evaluate_sample(
+                        sample_id=sample_id,
+                        item=tuple(dataset[sample_id]),
+                        dataset=dataset,
+                        coupling_model=coupling_model,
+                        green_kernel=green_kernel,
+                        integration_rule=configs.coupling_training.integration_rule,
+                        device=device,
+                    )
+                    selected_records.append(evaluation)
+                    figure_paths.extend(self._write_sample_figures(evaluation))
         finally:
             coupling_model.train(was_training)
 
@@ -394,6 +404,8 @@ class CouplingArtifactExporter:
             "theme": self.request.theme,
             "integration_rule": configs.coupling_training.integration_rule,
             "selected_samples": list(selected_indices),
+            "selected_sample_policy": selected_policy,
+            "selected_sample_roles": selected_roles,
             "plot_workers": self.request.plot_workers,
             "save_generated_data": self.request.save_generated_data,
             "source_grid_policy": sorted(source_policies),
@@ -478,30 +490,53 @@ class CouplingArtifactExporter:
             ),
         ).detach()
 
-    def _select_sample_indices(self, dataset_len: int) -> tuple[int, ...]:
-        if dataset_len <= 0:
+    def _select_sample_indices(
+        self,
+        metric_rows: list[dict[str, object]],
+    ) -> tuple[tuple[int, ...], dict[str, int], str]:
+        if not metric_rows:
             raise ValueError("Coupling artifact export requires at least one sample.")
         if self.request.selected_samples is not None:
             requested = list(self.request.selected_samples)
-        else:
-            max_samples = (
-                self.request.max_samples
-                if self.request.max_samples is not None
-                else 3
-            )
-            if max_samples <= 0:
-                raise ValueError("--max-samples must be positive when provided.")
-            requested = list(range(min(max_samples, dataset_len)))
-        selected: list[int] = []
-        for index in requested:
-            if index < 0 or index >= dataset_len:
-                raise ValueError(
-                    f"Selected sample index {index} is out of range for "
-                    f"{dataset_len} sample(s)."
-                )
-            if index not in selected:
-                selected.append(index)
-        return tuple(selected)
+            selected: list[int] = []
+            dataset_len = len(metric_rows)
+            for index in requested:
+                if index < 0 or index >= dataset_len:
+                    raise ValueError(
+                        f"Selected sample index {index} is out of range for "
+                        f"{dataset_len} sample(s)."
+                    )
+                if index not in selected:
+                    selected.append(index)
+            return tuple(selected), {}, "explicit"
+
+        ranked: list[tuple[float, int]] = []
+        for row in metric_rows:
+            rel_sol = row["rel_sol"]
+            sample_id = row["sample_id"]
+            if not isinstance(rel_sol, int | float):
+                raise TypeError("Metric 'rel_sol' must be numeric.")
+            if not isinstance(sample_id, int):
+                raise TypeError("Metric row 'sample_id' must be an integer.")
+            ranked.append((float(rel_sol), sample_id))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        n_samples = len(ranked)
+        quantiles = (
+            ("min", 0.0),
+            ("q25", 0.25),
+            ("q50", 0.50),
+            ("q75", 0.75),
+            ("max", 1.0),
+        )
+        roles: dict[str, int] = {}
+        selected = []
+        for role, quantile in quantiles:
+            rank = int(round(quantile * (n_samples - 1)))
+            sample_id = ranked[rank][1]
+            roles[role] = sample_id
+            if sample_id not in selected:
+                selected.append(sample_id)
+        return tuple(selected), roles, "rel_sol_quantiles"
 
     def _integrate(self, green: Tensor, values: Tensor, x_axis: Tensor) -> Tensor:
         weighted = values.unsqueeze(-2) * green.unsqueeze(0)

@@ -108,12 +108,24 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - GreenNet 논문용 산출물은 run-level training metrics, per-line metrics,
   selected-line Green kernel data, selected-line coefficient slices,
   source-to-solution reconstruction data를 분리해서 저장하는 방향을 기본으로 한다.
-- GreenNet `training.log`의 `rel_green`은 diffusion-only/no-convection/no-reaction
-  문제에서만 유효한 metric으로 해석한다. Convection 또는 reaction이 포함된
-  문제에서는 로그에 값이 있어도 논문용 Green accuracy metric으로 사용하지 않는다.
+- GreenNet `training.log`와 artifact summary의 `rel_green`은 exact/reference
+  1D line Green kernel을 구성할 수 있는 경우에 유효하다. `c=0, b=0`이면
+  diffusion reference를 쓰고, `c=0, b!=0`이면 convection-diffusion reference를
+  쓴다. Reaction `c`가 nonzero이면 현재 exact/reference가 없으므로 invalid/skip
+  처리한다.
+- `ExactGreenFunction`의 기본 `forward()`, `__call__()`, `error()`는 diffusion-only
+  reference로 유지한다. Reaction-free convection-diffusion line reference가
+  필요하면 `convection_diffusion(b)`를 명시적으로 호출하고, x-lines에는 `bx`,
+  y-lines에는 `by`의 line slice를 넘긴다. GreenNet `rel_green` 경로는 같은
+  reference policy를 사용한다.
+- Exact/reference Green kernel matrix convention은 `G[row=x, col=xi]`이다.
+  Reconstruction은 마지막 dimension인 `xi` 방향으로 적분한다. Convection-diffusion
+  kernel은 비대칭이므로 이 orientation을 해석식 테스트로 고정해야 한다.
 - GreenNet problem selection의 현재 논의 기준은 `Pure_Poisson.py`와 두
-  diffusion-only 문제를 `rel_green` 중심 주력 문제로 두고, reaction/convection
-  포함 문제는 reconstruction 중심 보조/확장 산출물로 다루는 것이다.
+  diffusion-only 문제를 `rel_green` 중심 주력 문제로 두고, reaction-free
+  convection-diffusion 문제도 `rel_green_reference="convection_diffusion"`로
+  비교할 수 있다. Reaction 포함 문제는 reconstruction 중심 보조/확장 산출물로
+  다루는 것이다.
 - GreenNet 논문용 산출물은 training loop에 묶기보다 checkpoint/config/dataset을
   다시 읽는 별도 재생성 script 또는 CLI로 만드는 방향을 선호한다.
 - GreenNet이 주장하려는 내용이 fixed coefficient problem에서 학습한 Green
@@ -184,6 +196,11 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   실패해도 `html`과 `json`은 저장해야 한다.
 - `plot_green_logs.py`도 GreenNet log comparison figures를 `html`, `json`으로
   항상 저장하고, 가능한 경우 `png`, `pdf`도 함께 저장한다.
+- `plot_coupling_rel_sol_boxplots.py`는 workshop용 CouplingNet test result CSV
+  비교 script이다. `checkpoints/For_Workshop/CouplingNetResults`의 네
+  `*_per_sample_metrics.csv` 파일에서 `rel_sol`을 읽고 문제별 Plotly boxplot을
+  `html/json/png/pdf` 네 형식으로 저장한다. 이 script는 점 표시 없이 박스 플롯만
+  그리며 `rel_sol`은 `%` 단위(100배)로 표시한다.
 - Figure 후보:
   - coefficient field visualization: `a`, `bx`, `by`, `c`
   - source/solution sample visualization

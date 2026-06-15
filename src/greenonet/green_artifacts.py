@@ -19,7 +19,11 @@ from greenonet.backward_sampler import BackwardSampler
 from greenonet.coefficients import CoefficientFunctions, load_coefficient_functions
 from greenonet.config import CompileConfig, DatasetConfig, ModelConfig, TrainingConfig
 from greenonet.data import AxialDataset
-from greenonet.greens import ExactGreenFunction
+from greenonet.greens import (
+    GreenReferenceKind,
+    exact_green_kernel_from_coefficients,
+    select_green_reference_policy,
+)
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.numerics import IntegrationRule, integrate
@@ -246,22 +250,29 @@ class GreenArtifactExporter:
                 integration_rule=training_cfg.integration_rule,
             )
 
-        rel_green_valid = self._is_diffusion_only(b_vals_all, c_vals_all)
-        rel_green_skip_reason = None
+        rel_green_policy = select_green_reference_policy(
+            b_vals_all,
+            c_vals_all,
+            zero_tol=self.ZERO_TOL,
+        )
+        rel_green_valid = rel_green_policy.valid
+        rel_green_reference = rel_green_policy.reference
+        rel_green_skip_reason = rel_green_policy.skip_reason
         exact_kernel: Tensor | None = None
         rel_green_by_line: Tensor | None = None
         if rel_green_valid:
-            exact_kernel = self._exact_green_kernel(coords=coords, a_vals=a_vals)
+            assert rel_green_reference is not None
+            exact_kernel = self._exact_green_kernel(
+                coords=coords,
+                a_vals=a_vals,
+                b_vals=b_vals,
+                reference=rel_green_reference,
+            )
             rel_green_by_line = self._relative_green_error_by_line(
                 prediction=kernel,
                 exact_kernel=exact_kernel,
                 x_axis=trunk_grid[:, 0, 0],
                 integration_rule=training_cfg.integration_rule,
-            )
-        else:
-            rel_green_skip_reason = (
-                "Skipped because sampled convection b_vals or reaction c_vals "
-                "are nonzero; rel_green is treated as a diffusion-only metric."
             )
 
         selected_lines = self._select_line_indices(
@@ -341,6 +352,7 @@ class GreenArtifactExporter:
             "selected_xi": [asdict(item) for item in selected_xi],
             "selected_sample_indices": list(selected_samples),
             "rel_green_valid": rel_green_valid,
+            "rel_green_reference": rel_green_reference,
             "rel_green_skip_reason": rel_green_skip_reason,
             "rel_sol": {
                 "mean": float(rel_sol_flat.mean().item()),
@@ -524,30 +536,18 @@ class GreenArtifactExporter:
         return torch.sqrt(num / den)
 
     @staticmethod
-    def _exact_green_kernel(coords: Tensor, a_vals: Tensor) -> Tensor:
-        exact = torch.zeros(
-            (
-                a_vals.shape[0],
-                a_vals.shape[1],
-                a_vals.shape[2],
-                a_vals.shape[2],
-            ),
-            device=a_vals.device,
-            dtype=a_vals.dtype,
+    def _exact_green_kernel(
+        coords: Tensor,
+        a_vals: Tensor,
+        b_vals: Tensor,
+        reference: GreenReferenceKind,
+    ) -> Tensor:
+        return exact_green_kernel_from_coefficients(
+            coords=coords,
+            a_vals=a_vals,
+            b_vals=b_vals,
+            reference=reference,
         )
-        for axis in range(a_vals.shape[0]):
-            for line_idx in range(a_vals.shape[1]):
-                x_axis = coords[axis, line_idx, :, axis]
-                exact[axis, line_idx] = ExactGreenFunction(
-                    x_axis,
-                    a=a_vals[axis, line_idx],
-                )()
-        return exact
-
-    def _is_diffusion_only(self, b_vals: Tensor, c_vals: Tensor) -> bool:
-        b_max = float(b_vals.detach().abs().max().item())
-        c_max = float(c_vals.detach().abs().max().item())
-        return b_max <= self.ZERO_TOL and c_max <= self.ZERO_TOL
 
     @staticmethod
     def _aggregate_stats(values: Tensor) -> MetricStats:

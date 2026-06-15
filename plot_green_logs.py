@@ -9,7 +9,7 @@ from typing import Dict, List
 import plotly.graph_objs as go
 
 
-NUMBER_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+NUMBER_PATTERN = r"(?:[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|nan)"
 TOKEN_PATTERN = re.compile(
     rf"\|\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>{NUMBER_PATTERN})"
 )

@@ -14,7 +14,10 @@ from greenonet.config import ModelConfig, TrainingConfig
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.numerics import IntegrationRule, integrate
 from greenonet.visualizer import GreenVisualizer, LossVisualizer
-from greenonet.greens import ExactGreenFunction
+from greenonet.greens import (
+    exact_green_kernel_from_coefficients,
+    select_green_reference_policy,
+)
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
 
@@ -127,21 +130,37 @@ class Trainer(LoggingMixin):
             prediction = prediction.unsqueeze(0)
         if a_val.dim() == 3:
             a_val = a_val.unsqueeze(0)
+        if b_val.dim() == 3:
+            b_val = b_val.unsqueeze(0)
+        if c_val.dim() == 3:
+            c_val = c_val.unsqueeze(0)
         # Align dimensions
-        b_pred, axes_pred, n_lines_pred, m_points, _ = prediction.shape
-        b_coeff, axes_coeff, n_lines_coeff, _ = a_val.shape
-        axes = min(axes_pred, axes_coeff)
-        n_lines = min(n_lines_pred, n_lines_coeff)
-        prediction = prediction[:, :axes, :n_lines]
-        a_val = a_val[:, :axes, :n_lines]
+        b_pred, axes_pred, n_lines_pred, _m_points, _ = prediction.shape
+        b_coeff = min(a_val.shape[0], b_val.shape[0], c_val.shape[0])
+        axes = min(axes_pred, a_val.shape[1], b_val.shape[1], c_val.shape[1])
+        n_lines = min(
+            n_lines_pred,
+            a_val.shape[2],
+            b_val.shape[2],
+            c_val.shape[2],
+        )
+        batch = min(b_pred, b_coeff)
+        prediction = prediction[:batch, :axes, :n_lines]
+        a_val = a_val[:batch, :axes, :n_lines]
+        b_val = b_val[:batch, :axes, :n_lines]
+        c_val = c_val[:batch, :axes, :n_lines]
         x_axis = coords[0, 0, :, 0].to(prediction.device)  # (m,)
 
-        exact_kernel = torch.zeros_like(prediction)
-        for b_idx in range(min(b_pred, b_coeff)):
-            for axis in range(axes):
-                for line in range(n_lines):
-                    gf = ExactGreenFunction(x_axis, a=a_val[b_idx, axis, line])
-                    exact_kernel[b_idx, axis, line] = gf()
+        policy = select_green_reference_policy(b_val, c_val)
+        if not policy.valid:
+            return torch.full((), float("nan"), device=prediction.device)
+        assert policy.reference is not None
+        exact_kernel = exact_green_kernel_from_coefficients(
+            coords=coords,
+            a_vals=a_val,
+            b_vals=b_val,
+            reference=policy.reference,
+        )
 
         # num = (prediction - exact_kernel).pow(2).sum()
         # den = exact_kernel.pow(2).sum().clamp_min(1e-12)
@@ -150,7 +169,7 @@ class Trainer(LoggingMixin):
         num = integrate(num, x=x_axis, dim=-1, rule=integration_rule)
         den = integrate(den, x=x_axis, dim=-1, rule=integration_rule)
         num = integrate(num, x=x_axis, dim=-1, rule=integration_rule)
-        den = integrate(den, x=x_axis, dim=-1, rule=integration_rule)
+        den = integrate(den, x=x_axis, dim=-1, rule=integration_rule).clamp_min(1e-12)
 
         return torch.sqrt(num / den).mean()
 
@@ -207,22 +226,41 @@ class Trainer(LoggingMixin):
             prediction = prediction.unsqueeze(0)
         if a_val.dim() == 3:
             a_val = a_val.unsqueeze(0)
+        if b_val.dim() == 3:
+            b_val = b_val.unsqueeze(0)
+        if c_val.dim() == 3:
+            c_val = c_val.unsqueeze(0)
 
         b_pred, axes_pred, n_lines_pred, _, _ = prediction.shape
-        b_coeff, axes_coeff, n_lines_coeff, _ = a_val.shape
-        axes = min(axes_pred, axes_coeff)
-        n_lines = min(n_lines_pred, n_lines_coeff)
-        prediction = prediction[:, :axes, :n_lines]
-        a_val = a_val[:, :axes, :n_lines]
+        b_coeff = min(a_val.shape[0], b_val.shape[0], c_val.shape[0])
+        axes = min(axes_pred, a_val.shape[1], b_val.shape[1], c_val.shape[1])
+        n_lines = min(
+            n_lines_pred,
+            a_val.shape[2],
+            b_val.shape[2],
+            c_val.shape[2],
+        )
+        batch = min(b_pred, b_coeff)
+        prediction = prediction[:batch, :axes, :n_lines]
+        a_val = a_val[:batch, :axes, :n_lines]
+        b_val = b_val[:batch, :axes, :n_lines]
+        c_val = c_val[:batch, :axes, :n_lines]
         x_axis = coords[0, 0, :, 0].to(prediction.device)
 
-        exact_kernel = torch.zeros_like(prediction)
-        for b_idx in range(min(b_pred, b_coeff)):
-            for axis in range(axes):
-                for line in range(n_lines):
-                    gf = ExactGreenFunction(x_axis, a=a_val[b_idx, axis, line])
-                    # exact_kernel[b_idx, axis, line] = gf()
-                    exact_kernel[b_idx, axis, line] = gf.poisson()
+        policy = select_green_reference_policy(b_val, c_val)
+        if not policy.valid:
+            return torch.full(
+                (batch, axes, n_lines),
+                float("nan"),
+                device=prediction.device,
+            )
+        assert policy.reference is not None
+        exact_kernel = exact_green_kernel_from_coefficients(
+            coords=coords,
+            a_vals=a_val,
+            b_vals=b_val,
+            reference=policy.reference,
+        )
 
         num = (prediction - exact_kernel).pow(2)
         den = exact_kernel.pow(2)
