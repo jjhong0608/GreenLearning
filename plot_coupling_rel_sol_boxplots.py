@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -39,12 +40,16 @@ class CouplingRelSolBoxplotter:
         basename: str = DEFAULT_BASENAME,
         theme: str = "plotly_white",
         y_log: bool = False,
+        rel_sol_percentile: float = 100.0,
     ) -> None:
         self.indir = indir
         self.outdir = outdir
         self.basename = basename
         self.theme = theme
         self.y_log = y_log
+        if not math.isfinite(rel_sol_percentile) or not (0.0 < rel_sol_percentile <= 100.0):
+            raise ValueError("rel_sol_percentile must be in (0, 100].")
+        self.rel_sol_percentile = rel_sol_percentile
 
     @staticmethod
     def label_from_path(path: Path) -> str:
@@ -96,9 +101,19 @@ class CouplingRelSolBoxplotter:
             raise ValueError(f"{path} contains no rel_sol values.")
         return values
 
+    def filter_lowest_percent(self, values: Sequence[float]) -> list[float]:
+        if self.rel_sol_percentile >= 100.0:
+            return list(values)
+        sorted_values = sorted(values)
+        n_keep = max(1, math.floor(len(sorted_values) * self.rel_sol_percentile / 100.0))
+        return sorted_values[:n_keep]
+
     def load_series(self) -> list[RelSolSeries]:
         return [
-            RelSolSeries(label=self.label_from_path(path), values=self.read_rel_sol(path))
+            RelSolSeries(
+                label=self.label_from_path(path),
+                values=self.filter_lowest_percent(self.read_rel_sol(path)),
+            )
             for path in self.find_csv_files()
         ]
 
@@ -182,6 +197,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use a logarithmic y-axis.",
     )
+    parser.add_argument(
+        "--rel-sol-percentile",
+        type=float,
+        default=100.0,
+        help="Keep only the lowest percentile of rel_sol values (1~100, default=100).",
+    )
     return parser.parse_args()
 
 
@@ -193,6 +214,7 @@ def main() -> None:
         basename=args.basename,
         theme=args.theme,
         y_log=bool(args.y_log),
+        rel_sol_percentile=args.rel_sol_percentile,
     ).run()
 
 

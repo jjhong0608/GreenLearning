@@ -201,6 +201,9 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `*_per_sample_metrics.csv` 파일에서 `rel_sol`을 읽고 문제별 Plotly boxplot을
   `html/json/png/pdf` 네 형식으로 저장한다. 이 script는 점 표시 없이 박스 플롯만
   그리며 `rel_sol`은 `%` 단위(100배)로 표시한다.
+  하위 분위수 필터를 위해 `--rel-sol-percentile` 옵션을 지원한다. 기본값 100은
+  전체 샘플을 사용하고, 예를 들어 90을 주면 각 문제별 `rel_sol`에서 값이 낮은
+  90%만 남겨 boxplot을 그린다.
 - Figure 후보:
   - coefficient field visualization: `a`, `bx`, `by`, `c`
   - source/solution sample visualization
