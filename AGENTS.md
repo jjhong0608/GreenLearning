@@ -1,47 +1,19 @@
-# Resaerch Mode
+# Complex geometry domain에서의 Elliptic PDE를 계산하기 위한 GreenNet & CouplingNet의 개발
 
-Mission: Exhaustive information gathering through aggressive tool usage.
+너는 OpenAI의 codex이고 GPT5를 기반으로 하고 있어. 이 repo에서의 너의 목적은 Elliptic PDE를 계산하기 위한 operator-learning framework 개발을 돕는 것이야.
 
-## Core Protocol
-Mandatory Search: 
-- Search for EVERY query, even simple ones. 
-- Target 100+ tool uses per complex task. 
-- You always carefully review the question befere answering.
-- You should use tools as much as possible, ideally more than 100 times.
-- You should also implement your own test first before attempting the problem.
-- You should review and evaluate your answer and answer until your confidnece and certainty reach no less than 80%
+## 반드시 지켜야 할 지침
 
-**Extended Thinking**: Enabled. Use thinking blocks to plan searches, verify consistency.
+- `docs/memory.md`파일을 작성하고 매 작업마다 네가 기억해야 할 것을 정리해서 업데이트 해야 해.
+- 모든 작업을 시작하기 전에 너는 항상 `docs/memory.md` 파일의 내용을 확인해야 해.
+- 매 작업마다 `README.md`파일을 업데이트 해야 해.
 
-## Execution Pattern
-**For Every Query**:
-- Initial broad seraches.
-- Targeted specific searches.
-- Verification searches.
-- Comparative searches across sources.
-- Recent update searches.
-- Alternative angle searches.
 
-Response Format:
-- Direct 1-2 sentences answer first.
-- Use markdown format: headers(###), lists, tables.
-- inline citations `[1][2]`.
-- Bold critical terms only.
+## Python Coding을 위한 지침
 
-## Quality Standards
+- 아래의 예제를 바탕으로 로그 출력을 해줘.
 
-- Search before answering — Always.
-- More searches=better answer.
-- When sources conflict, search more.
-- Prioritize accuracy over speed.
-- Default to over-researching
-- Never guess — search instead
-
-Philosophy: Treat search as unlimited resource. 
-
-## Instruction for Python coding
-- Print a log using below code example:
-  ```Python
+  ```python
   import logging
   from rich.logging import RichHandler
   
@@ -59,48 +31,30 @@ Philosophy: Treat search as unlimited resource.
   logger.setLevel(logging.DEBUG)
   logging.root.handlers.clear()
   ```
-- Same logs printing in terminal have to be saved in working directiry.
-- You always use `class` instead of function. (I prefer Object-Oriented Programming)
-- When you use `class`, you should consider MixIn structure.
-- Use dataclasses and MixIn structure when sharing behaviors
-- For drawing the graph, use `Plotly` library instaed of `matplotlib`.
-- To excute Python, use conda environment `~/.conda/envs/green_net/bin/python`
 
+- 작업 디렉토리에는 터미널에 출력되는 것과 같은 로그가 파일로 저장되어야 해.
 
-# Repository Guidelines
+- `class`를 사용하는 것을 우선 순위에 두어야 해. 나는 OOP(Object-Oriented Programing) 방식을 선호해.
 
-## Goal
-Develop a deep learning model for Poisson's partial differential equation,
-$$
-\nabla\cdot(\kappa(\mathbf{x})\nabla u(\mathbf{x}))=f(\mathbf{x})
-$$
-with Dirichlet boundary condition. Your model is constructed by inspired Axial Green's Function Method (AGM). This method repsents the solution as the integration of the one-dimensional Green's function with source term. For this method, the governing equation should be decomposed along axes. The paper about AGM named `Axial Green s function method for multi‐dimensional elliptic boundary value.pdf` is in `refenreces` folder. Your model is based on the paper named `DD29_proceedings_revision_v1.pdf` in `references` folder. The code already work is in `/home/jjhong0608/Documents/GreenONet`
+- 네가 `class`를 사용할 때에는 반드시 `Mixin` 구조를 고려해야 해.
 
-## Caution
+- 같은 동작을 행하는 구조를 위해서 `dataclasses`와 `Mixin`구조를 항상 염두해두어야 해.
 
-- You should read `memory.md` before you conduct work.
-- After your work, you should update `memory.md`.
+- 그래프를 그릴 때, 나는 `matplotlib`보다 `plotly`를 선호해.
 
-## Project Structures
+- Python을 실행할 때는 항상  `~/.conda/envs/green_net/bin/python`의 conda 환경을 실행해.
 
-- `src/` hosts the core code.
-- `cli/` hosts CLIs
-- `configs/` stores JSON style configuration file for training.
-- `checkpoints/` stores output file such as model's weights, log files, configuration files used for training.
+- 매 작업 후에 린트 검사 및 타입 검사를 수행해줘. `ruff check src`, `ruff format src`, `mypy src` 명령어를 사용해줘.
 
-## Build, Test and Development Command
-- Use virtual environtment; `source .venv/bin/activate`.
-- Lint and type-check before running; `ruff check src`, `ruff format src`, `mypy src`.
-- After modify or add code, you should always upate README.md file.
-- After modify or add code, you should always lint and type-check usinhg `ruff` and `mypy`.
+- PEP8을 준수하여 4칸 들여쓰기, `PascalCase` 클래스, `snake_case` 함수 및 `UPPER_SNAKE_CASE` 상수를 사용해.
 
-## Code style & Naming Conventions
-- Follow PEP8 with four-space indentation, `PascalCase` classes, `snake_case` functions, and `UPPER_SNAKE_CASE` constants.
-- Use dataclasses and mixin when sharing behaviors
+## Project 구조
 
-## Testing Guidelines
-- Place test in `test/` with filenames `test_<module>.py`
+- `src/`에는 core code가 저장된다.
+- `cli/`에는 CLI들이 저장된다.
+- `configs/`dpsms JSON 형식의 설정파일이 저장된다.
+- `checkpoints/`에는 모델의 가중치, 로그 파일, 설정 파일등의 산출물이 저장된다.
 
-## Commit & Pull Request Guidlines
-- Don't use git in this project.
-- No commit & No pull
+## 테스트 가이드라인
+
+- 테스트 파일은 `test/` 디렉터리에 `test_<module>.py`라는 이름으로 저장해줘.

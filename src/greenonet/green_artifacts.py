@@ -530,9 +530,7 @@ class GreenArtifactExporter:
         num = integrate(num, x=x_axis, dim=-1, rule=integration_rule)
         den = integrate(den, x=x_axis, dim=-1, rule=integration_rule)
         num = integrate(num, x=x_axis, dim=-1, rule=integration_rule)
-        den = integrate(den, x=x_axis, dim=-1, rule=integration_rule).clamp_min(
-            1.0e-12
-        )
+        den = integrate(den, x=x_axis, dim=-1, rule=integration_rule).clamp_min(1.0e-12)
         return torch.sqrt(num / den)
 
     @staticmethod
@@ -777,16 +775,12 @@ class GreenArtifactExporter:
                                 "axis_name": self._axis_name(axis),
                                 "line_index": line_idx,
                                 "rel_sol_line": float(
-                                    rel_sol_by_line[
-                                        sample_idx, axis, line_idx
-                                    ].item()
+                                    rel_sol_by_line[sample_idx, axis, line_idx].item()
                                 ),
                                 "rel_green_line": (
                                     ""
                                     if rel_green_by_line is None
-                                    else float(
-                                        rel_green_by_line[axis, line_idx].item()
-                                    )
+                                    else float(rel_green_by_line[axis, line_idx].item())
                                 ),
                             }
                         )
@@ -821,9 +815,10 @@ class GreenArtifactExporter:
             *boundary_fields,
             "slice_rel_error",
         ]
-        with boundary_path.open("w", newline="") as bfp, slice_path.open(
-            "w", newline=""
-        ) as sfp:
+        with (
+            boundary_path.open("w", newline="") as bfp,
+            slice_path.open("w", newline="") as sfp,
+        ):
             boundary_writer = csv.DictWriter(bfp, fieldnames=boundary_fields)
             slice_writer = csv.DictWriter(sfp, fieldnames=slice_fields)
             boundary_writer.writeheader()
@@ -876,18 +871,14 @@ class GreenArtifactExporter:
             "pred_left_boundary": pred_left,
             "pred_right_boundary": pred_right,
             "boundary_abs_max": max(abs(pred_left), abs(pred_right)),
-            "diagonal_value": float(
-                pred_slice[xi_item.index].detach().cpu().item()
-            ),
+            "diagonal_value": float(pred_slice[xi_item.index].detach().cpu().item()),
             "ref_left_boundary": "",
             "ref_right_boundary": "",
             "slice_rel_error": "",
         }
         if ref_slice is not None:
             residual = pred_slice - ref_slice
-            num = integrate(
-                residual.pow(2), x=x_axis, dim=-1, rule=integration_rule
-            )
+            num = integrate(residual.pow(2), x=x_axis, dim=-1, rule=integration_rule)
             den = integrate(
                 ref_slice.pow(2), x=x_axis, dim=-1, rule=integration_rule
             ).clamp_min(1.0e-12)
@@ -1166,8 +1157,7 @@ class GreenArtifactExporter:
             )
         fig.update_layout(
             title=(
-                f"Green reconstruction sample={sample_idx} "
-                f"axis={axis} line={line_idx}"
+                f"Green reconstruction sample={sample_idx} axis={axis} line={line_idx}"
             ),
             xaxis_title=self._axis_name(axis),
             yaxis_title="value",
@@ -1219,9 +1209,7 @@ class GreenArtifactExporter:
                 dim=0,
             )
         )
-        kernel_axes = np.array(
-            [axis for axis, _line in selected_pairs], dtype=np.int64
-        )
+        kernel_axes = np.array([axis for axis, _line in selected_pairs], dtype=np.int64)
         kernel_line_indices = np.array(
             [line for _axis, line in selected_pairs], dtype=np.int64
         )

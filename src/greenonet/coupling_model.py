@@ -736,9 +736,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
                     "branch_fuser must be initialized when "
                     "branch_fusion.mode='product_fuser'."
                 )
-            fused = self.branch_fuser(
-                torch.cat(components + [product_feature], dim=-1)
-            )
+            fused = self.branch_fuser(torch.cat(components + [product_feature], dim=-1))
             fused = cast(torch.Tensor, self.branch_fuser_activation(fused))
             return cast(torch.Tensor, self.branch_fuser_dropout(fused))
         raise ValueError(f"Unsupported branch_fusion mode: {self.branch_fusion_mode}")
@@ -856,9 +854,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
             m_phi = torch.sin(math.pi * y_inner)
             m_psi = torch.sin(math.pi * x_inner)
         else:
-            raise ValueError(
-                "balance_projection.mask must be 'quadratic' or 'sin'."
-            )
+            raise ValueError("balance_projection.mask must be 'quadratic' or 'sin'.")
         if self.smooth_mask_power != 1.0:
             m_phi = torch.pow(m_phi.clamp_min(0.0), self.smooth_mask_power)
             m_psi = torch.pow(m_psi.clamp_min(0.0), self.smooth_mask_power)
@@ -948,8 +944,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
         b, axis, n_lines, m_points = a_vals.shape
         if eval_coords.shape[:2] != (axis, n_lines) or eval_coords.shape[-1] != 2:
             raise ValueError(
-                "eval_coords must have shape (2, n_lines, k_points, 2) "
-                "matching a_vals."
+                "eval_coords must have shape (2, n_lines, k_points, 2) matching a_vals."
             )
         expected_axis_shape = (b, axis, n_lines, m_points)
         if (

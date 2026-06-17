@@ -384,17 +384,20 @@ class CouplingEvaluator(LoggingMixin):
                 with torch.no_grad():
                     for batch_idx, batch in enumerate(loader):
                         (
-                            coords,
-                            rhs_raw,
-                            rhs_tilde,
-                            rhs_norm,
-                            sol,
-                            flux,
-                            a_vals,
-                            b_vals,
-                            c_vals,
-                            ap,
-                        ), _boundary_batch = split_coupling_batch(tuple(batch))
+                            (
+                                coords,
+                                rhs_raw,
+                                rhs_tilde,
+                                rhs_norm,
+                                sol,
+                                flux,
+                                a_vals,
+                                b_vals,
+                                c_vals,
+                                ap,
+                            ),
+                            _boundary_batch,
+                        ) = split_coupling_batch(tuple(batch))
                         del ap
                         tensors = self._evaluate_batch(
                             coords,

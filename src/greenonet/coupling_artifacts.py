@@ -175,6 +175,10 @@ def load_coupling_artifact_configs(config_path: Path) -> CouplingArtifactConfigs
     for key in ("training_path", "validation_path", "test_path"):
         if dataset_kwargs.get(key) is not None:
             dataset_kwargs[key] = Path(cast(str, dataset_kwargs[key]))
+    if dataset_kwargs.get("geometry_path") is not None:
+        dataset_kwargs["geometry_path"] = Path(
+            cast(str, dataset_kwargs["geometry_path"])
+        )
     if dataset_kwargs.get("coefficient_functions_path") is not None:
         dataset_kwargs["coefficient_functions_path"] = Path(
             cast(str, dataset_kwargs["coefficient_functions_path"])
@@ -192,7 +196,9 @@ def load_coupling_artifact_configs(config_path: Path) -> CouplingArtifactConfigs
     if not isinstance(raw_training, dict):
         raise TypeError("training config section must be an object when provided.")
     training_kwargs = dict(raw_training)
-    compile_cfg = _build_compile_config(training_kwargs.pop("compile", None), "training")
+    compile_cfg = _build_compile_config(
+        training_kwargs.pop("compile", None), "training"
+    )
     green_training_cfg = TrainingConfig(compile=compile_cfg, **training_kwargs)
 
     raw_coupling_model = raw_payload.get("coupling_model", {})
@@ -242,7 +248,9 @@ def load_coupling_artifact_configs(config_path: Path) -> CouplingArtifactConfigs
     if not isinstance(raw_coupling_training, dict):
         raise TypeError("coupling_training config section must be an object.")
     coupling_training_kwargs = dict(raw_coupling_training)
-    losses_cfg = _build_coupling_losses_config(coupling_training_kwargs.pop("losses", None))
+    losses_cfg = _build_coupling_losses_config(
+        coupling_training_kwargs.pop("losses", None)
+    )
     compile_cfg = _build_compile_config(
         coupling_training_kwargs.pop("compile", None), "coupling_training"
     )
@@ -293,10 +301,16 @@ class CouplingArtifactExporter:
         self._ensure_output_tree()
         configs = load_coupling_artifact_configs(self.request.config)
         if configs.dataset.test_path is None:
-            raise ValueError("dataset.test_path must be set for Coupling artifact export.")
-        coeff_path = self.request.coefficients or configs.dataset.coefficient_functions_path
+            raise ValueError(
+                "dataset.test_path must be set for Coupling artifact export."
+            )
+        coeff_path = (
+            self.request.coefficients or configs.dataset.coefficient_functions_path
+        )
         coeffs = load_coefficient_functions(coeff_path)
-        device = self._resolve_device(self.request.device or configs.coupling_training.device)
+        device = self._resolve_device(
+            self.request.device or configs.coupling_training.device
+        )
 
         dataset = CouplingDataset(
             data_dir=configs.dataset.test_path,
@@ -445,18 +459,24 @@ class CouplingArtifactExporter:
             load_state_dict_auto(model, self.request.coupling_checkpoint)
             return model
         if not isinstance(loaded_model, CouplingNet):
-            raise TypeError("Coupling checkpoint metadata does not describe CouplingNet.")
+            raise TypeError(
+                "Coupling checkpoint metadata does not describe CouplingNet."
+            )
         return loaded_model
 
     def _load_green_model(self, model_cfg: ModelConfig) -> GreenONetModel:
         try:
-            loaded_model, _loaded_cfg = load_model_with_config(self.request.green_checkpoint)
+            loaded_model, _loaded_cfg = load_model_with_config(
+                self.request.green_checkpoint
+            )
         except Exception:
             model = GreenONetModel(model_cfg)
             load_state_dict_auto(model, self.request.green_checkpoint)
             return model
         if not isinstance(loaded_model, GreenONetModel):
-            raise TypeError("Green checkpoint metadata does not describe GreenONetModel.")
+            raise TypeError(
+                "Green checkpoint metadata does not describe GreenONetModel."
+            )
         return loaded_model
 
     @staticmethod
@@ -573,7 +593,9 @@ class CouplingArtifactExporter:
     ) -> SampleEvaluation:
         self.integration_rule = integration_rule
         core, _boundary = split_coupling_batch(item)
-        coords, rhs_raw, rhs_tilde, rhs_norm, sol, flux, a_vals, b_vals, c_vals, ap = core
+        coords, rhs_raw, rhs_tilde, rhs_norm, sol, flux, a_vals, b_vals, c_vals, ap = (
+            core
+        )
         del ap
         x_axis = coords[0, 0, :, 0].to(device)
         y_axis = coords[1, 0, :, 1].to(device)
@@ -609,8 +631,12 @@ class CouplingArtifactExporter:
         pred_sol_y = pad(pred_sol_y[..., 1:-1], pad=(1, 1, 1, 1), value=0.0)
         pred_flux = torch.stack((phi_lines, psi_lines), dim=1)
         pred_flux = pad(pred_flux[..., 1:-1], pad=(1, 1, 1, 1), value=0.0)
-        exact_flux = pad(flux.unsqueeze(0).to(device)[..., 1:-1], pad=(1, 1, 1, 1), value=0.0)
-        exact_sol = pad(sol.unsqueeze(0).to(device)[..., 1:-1], pad=(1, 1, 1, 1), value=0.0)
+        exact_flux = pad(
+            flux.unsqueeze(0).to(device)[..., 1:-1], pad=(1, 1, 1, 1), value=0.0
+        )
+        exact_sol = pad(
+            sol.unsqueeze(0).to(device)[..., 1:-1], pad=(1, 1, 1, 1), value=0.0
+        )
 
         file_stem = ""
         sample_path: Path | None = None
@@ -640,12 +666,16 @@ class CouplingArtifactExporter:
             file_stem=file_stem or f"sample_{sample_id}",
             source_grid=source_grid.detach().cpu(),
             source_grid_policy=source_policy,
-            solution_grids={key: value.detach().cpu() for key, value in solution_grids.items()},
+            solution_grids={
+                key: value.detach().cpu() for key, value in solution_grids.items()
+            },
             flux_grids={key: value.detach().cpu() for key, value in flux_grids.items()},
             coefficient_grids={
                 key: value.detach().cpu() for key, value in coefficient_grids.items()
             },
-            pred_sol_components=torch.stack((pred_sol_x[0], pred_sol_y[0]), dim=0).detach(),
+            pred_sol_components=torch.stack(
+                (pred_sol_x[0], pred_sol_y[0]), dim=0
+            ).detach(),
             sol_components=exact_sol[0].detach(),
             pred_flux_components=pred_flux[0].detach(),
             flux_components=exact_flux[0].detach(),
@@ -765,10 +795,16 @@ class CouplingArtifactExporter:
         num = integrate((pred - target).pow(2), x=x_axis, dim=-1, rule=integration_rule)
         num = integrate(num, x=x_axis, dim=-1, rule=integration_rule).mean()
         den = integrate(target.pow(2), x=x_axis, dim=-1, rule=integration_rule)
-        den = integrate(den, x=x_axis, dim=-1, rule=integration_rule).mean().clamp_min(eps)
+        den = (
+            integrate(den, x=x_axis, dim=-1, rule=integration_rule)
+            .mean()
+            .clamp_min(eps)
+        )
         return float(torch.sqrt(num / den).item())
 
-    def _field_l2(self, field: Tensor, x_axis: Tensor, integration_rule: IntegrationRule) -> float:
+    def _field_l2(
+        self, field: Tensor, x_axis: Tensor, integration_rule: IntegrationRule
+    ) -> float:
         clean = torch.nan_to_num(field.to(x_axis.device), nan=0.0)
         energy = integrate(clean.pow(2), x=x_axis, dim=-1, rule=integration_rule)
         energy = integrate(energy, x=x_axis, dim=-1, rule=integration_rule)
@@ -858,7 +894,9 @@ class CouplingArtifactExporter:
                 title=title,
                 font={"family": "Times New Roman", "size": 22},
                 xaxis=dict(visible=False, showgrid=False),
-                yaxis=dict(visible=False, showgrid=False, scaleanchor="x", scaleratio=1),
+                yaxis=dict(
+                    visible=False, showgrid=False, scaleanchor="x", scaleratio=1
+                ),
             ),
         )
 
@@ -883,7 +921,14 @@ class CouplingArtifactExporter:
         written: list[str] = []
         figure_specs: list[tuple[str, str, Tensor, str, bool, bool]] = [
             ("solution", "f", evaluation.source_grid, "Source f", False, False),
-            ("solution", "u", evaluation.solution_grids["u"], "Exact solution u", False, False),
+            (
+                "solution",
+                "u",
+                evaluation.solution_grids["u"],
+                "Exact solution u",
+                False,
+                False,
+            ),
             (
                 "solution",
                 "u_pred",
@@ -1002,7 +1047,9 @@ class CouplingArtifactExporter:
             written.append(str(base_path.with_suffix(".html")))
 
         for name, grid in evaluation.coefficient_grids.items():
-            base_path = self.request.outdir / "figures" / "coefficients" / f"{stem}_{name}"
+            base_path = (
+                self.request.outdir / "figures" / "coefficients" / f"{stem}_{name}"
+            )
             save_plotly_figure(
                 self._heatmap(f"Coefficient {name}", grid, self.request.theme),
                 base_path,
@@ -1035,7 +1082,14 @@ class CouplingArtifactExporter:
         self._write_csv(
             metrics_dir / "per_sample_metrics.csv",
             metric_rows,
-            ["sample_id", "file", "rel_sol", "rel_flux", "balance_l2", "balance_max_abs"],
+            [
+                "sample_id",
+                "file",
+                "rel_sol",
+                "rel_flux",
+                "balance_l2",
+                "balance_max_abs",
+            ],
         )
         self._write_csv(
             metrics_dir / "balance_residual_metrics.csv",
@@ -1082,7 +1136,9 @@ class CouplingArtifactExporter:
             stats = {
                 "metric": metric,
                 "mean": float(values.mean().item()),
-                "std": float(values.std(unbiased=True).item()) if values.numel() > 1 else 0.0,
+                "std": float(values.std(unbiased=True).item())
+                if values.numel() > 1
+                else 0.0,
                 "median": float(values.median().item()),
                 "min": float(values.min().item()),
                 "max": float(values.max().item()),
@@ -1115,7 +1171,9 @@ class CouplingArtifactExporter:
         data_dir = self.request.outdir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
-        def stack_grid(records_dict: Sequence[dict[str, Tensor]], key: str) -> np.ndarray:
+        def stack_grid(
+            records_dict: Sequence[dict[str, Tensor]], key: str
+        ) -> np.ndarray:
             return torch.stack([record[key] for record in records_dict], dim=0).numpy()
 
         solution_dicts = [record.solution_grids for record in records]
@@ -1123,7 +1181,9 @@ class CouplingArtifactExporter:
         coefficient_dicts = [record.coefficient_grids for record in records]
         np.savez_compressed(
             data_dir / "selected_samples.npz",
-            sample_ids=np.array([record.sample_id for record in records], dtype=np.int64),
+            sample_ids=np.array(
+                [record.sample_id for record in records], dtype=np.int64
+            ),
             source=np.stack([record.source_grid.numpy() for record in records], axis=0),
             u=stack_grid(solution_dicts, "u"),
             phi=stack_grid(flux_dicts, "phi"),
@@ -1135,7 +1195,9 @@ class CouplingArtifactExporter:
         )
         np.savez_compressed(
             data_dir / "selected_predictions.npz",
-            sample_ids=np.array([record.sample_id for record in records], dtype=np.int64),
+            sample_ids=np.array(
+                [record.sample_id for record in records], dtype=np.int64
+            ),
             u_pred=stack_grid(solution_dicts, "u_pred"),
             u_pred_x=stack_grid(solution_dicts, "u_pred_x"),
             u_pred_y=stack_grid(solution_dicts, "u_pred_y"),
@@ -1144,7 +1206,9 @@ class CouplingArtifactExporter:
         )
         np.savez_compressed(
             data_dir / "selected_diagnostics.npz",
-            sample_ids=np.array([record.sample_id for record in records], dtype=np.int64),
+            sample_ids=np.array(
+                [record.sample_id for record in records], dtype=np.int64
+            ),
             u_error=stack_grid(solution_dicts, "u_error"),
             u_pred_x_error=stack_grid(solution_dicts, "u_pred_x_error"),
             u_pred_y_error=stack_grid(solution_dicts, "u_pred_y_error"),

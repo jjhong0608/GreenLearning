@@ -963,17 +963,20 @@ class CouplingTrainer(LoggingMixin):
                 batch_count = 0
                 for batch in loader:
                     (
-                        coords,
-                        rhs_raw,
-                        rhs_tilde,
-                        rhs_norm,
-                        sol,
-                        flux,
-                        a_vals,
-                        b_vals,
-                        c_vals,
-                        ap,
-                    ), boundary_batch = split_coupling_batch(tuple(batch))
+                        (
+                            coords,
+                            rhs_raw,
+                            rhs_tilde,
+                            rhs_norm,
+                            sol,
+                            flux,
+                            a_vals,
+                            b_vals,
+                            c_vals,
+                            ap,
+                        ),
+                        boundary_batch,
+                    ) = split_coupling_batch(tuple(batch))
                     del ap
                     _, metrics = self._step_loss(
                         coords,
@@ -1020,17 +1023,20 @@ class CouplingTrainer(LoggingMixin):
             batch_count = 0
             for batch in train_loader:
                 (
-                    coords,
-                    rhs_raw,
-                    rhs_tilde,
-                    rhs_norm,
-                    sol,
-                    flux,
-                    a_vals,
-                    b_vals,
-                    c_vals,
-                    ap,
-                ), boundary_batch = split_coupling_batch(tuple(batch))
+                    (
+                        coords,
+                        rhs_raw,
+                        rhs_tilde,
+                        rhs_norm,
+                        sol,
+                        flux,
+                        a_vals,
+                        b_vals,
+                        c_vals,
+                        ap,
+                    ),
+                    boundary_batch,
+                ) = split_coupling_batch(tuple(batch))
                 del ap
                 optimizer.zero_grad()
                 loss, metrics = self._step_loss(
@@ -1184,17 +1190,20 @@ class CouplingTrainer(LoggingMixin):
             with torch.no_grad():
                 for batch in loader:
                     (
-                        coords,
-                        rhs_raw,
-                        rhs_tilde,
-                        rhs_norm,
-                        sol,
-                        flux,
-                        a_vals,
-                        b_vals,
-                        c_vals,
-                        ap,
-                    ), boundary_batch = split_coupling_batch(tuple(batch))
+                        (
+                            coords,
+                            rhs_raw,
+                            rhs_tilde,
+                            rhs_norm,
+                            sol,
+                            flux,
+                            a_vals,
+                            b_vals,
+                            c_vals,
+                            ap,
+                        ),
+                        boundary_batch,
+                    ) = split_coupling_batch(tuple(batch))
                     del ap
                     _loss, metrics = self._step_loss(
                         coords,

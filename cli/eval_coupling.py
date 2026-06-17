@@ -9,6 +9,11 @@ from typing import Callable
 import torch
 from torch import Tensor
 
+from greenonet.coefficients import load_coefficient_functions
+from greenonet.complex_coupling_data import ComplexCouplingDataset
+from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
+from greenonet.complex_coupling_model import ComplexCouplingNet
+from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
@@ -81,6 +86,18 @@ class EvalCouplingCLI:
         for key in ("training_path", "validation_path", "test_path"):
             if key in dataset_kwargs and dataset_kwargs[key] is not None:
                 dataset_kwargs[key] = Path(dataset_kwargs[key])
+        if (
+            "geometry_path" in dataset_kwargs
+            and dataset_kwargs["geometry_path"] is not None
+        ):
+            dataset_kwargs["geometry_path"] = Path(dataset_kwargs["geometry_path"])
+        if (
+            "coefficient_functions_path" in dataset_kwargs
+            and dataset_kwargs["coefficient_functions_path"] is not None
+        ):
+            dataset_kwargs["coefficient_functions_path"] = Path(
+                dataset_kwargs["coefficient_functions_path"]
+            )
         return DatasetConfig(**dataset_kwargs)
 
     @staticmethod
@@ -154,7 +171,7 @@ class EvalCouplingCLI:
         if not isinstance(raw_positional, dict):
             raise TypeError(
                 f"{section_name}.trunk_positional_encoding must be an object."
-        )
+            )
         return CouplingTrunkPositionalEncodingConfig(**dict(raw_positional))
 
     @staticmethod
@@ -345,6 +362,65 @@ class EvalCouplingCLI:
         kernel = kernel_class().squeeze(0)
         return kernel.cpu()
 
+    def _run_complex_evaluation(
+        self,
+        *,
+        args: argparse.Namespace,
+        dataset_cfg: DatasetConfig,
+        coupling_model_cfg: CouplingModelConfig,
+        coupling_training_cfg: CouplingTrainingConfig,
+        training_cfg: TrainingConfig,
+        raw: dict,
+        terminal_cfg: TerminalConfig,
+    ) -> None:
+        if dataset_cfg.geometry_path is None:
+            raise ValueError("dataset.geometry_path is required for complex mode.")
+        if dataset_cfg.test_path is None:
+            raise ValueError("dataset.test_path must be set for complex evaluation.")
+        coeffs = load_coefficient_functions(dataset_cfg.coefficient_functions_path)
+        geometry = load_complex_geometry(
+            dataset_cfg.geometry_path, dtype=dataset_cfg.dtype
+        )
+        test_dataset = ComplexCouplingDataset(
+            dataset_cfg.test_path,
+            geometry,
+            coeffs,
+            branch_input_dim=coupling_model_cfg.branch_input_dim,
+            dtype=dataset_cfg.dtype,
+        )
+        device = torch.device(coupling_training_cfg.device)
+        coupling_model = ComplexCouplingNet(coupling_model_cfg)
+        load_state_dict_auto(coupling_model, Path(args.coupling_checkpoint))
+
+        model_kwargs = dict(raw.get("model", {}))
+        model_dtype = model_kwargs.pop("dtype", "float64")
+        model_kwargs["dtype"] = getattr(torch, model_dtype)
+        green_model = GreenONetModel(ModelConfig(**model_kwargs))
+        try:
+            green_model, _model_cfg = load_model_with_config(
+                Path(args.green_checkpoint)
+            )
+        except Exception:
+            load_state_dict_auto(green_model, Path(args.green_checkpoint))
+        green_model = maybe_compile_model(
+            green_model.to(device),
+            training_cfg.compile,
+            model_name="GreenONetModel",
+        )
+
+        evaluator = ComplexCouplingEvaluator(
+            model=coupling_model,
+            green_model=green_model,
+            device=device,
+            work_dir=Path(args.work_dir),
+            terminal_width=terminal_cfg.width,
+        )
+        evaluator.evaluate(
+            test_dataset,
+            dataset_name="test",
+            batch_size=coupling_training_cfg.batch_size,
+        )
+
     def run(self) -> None:
         args = self.parser.parse_args()
         with Path(args.config).open() as fp:
@@ -412,6 +488,18 @@ class EvalCouplingCLI:
 
         work_dir = Path(args.work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
+
+        if dataset_cfg.geometry_mode == "complex":
+            self._run_complex_evaluation(
+                args=args,
+                dataset_cfg=dataset_cfg,
+                coupling_model_cfg=coupling_model_cfg,
+                coupling_training_cfg=coupling_training_cfg,
+                training_cfg=training_cfg,
+                raw=raw,
+                terminal_cfg=terminal_cfg,
+            )
+            return
 
         def a_fun(x: Tensor, y: Tensor) -> Tensor:
             # h = 0.0625

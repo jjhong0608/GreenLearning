@@ -13,6 +13,8 @@ from greenonet.numerics import IntegrationRule
 class DatasetConfig:
     """Sampling settings for synthetic Poisson data."""
 
+    geometry_mode: Literal["unit_square", "complex"] = "unit_square"
+    geometry_path: Optional[Path] = None
     step_size: float = 0.25
     n_points_per_line: int | None = None
     sampler_mode: Literal["forward", "backward"] = "forward"
@@ -103,9 +105,7 @@ class CouplingBranchFusionConfig:
         if not isinstance(self.mode, str):
             raise TypeError("branch_fusion.mode must be a string.")
         if self.mode not in {"product", "product_fuser"}:
-            raise ValueError(
-                "branch_fusion.mode must be 'product' or 'product_fuser'."
-            )
+            raise ValueError("branch_fusion.mode must be 'product' or 'product_fuser'.")
 
     @classmethod
     def from_raw(
@@ -121,8 +121,7 @@ class CouplingBranchFusionConfig:
             unknown = sorted(set(data) - {"mode"})
             if unknown:
                 raise TypeError(
-                    "branch_fusion has unknown keys: "
-                    f"{', '.join(unknown)}."
+                    f"branch_fusion has unknown keys: {', '.join(unknown)}."
                 )
             return cls(**data)
         raise TypeError("branch_fusion must be an object.")
@@ -171,8 +170,7 @@ class Axis1DTrunkConfig:
             unknown = sorted(set(data) - {"enabled", "boundary_aware_modes"})
             if unknown:
                 raise TypeError(
-                    "axis_1d_trunk has unknown keys: "
-                    f"{', '.join(unknown)}."
+                    f"axis_1d_trunk has unknown keys: {', '.join(unknown)}."
                 )
             return cls(**data)
         raise TypeError("axis_1d_trunk must be an object.")
@@ -215,8 +213,7 @@ class BalanceProjectionConfig:
             unknown = sorted(set(data) - {"enabled", "mode", "mask"})
             if unknown:
                 raise TypeError(
-                    "balance_projection has unknown keys: "
-                    f"{', '.join(unknown)}."
+                    f"balance_projection has unknown keys: {', '.join(unknown)}."
                 )
             enabled = data.get("enabled", True)
             mode = data.get("mode", "symmetric")

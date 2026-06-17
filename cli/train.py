@@ -29,7 +29,16 @@ from greenonet.config import (
     TrainingConfig,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
-from greenonet.coefficients import CoefficientFunction, load_coefficient_functions
+from greenonet.coefficients import (
+    CoefficientFunction,
+    CoefficientFunctions,
+    load_coefficient_functions,
+)
+from greenonet.complex_coupling_data import ComplexCouplingDataset
+from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
+from greenonet.complex_coupling_model import ComplexCouplingNet
+from greenonet.complex_coupling_trainer import ComplexCouplingTrainer
+from greenonet.complex_geometry import load_complex_geometry
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_model import CouplingNet
 from greenonet.coupling_trainer import CouplingTrainer
@@ -101,6 +110,11 @@ class TrainCLI:
             dataset_kwargs["validation_path"] = Path(dataset_kwargs["validation_path"])
         if "test_path" in dataset_kwargs and dataset_kwargs["test_path"] is not None:
             dataset_kwargs["test_path"] = Path(dataset_kwargs["test_path"])
+        if (
+            "geometry_path" in dataset_kwargs
+            and dataset_kwargs["geometry_path"] is not None
+        ):
+            dataset_kwargs["geometry_path"] = Path(dataset_kwargs["geometry_path"])
         if (
             "coefficient_functions_path" in dataset_kwargs
             and dataset_kwargs["coefficient_functions_path"] is not None
@@ -257,7 +271,7 @@ class TrainCLI:
         if not isinstance(raw_positional, dict):
             raise TypeError(
                 f"{section_name}.trunk_positional_encoding must be an object."
-        )
+            )
         return CouplingTrunkPositionalEncodingConfig(**dict(raw_positional))
 
     @staticmethod
@@ -444,6 +458,78 @@ class TrainCLI:
         # kernel0 = kernel_class.poisson().unsqueeze(0).unsqueeze(0).expand_as(kernel)
         return kernel.cpu()
 
+    def _run_complex_coupling(
+        self,
+        *,
+        dataset_cfg: DatasetConfig,
+        coupling_model_cfg: CouplingModelConfig,
+        coupling_training_cfg: CouplingTrainingConfig,
+        pipeline_cfg: PipelineConfig,
+        terminal_cfg: TerminalConfig,
+        coeffs: CoefficientFunctions,
+        green_model: torch.nn.Module,
+        work_dir: Path,
+    ) -> None:
+        if dataset_cfg.geometry_path is None:
+            raise ValueError("dataset.geometry_path is required for complex mode.")
+        if dataset_cfg.training_path is None:
+            raise ValueError("dataset.training_path is required for complex mode.")
+        geometry = load_complex_geometry(
+            dataset_cfg.geometry_path,
+            dtype=dataset_cfg.dtype,
+        )
+        train_dataset = ComplexCouplingDataset(
+            dataset_cfg.training_path,
+            geometry,
+            coeffs,
+            branch_input_dim=coupling_model_cfg.branch_input_dim,
+            dtype=dataset_cfg.dtype,
+        )
+        validation_dataset = None
+        if dataset_cfg.validation_path is not None:
+            validation_dataset = ComplexCouplingDataset(
+                dataset_cfg.validation_path,
+                geometry,
+                coeffs,
+                branch_input_dim=coupling_model_cfg.branch_input_dim,
+                dtype=dataset_cfg.dtype,
+            )
+        test_dataset = None
+        if dataset_cfg.test_path is not None:
+            test_dataset = ComplexCouplingDataset(
+                dataset_cfg.test_path,
+                geometry,
+                coeffs,
+                branch_input_dim=coupling_model_cfg.branch_input_dim,
+                dtype=dataset_cfg.dtype,
+            )
+
+        coupling_model = ComplexCouplingNet(coupling_model_cfg)
+        if pipeline_cfg.coupling_pretrained_path is not None:
+            load_state_dict_auto(coupling_model, pipeline_cfg.coupling_pretrained_path)
+        trainer = ComplexCouplingTrainer(
+            model=coupling_model,
+            config=coupling_training_cfg,
+            work_dir=work_dir,
+            green_model=green_model,
+            model_cfg=coupling_model_cfg,
+            terminal_width=terminal_cfg.width,
+        )
+        trainer.train(train_dataset, validation_dataset)
+        if test_dataset is not None:
+            evaluator = ComplexCouplingEvaluator(
+                model=coupling_model,
+                green_model=green_model,
+                device=torch.device(coupling_training_cfg.device),
+                work_dir=work_dir,
+                terminal_width=terminal_cfg.width,
+            )
+            evaluator.evaluate(
+                test_dataset,
+                dataset_name="test",
+                batch_size=coupling_training_cfg.batch_size,
+            )
+
     def run(self) -> None:
         args = self.parser.parse_args()
         config_path = Path(args.config)
@@ -504,6 +590,18 @@ class TrainCLI:
                 load_state_dict_auto(green_model, pipeline_cfg.green_pretrained_path)
 
         if pipeline_cfg.run_coupling:
+            if dataset_cfg.geometry_mode == "complex":
+                self._run_complex_coupling(
+                    dataset_cfg=dataset_cfg,
+                    coupling_model_cfg=coupling_model_cfg,
+                    coupling_training_cfg=coupling_training_cfg,
+                    pipeline_cfg=pipeline_cfg,
+                    terminal_cfg=terminal_cfg,
+                    coeffs=coeffs,
+                    green_model=green_model,
+                    work_dir=work_dir,
+                )
+                return
             train_dir = dataset_cfg.training_path or Path("2D_data_variable")
             val_dir = dataset_cfg.validation_path
             coupling_train_dataset = CouplingDataset(

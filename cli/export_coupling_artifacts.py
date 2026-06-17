@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from greenonet.coupling_artifacts import (
     CouplingArtifactRequest,
     export_coupling_artifacts,
 )
+from greenonet.complex_coupling_artifacts import export_complex_coupling_artifacts
 
 
 class ExportCouplingArtifactsCLI:
@@ -135,7 +137,16 @@ class ExportCouplingArtifactsCLI:
             save_generated_data=bool(args.save_generated_data),
         )
         logger = self._build_logger(request.outdir)
-        summary = export_coupling_artifacts(request, logger=logger)
+        with request.config.open() as fp:
+            raw = json.load(fp)
+        dataset_raw = raw.get("dataset", {})
+        if (
+            isinstance(dataset_raw, dict)
+            and dataset_raw.get("geometry_mode") == "complex"
+        ):
+            summary = export_complex_coupling_artifacts(request, logger=logger)
+        else:
+            summary = export_coupling_artifacts(request, logger=logger)
         logger.info(
             "Completed CouplingNet artifact export (selected_samples=%s)",
             summary["selected_samples"],

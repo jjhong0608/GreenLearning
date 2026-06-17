@@ -299,6 +299,116 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMix
             + a_recip * green_b
         )
 
+    @staticmethod
+    def _as_line_batch(values: torch.Tensor, field_name: str) -> torch.Tensor:
+        if values.dim() == 1:
+            return values.unsqueeze(0)
+        if values.dim() == 2:
+            return values
+        if values.dim() == 3:
+            axis, n_lines, m_points = values.shape
+            return values.reshape(axis * n_lines, m_points)
+        if values.dim() == 4:
+            return values[0].reshape(values.shape[1] * values.shape[2], values.shape[3])
+        raise ValueError(f"{field_name} must be 1D, 2D, 3D, or 4D.")
+
+    @staticmethod
+    def _interpolate_unit_samples(
+        samples: torch.Tensor,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        """Linearly interpolate fixed unit-interval branch samples at arbitrary x."""
+
+        if samples.dim() != 2:
+            raise ValueError("samples must have shape (n_lines, m_points).")
+        if samples.shape[-1] < 2:
+            raise ValueError("At least two branch samples are required.")
+        flat_x = x.reshape(-1).clamp(0.0, 1.0)
+        scaled = flat_x * float(samples.shape[-1] - 1)
+        left = torch.floor(scaled).to(dtype=torch.long)
+        right = torch.clamp(left + 1, max=samples.shape[-1] - 1)
+        weight = (scaled - left.to(dtype=samples.dtype)).unsqueeze(0)
+        left_values = samples[:, left]
+        right_values = samples[:, right]
+        interpolated = left_values * (1.0 - weight) + right_values * weight
+        return interpolated.reshape(samples.shape[0], *x.shape)
+
+    def _apply_analytic_green_wrap_pairs(
+        self,
+        trunk_coords: torch.Tensor,
+        learned_output: torch.Tensor,
+        a_used: torch.Tensor,
+        ap_used: torch.Tensor,
+        b_used: torch.Tensor,
+    ) -> torch.Tensor:
+        ap_used = torch.where(ap_used.abs() < 1e-15, torch.zeros_like(ap_used), ap_used)
+        x = trunk_coords[..., 0]
+        a_x = self._interpolate_unit_samples(a_used, x)
+        ap_x = self._interpolate_unit_samples(ap_used, x)
+        b_x = self._interpolate_unit_samples(b_used, x)
+
+        envelope = self._envelope(trunk_coords).squeeze(-1).unsqueeze(0)
+        remain = self._remain(trunk_coords).squeeze(-1).unsqueeze(0)
+        bias_term = self._bias_term(trunk_coords).squeeze(-1).unsqueeze(0)
+        green_term = (
+            cast(torch.Tensor, self.green(trunk_coords)).squeeze(-1).unsqueeze(0)
+        )
+        igreen_term = (
+            cast(torch.Tensor, self.igreen(trunk_coords)).squeeze(-1).unsqueeze(0)
+        )
+
+        a_recip = 1.0 / (a_x + self.EPS)
+        b_coeff = (ap_x + b_x) * a_recip.pow(2)
+        return (
+            envelope * remain * learned_output
+            + b_coeff * (igreen_term + envelope * bias_term)
+            + a_recip * green_term
+        )
+
+    def forward_pairs(
+        self,
+        trunk_coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+    ) -> torch.Tensor:
+        """Evaluate Green values for arbitrary unit-interval ``(t, eta)`` pairs.
+
+        Branch coefficient samples stay on the fixed unit branch grid. The returned
+        shape is ``(n_lines, *trunk_coords.shape[:-1])``.
+        """
+
+        if trunk_coords.shape[-1] != 2:
+            raise ValueError("trunk_coords must have final dimension 2.")
+        a_used = self._as_line_batch(a_vals, "a_vals")
+        ap_used = self._as_line_batch(ap_vals, "ap_vals")
+        b_used = self._as_line_batch(b_vals, "b_vals")
+        c_used = self._as_line_batch(c_vals, "c_vals")
+        if not (a_used.shape == ap_used.shape == b_used.shape == c_used.shape):
+            raise ValueError("a/ap/b/c branch samples must have matching shapes.")
+
+        trunk_shape = trunk_coords.shape[:-1]
+        trunk_flat = self._build_trunk_inputs(trunk_coords.reshape(-1, 2))
+        trunk_out = cast(torch.Tensor, self.trunk(trunk_flat))
+        branch_feat = self._fuse_branch_features(
+            a_used.unsqueeze(0),
+            ap_used.unsqueeze(0),
+            b_used.unsqueeze(0),
+            c_used.unsqueeze(0),
+        )
+        output = branch_feat @ trunk_out.T
+        output = output.reshape(a_used.shape[0], *trunk_shape) + self.output_bias
+        if not self.use_green:
+            return output
+        return self._apply_analytic_green_wrap_pairs(
+            trunk_coords=trunk_coords,
+            learned_output=output,
+            a_used=a_used,
+            ap_used=ap_used,
+            b_used=b_used,
+        )
+
     def forward(
         self,
         trunk_grid: torch.Tensor,

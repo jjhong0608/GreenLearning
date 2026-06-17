@@ -32,8 +32,7 @@ def save_plotly_figure(
     except Exception as exc:  # pragma: no cover - depends on local kaleido/Chrome
         if not _WARNED_STATIC_EXPORT:
             message = (
-                "Static Plotly export skipped; HTML and JSON were saved. "
-                f"Reason: {exc}"
+                f"Static Plotly export skipped; HTML and JSON were saved. Reason: {exc}"
             )
             if logger is not None:
                 logger.warning(message)

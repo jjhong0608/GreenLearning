@@ -99,6 +99,23 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   boundary-aware sin/cos branch로 넣는다.
 - Axis-1D trunk의 boundary-aware encoding은 raw coordinate `t`를 포함하지 않고
   `sin(n*pi*t)`, `cos(n*pi*t)` for `n=1..k`만 사용한다.
+- Complex geometry mode는 `dataset.geometry_mode="complex"`일 때만 사용한다.
+  기존 unit-square path는 기본값 `unit_square`로 보존한다.
+- Complex geometry v1 입력 계약은 precomputed geometry `.npz`와 full-grid sample
+  `.npz` 조합이다. geometry 추출 자체는 이 repo의 v1 구현 범위가 아니다.
+- Complex geometry sample은 full-grid `rhs`, `sol`을 필수로 갖고, flux target은
+  `phi`/`psi`를 우선 사용하며 legacy `uxx`/`uyy`를 fallback으로 해석한다.
+  모든 full-grid array는 `[row=y, col=x]` convention으로 valid point에 gather한다.
+- Complex geometry Green interval normalization은 `a_unit=a_phys`,
+  `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, `c_unit=L^2*c_phys`,
+  `f_unit=L^2*f_phys`를 사용한다. Unit reconstruction에서 Green kernel에
+  추가 segment length factor를 곱하지 않는다.
+- Complex CouplingNet function branch에는 transformed `[a,b,c]`만 넣는다.
+  `a'`는 GreenONet reconstruction query용 branch에는 보관하지만 CouplingNet
+  function branch에는 넣지 않는다.
+- Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
+  `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
+  key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.
 
 ## Experiment And Figure Planning
 

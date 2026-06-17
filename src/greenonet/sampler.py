@@ -161,9 +161,7 @@ class ForwardSampler:
         c_fun: Callable[[Tensor], Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         x = axial_line.x_coordinates
-        u, f, a, ap, b, c = self.generate_sample(
-            x, a_fun, ap_fun, b_line_fun, c_fun
-        )
+        u, f, a, ap, b, c = self.generate_sample(x, a_fun, ap_fun, b_line_fun, c_fun)
         coords = axial_line.coordinates.to(device=self.device, dtype=self.dtype)
         return u, f, a, ap, b, c, coords
 
@@ -176,9 +174,7 @@ class ForwardSampler:
         c_fun: Callable[[Tensor], Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         y = axial_line.y_coordinates
-        u, f, a, ap, b, c = self.generate_sample(
-            y, a_fun, ap_fun, b_line_fun, c_fun
-        )
+        u, f, a, ap, b, c = self.generate_sample(y, a_fun, ap_fun, b_line_fun, c_fun)
         coords = axial_line.coordinates.to(device=self.device, dtype=self.dtype)
         return u, f, a, ap, b, c, coords
 
