@@ -74,7 +74,9 @@ def test_convection_diffusion_shape_mismatch_raises() -> None:
         gf.convection_diffusion(b)
 
 
-def test_convection_diffusion_orientation_matches_constant_coefficient_formula() -> None:
+def test_convection_diffusion_orientation_matches_constant_coefficient_formula() -> (
+    None
+):
     x = torch.linspace(0.0, 1.0, steps=9, dtype=torch.float64)
     beta = torch.tensor(1.7, dtype=torch.float64)
     a = torch.ones_like(x)
@@ -86,12 +88,16 @@ def test_convection_diffusion_orientation_matches_constant_coefficient_formula()
     xi_src = x.unsqueeze(0)
     total = torch.exp(beta) - 1.0
     common = beta * torch.exp(beta * xi_src) * total
-    left = (torch.exp(beta * x_eval) - 1.0) * (
-        torch.exp(beta) - torch.exp(beta * xi_src)
-    ) / common
-    right = (torch.exp(beta * xi_src) - 1.0) * (
-        torch.exp(beta) - torch.exp(beta * x_eval)
-    ) / common
+    left = (
+        (torch.exp(beta * x_eval) - 1.0)
+        * (torch.exp(beta) - torch.exp(beta * xi_src))
+        / common
+    )
+    right = (
+        (torch.exp(beta * xi_src) - 1.0)
+        * (torch.exp(beta) - torch.exp(beta * x_eval))
+        / common
+    )
     expected = torch.where(x_eval < xi_src, left, right)
 
     assert not torch.allclose(result, result.T)

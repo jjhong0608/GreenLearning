@@ -91,6 +91,51 @@ def exact_green_kernel_from_coefficients(
     return exact.squeeze(0) if single_batch else exact
 
 
+def exact_green_kernel_from_unit_coefficients(
+    x_axis: Tensor,
+    a_vals: Tensor,
+    b_vals: Tensor,
+    reference: GreenReferenceKind,
+) -> Tensor:
+    """Build flat unit-interval exact kernels for shape ``(..., intervals, M)``."""
+
+    if x_axis.dim() != 1:
+        raise ValueError("x_axis must be one-dimensional.")
+    if a_vals.shape != b_vals.shape:
+        raise ValueError("a_vals and b_vals must have the same shape.")
+    if a_vals.dim() not in (2, 3):
+        raise ValueError(
+            "a_vals must have shape (intervals, M) or (batch, intervals, M)."
+        )
+    if a_vals.shape[-1] != x_axis.numel():
+        raise ValueError("Coefficient tensors must share x_axis point count.")
+
+    single_batch = a_vals.dim() == 2
+    if single_batch:
+        a_vals = a_vals.unsqueeze(0)
+        b_vals = b_vals.unsqueeze(0)
+
+    batch_size, num_intervals, m_points = a_vals.shape
+    exact = torch.zeros(
+        (batch_size, num_intervals, m_points, m_points),
+        device=a_vals.device,
+        dtype=a_vals.dtype,
+    )
+    x_axis = x_axis.to(device=a_vals.device, dtype=a_vals.dtype)
+    for batch_idx in range(batch_size):
+        for interval_idx in range(num_intervals):
+            gf = ExactGreenFunction(x_axis, a=a_vals[batch_idx, interval_idx])
+            if reference == "diffusion":
+                exact[batch_idx, interval_idx] = gf()
+            elif reference == "convection_diffusion":
+                exact[batch_idx, interval_idx] = gf.convection_diffusion(
+                    b_vals[batch_idx, interval_idx]
+                )
+            else:
+                raise ValueError(f"Unknown Green reference: {reference}")
+    return exact.squeeze(0) if single_batch else exact
+
+
 class EllipticGreenFunction(nn.Module):
     """Lightweight analytic surrogate for Poisson's Green function on the unit square."""
 

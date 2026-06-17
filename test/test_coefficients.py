@@ -113,9 +113,7 @@ def test_divergence_free_convection_diffusion_example() -> None:
 
     expected_a = 1 + 0.5 * torch.sin(2 * torch.pi * x) * torch.sin(2 * torch.pi * y)
     expected_apx = torch.pi * torch.cos(2 * torch.pi * x) * torch.sin(2 * torch.pi * y)
-    expected_apy = (
-        torch.pi * torch.sin(2 * torch.pi * x) * torch.cos(2 * torch.pi * y)
-    )
+    expected_apy = torch.pi * torch.sin(2 * torch.pi * x) * torch.cos(2 * torch.pi * y)
     expected_bx = (
         amplitude * torch.pi * torch.sin(torch.pi * x) * torch.cos(torch.pi * y)
     )

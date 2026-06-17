@@ -1,0 +1,47 @@
+{
+  "dataset": {
+    "geometry_mode": "complex",
+    "geometry_path": "data/geometry/unit_circle_h005.npz",
+    "samples_per_line": 2,
+    "validation_samples_per_line": 1,
+    "sampler_mode": "forward",
+    "validation_sampler_mode": "forward",
+    "scale_length": 0.1,
+    "validation_scale_length": 0.1,
+    "deterministic": true,
+    "use_operator_learning": true,
+    "coefficient_functions_path": null,
+    "dtype": "float64"
+  },
+  "model": {
+    "input_dim": 2,
+    "hidden_dim": 64,
+    "depth": 4,
+    "activation": "tanh",
+    "use_bias": true,
+    "dropout": 0.0,
+    "use_green": true,
+    "branch_input_dim": 41,
+    "use_fourier": false,
+    "dtype": "float64"
+  },
+  "training": {
+    "learning_rate": 0.001,
+    "epochs": 10,
+    "batch_size": 4,
+    "log_interval": 1,
+    "compute_validation_rel_sol": true,
+    "device": "cpu",
+    "integration_rule": "simpson",
+    "compile": {
+      "enabled": false
+    },
+    "lbfgs_max_iter": 0
+  },
+  "pipeline": {
+    "run_green": true,
+    "run_coupling": false,
+    "green_pretrained_path": null,
+    "coupling_pretrained_path": null
+  }
+}

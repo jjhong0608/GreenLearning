@@ -26,8 +26,10 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - CouplingNet: a shared branch/trunk MIONet consumes axial-line inputs `(a, b, c, f)` together with interior coordinates and predicts axial flux-divergences `(phi_x, psi_y)` through a single shared DeepONet-style readout followed by optional balance projection.
 - Complex geometry mode: set `dataset.geometry_mode="complex"` to train/evaluate CouplingNet on a precomputed non-rectangular valid-point geometry. The default remains `unit_square`, so existing configs keep the original `CouplingDataset`, `CouplingNet`, `CouplingTrainer`, evaluator, and artifact exporter. Complex mode requires `dataset.geometry_path` and interprets `dataset.training_path`, `dataset.validation_path`, and `dataset.test_path` as directories of full-grid sample `.npz` files. `coupling_model.branch_input_dim` is reused as the number of fixed unit-interval branch samples per segment, while `hidden_dim`, `depth`, `activation`, `dropout`, `use_bias`, and `dtype` are reused by `ComplexCouplingNet`.
 - Complex geometry schema: the geometry `.npz` must contain `coords_valid`, `valid_grid_y_index`, `valid_grid_x_index`, `x_segment_id`, `y_segment_id`, `x_local_t`, `y_local_t`, `x_segment_left`, `x_segment_right`, `x_segment_y`, `x_segment_length`, `y_segment_bottom`, `y_segment_top`, `y_segment_x`, `y_segment_length`, `x_recon_ptr`, `x_recon_t`, `x_recon_weight`, `x_recon_valid_index`, `y_recon_ptr`, `y_recon_t`, `y_recon_weight`, `y_recon_valid_index`, `x_edges`, `y_edges`, `hx`, and `hy`. Reconstruction arrays use `valid_index == -1` for hard-zero segment endpoints; valid points must be strictly interior in segment-local coordinates.
+- Unit-circle geometry generation: use `PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/make_circular_geometry.py --step-size 0.05 --out data/geometry/unit_circle_h005.npz` to generate a unit-radius circular complex geometry centered at `(0, 0)`. The generator requires `2 / step_size` to be an integer, excludes boundary grid points and degenerate boundary lines, stores only axial chord segments with valid interior points, writes unit-local nonuniform trapezoid reconstruction weights, and validates the saved `.npz` with `load_complex_geometry` by default. Pass `--overwrite` to replace an existing output and `--no-validate` to skip the post-write schema check.
 - Complex sample schema: each sample `.npz` must contain full-grid `rhs` and `sol` arrays indexed as `[row=y, col=x]`. Optional flux targets use preferred keys `phi` and `psi`; legacy keys `uxx` and `uyy` are accepted as fallback. Full-grid values are gathered into valid-point order using `valid_grid_y_index` and `valid_grid_x_index`.
-- Complex coefficient normalization: each physical segment is mapped to the unit interval before GreenONet/CouplingNet use. The unit coefficients are `a_unit=a_phys`, `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, `c_unit=L^2*c_phys`, and `f_unit=L^2*f_phys`. Green kernel pair evaluation does not multiply the unit reconstruction by an additional segment length.
+- Complex GreenNet training: when `dataset.geometry_mode="complex"` and `pipeline.run_green=true`, GreenNet trains on the connected x/y segments from `dataset.geometry_path` as a flat interval list `N = Sx + Sy`. Every connected interval is an independent 1D domain, so disconnected components on the same axial line remain separate rows. `dataset.samples_per_line` and `dataset.validation_samples_per_line` mean samples per connected interval. `dataset.training_path`, `dataset.validation_path`, and `dataset.test_path` are ignored by GreenNet in complex mode and remain CouplingNet full-grid sample directories.
+- Complex coefficient normalization: each physical segment is mapped to the unit interval before GreenONet/CouplingNet use. The unit coefficients are `a_unit=a_phys`, `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, `c_unit=L^2*c_phys`, and `f_unit=L^2*f_phys`. GreenNet trunk coordinates are always unit `(t, eta) in [0,1]^2`; unit reconstruction integrates `G_unit(t, eta) f_unit(eta)` over `eta` without multiplying by an additional segment length.
 - Complex CouplingNet behavior: the function branch consumes transformed `[a,b,c]` only; `a'` is kept only for GreenONet reconstruction queries. The geometry branch consumes transverse positional encoding plus `[s_left, s_right, s_mid, L, L^2, 1/L]`, and the trunk consumes segment-local `t`. Raw unit outputs are converted to physical `phi`/`psi`, projected with hard symmetric balance in physical variables, converted back to unit outputs, and reconstructed segment by segment with the precomputed nonuniform trapezoid weights.
 - Complex disabled features: `cross_consistency`, `smooth_mask`, `balance_loss`, `source_stencil_lift`, and `green_response_feature` are unit-square-only surfaces. Complex trainer/evaluator/artifact paths do not compute, log, serialize, or export cross-related metric keys or placeholder fields.
 - CouplingNet coefficient terms: in the standard branch path (`source_stencil_lift.enabled=false`), `coupling_model.coefficient_terms` controls which operator coefficients enter the generic `branch_coefficient`. Enabled terms are concatenated in `[a, b, c]` order from `diffusion`, `convection`, and `reaction`; the default `diffusion=true, convection=false, reaction=false` preserves the previous diffusion-only coefficient branch. If all three are false, CouplingNet uses a source-only pure Poisson branch path and skips `branch_coefficient`.
@@ -80,6 +82,23 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Plotting GreenONet logs: `python plot_green_logs.py --logs checkpoints/run_green_net/training.log --outdir plots_green --theme plotly_white` (supports multiple logs, `--labels`, and Plotly templates via `--theme`; outputs `loss`, `train_rel_sol`, `val_rel_sol`, and `rel_green` figures as HTML/JSON plus PNG/PDF if available).
 - Plotting paper-facing CouplingNet logs: `python plot_coupling_logs.py --logs checkpoints/coupling_run/training.log checkpoints/coupling_run_2/training.log --labels run1 run2 --outdir plots_coupling --theme plotly_white`. Add `--show-annotations` to label each trace's last value and minimum value near the corresponding curve points. This intentionally writes only `loss`, `l2_consistency`, `energy_consistency`, `rel_flux`, and `rel_sol` training curves, each with train/validation traces when present. Every figure is saved as `.html` and editable Plotly `.json`, plus `.png`/`.pdf` when static export is available.
 - Plotting recent Coupling logs from the current `_run_training_phase - epoch ...` format: `python plot_logs.py --logs checkpoints/test_diffusion/coupling/single_unknown/backward/training.log --outdir plots_coupling_recent`. This plots total loss, L2 consistency, energy consistency, cross consistency, optional `balance_loss`, optional `symmetric_boundary_loss`, `rel_flux`, and `rel_sol` from the current Coupling trainer log lines and ignores compile/checkpoint noise lines.
+- Complex GreenNet training example:
+  ```
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/make_circular_geometry.py \
+    --step-size 0.05 \
+    --out data/geometry/unit_circle_h005.npz
+
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/train.py \
+    --config configs/complex_green.json \
+    --work-dir checkpoints/complex_green
+
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/export_green_artifacts.py \
+    --checkpoint checkpoints/complex_green/model.safetensors \
+    --config checkpoints/complex_green/config_used.json \
+    --outdir checkpoints/complex_green/green_artifacts \
+    --device cpu
+  ```
+  The complex GreenNet path writes the standard training curves and `model.safetensors`, plus `per_interval_metrics.csv`, `per_interval_metrics_summary.json`, and a first-interval `green_heatmap.html`. Artifact export records `geometry_mode="complex"`, the geometry path, interval counts, per-interval metrics, selected flat-interval kernels, coefficient slices, and unit reconstruction figures.
 - Exporting paper-oriented CouplingNet checkpoint artifacts:
   ```
   PYTHONPATH=src python cli/export_coupling_artifacts.py \
@@ -104,6 +123,10 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   3. Outputs: per-file metrics CSV (relative L2 for solution and flux-divergence via the configured `coupling_training.integration_rule`) and Plotly heatmaps (Times New Roman, bold) for exact/pred/error of solution and flux-divergence saved as pdf/png/html.
 - Complex geometry training/evaluation example:
   ```
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/make_circular_geometry.py \
+    --step-size 0.05 \
+    --out data/geometry/unit_circle_h005.npz
+
   PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/train.py \
     --config configs/complex_geometry.json \
     --work-dir checkpoints/complex_geometry_run

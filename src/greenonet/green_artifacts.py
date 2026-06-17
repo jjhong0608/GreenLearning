@@ -17,11 +17,17 @@ from torch import Tensor
 from greenonet.axial import make_square_axial_lines
 from greenonet.backward_sampler import BackwardSampler
 from greenonet.coefficients import CoefficientFunctions, load_coefficient_functions
+from greenonet.complex_geometry import load_complex_geometry
+from greenonet.complex_green_data import (
+    ComplexGreenDataset,
+    generate_complex_green_data,
+)
 from greenonet.config import CompileConfig, DatasetConfig, ModelConfig, TrainingConfig
 from greenonet.data import AxialDataset
 from greenonet.greens import (
     GreenReferenceKind,
     exact_green_kernel_from_coefficients,
+    exact_green_kernel_from_unit_coefficients,
     select_green_reference_policy,
 )
 from greenonet.io import load_model_with_config, load_state_dict_auto
@@ -143,6 +149,10 @@ def load_green_artifact_configs(
     for key in ("training_path", "validation_path", "test_path"):
         if dataset_kwargs.get(key) is not None:
             dataset_kwargs[key] = Path(cast(str, dataset_kwargs[key]))
+    if dataset_kwargs.get("geometry_path") is not None:
+        dataset_kwargs["geometry_path"] = Path(
+            cast(str, dataset_kwargs["geometry_path"])
+        )
     if dataset_kwargs.get("coefficient_functions_path") is not None:
         dataset_kwargs["coefficient_functions_path"] = Path(
             cast(str, dataset_kwargs["coefficient_functions_path"])
@@ -202,6 +212,19 @@ class GreenArtifactExporter:
 
         random.seed(self.request.eval_seed)
         torch.manual_seed(self.request.eval_seed)
+        if dataset_cfg.geometry_mode == "complex":
+            return self._export_complex(
+                dataset_cfg=dataset_cfg,
+                model_cfg=model_cfg,
+                training_cfg=training_cfg,
+                raw_config=raw_config,
+                sampling_cfg=sampling_cfg,
+                coeffs=coeffs,
+                coeff_path=coeff_path,
+                model=model,
+                device=device,
+            )
+
         dataset = self._generate_dataset(
             dataset_cfg=dataset_cfg,
             training_cfg=training_cfg,
@@ -474,6 +497,801 @@ class GreenArtifactExporter:
             c_fun_y=coeffs.c_fun,
         )
         return AxialDataset(data)
+
+    def _export_complex(
+        self,
+        *,
+        dataset_cfg: DatasetConfig,
+        model_cfg: ModelConfig,
+        training_cfg: TrainingConfig,
+        raw_config: dict[str, Any],
+        sampling_cfg: EvaluationSamplingConfig,
+        coeffs: CoefficientFunctions,
+        coeff_path: Path | None,
+        model: GreenONetModel,
+        device: torch.device,
+    ) -> dict[str, object]:
+        if dataset_cfg.geometry_path is None:
+            raise ValueError(
+                "dataset.geometry_path is required for complex Green artifact export."
+            )
+        geometry = load_complex_geometry(
+            dataset_cfg.geometry_path, dtype=model_cfg.dtype
+        )
+        data = generate_complex_green_data(
+            geometry,
+            coeffs,
+            branch_input_dim=model_cfg.branch_input_dim,
+            samples_per_interval=sampling_cfg.samples_per_line,
+            sampler_mode=sampling_cfg.sampler_mode,
+            scale_length=sampling_cfg.scale_length,
+            deterministic=dataset_cfg.deterministic,
+            integration_rule=training_cfg.integration_rule,
+            dtype=model_cfg.dtype,
+        )
+        dataset = ComplexGreenDataset(data)
+        unit_grid = data.unit_grid.to(device)
+        solution = data.solution.to(device)
+        source = data.source.to(device)
+        a_vals = data.a_vals.to(device)
+        ap_vals = data.ap_vals.to(device)
+        b_vals = data.b_vals.to(device)
+        c_vals = data.c_vals.to(device)
+        trunk_grid = self._build_unit_trunk_grid(unit_grid)
+
+        with torch.no_grad():
+            kernel = self._forward_pairs_model(
+                model=model,
+                trunk_grid=trunk_grid,
+                a_vals=a_vals,
+                ap_vals=ap_vals,
+                b_vals=b_vals,
+                c_vals=c_vals,
+            )
+            reconstruction = self._reconstruct_solution(
+                kernel=kernel,
+                source=source,
+                trunk_grid=trunk_grid,
+                integration_rule=training_cfg.integration_rule,
+            )
+            rel_sol_by_interval = self._relative_solution_error_by_line(
+                reconstruction=reconstruction,
+                solution=solution,
+                trunk_grid=trunk_grid,
+                integration_rule=training_cfg.integration_rule,
+            )
+
+        rel_green_policy = select_green_reference_policy(
+            b_vals,
+            c_vals,
+            zero_tol=self.ZERO_TOL,
+        )
+        exact_kernel: Tensor | None = None
+        rel_green_by_interval: Tensor | None = None
+        if rel_green_policy.valid:
+            assert rel_green_policy.reference is not None
+            exact_kernel = exact_green_kernel_from_unit_coefficients(
+                unit_grid,
+                a_vals,
+                b_vals,
+                rel_green_policy.reference,
+            )
+            rel_green_by_interval = self._relative_green_error_by_line(
+                prediction=kernel,
+                exact_kernel=exact_kernel,
+                x_axis=unit_grid,
+                integration_rule=training_cfg.integration_rule,
+            )
+
+        selected_intervals = self._select_line_indices(
+            n_lines=data.num_intervals,
+            requested=self.request.line_indices,
+        )
+        selected_xi = self._select_xi(
+            x_axis=unit_grid,
+            fractions=self.request.xi_fractions,
+            include_boundary_xi=self.request.include_boundary_xi,
+        )
+        selected_samples = (0,)
+
+        rel_sol_stats = self._aggregate_stats(rel_sol_by_interval)
+        rel_green_stats = (
+            self._static_line_stats(rel_green_by_interval)
+            if rel_green_by_interval is not None
+            else None
+        )
+        self._write_complex_metrics(
+            dataset=dataset,
+            rel_sol_by_interval=rel_sol_by_interval,
+            rel_sol_stats=rel_sol_stats,
+            rel_green_by_interval=rel_green_by_interval,
+            rel_green_stats=rel_green_stats,
+            kernel=kernel,
+            exact_kernel=exact_kernel,
+            selected_intervals=selected_intervals,
+            selected_xi=selected_xi,
+            unit_grid=unit_grid,
+            integration_rule=training_cfg.integration_rule,
+        )
+        self._write_complex_figures(
+            dataset=dataset,
+            source=source,
+            solution=solution,
+            reconstruction=reconstruction,
+            a_vals=a_vals,
+            ap_vals=ap_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            kernel=kernel,
+            exact_kernel=exact_kernel,
+            selected_intervals=selected_intervals,
+            selected_xi=selected_xi,
+            selected_samples=selected_samples,
+            unit_grid=unit_grid,
+        )
+        if self.request.save_generated_data:
+            self._write_complex_raw_data(
+                dataset=dataset,
+                kernel=kernel,
+                exact_kernel=exact_kernel,
+                reconstruction=reconstruction,
+                selected_intervals=selected_intervals,
+                selected_samples=selected_samples,
+            )
+
+        rel_sol_flat = rel_sol_by_interval.detach().cpu().reshape(-1)
+        rel_green_flat = (
+            None
+            if rel_green_by_interval is None
+            else rel_green_by_interval.detach().cpu().reshape(-1)
+        )
+        summary: dict[str, object] = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "checkpoint": str(self.request.checkpoint),
+            "config": str(self.request.config),
+            "coefficients": str(coeff_path) if coeff_path is not None else None,
+            "outdir": str(self.request.outdir),
+            "device": str(device),
+            "theme": self.request.theme,
+            "integration_rule": training_cfg.integration_rule,
+            "eval_seed": self.request.eval_seed,
+            "eval_split": self.request.eval_split,
+            "eval_sampling": _jsonify(asdict(sampling_cfg)),
+            "geometry_mode": "complex",
+            "geometry_path": str(dataset_cfg.geometry_path),
+            "num_intervals": data.num_intervals,
+            "num_x_segments": geometry.num_x_segments,
+            "num_y_segments": geometry.num_y_segments,
+            "intervals": self._complex_interval_summary(dataset),
+            "selected_interval_indices": list(selected_intervals),
+            "selected_line_indices": list(selected_intervals),
+            "selected_xi": [asdict(item) for item in selected_xi],
+            "selected_sample_indices": list(selected_samples),
+            "rel_green_valid": rel_green_policy.valid,
+            "rel_green_reference": rel_green_policy.reference,
+            "rel_green_skip_reason": rel_green_policy.skip_reason,
+            "rel_sol": {
+                "mean": float(rel_sol_flat.mean().item()),
+                "max": float(rel_sol_flat.max().item()),
+                "min": float(rel_sol_flat.min().item()),
+            },
+            "rel_green": (
+                None
+                if rel_green_flat is None
+                else {
+                    "mean": float(rel_green_flat.mean().item()),
+                    "max": float(rel_green_flat.max().item()),
+                    "min": float(rel_green_flat.min().item()),
+                }
+            ),
+            "raw_config": _jsonify(raw_config),
+        }
+        summary_path = self.request.outdir / "summary.json"
+        summary_path.write_text(json.dumps(_jsonify(summary), indent=2) + "\n")
+        if self.logger is not None:
+            self.logger.info(
+                "Saved complex GreenNet artifact summary to %s", summary_path
+            )
+        return summary
+
+    @staticmethod
+    def _build_unit_trunk_grid(unit_grid: Tensor) -> Tensor:
+        return torch.stack(torch.meshgrid(unit_grid, unit_grid, indexing="ij"), dim=-1)
+
+    @staticmethod
+    def _forward_pairs_model(
+        *,
+        model: GreenONetModel,
+        trunk_grid: Tensor,
+        a_vals: Tensor,
+        ap_vals: Tensor,
+        b_vals: Tensor,
+        c_vals: Tensor,
+    ) -> Tensor:
+        pair_forward = getattr(model, "forward_pairs", None)
+        if not callable(pair_forward):
+            raise TypeError("Complex Green artifact export requires forward_pairs().")
+        return cast(Tensor, pair_forward(trunk_grid, a_vals, ap_vals, b_vals, c_vals))
+
+    @staticmethod
+    def _complex_axis_name(axis_id: int) -> str:
+        return "x" if axis_id == 0 else "y"
+
+    @staticmethod
+    def _complex_interval_summary(
+        dataset: ComplexGreenDataset,
+    ) -> list[dict[str, object]]:
+        data = dataset.data
+        rows: list[dict[str, object]] = []
+        for interval_idx in range(data.num_intervals):
+            axis_id = int(data.axis_id[interval_idx].item())
+            rows.append(
+                {
+                    "interval_index": interval_idx,
+                    "axis_id": axis_id,
+                    "axis": GreenArtifactExporter._complex_axis_name(axis_id),
+                    "segment_index": int(data.segment_id[interval_idx].item()),
+                    "left": float(data.left[interval_idx].item()),
+                    "right": float(data.right[interval_idx].item()),
+                    "fixed": float(data.fixed[interval_idx].item()),
+                    "length": float(data.length[interval_idx].item()),
+                }
+            )
+        return rows
+
+    def _write_complex_metrics(
+        self,
+        *,
+        dataset: ComplexGreenDataset,
+        rel_sol_by_interval: Tensor,
+        rel_sol_stats: MetricStats,
+        rel_green_by_interval: Tensor | None,
+        rel_green_stats: MetricStats | None,
+        kernel: Tensor,
+        exact_kernel: Tensor | None,
+        selected_intervals: tuple[int, ...],
+        selected_xi: tuple[SelectedXi, ...],
+        unit_grid: Tensor,
+        integration_rule: IntegrationRule,
+    ) -> None:
+        metrics_dir = self.request.outdir / "metrics"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        self._write_complex_per_interval_metrics(
+            metrics_dir / "per_interval_metrics.csv",
+            dataset=dataset,
+            rel_sol_stats=rel_sol_stats,
+            rel_green_stats=rel_green_stats,
+        )
+        self._write_complex_sample_metrics(
+            metrics_dir / "sample_metrics.csv",
+            dataset=dataset,
+            rel_sol_by_interval=rel_sol_by_interval,
+            rel_green_by_interval=rel_green_by_interval,
+        )
+        self._write_complex_boundary_and_slice_metrics(
+            metrics_dir=metrics_dir,
+            dataset=dataset,
+            kernel=kernel,
+            exact_kernel=exact_kernel,
+            selected_intervals=selected_intervals,
+            selected_xi=selected_xi,
+            unit_grid=unit_grid,
+            integration_rule=integration_rule,
+        )
+
+    def _write_complex_per_interval_metrics(
+        self,
+        path: Path,
+        *,
+        dataset: ComplexGreenDataset,
+        rel_sol_stats: MetricStats,
+        rel_green_stats: MetricStats | None,
+    ) -> None:
+        data = dataset.data
+        with path.open("w", newline="") as fp:
+            fieldnames = [
+                "interval_index",
+                "axis_id",
+                "axis",
+                "segment_index",
+                "left",
+                "right",
+                "fixed",
+                "length",
+                "rel_sol_interval_mean",
+                "rel_sol_interval_min",
+                "rel_sol_interval_max",
+                "rel_sol_interval_std",
+                "rel_green_interval_mean",
+                "rel_green_interval_min",
+                "rel_green_interval_max",
+                "rel_green_interval_std",
+            ]
+            writer = csv.DictWriter(fp, fieldnames=fieldnames)
+            writer.writeheader()
+            for interval_idx in range(data.num_intervals):
+                axis_id = int(data.axis_id[interval_idx].item())
+                row: dict[str, object] = {
+                    "interval_index": interval_idx,
+                    "axis_id": axis_id,
+                    "axis": self._complex_axis_name(axis_id),
+                    "segment_index": int(data.segment_id[interval_idx].item()),
+                    "left": float(data.left[interval_idx].item()),
+                    "right": float(data.right[interval_idx].item()),
+                    "fixed": float(data.fixed[interval_idx].item()),
+                    "length": float(data.length[interval_idx].item()),
+                    "rel_sol_interval_mean": float(
+                        rel_sol_stats.mean[interval_idx].item()
+                    ),
+                    "rel_sol_interval_min": float(
+                        rel_sol_stats.min[interval_idx].item()
+                    ),
+                    "rel_sol_interval_max": float(
+                        rel_sol_stats.max[interval_idx].item()
+                    ),
+                    "rel_sol_interval_std": float(
+                        rel_sol_stats.std[interval_idx].item()
+                    ),
+                }
+                if rel_green_stats is None:
+                    row.update(
+                        {
+                            "rel_green_interval_mean": "",
+                            "rel_green_interval_min": "",
+                            "rel_green_interval_max": "",
+                            "rel_green_interval_std": "",
+                        }
+                    )
+                else:
+                    row.update(
+                        {
+                            "rel_green_interval_mean": float(
+                                rel_green_stats.mean[interval_idx].item()
+                            ),
+                            "rel_green_interval_min": float(
+                                rel_green_stats.min[interval_idx].item()
+                            ),
+                            "rel_green_interval_max": float(
+                                rel_green_stats.max[interval_idx].item()
+                            ),
+                            "rel_green_interval_std": float(
+                                rel_green_stats.std[interval_idx].item()
+                            ),
+                        }
+                    )
+                writer.writerow(row)
+
+    def _write_complex_sample_metrics(
+        self,
+        path: Path,
+        *,
+        dataset: ComplexGreenDataset,
+        rel_sol_by_interval: Tensor,
+        rel_green_by_interval: Tensor | None,
+    ) -> None:
+        data = dataset.data
+        with path.open("w", newline="") as fp:
+            fieldnames = [
+                "sample_index",
+                "interval_index",
+                "axis_id",
+                "axis",
+                "segment_index",
+                "rel_sol_interval",
+                "rel_green_interval",
+            ]
+            writer = csv.DictWriter(fp, fieldnames=fieldnames)
+            writer.writeheader()
+            for sample_idx in range(rel_sol_by_interval.shape[0]):
+                for interval_idx in range(rel_sol_by_interval.shape[1]):
+                    axis_id = int(data.axis_id[interval_idx].item())
+                    writer.writerow(
+                        {
+                            "sample_index": sample_idx,
+                            "interval_index": interval_idx,
+                            "axis_id": axis_id,
+                            "axis": self._complex_axis_name(axis_id),
+                            "segment_index": int(data.segment_id[interval_idx].item()),
+                            "rel_sol_interval": float(
+                                rel_sol_by_interval[sample_idx, interval_idx].item()
+                            ),
+                            "rel_green_interval": (
+                                ""
+                                if rel_green_by_interval is None
+                                else float(rel_green_by_interval[interval_idx].item())
+                            ),
+                        }
+                    )
+
+    def _write_complex_boundary_and_slice_metrics(
+        self,
+        *,
+        metrics_dir: Path,
+        dataset: ComplexGreenDataset,
+        kernel: Tensor,
+        exact_kernel: Tensor | None,
+        selected_intervals: tuple[int, ...],
+        selected_xi: tuple[SelectedXi, ...],
+        unit_grid: Tensor,
+        integration_rule: IntegrationRule,
+    ) -> None:
+        boundary_path = metrics_dir / "boundary_diagnostics.csv"
+        slice_path = metrics_dir / "green_slice_metrics.csv"
+        boundary_fields = [
+            "interval_index",
+            "axis_id",
+            "axis",
+            "segment_index",
+            "xi_index",
+            "xi_value",
+            "pred_left_boundary",
+            "pred_right_boundary",
+            "boundary_abs_max",
+            "diagonal_value",
+            "ref_left_boundary",
+            "ref_right_boundary",
+        ]
+        slice_fields = [*boundary_fields, "slice_rel_error"]
+        data = dataset.data
+        with (
+            boundary_path.open("w", newline="") as bfp,
+            slice_path.open("w", newline="") as sfp,
+        ):
+            boundary_writer = csv.DictWriter(bfp, fieldnames=boundary_fields)
+            slice_writer = csv.DictWriter(sfp, fieldnames=slice_fields)
+            boundary_writer.writeheader()
+            slice_writer.writeheader()
+            for interval_idx in selected_intervals:
+                axis_id = int(data.axis_id[interval_idx].item())
+                for xi_item in selected_xi:
+                    pred_slice = kernel[interval_idx, :, xi_item.index]
+                    ref_slice = (
+                        None
+                        if exact_kernel is None
+                        else exact_kernel[interval_idx, :, xi_item.index]
+                    )
+                    row = {
+                        "interval_index": interval_idx,
+                        "axis_id": axis_id,
+                        "axis": self._complex_axis_name(axis_id),
+                        "segment_index": int(data.segment_id[interval_idx].item()),
+                        "xi_index": xi_item.index,
+                        "xi_value": xi_item.value,
+                        "pred_left_boundary": float(pred_slice[0].item()),
+                        "pred_right_boundary": float(pred_slice[-1].item()),
+                        "boundary_abs_max": max(
+                            abs(float(pred_slice[0].item())),
+                            abs(float(pred_slice[-1].item())),
+                        ),
+                        "diagonal_value": float(pred_slice[xi_item.index].item()),
+                        "ref_left_boundary": "",
+                        "ref_right_boundary": "",
+                        "slice_rel_error": "",
+                    }
+                    if ref_slice is not None:
+                        residual = pred_slice - ref_slice
+                        num = integrate(
+                            residual.pow(2),
+                            x=unit_grid,
+                            dim=-1,
+                            rule=integration_rule,
+                        )
+                        den = integrate(
+                            ref_slice.pow(2),
+                            x=unit_grid,
+                            dim=-1,
+                            rule=integration_rule,
+                        ).clamp_min(1.0e-12)
+                        row.update(
+                            {
+                                "ref_left_boundary": float(ref_slice[0].item()),
+                                "ref_right_boundary": float(ref_slice[-1].item()),
+                                "slice_rel_error": float(torch.sqrt(num / den).item()),
+                            }
+                        )
+                    boundary_writer.writerow({key: row[key] for key in boundary_fields})
+                    slice_writer.writerow(row)
+
+    def _write_complex_figures(
+        self,
+        *,
+        dataset: ComplexGreenDataset,
+        source: Tensor,
+        solution: Tensor,
+        reconstruction: Tensor,
+        a_vals: Tensor,
+        ap_vals: Tensor,
+        b_vals: Tensor,
+        c_vals: Tensor,
+        kernel: Tensor,
+        exact_kernel: Tensor | None,
+        selected_intervals: tuple[int, ...],
+        selected_xi: tuple[SelectedXi, ...],
+        selected_samples: tuple[int, ...],
+        unit_grid: Tensor,
+    ) -> None:
+        for interval_idx in selected_intervals:
+            self._save_complex_green_heatmap(
+                kernel=kernel,
+                exact_kernel=exact_kernel,
+                interval_idx=interval_idx,
+                unit_grid=unit_grid,
+            )
+            self._save_complex_coefficient_figure(
+                dataset=dataset,
+                a_vals=a_vals,
+                ap_vals=ap_vals,
+                b_vals=b_vals,
+                c_vals=c_vals,
+                interval_idx=interval_idx,
+                unit_grid=unit_grid,
+            )
+            for xi_item in selected_xi:
+                self._save_complex_green_slice(
+                    kernel=kernel,
+                    exact_kernel=exact_kernel,
+                    interval_idx=interval_idx,
+                    xi_item=xi_item,
+                    unit_grid=unit_grid,
+                )
+            for sample_idx in selected_samples:
+                self._save_complex_reconstruction_figure(
+                    source=source,
+                    solution=solution,
+                    reconstruction=reconstruction,
+                    sample_idx=sample_idx,
+                    interval_idx=interval_idx,
+                    unit_grid=unit_grid,
+                )
+
+    def _save_complex_green_heatmap(
+        self,
+        *,
+        kernel: Tensor,
+        exact_kernel: Tensor | None,
+        interval_idx: int,
+        unit_grid: Tensor,
+    ) -> None:
+        base = self.request.outdir / "figures" / "green_heatmaps"
+        pred = kernel[interval_idx]
+        self._save_heatmap_figure(
+            z=pred,
+            x_axis=unit_grid,
+            title=f"Predicted Green kernel interval={interval_idx}",
+            base_path=base / f"interval{interval_idx:03d}_green_heatmap_pred",
+        )
+        if exact_kernel is not None:
+            ref = exact_kernel[interval_idx]
+            self._save_heatmap_figure(
+                z=ref,
+                x_axis=unit_grid,
+                title=f"Reference Green kernel interval={interval_idx}",
+                base_path=base / f"interval{interval_idx:03d}_green_heatmap_ref",
+            )
+            self._save_heatmap_figure(
+                z=pred - ref,
+                x_axis=unit_grid,
+                title=f"Green kernel error interval={interval_idx}",
+                base_path=base / f"interval{interval_idx:03d}_green_heatmap_error",
+            )
+
+    def _save_complex_green_slice(
+        self,
+        *,
+        kernel: Tensor,
+        exact_kernel: Tensor | None,
+        interval_idx: int,
+        xi_item: SelectedXi,
+        unit_grid: Tensor,
+    ) -> None:
+        pred_slice = kernel[interval_idx, :, xi_item.index]
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=_tensor_to_numpy(unit_grid),
+                y=_tensor_to_numpy(pred_slice),
+                mode="lines+markers",
+                name="predicted",
+            )
+        )
+        if exact_kernel is not None:
+            ref_slice = exact_kernel[interval_idx, :, xi_item.index]
+            fig.add_trace(
+                go.Scatter(
+                    x=_tensor_to_numpy(unit_grid),
+                    y=_tensor_to_numpy(ref_slice),
+                    mode="lines",
+                    name="reference",
+                    line=dict(dash="dash"),
+                )
+            )
+        fig.add_vline(
+            x=xi_item.value,
+            line=dict(color="black", dash="dot"),
+            annotation_text="t=eta",
+        )
+        fig.update_layout(
+            title=f"Fixed-eta Green slice interval={interval_idx} eta={xi_item.value:.4f}",
+            xaxis_title="t",
+            yaxis_title="G_unit(t, eta)",
+            template=self.request.theme,
+        )
+        base_path = (
+            self.request.outdir
+            / "figures"
+            / "green_slices"
+            / f"interval{interval_idx:03d}_xi{xi_item.index:03d}_green_slice"
+        )
+        save_plotly_figure(fig, base_path, self.logger)
+
+    def _save_complex_coefficient_figure(
+        self,
+        *,
+        dataset: ComplexGreenDataset,
+        a_vals: Tensor,
+        ap_vals: Tensor,
+        b_vals: Tensor,
+        c_vals: Tensor,
+        interval_idx: int,
+        unit_grid: Tensor,
+    ) -> None:
+        axis_id = int(dataset.data.axis_id[interval_idx].item())
+        axis_name = self._complex_axis_name(axis_id)
+        ap_name = "apx_unit" if axis_name == "x" else "apy_unit"
+        b_name = "bx_unit" if axis_name == "x" else "by_unit"
+        fig = go.Figure()
+        for name, values in (
+            ("a_unit", a_vals[interval_idx]),
+            (ap_name, ap_vals[interval_idx]),
+            (b_name, b_vals[interval_idx]),
+            ("c_unit", c_vals[interval_idx]),
+        ):
+            fig.add_trace(
+                go.Scatter(
+                    x=_tensor_to_numpy(unit_grid),
+                    y=_tensor_to_numpy(values),
+                    mode="lines",
+                    name=name,
+                )
+            )
+        fig.update_layout(
+            title=f"Unit coefficient slices interval={interval_idx}",
+            xaxis_title="t",
+            yaxis_title="coefficient value",
+            template=self.request.theme,
+        )
+        base_path = (
+            self.request.outdir
+            / "figures"
+            / "coefficients"
+            / f"interval{interval_idx:03d}_coefficients"
+        )
+        save_plotly_figure(fig, base_path, self.logger)
+
+    def _save_complex_reconstruction_figure(
+        self,
+        *,
+        source: Tensor,
+        solution: Tensor,
+        reconstruction: Tensor,
+        sample_idx: int,
+        interval_idx: int,
+        unit_grid: Tensor,
+    ) -> None:
+        exact = solution[sample_idx, interval_idx]
+        pred = reconstruction[sample_idx, interval_idx]
+        fig = go.Figure()
+        for name, values in (
+            ("source f_unit", source[sample_idx, interval_idx]),
+            ("reference v", exact),
+            ("reconstructed v", pred),
+            ("error v-v_hat", exact - pred),
+        ):
+            fig.add_trace(
+                go.Scatter(
+                    x=_tensor_to_numpy(unit_grid),
+                    y=_tensor_to_numpy(values),
+                    mode="lines",
+                    name=name,
+                )
+            )
+        fig.update_layout(
+            title=f"Unit Green reconstruction sample={sample_idx} interval={interval_idx}",
+            xaxis_title="t",
+            yaxis_title="value",
+            template=self.request.theme,
+        )
+        base_path = (
+            self.request.outdir
+            / "figures"
+            / "reconstruction"
+            / f"sample{sample_idx:03d}_interval{interval_idx:03d}_reconstruction"
+        )
+        save_plotly_figure(fig, base_path, self.logger)
+
+    def _write_complex_raw_data(
+        self,
+        *,
+        dataset: ComplexGreenDataset,
+        kernel: Tensor,
+        exact_kernel: Tensor | None,
+        reconstruction: Tensor,
+        selected_intervals: tuple[int, ...],
+        selected_samples: tuple[int, ...],
+    ) -> None:
+        data_dir = self.request.outdir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        data = dataset.data
+        np.savez_compressed(
+            data_dir / "generated_eval_data.npz",
+            unit_grid=_tensor_to_numpy(data.unit_grid),
+            physical_coords=_tensor_to_numpy(data.physical_coords),
+            axis_id=_tensor_to_numpy(data.axis_id),
+            segment_id=_tensor_to_numpy(data.segment_id),
+            left=_tensor_to_numpy(data.left),
+            right=_tensor_to_numpy(data.right),
+            fixed=_tensor_to_numpy(data.fixed),
+            length=_tensor_to_numpy(data.length),
+            solution=_tensor_to_numpy(data.solution),
+            source=_tensor_to_numpy(data.source),
+            a_vals=_tensor_to_numpy(data.a_vals),
+            ap_vals=_tensor_to_numpy(data.ap_vals),
+            b_vals=_tensor_to_numpy(data.b_vals),
+            c_vals=_tensor_to_numpy(data.c_vals),
+        )
+
+        selected_pred = torch.stack([kernel[idx] for idx in selected_intervals], dim=0)
+        if exact_kernel is None:
+            np.savez_compressed(
+                data_dir / "selected_green_kernels.npz",
+                interval_indices=np.array(selected_intervals, dtype=np.int64),
+                predicted=_tensor_to_numpy(selected_pred),
+            )
+        else:
+            selected_ref = torch.stack(
+                [exact_kernel[idx] for idx in selected_intervals],
+                dim=0,
+            )
+            np.savez_compressed(
+                data_dir / "selected_green_kernels.npz",
+                interval_indices=np.array(selected_intervals, dtype=np.int64),
+                predicted=_tensor_to_numpy(selected_pred),
+                reference=_tensor_to_numpy(selected_ref),
+                error=_tensor_to_numpy(selected_pred - selected_ref),
+            )
+
+        sample_pairs = [
+            (sample_idx, interval_idx)
+            for sample_idx in selected_samples
+            for interval_idx in selected_intervals
+        ]
+        selected_reconstruction = torch.stack(
+            [reconstruction[sample, interval] for sample, interval in sample_pairs],
+            dim=0,
+        )
+        selected_solution = torch.stack(
+            [data.solution[sample, interval] for sample, interval in sample_pairs],
+            dim=0,
+        )
+        selected_source = torch.stack(
+            [data.source[sample, interval] for sample, interval in sample_pairs],
+            dim=0,
+        )
+        np.savez_compressed(
+            data_dir / "selected_reconstructions.npz",
+            sample_indices=np.array(
+                [sample for sample, _interval in sample_pairs],
+                dtype=np.int64,
+            ),
+            interval_indices=np.array(
+                [interval for _sample, interval in sample_pairs],
+                dtype=np.int64,
+            ),
+            reconstruction=_tensor_to_numpy(selected_reconstruction),
+            solution=_tensor_to_numpy(selected_solution),
+            source=_tensor_to_numpy(selected_source),
+            error=_tensor_to_numpy(selected_solution - selected_reconstruction.cpu()),
+        )
 
     @staticmethod
     def _build_trunk_grid(

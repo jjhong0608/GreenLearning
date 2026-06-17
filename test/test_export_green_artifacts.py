@@ -17,6 +17,7 @@ from greenonet.green_artifacts import (
 )
 from greenonet.io import save_model_with_config
 from greenonet.model import GreenONetModel
+from test.complex_fixtures import write_geometry_npz
 
 
 def _write_config(
@@ -60,6 +61,53 @@ def _write_config(
             "log_interval": 1,
             "compute_validation_rel_sol": True,
             "device": training_device,
+            "integration_rule": "trapezoid",
+            "compile": {"enabled": False},
+        },
+        "pipeline": {
+            "run_green": True,
+            "run_coupling": False,
+            "green_pretrained_path": None,
+            "coupling_pretrained_path": None,
+        },
+    }
+    path.write_text(json.dumps(payload))
+
+
+def _write_complex_config(path: Path, geometry_path: Path) -> None:
+    payload = {
+        "dataset": {
+            "geometry_mode": "complex",
+            "geometry_path": str(geometry_path),
+            "samples_per_line": 1,
+            "validation_samples_per_line": 1,
+            "scale_length": 0.1,
+            "validation_scale_length": 0.1,
+            "deterministic": True,
+            "sampler_mode": "forward",
+            "validation_sampler_mode": "forward",
+            "use_operator_learning": True,
+            "dtype": "float64",
+        },
+        "model": {
+            "input_dim": 2,
+            "hidden_dim": 4,
+            "depth": 1,
+            "activation": "tanh",
+            "use_bias": True,
+            "dropout": 0.0,
+            "use_green": True,
+            "branch_input_dim": 5,
+            "use_fourier": False,
+            "dtype": "float64",
+        },
+        "training": {
+            "learning_rate": 1e-3,
+            "epochs": 1,
+            "batch_size": 2,
+            "log_interval": 1,
+            "compute_validation_rel_sol": True,
+            "device": "cpu",
             "integration_rule": "trapezoid",
             "compile": {"enabled": False},
         },
@@ -129,37 +177,23 @@ def test_export_green_artifacts_smoke_diffusion_only(
     assert (outdir / "metrics" / "boundary_diagnostics.csv").exists()
     assert (outdir / "metrics" / "green_slice_metrics.csv").exists()
     assert (
-        outdir
-        / "figures"
-        / "green_heatmaps"
-        / "axis0_line000_green_heatmap_pred.html"
+        outdir / "figures" / "green_heatmaps" / "axis0_line000_green_heatmap_pred.html"
     ).exists()
     assert (
-        outdir
-        / "figures"
-        / "green_heatmaps"
-        / "axis0_line000_green_heatmap_pred.json"
+        outdir / "figures" / "green_heatmaps" / "axis0_line000_green_heatmap_pred.json"
     ).exists()
     assert (
-        outdir
-        / "figures"
-        / "green_slices"
-        / "axis0_line000_xi002_green_slice.html"
+        outdir / "figures" / "green_slices" / "axis0_line000_xi002_green_slice.html"
     ).exists()
     assert (
-        outdir
-        / "figures"
-        / "green_slices"
-        / "axis0_line000_xi002_green_slice.json"
+        outdir / "figures" / "green_slices" / "axis0_line000_xi002_green_slice.json"
     ).exists()
     assert (outdir / "data" / "generated_eval_data.npz").exists()
     assert (outdir / "data" / "selected_green_kernels.npz").exists()
     assert (outdir / "data" / "selected_reconstructions.npz").exists()
 
     saved_summary = json.loads((outdir / "summary.json").read_text())
-    assert saved_summary["selected_xi"] == [
-        {"index": 2, "value": 0.5, "label": "0.5"}
-    ]
+    assert saved_summary["selected_xi"] == [{"index": 2, "value": 0.5, "label": "0.5"}]
     assert saved_summary["eval_seed"] == 7
     assert saved_summary["eval_sampling"]["samples_per_line"] == 1
     assert saved_summary["device"] == "cpu"
@@ -358,3 +392,51 @@ def test_exporter_reconstruction_metric_shape(
     )
 
     assert rel.shape == (1, 2, 1)
+
+
+def test_export_green_artifacts_complex_geometry_uses_flat_intervals(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    checkpoint_path = tmp_path / "green.safetensors"
+    config_path = tmp_path / "config.json"
+    outdir = tmp_path / "artifacts"
+    _write_checkpoint(checkpoint_path)
+    _write_complex_config(config_path, geometry_path)
+
+    summary = export_green_artifacts(
+        GreenArtifactRequest(
+            checkpoint=checkpoint_path,
+            config=config_path,
+            outdir=outdir,
+            eval_seed=17,
+            line_indices=(0,),
+            xi_fractions=(0.5,),
+        )
+    )
+
+    assert summary["geometry_mode"] == "complex"
+    assert summary["geometry_path"] == str(geometry_path)
+    assert summary["num_intervals"] == 5
+    assert summary["num_x_segments"] == 2
+    assert summary["num_y_segments"] == 3
+    assert summary["selected_interval_indices"] == [0]
+    assert (outdir / "summary.json").exists()
+    assert (outdir / "metrics" / "per_interval_metrics.csv").exists()
+    assert (outdir / "metrics" / "sample_metrics.csv").exists()
+    assert (outdir / "metrics" / "boundary_diagnostics.csv").exists()
+    assert (outdir / "metrics" / "green_slice_metrics.csv").exists()
+    assert (
+        outdir / "figures" / "green_heatmaps" / "interval000_green_heatmap_pred.html"
+    ).exists()
+    assert (
+        outdir / "figures" / "green_heatmaps" / "interval000_green_heatmap_pred.json"
+    ).exists()
+    assert (
+        outdir / "figures" / "green_slices" / "interval000_xi002_green_slice.html"
+    ).exists()
+    assert (outdir / "data" / "generated_eval_data.npz").exists()
+    assert (outdir / "data" / "selected_green_kernels.npz").exists()
+    assert (outdir / "data" / "selected_reconstructions.npz").exists()

@@ -110,12 +110,23 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, `c_unit=L^2*c_phys`,
   `f_unit=L^2*f_phys`를 사용한다. Unit reconstruction에서 Green kernel에
   추가 segment length factor를 곱하지 않는다.
+- Complex geometry GreenNet은 geometry `.npz`의 connected x/y segment를
+  flat interval list `N=Sx+Sy`로 펼쳐 학습한다. 각 connected interval은
+  독립 1D domain이며, 같은 fixed coordinate에 놓인 disconnected segment도
+  합치지 않는다. Trunk coordinate는 항상 unit `(t, eta) in [0,1]^2`이고,
+  `dataset.samples_per_line`은 complex GreenNet mode에서 connected interval당
+  synthetic sample 수를 뜻한다.
 - Complex CouplingNet function branch에는 transformed `[a,b,c]`만 넣는다.
   `a'`는 GreenONet reconstruction query용 branch에는 보관하지만 CouplingNet
   function branch에는 넣지 않는다.
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
   `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
   key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.
+- Unit-circle complex geometry generator는 `cli/make_circular_geometry.py`이며
+  center `(0, 0)`, radius `1.0`, `2 / step_size` 정수 조건을 사용한다. Boundary
+  grid point와 degenerate boundary line은 제외하고, valid interior point가 있는
+  axial chord segment만 저장하며, reconstruction weight는 physical length가 아닌
+  segment-local unit coordinate 기준 nonuniform trapezoid weight로 저장한다.
 
 ## Experiment And Figure Planning
 

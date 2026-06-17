@@ -340,10 +340,7 @@ def test_export_coupling_artifacts_smoke(
     assert figure_base.with_suffix(".html").exists()
     assert figure_base.with_suffix(".json").exists()
     assert (
-        outdir
-        / "figures"
-        / "balance"
-        / "sample_0000_sample_balance_residual.json"
+        outdir / "figures" / "balance" / "sample_0000_sample_balance_residual.json"
     ).exists()
     assert not any("null" in path.name for path in (outdir / "figures").rglob("*"))
     assert not any("closure" in path.name for path in (outdir / "figures").rglob("*"))

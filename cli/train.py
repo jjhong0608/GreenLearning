@@ -45,7 +45,7 @@ from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
-from greenonet.runner import run_green_o_net
+from greenonet.runner import run_complex_green_o_net, run_green_o_net
 
 
 class TrainCLI:
@@ -552,30 +552,53 @@ class TrainCLI:
         green_kernel: torch.Tensor | None = None
 
         if pipeline_cfg.run_green:
-            green_trainer = run_green_o_net(
-                a_fun=coeffs.a_fun,
-                apx_fun=coeffs.apx_fun,
-                apy_fun=coeffs.apy_fun,
-                bx_fun=coeffs.bx_fun,
-                by_fun=coeffs.by_fun,
-                c_fun=coeffs.c_fun,
-                activation=model_cfg.activation,
-                work_dir=work_dir,
-                ndata=dataset_cfg.samples_per_line,
-                validation_ndata=dataset_cfg.validation_samples_per_line,
-                seed=training_cfg.epochs,
-                scale_length=dataset_cfg.scale_length,
-                validation_scale_length=dataset_cfg.validation_scale_length,
-                use_operator_learning=dataset_cfg.use_operator_learning,
-                deterministic=dataset_cfg.deterministic,
-                sampler_mode=dataset_cfg.sampler_mode,
-                validation_sampler_mode=dataset_cfg.validation_sampler_mode,
-                n_points_per_line=model_cfg.branch_input_dim,
-                step_size=dataset_cfg.step_size,
-                model_cfg=model_cfg,
-                training_cfg=training_cfg,
-                terminal_width=terminal_cfg.width,
-            )
+            if dataset_cfg.geometry_mode == "complex":
+                if dataset_cfg.geometry_path is None:
+                    raise ValueError(
+                        "dataset.geometry_path is required for complex GreenNet training."
+                    )
+                green_trainer = run_complex_green_o_net(
+                    coeffs=coeffs,
+                    geometry_path=dataset_cfg.geometry_path,
+                    activation=model_cfg.activation,
+                    work_dir=work_dir,
+                    ndata=dataset_cfg.samples_per_line,
+                    validation_ndata=dataset_cfg.validation_samples_per_line,
+                    seed=training_cfg.epochs,
+                    scale_length=dataset_cfg.scale_length,
+                    validation_scale_length=dataset_cfg.validation_scale_length,
+                    deterministic=dataset_cfg.deterministic,
+                    sampler_mode=dataset_cfg.sampler_mode,
+                    validation_sampler_mode=dataset_cfg.validation_sampler_mode,
+                    model_cfg=model_cfg,
+                    training_cfg=training_cfg,
+                    terminal_width=terminal_cfg.width,
+                )
+            else:
+                green_trainer = run_green_o_net(
+                    a_fun=coeffs.a_fun,
+                    apx_fun=coeffs.apx_fun,
+                    apy_fun=coeffs.apy_fun,
+                    bx_fun=coeffs.bx_fun,
+                    by_fun=coeffs.by_fun,
+                    c_fun=coeffs.c_fun,
+                    activation=model_cfg.activation,
+                    work_dir=work_dir,
+                    ndata=dataset_cfg.samples_per_line,
+                    validation_ndata=dataset_cfg.validation_samples_per_line,
+                    seed=training_cfg.epochs,
+                    scale_length=dataset_cfg.scale_length,
+                    validation_scale_length=dataset_cfg.validation_scale_length,
+                    use_operator_learning=dataset_cfg.use_operator_learning,
+                    deterministic=dataset_cfg.deterministic,
+                    sampler_mode=dataset_cfg.sampler_mode,
+                    validation_sampler_mode=dataset_cfg.validation_sampler_mode,
+                    n_points_per_line=model_cfg.branch_input_dim,
+                    step_size=dataset_cfg.step_size,
+                    model_cfg=model_cfg,
+                    training_cfg=training_cfg,
+                    terminal_width=terminal_cfg.width,
+                )
             green_model.load_state_dict(model_state_dict_for_save(green_trainer.model))
         else:
             if pipeline_cfg.green_pretrained_path is None:
