@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CircularGeometryConfig:
-    """Configuration for unit-circle complex-geometry generation."""
+    """Configuration for circular complex-geometry generation."""
 
     step_size: float
     out: Path
+    radius: float = 1.0
     boundary_tol: float = 1e-12
     overwrite: bool = False
     validate: bool = True
@@ -28,8 +29,12 @@ class CircularGeometryConfig:
     def __post_init__(self) -> None:
         if self.step_size <= 0.0:
             raise ValueError("--step-size must be positive.")
+        if self.radius <= 0.0:
+            raise ValueError("--radius must be positive.")
         if self.boundary_tol < 0.0:
             raise ValueError("--boundary-tol must be non-negative.")
+        if self.radius * self.radius <= self.boundary_tol:
+            raise ValueError("--boundary-tol must be smaller than radius squared.")
 
 
 @dataclass(frozen=True)
@@ -62,10 +67,9 @@ class GeometryValidationMixin:
 
 
 class CircularGeometryBuilder(GeometryValidationMixin):
-    """Build and write complex-geometry metadata for the unit disk."""
+    """Build and write complex-geometry metadata for a centered disk."""
 
     INTEGER_TOL = 1e-10
-    RADIUS = 1.0
     CENTER = np.array([0.0, 0.0], dtype=np.float64)
 
     def __init__(
@@ -100,8 +104,8 @@ class CircularGeometryBuilder(GeometryValidationMixin):
         )
         x_segments = self._build_x_segments(grid, point_index_by_grid)
         y_segments = self._build_y_segments(grid, point_index_by_grid)
-        self._require(x_segments, "Unit-circle geometry has no x-axis segments.")
-        self._require(y_segments, "Unit-circle geometry has no y-axis segments.")
+        self._require(x_segments, "Circular geometry has no x-axis segments.")
+        self._require(y_segments, "Circular geometry has no y-axis segments.")
 
         x_segment_id = np.full(coords_valid.shape[0], -1, dtype=np.int64)
         y_segment_id = np.full(coords_valid.shape[0], -1, dtype=np.int64)
@@ -170,8 +174,8 @@ class CircularGeometryBuilder(GeometryValidationMixin):
             "y_edges": self._build_edges(y_segments, y_local_t),
             "hx": np.array(self.config.step_size, dtype=np.float64),
             "hy": np.array(self.config.step_size, dtype=np.float64),
-            "domain_type": np.array("unit_circle"),
-            "radius": np.array(self.RADIUS, dtype=np.float64),
+            "domain_type": np.array(self._domain_type()),
+            "radius": np.array(self.config.radius, dtype=np.float64),
             "center": self.CENTER.copy(),
             "step_size": np.array(self.config.step_size, dtype=np.float64),
             "boundary_tol": np.array(self.config.boundary_tol, dtype=np.float64),
@@ -179,8 +183,9 @@ class CircularGeometryBuilder(GeometryValidationMixin):
             "grid_y": grid.copy(),
         }
         self.logger.info(
-            "Built unit-circle geometry with %d valid points, %d x-segments, "
-            "%d y-segments",
+            "Built circular geometry with radius=%s, %d valid points, "
+            "%d x-segments, %d y-segments",
+            self.config.radius,
             coords_valid.shape[0],
             len(x_segments),
             len(y_segments),
@@ -188,21 +193,28 @@ class CircularGeometryBuilder(GeometryValidationMixin):
         return payload
 
     def _build_grid(self) -> np.ndarray:
-        n_intervals = round(2.0 / self.config.step_size)
-        if abs(n_intervals * self.config.step_size - 2.0) > self.INTEGER_TOL:
+        diameter = 2.0 * self.config.radius
+        n_intervals = round(diameter / self.config.step_size)
+        if abs(n_intervals * self.config.step_size - diameter) > self.INTEGER_TOL:
             raise ValueError(
-                "--step-size must divide the interval [-1, 1]; "
-                "2 / step_size must be an integer."
+                "--step-size must divide the interval [-radius, radius]; "
+                "2 * radius / step_size must be an integer."
             )
-        grid = np.linspace(-1.0, 1.0, n_intervals + 1, dtype=np.float64)
+        grid = np.linspace(
+            -self.config.radius,
+            self.config.radius,
+            n_intervals + 1,
+            dtype=np.float64,
+        )
         if grid.size < 3:
             raise ValueError(
                 "--step-size is too large to produce interior grid points."
             )
         self.logger.info(
-            "Generated %d by %d grid with step_size=%s",
+            "Generated %d by %d grid with radius=%s and step_size=%s",
             grid.size,
             grid.size,
+            self.config.radius,
             self.config.step_size,
         )
         return grid
@@ -215,7 +227,7 @@ class CircularGeometryBuilder(GeometryValidationMixin):
         valid_y: list[int] = []
         valid_x: list[int] = []
         point_index_by_grid: dict[tuple[int, int], int] = {}
-        radius_threshold = self.RADIUS**2 - self.config.boundary_tol
+        radius_threshold = self.config.radius**2 - self.config.boundary_tol
         for row_index, y_value in enumerate(grid):
             for col_index, x_value in enumerate(grid):
                 if x_value * x_value + y_value * y_value < radius_threshold:
@@ -224,7 +236,7 @@ class CircularGeometryBuilder(GeometryValidationMixin):
                     valid_y.append(row_index)
                     valid_x.append(col_index)
                     point_index_by_grid[(row_index, col_index)] = point_index
-        self._require(coords, "Unit-circle geometry contains no valid interior points.")
+        self._require(coords, "Circular geometry contains no valid interior points.")
         return (
             np.array(coords, dtype=np.float64),
             np.array(valid_y, dtype=np.int64),
@@ -246,9 +258,11 @@ class CircularGeometryBuilder(GeometryValidationMixin):
             )
             if not point_indices:
                 continue
-            if abs(float(y_value)) >= self.RADIUS - self.config.boundary_tol:
+            if abs(float(y_value)) >= self.config.radius - self.config.boundary_tol:
                 continue
-            half_length = float(np.sqrt(max(self.RADIUS**2 - y_value * y_value, 0.0)))
+            half_length = float(
+                np.sqrt(max(self.config.radius**2 - y_value * y_value, 0.0))
+            )
             segments.append(
                 AxisSegment(
                     grid_index=row_index,
@@ -274,9 +288,11 @@ class CircularGeometryBuilder(GeometryValidationMixin):
             )
             if not point_indices:
                 continue
-            if abs(float(x_value)) >= self.RADIUS - self.config.boundary_tol:
+            if abs(float(x_value)) >= self.config.radius - self.config.boundary_tol:
                 continue
-            half_length = float(np.sqrt(max(self.RADIUS**2 - x_value * x_value, 0.0)))
+            half_length = float(
+                np.sqrt(max(self.config.radius**2 - x_value * x_value, 0.0))
+            )
             segments.append(
                 AxisSegment(
                     grid_index=col_index,
@@ -379,19 +395,28 @@ class CircularGeometryBuilder(GeometryValidationMixin):
             return np.empty((0, 2), dtype=np.int64)
         return np.array(edges, dtype=np.int64)
 
+    def _domain_type(self) -> str:
+        return "unit_circle" if np.isclose(self.config.radius, 1.0) else "circle"
+
 
 class MakeCircularGeometryCLI:
-    """Command-line surface for unit-circle geometry generation."""
+    """Command-line surface for centered circular geometry generation."""
 
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(
-            description="Generate a unit-circle complex-geometry NPZ file."
+            description="Generate a centered circular complex-geometry NPZ file."
         )
         parser.add_argument(
             "--step-size",
             type=float,
             required=True,
-            help="Positive grid spacing; 2 / step_size must be an integer.",
+            help=("Positive grid spacing; 2 * radius / step_size must be an integer."),
+        )
+        parser.add_argument(
+            "--radius",
+            type=float,
+            default=1.0,
+            help="Positive circle radius. Default: 1.0.",
         )
         parser.add_argument(
             "--out",
@@ -452,13 +477,14 @@ class MakeCircularGeometryCLI:
         config = CircularGeometryConfig(
             step_size=float(args.step_size),
             out=args.out,
+            radius=float(args.radius),
             boundary_tol=float(args.boundary_tol),
             overwrite=bool(args.overwrite),
             validate=bool(args.validate),
         )
         build_logger = self._build_logger(config.out.parent)
         output_path = CircularGeometryBuilder(config, build_logger).write()
-        build_logger.info("Completed unit-circle geometry generation")
+        build_logger.info("Completed circular geometry generation")
         return output_path
 
 

@@ -236,6 +236,7 @@ class FenicsxDomainBuilder(MeshCoverageMixin):
                 raw_tags,
                 num_valid_points=geometry.num_valid_points,
             )
+            self._ensure_physical_groups(gmsh, tags)
             if self.config.embed_valid_points:
                 self._embed_valid_points(gmsh, geometry, tags)
             if self.config.mesh_size is not None:
@@ -282,6 +283,12 @@ class FenicsxDomainBuilder(MeshCoverageMixin):
         gmsh.model.occ.synchronize()
         gmsh.model.geo.synchronize()
 
+    @staticmethod
+    def _ensure_physical_groups(gmsh: Any, tags: GmshDomainTags) -> None:
+        gmsh.model.addPhysicalGroup(2, list(tags.surface_tags))
+        if tags.boundary_tags:
+            gmsh.model.addPhysicalGroup(1, list(tags.boundary_tags))
+
     def _embed_valid_points(
         self,
         gmsh: Any,
@@ -293,12 +300,12 @@ class FenicsxDomainBuilder(MeshCoverageMixin):
         for x_coord, y_coord in geometry.coords_valid:
             point_tags.append(
                 int(
-                    gmsh.model.geo.addPoint(
+                    gmsh.model.occ.addPoint(
                         float(x_coord), float(y_coord), 0.0, mesh_size
                     )
                 )
             )
-        gmsh.model.geo.synchronize()
+        gmsh.model.occ.synchronize()
 
         surface_groups: dict[int, list[int]]
         if tags.point_surface_tags is None:
@@ -311,4 +318,4 @@ class FenicsxDomainBuilder(MeshCoverageMixin):
         for surface_tag, embedded_points in surface_groups.items():
             if embedded_points:
                 gmsh.model.mesh.embed(0, embedded_points, 2, int(surface_tag))
-        gmsh.model.geo.synchronize()
+        gmsh.model.occ.synchronize()

@@ -27,9 +27,9 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - CouplingNet: a shared branch/trunk MIONet consumes axial-line inputs `(a, b, c, f)` together with interior coordinates and predicts axial flux-divergences `(phi_x, psi_y)` through a single shared DeepONet-style readout followed by optional balance projection.
 - Complex geometry mode: set `dataset.geometry_mode="complex"` to train/evaluate CouplingNet on a precomputed non-rectangular valid-point geometry. The default remains `unit_square`, so existing configs keep the original `CouplingDataset`, `CouplingNet`, `CouplingTrainer`, evaluator, and artifact exporter. Complex mode requires `dataset.geometry_path` and interprets `dataset.training_path`, `dataset.validation_path`, and `dataset.test_path` as directories of full-grid sample `.npz` files. `coupling_model.branch_input_dim` is reused as the number of fixed unit-interval branch samples per segment, while `hidden_dim`, `depth`, `activation`, `dropout`, `use_bias`, and `dtype` are reused by `ComplexCouplingNet`.
 - Complex geometry schema: the geometry `.npz` must contain `coords_valid`, `valid_grid_y_index`, `valid_grid_x_index`, `x_segment_id`, `y_segment_id`, `x_local_t`, `y_local_t`, `x_segment_left`, `x_segment_right`, `x_segment_y`, `x_segment_length`, `y_segment_bottom`, `y_segment_top`, `y_segment_x`, `y_segment_length`, `x_recon_ptr`, `x_recon_t`, `x_recon_weight`, `x_recon_valid_index`, `y_recon_ptr`, `y_recon_t`, `y_recon_weight`, `y_recon_valid_index`, `x_edges`, `y_edges`, `hx`, and `hy`. Reconstruction arrays use `valid_index == -1` for hard-zero segment endpoints; valid points must be strictly interior in segment-local coordinates.
-- Unit-circle geometry generation: use `PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/make_circular_geometry.py --step-size 0.05 --out data/geometry/unit_circle_h005.npz` to generate a unit-radius circular complex geometry centered at `(0, 0)`. The generator requires `2 / step_size` to be an integer, excludes boundary grid points and degenerate boundary lines, stores only axial chord segments with valid interior points, writes unit-local nonuniform trapezoid reconstruction weights, and validates the saved `.npz` with `load_complex_geometry` by default. Pass `--overwrite` to replace an existing output and `--no-validate` to skip the post-write schema check.
+- Circular geometry generation: use `PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/make_circular_geometry.py --step-size 0.05 --radius 1.0 --out data/geometry/unit_circle_h005.npz` to generate a centered circular complex geometry. The default radius is `1.0`; non-unit circles use `--radius R` and a filename such as `circle_r2_h005.npz`. The generator requires `2 * radius / step_size` to be an integer, builds the full grid on `[-radius, radius]`, excludes boundary grid points and degenerate boundary lines, stores only axial chord segments with valid interior points, writes unit-local nonuniform trapezoid reconstruction weights, and validates the saved `.npz` with `load_complex_geometry` by default. Pass `--overwrite` to replace an existing output and `--no-validate` to skip the post-write schema check.
 - Complex sample schema: each sample `.npz` must contain full-grid `rhs` and `sol` arrays indexed as `[row=y, col=x]`. Optional flux targets use preferred keys `phi` and `psi`; legacy keys `uxx` and `uyy` are accepted as fallback. Full-grid values are gathered into valid-point order using `valid_grid_y_index` and `valid_grid_x_index`.
-- FEniCSx complex sample generation: use `cli/make_fenicsx_samples.py` from the optional `green_fenicsx` environment to generate CouplingNet sample `.npz` files for complex geometry. The geometry `.npz` must include `grid_x` and `grid_y` because the generator writes full-grid arrays, while the existing `coords_valid` and valid index arrays define which grid values belong to the domain. Domain input must be exactly one of `--gmsh-script <path>` or `--msh <path>`. A Gmsh script must define `build_domain(gmsh, context)` and return `{"surface_tags": [...]}`; disconnected multi-surface domains must also return `point_surface_tags`, one surface tag per valid geometry point, so the generator can embed each valid point in the correct surface. Script mode embeds valid grid points as internal Gmsh points by default and requires vertex coverage by default; `.msh` mode evaluates at valid points and does not require vertex coverage unless `--require-valid-points-in-mesh` is passed.
+- FEniCSx complex sample generation: use `cli/make_fenicsx_samples.py` from the optional `green_fenicsx` environment to generate CouplingNet sample `.npz` files for complex geometry. The geometry `.npz` must include `grid_x` and `grid_y` because the generator writes full-grid arrays, while the existing `coords_valid` and valid index arrays define which grid values belong to the domain. Domain input must be exactly one of `--gmsh-script <path>` or `--msh <path>`. A Gmsh script must define `build_domain(gmsh, context)` and return `{"surface_tags": [...]}`; disconnected multi-surface domains must also return `point_surface_tags`, one surface tag per valid geometry point, so the generator can embed each valid point in the correct surface. Script mode embeds valid grid points as internal Gmsh points by default and requires vertex coverage by default; `.msh` mode evaluates at valid points and does not require vertex coverage unless `--require-valid-points-in-mesh` is passed. `examples/unit_circle_gmsh.py` is unit-radius by default but reads `radius` from the geometry `.npz`, so non-unit circular geometry and the FEniCSx disk mesh stay aligned.
 - FEniCSx sample command example:
   ```
   PYTHONPATH=src conda run -n green_fenicsx python cli/make_fenicsx_samples.py \
@@ -45,7 +45,89 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     --mesh-size 0.03
   ```
   The output layout is `<out>/train/sample_000000.npz`, `<out>/valid/sample_000000.npz`, `<out>/test/sample_000000.npz`, plus `<out>/make_fenicsx_samples.log` and `<out>/generation_summary.json`. Every sample stores full-grid `rhs`, `sol`, `phi`, and `psi` arrays with shape `(len(grid_y), len(grid_x))`; values outside `coords_valid` are zero-filled. `rhs` is sampled from a separable squared-exponential GP on the Cartesian grid, then zero-filled outside the valid domain points before the FEM solve. `sol`, `phi`, and `psi` are evaluated from FEniCSx functions at valid grid points and written back to full-grid arrays.
+- FEniCSx sample-level parallelism: add `--num-workers N --sample-seed-policy indexed` to split independent samples across spawned Python worker processes. Each worker performs single-process FEniCSx solves; this is not MPI domain decomposition. `num_workers=1` keeps the legacy sequential RNG path. Parallel mode requires indexed seeds, so each `(split, index)` sample is reproducible regardless of worker scheduling. By default existing sample files fail fast; pass `--overwrite` to replace them or `--skip-existing` to resume without rewriting existing samples. Only the parent process writes `generation_summary.json`.
+  ```
+  PYTHONPATH=src conda run -n green_fenicsx python cli/make_fenicsx_samples.py \
+    --geometry data/geometry/unit_circle_h01.npz \
+    --out data/complex_samples/unit_circle_h01_small_parallel \
+    --gmsh-script examples/unit_circle_gmsh.py \
+    --num-train 32 \
+    --num-valid 8 \
+    --num-test 8 \
+    --lengthscale 0.2 \
+    --amplitude 1.0 \
+    --mean 0.0 \
+    --seed 0 \
+    --mesh-size 0.025 \
+    --solution-degree 3 \
+    --target-degree 2 \
+    --coefficients coefficients/Pure_Poisson.py \
+    --num-workers 4 \
+    --sample-seed-policy indexed
+  ```
 - FEniCSx `phi`/`psi` convention: the generator solves the weak form `int a grad(u).grad(v) + (b.grad(u)) v + c u v = int f v` with homogeneous Dirichlet boundary conditions, then projects the direction-split targets `phi=-d_x(a d_x u)+b_x d_x u+0.5 c u` and `psi=-d_y(a d_y u)+b_y d_y u+0.5 c u`. `generation_summary.json` records the valid-point relative balance residual for `phi + psi ~= rhs`.
+- Circular-domain smoke and small dataset workflow:
+  ```
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/make_circular_geometry.py \
+    --step-size 0.25 \
+    --out data/geometry/unit_circle_h025.npz \
+    --overwrite
+
+  PYTHONPATH=src conda run -n green_fenicsx python cli/make_fenicsx_samples.py \
+    --geometry data/geometry/unit_circle_h025.npz \
+    --out data/complex_samples/unit_circle_h025_smoke \
+    --gmsh-script examples/unit_circle_gmsh.py \
+    --num-train 1 \
+    --num-valid 0 \
+    --num-test 0 \
+    --lengthscale 0.2 \
+    --amplitude 1.0 \
+    --mean 0.0 \
+    --seed 0 \
+    --mesh-size 0.035 \
+    --solution-degree 3 \
+    --target-degree 2 \
+    --coefficients coefficients/Pure_Poisson.py
+
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/validate_complex_samples.py \
+    --geometry data/geometry/unit_circle_h025.npz \
+    --sample-root data/complex_samples/unit_circle_h025_smoke \
+    --splits train \
+    --coefficients coefficients/Pure_Poisson.py \
+    --branch-input-dim 4 \
+    --max-balance-residual 1e-2
+
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/make_circular_geometry.py \
+    --step-size 0.1 \
+    --out data/geometry/unit_circle_h01.npz \
+    --overwrite
+
+  PYTHONPATH=src conda run -n green_fenicsx python cli/make_fenicsx_samples.py \
+    --geometry data/geometry/unit_circle_h01.npz \
+    --out data/complex_samples/unit_circle_h01_small \
+    --gmsh-script examples/unit_circle_gmsh.py \
+    --num-train 32 \
+    --num-valid 8 \
+    --num-test 8 \
+    --lengthscale 0.2 \
+    --amplitude 1.0 \
+    --mean 0.0 \
+    --seed 0 \
+    --mesh-size 0.025 \
+    --solution-degree 3 \
+    --target-degree 2 \
+    --coefficients coefficients/Pure_Poisson.py
+
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python cli/validate_complex_samples.py \
+    --geometry data/geometry/unit_circle_h01.npz \
+    --sample-root data/complex_samples/unit_circle_h01_small \
+    --splits train valid test \
+    --coefficients coefficients/Pure_Poisson.py \
+    --branch-input-dim 4 \
+    --max-balance-residual 5e-2
+  ```
+  The circular smoke path uses `h=0.25`, `mesh_size=0.035`, `solution_degree=3`, `target_degree=2`, and one train sample. The small dataset path uses `h=0.1`, `mesh_size=0.025`, the same FEM degrees, and `32/8/8` train/valid/test samples. Start with `coefficients/Pure_Poisson.py`; move to diffusion, reaction, and convection families only after the circular balance residual is stable.
+  With these defaults, the refined `h=0.25` smoke sample has been observed to pass `1e-2` (`max ~= 7.8e-3`), while the `h=0.1` small dataset is a schema/loadability and residual-distribution check (`max ~= 3.7e-2`). Refine `mesh_size`, `solution_degree`, or `target_degree` before treating the small dataset as a strict `1e-2` quality dataset.
 - Complex GreenNet training: when `dataset.geometry_mode="complex"` and `pipeline.run_green=true`, GreenNet trains on the connected x/y segments from `dataset.geometry_path` as a flat interval list `N = Sx + Sy`. Every connected interval is an independent 1D domain, so disconnected components on the same axial line remain separate rows. `dataset.samples_per_line` and `dataset.validation_samples_per_line` mean samples per connected interval. `dataset.training_path`, `dataset.validation_path`, and `dataset.test_path` are ignored by GreenNet in complex mode and remain CouplingNet full-grid sample directories.
 - Complex coefficient normalization: each physical segment is mapped to the unit interval before GreenONet/CouplingNet use. The unit coefficients are `a_unit=a_phys`, `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, `c_unit=L^2*c_phys`, and `f_unit=L^2*f_phys`. GreenNet trunk coordinates are always unit `(t, eta) in [0,1]^2`; unit reconstruction integrates `G_unit(t, eta) f_unit(eta)` over `eta` without multiplying by an additional segment length.
 - Complex CouplingNet behavior: the function branch consumes transformed `[a,b,c]` only; `a'` is kept only for GreenONet reconstruction queries. The geometry branch consumes transverse positional encoding plus `[s_left, s_right, s_mid, L, L^2, 1/L]`, and the trunk consumes segment-local `t`. Raw unit outputs are converted to physical `phi`/`psi`, projected with hard symmetric balance in physical variables, converted back to unit outputs, and reconstructed segment by segment with the precomputed nonuniform trapezoid weights.

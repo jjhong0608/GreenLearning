@@ -5,12 +5,15 @@ dependencies:
   - python=3.12
   - fenics-dolfinx=0.11.*
   - gmsh
+  - python-gmsh
   - mpi4py
   - petsc4py
   - numpy
   - scipy
   - rich
   - plotly
+  - safetensors
+  - python-kaleido
   - pytorch
   - pytest
   - ruff

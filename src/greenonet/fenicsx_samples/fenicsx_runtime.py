@@ -5,6 +5,54 @@ from dataclasses import dataclass
 from typing import Any
 
 
+class GmshIOAdapter:
+    """Normalize DOLFINx Gmsh IO API differences across supported versions."""
+
+    def __init__(self, module: Any) -> None:
+        self.module = module
+
+    def model_to_mesh(
+        self,
+        model: Any,
+        comm: Any,
+        rank: int,
+        *,
+        gdim: int,
+    ) -> tuple[Any, Any, Any]:
+        return self._normalize_mesh_data(
+            self.module.model_to_mesh(model, comm, rank, gdim=gdim)
+        )
+
+    def read_from_msh(
+        self,
+        filename: str,
+        comm: Any,
+        rank: int,
+        *,
+        gdim: int,
+    ) -> tuple[Any, Any, Any]:
+        return self._normalize_mesh_data(
+            self.module.read_from_msh(filename, comm, rank=rank, gdim=gdim)
+        )
+
+    @staticmethod
+    def _normalize_mesh_data(value: Any) -> tuple[Any, Any, Any]:
+        if isinstance(value, tuple):
+            if len(value) < 3:
+                raise ValueError("DOLFINx Gmsh IO tuple return must contain 3 values.")
+            return value[0], value[1], value[2]
+        if hasattr(value, "mesh"):
+            return (
+                value.mesh,
+                getattr(value, "cell_tags", None),
+                getattr(value, "facet_tags", None),
+            )
+        raise TypeError(
+            "DOLFINx Gmsh IO returned an unsupported mesh payload type: "
+            f"{type(value)!r}."
+        )
+
+
 @dataclass(frozen=True)
 class FenicsxRuntime:
     """Lazy-loaded optional FEniCSx/Gmsh module bundle."""
@@ -33,7 +81,7 @@ class FenicsxImportMixin:
             fem_petsc = importlib.import_module("dolfinx.fem.petsc")
             dolfinx_mesh = importlib.import_module("dolfinx.mesh")
             dolfinx_geometry = importlib.import_module("dolfinx.geometry")
-            gmshio = importlib.import_module("dolfinx.io.gmshio")
+            gmsh_module = FenicsxImportMixin._load_gmsh_io_module()
             ufl = importlib.import_module("ufl")
         except ModuleNotFoundError as exc:
             raise ModuleNotFoundError(
@@ -49,7 +97,14 @@ class FenicsxImportMixin:
             fem_petsc=fem_petsc,
             dolfinx_mesh=dolfinx_mesh,
             dolfinx_geometry=dolfinx_geometry,
-            gmshio=gmshio,
+            gmshio=GmshIOAdapter(gmsh_module),
             ufl=ufl,
             default_scalar_type=getattr(dolfinx, "default_scalar_type", float),
         )
+
+    @staticmethod
+    def _load_gmsh_io_module() -> Any:
+        try:
+            return importlib.import_module("dolfinx.io.gmsh")
+        except ModuleNotFoundError:
+            return importlib.import_module("dolfinx.io.gmshio")

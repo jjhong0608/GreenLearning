@@ -122,11 +122,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
   `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
   key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.
-- Unit-circle complex geometry generator는 `cli/make_circular_geometry.py`이며
-  center `(0, 0)`, radius `1.0`, `2 / step_size` 정수 조건을 사용한다. Boundary
-  grid point와 degenerate boundary line은 제외하고, valid interior point가 있는
-  axial chord segment만 저장하며, reconstruction weight는 physical length가 아닌
-  segment-local unit coordinate 기준 nonuniform trapezoid weight로 저장한다.
+- Circular complex geometry generator는 `cli/make_circular_geometry.py`이며
+  center `(0, 0)` 고정, radius CLI option default `1.0`, `2 * radius / step_size`
+  정수 조건을 사용한다. Grid interval은 `[-radius, radius]`이고, boundary grid point와
+  degenerate boundary line은 제외하며, valid interior point가 있는 axial chord segment만
+  저장한다. Reconstruction weight는 physical length가 아닌 segment-local unit coordinate
+  기준 nonuniform trapezoid weight로 저장한다.
 - FEniCSx complex sample generator는 optional `green_fenicsx` conda env에서만
   실행하는 path로 둔다. Main `green_net` training env와 `pyproject.toml`에는
   FEniCSx dependency를 섞지 않는다.
@@ -137,10 +138,25 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `phi=-d_x(a d_x u)+b_x d_x u+0.5*c*u`,
   `psi=-d_y(a d_y u)+b_y d_y u+0.5*c*u`인 direction-split operator component이며,
   valid point에서 `phi + psi ~= rhs` balance residual을 summary에 기록한다.
+- FEniCSx sample-level 병렬화는 spawned Python process worker로 독립 sample을
+  나눠 생성하는 방식이다. MPI domain decomposition은 v1 범위가 아니며,
+  `num_workers > 1`이면 `sample_seed_policy="indexed"`를 강제한다. Parent process만
+  `generation_summary.json`을 작성하고, sample `.npz` schema는 `rhs`, `sol`,
+  `phi`, `psi` 그대로 유지한다.
 - FEniCSx Gmsh script input은 `build_domain(gmsh, context)`를 제공해야 하며,
   multi-surface disconnected domain에서는 valid point마다 들어갈 surface를
   `point_surface_tags`로 명시해야 한다. Script mode는 valid points를 mesh internal
   points로 embed하려고 시도하고, `.msh` mode는 vertex 보장을 기본 요구하지 않는다.
+  `examples/unit_circle_gmsh.py`는 geometry `.npz`의 `radius` metadata를 읽어서
+  non-unit circular geometry와 Gmsh disk mesh radius를 일치시킨다.
+- Circular sample generation workflow는 `examples/unit_circle_gmsh.py`를 기본
+  Gmsh domain script로 사용한다. Smoke default는 `h=0.25`, `mesh_size=0.035`,
+  `solution_degree=3`, `target_degree=2`, `train=1`; small dataset default는
+  `h=0.1`, `mesh_size=0.025`, same FEM degrees, `train/valid/test=32/8/8`이다.
+  첫 coefficient는 `Pure_Poisson.py`로 고정한다. 현재 refined smoke는
+  `phi + psi ~= rhs` residual `1e-2`를 통과했지만, small dataset default는
+  max residual이 약 `3.7e-2`이므로 schema/loadability와 residual distribution 확인용으로
+  먼저 사용하고, strict `1e-2` 품질 dataset이 필요하면 mesh/projection parameter를 더 조정한다.
 
 ## Experiment And Figure Planning
 

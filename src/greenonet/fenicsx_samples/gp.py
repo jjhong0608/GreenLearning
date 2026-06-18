@@ -41,7 +41,13 @@ class GaussianProcessSourceSampler:
         )
 
     def sample(self) -> np.ndarray:
-        latent = self._rng.standard_normal((self.grid_y.size, self.grid_x.size))
+        return self._sample_with_rng(self._rng)
+
+    def sample_with_seed(self, seed: int | np.random.SeedSequence) -> np.ndarray:
+        return self._sample_with_rng(np.random.default_rng(seed))
+
+    def _sample_with_rng(self, rng: np.random.Generator) -> np.ndarray:
+        latent = rng.standard_normal((self.grid_y.size, self.grid_x.size))
         field = self.mean + self.amplitude * (
             self._factor_y @ latent @ self._factor_x.T
         )

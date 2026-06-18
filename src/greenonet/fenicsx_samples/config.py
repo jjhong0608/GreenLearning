@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+
+SampleSeedPolicy = Literal["sequential", "indexed"]
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,10 @@ class FenicsxSampleConfig:
     embed_valid_points: bool = True
     require_valid_points_in_mesh: bool = True
     coefficients: Path | None = None
+    num_workers: int = 1
+    sample_seed_policy: SampleSeedPolicy = "sequential"
+    overwrite: bool = False
+    skip_existing: bool = False
 
     def __post_init__(self) -> None:
         if (self.gmsh_script is None) == (self.msh is None):
@@ -46,6 +54,18 @@ class FenicsxSampleConfig:
             raise ValueError("--mesh-size must be positive when provided.")
         if self.geometry.suffix != ".npz":
             raise ValueError("--geometry must point to a .npz geometry file.")
+        if self.num_workers < 1:
+            raise ValueError("--num-workers must be >= 1.")
+        if self.sample_seed_policy not in ("sequential", "indexed"):
+            raise ValueError(
+                "--sample-seed-policy must be one of: sequential, indexed."
+            )
+        if self.num_workers > 1 and self.sample_seed_policy != "indexed":
+            raise ValueError(
+                '--sample-seed-policy must be "indexed" when --num-workers > 1.'
+            )
+        if self.overwrite and self.skip_existing:
+            raise ValueError("--overwrite and --skip-existing cannot both be set.")
 
     @property
     def split_counts(self) -> tuple[tuple[str, int], ...]:

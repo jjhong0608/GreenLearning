@@ -2,25 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
-from greenonet.coefficients import load_coefficient_functions
 from greenonet.fenicsx_samples.config import FenicsxSampleConfig
-from greenonet.fenicsx_samples.domain import FenicsxDomainBuilder
 from greenonet.fenicsx_samples.fenicsx_runtime import FenicsxImportMixin
 from greenonet.fenicsx_samples.geometry import GeometryGridLoader
-from greenonet.fenicsx_samples.gp import GaussianProcessSourceSampler
-from greenonet.fenicsx_samples.solver import FenicsxPdeSolver
-from greenonet.fenicsx_samples.writer import SampleWriter
-
-
-@dataclass(frozen=True)
-class GeneratedSampleSummary:
-    split: str
-    index: int
-    path: str
-    balance_relative_residual: float
+from greenonet.fenicsx_samples.parallel import (
+    FenicsxSampleWorker,
+    GeneratedSampleSummary,
+    SampleTask,
+    WorkerBatchResult,
+    build_sample_tasks,
+    run_parallel_batches,
+)
 
 
 class FenicsxSampleGenerator(FenicsxImportMixin):
@@ -37,67 +32,47 @@ class FenicsxSampleGenerator(FenicsxImportMixin):
     def run(self) -> dict[str, object]:
         self.config.out.mkdir(parents=True, exist_ok=True)
         geometry = GeometryGridLoader().load(self.config.geometry)
-        runtime = self.load_runtime()
-        mesh_bundle = FenicsxDomainBuilder(runtime, self.config).build(geometry)
-        coeffs = load_coefficient_functions(self.config.coefficients)
-        solver = FenicsxPdeSolver(
-            runtime,
-            mesh_bundle.domain,
-            geometry,
-            coeffs,
-            solution_degree=self.config.solution_degree,
-            target_degree=self.config.target_degree,
+        tasks = build_sample_tasks(self.config)
+        results = self._run_batches(tasks)
+        samples = sorted(
+            (sample for result in results for sample in result.samples),
+            key=lambda sample: sample.global_ordinal,
         )
-        sampler = GaussianProcessSourceSampler(
-            geometry.grid_x,
-            geometry.grid_y,
-            lengthscale=self.config.lengthscale,
-            amplitude=self.config.amplitude,
-            mean=self.config.mean,
-            seed=self.config.seed,
-        )
-        writer = SampleWriter(self.config.out, geometry.full_grid_shape)
-        samples: list[GeneratedSampleSummary] = []
-        for split, count in self.config.split_counts:
-            for index in range(count):
-                raw_rhs = sampler.sample()
-                rhs = geometry.valid_values_to_full_grid(
-                    raw_rhs[
-                        geometry.valid_grid_y_index,
-                        geometry.valid_grid_x_index,
-                    ]
-                )
-                solve_result = solver.solve(rhs)
-                path = writer.write_sample(
-                    split,
-                    index,
-                    rhs=rhs,
-                    sol=solve_result.sol,
-                    phi=solve_result.phi,
-                    psi=solve_result.psi,
-                )
-                summary = GeneratedSampleSummary(
-                    split=split,
-                    index=index,
-                    path=str(path),
-                    balance_relative_residual=solve_result.balance_relative_residual,
-                )
-                samples.append(summary)
-                self.logger.info(
-                    "wrote %s sample %06d with balance residual %.6e",
-                    split,
-                    index,
-                    solve_result.balance_relative_residual,
-                )
+        self._log_samples(samples)
         payload = self._summary_payload(
             geometry_metadata=geometry.metadata,
-            vertex_coverage_max_distance=mesh_bundle.vertex_coverage_max_distance,
+            vertex_coverage_max_distance=self._max_vertex_coverage(results),
             samples=samples,
+            task_count=len(tasks),
+            results=results,
         )
         summary_path = self.config.out / "generation_summary.json"
         summary_path.write_text(json.dumps(payload, indent=2))
         self.logger.info("wrote generation summary to %s", summary_path)
         return payload
+
+    def _run_batches(self, tasks: list[SampleTask]) -> list[WorkerBatchResult]:
+        if self.config.num_workers == 1:
+            return [FenicsxSampleWorker(self.config, worker_id=0).run(tasks)]
+        return run_parallel_batches(self.config, tasks)
+
+    def _log_samples(self, samples: list[GeneratedSampleSummary]) -> None:
+        for sample in samples:
+            if sample.skipped:
+                self.logger.info(
+                    "skipped existing %s sample %06d",
+                    sample.split,
+                    sample.index,
+                )
+                continue
+            if sample.balance_relative_residual is None:
+                raise ValueError("Generated sample summary is missing residual.")
+            self.logger.info(
+                "wrote %s sample %06d with balance residual %.6e",
+                sample.split,
+                sample.index,
+                sample.balance_relative_residual,
+            )
 
     def _summary_payload(
         self,
@@ -105,8 +80,14 @@ class FenicsxSampleGenerator(FenicsxImportMixin):
         geometry_metadata: dict[str, object],
         vertex_coverage_max_distance: float | None,
         samples: list[GeneratedSampleSummary],
+        task_count: int,
+        results: list[WorkerBatchResult],
     ) -> dict[str, object]:
-        residuals = [sample.balance_relative_residual for sample in samples]
+        residuals = [
+            sample.balance_relative_residual
+            for sample in samples
+            if sample.balance_relative_residual is not None
+        ]
         return {
             "config": self._serializable_config(),
             "geometry_metadata": geometry_metadata,
@@ -124,6 +105,10 @@ class FenicsxSampleGenerator(FenicsxImportMixin):
             "balance_relative_residual_max": (
                 None if not residuals else max(residuals)
             ),
+            "parallel": self._parallel_payload(
+                task_count=task_count,
+                results=results,
+            ),
             "samples": [asdict(sample) for sample in samples],
         }
 
@@ -135,3 +120,33 @@ class FenicsxSampleGenerator(FenicsxImportMixin):
             else value
             for key, value in raw.items()
         }
+
+    def _parallel_payload(
+        self,
+        *,
+        task_count: int,
+        results: list[WorkerBatchResult],
+    ) -> dict[str, object]:
+        return {
+            "num_workers": self.config.num_workers,
+            "sample_seed_policy": self.config.sample_seed_policy,
+            "task_count": task_count,
+            "skipped_count": sum(result.skipped_count for result in results),
+            "worker_generated_counts": {
+                str(result.worker_id): result.generated_count for result in results
+            },
+            "worker_skipped_counts": {
+                str(result.worker_id): result.skipped_count for result in results
+            },
+        }
+
+    @staticmethod
+    def _max_vertex_coverage(
+        results: list[WorkerBatchResult],
+    ) -> float | None:
+        distances = [
+            result.vertex_coverage_max_distance
+            for result in results
+            if result.vertex_coverage_max_distance is not None
+        ]
+        return None if not distances else max(distances)

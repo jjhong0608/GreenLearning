@@ -32,6 +32,14 @@ class MakeFenicsxSamplesCLI:
         parser.add_argument("--solution-degree", type=int, default=2)
         parser.add_argument("--target-degree", type=int, default=1)
         parser.add_argument("--mesh-size", type=float, default=None)
+        parser.add_argument("--num-workers", type=int, default=1)
+        parser.add_argument(
+            "--sample-seed-policy",
+            choices=("sequential", "indexed"),
+            default="sequential",
+        )
+        parser.add_argument("--overwrite", action="store_true")
+        parser.add_argument("--skip-existing", action="store_true")
         parser.add_argument(
             "--embed-valid-points",
             action=argparse.BooleanOptionalAction,
@@ -77,6 +85,10 @@ class MakeFenicsxSamplesCLI:
             embed_valid_points=embed_valid_points,
             require_valid_points_in_mesh=require_valid_points,
             coefficients=args.coefficients,
+            num_workers=int(args.num_workers),
+            sample_seed_policy=args.sample_seed_policy,
+            overwrite=bool(args.overwrite),
+            skip_existing=bool(args.skip_existing),
         )
 
     @staticmethod

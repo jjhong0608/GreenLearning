@@ -208,6 +208,7 @@ class FenicsxPdeSolver(TorchCoefficientMixin, PointEvaluationMixin):
             bilinear,
             linear,
             bcs=[self._homogeneous_dirichlet_bc()],
+            petsc_options_prefix="greenonet_fenicsx_pde_",
             petsc_options={
                 "ksp_type": "preonly",
                 "pc_type": "lu",
@@ -234,6 +235,7 @@ class FenicsxPdeSolver(TorchCoefficientMixin, PointEvaluationMixin):
         problem = self.runtime.fem_petsc.LinearProblem(
             trial * test * ufl.dx,
             expression * test * ufl.dx,
+            petsc_options_prefix="greenonet_fenicsx_project_",
             petsc_options={
                 "ksp_type": "preonly",
                 "pc_type": "lu",

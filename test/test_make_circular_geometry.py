@@ -53,6 +53,48 @@ def test_circular_geometry_loads_with_unit_circle_contract(tmp_path):
     assert geometry.y_edges.shape == (6, 2)
 
 
+def test_circular_geometry_supports_non_unit_radius(tmp_path):
+    path = tmp_path / "circle_r2_h05.npz"
+    radius = 2.0
+    step_size = 0.5
+    CircularGeometryBuilder(
+        CircularGeometryConfig(step_size=step_size, radius=radius, out=path),
+    ).write()
+
+    geometry = load_complex_geometry(path)
+    with np.load(path) as raw:
+        coords = raw["coords_valid"]
+        expected_grid = np.linspace(-radius, radius, 9)
+        assert raw["domain_type"].item() == "circle"
+        assert raw["radius"].item() == pytest.approx(radius)
+        assert raw["center"].tolist() == pytest.approx([0.0, 0.0])
+        assert raw["grid_x"].tolist() == pytest.approx(expected_grid.tolist())
+        assert raw["grid_y"].tolist() == pytest.approx(expected_grid.tolist())
+        assert np.all(coords[:, 0] ** 2 + coords[:, 1] ** 2 < radius**2 - 1e-12)
+        assert np.all(np.abs(raw["x_segment_y"]) < radius - 1e-12)
+        assert np.all(np.abs(raw["y_segment_x"]) < radius - 1e-12)
+        expected_x_left = -np.sqrt(radius**2 - raw["x_segment_y"] ** 2)
+        expected_x_right = -expected_x_left
+        expected_y_bottom = -np.sqrt(radius**2 - raw["y_segment_x"] ** 2)
+        expected_y_top = -expected_y_bottom
+        np.testing.assert_allclose(raw["x_segment_left"], expected_x_left)
+        np.testing.assert_allclose(raw["x_segment_right"], expected_x_right)
+        np.testing.assert_allclose(
+            raw["x_segment_length"],
+            expected_x_right - expected_x_left,
+        )
+        np.testing.assert_allclose(raw["y_segment_bottom"], expected_y_bottom)
+        np.testing.assert_allclose(raw["y_segment_top"], expected_y_top)
+        np.testing.assert_allclose(
+            raw["y_segment_length"],
+            expected_y_top - expected_y_bottom,
+        )
+
+    assert geometry.num_points > 9
+    assert geometry.num_x_segments > 3
+    assert geometry.num_y_segments > 3
+
+
 def test_circular_geometry_reconstruction_endpoints_and_weights(tmp_path):
     path = tmp_path / "unit_circle_h05.npz"
     CircularGeometryBuilder(
@@ -97,7 +139,17 @@ def test_circular_geometry_rejects_non_dividing_step_size(tmp_path):
         CircularGeometryConfig(step_size=0.3, out=path),
     )
 
-    with pytest.raises(ValueError, match="2 / step_size"):
+    with pytest.raises(ValueError, match=r"2 \* radius / step_size"):
+        builder.build()
+
+
+def test_circular_geometry_rejects_non_dividing_step_size_for_radius(tmp_path):
+    path = tmp_path / "bad_radius.npz"
+    builder = CircularGeometryBuilder(
+        CircularGeometryConfig(step_size=0.3, radius=2.0, out=path),
+    )
+
+    with pytest.raises(ValueError, match=r"2 \* radius / step_size"):
         builder.build()
 
 
@@ -134,3 +186,25 @@ def test_make_circular_geometry_cli_writes_log_and_validates(tmp_path):
     assert path.is_file()
     assert (path.parent / "make_circular_geometry.log").is_file()
     load_complex_geometry(path)
+
+
+def test_make_circular_geometry_cli_accepts_radius(tmp_path):
+    path = tmp_path / "geometry" / "circle_r2_h05.npz"
+
+    output_path = MakeCircularGeometryCLI().run(
+        [
+            "--step-size",
+            "0.5",
+            "--radius",
+            "2.0",
+            "--out",
+            str(path),
+        ]
+    )
+
+    assert output_path == path
+    with np.load(path) as raw:
+        assert raw["radius"].item() == pytest.approx(2.0)
+        assert raw["domain_type"].item() == "circle"
+        assert raw["grid_x"][0] == pytest.approx(-2.0)
+        assert raw["grid_x"][-1] == pytest.approx(2.0)

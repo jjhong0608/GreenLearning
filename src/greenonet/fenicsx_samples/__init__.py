@@ -6,6 +6,12 @@ from greenonet.fenicsx_samples.geometry import (
     RawComplexGeometryGrid,
 )
 from greenonet.fenicsx_samples.gp import GaussianProcessSourceSampler
+from greenonet.fenicsx_samples.parallel import (
+    SampleTask,
+    build_sample_tasks,
+    derive_indexed_seed,
+    partition_tasks,
+)
 from greenonet.fenicsx_samples.writer import SampleWriter
 
 __all__ = [
@@ -13,5 +19,9 @@ __all__ = [
     "GaussianProcessSourceSampler",
     "GeometryGridLoader",
     "RawComplexGeometryGrid",
+    "SampleTask",
     "SampleWriter",
+    "build_sample_tasks",
+    "derive_indexed_seed",
+    "partition_tasks",
 ]
