@@ -2,41 +2,50 @@
   "dataset": {
     "geometry_mode": "complex",
     "geometry_path": "data/geometry/unit_circle_h005.npz",
-    "samples_per_line": 2,
-    "validation_samples_per_line": 1,
-    "sampler_mode": "forward",
-    "validation_sampler_mode": "forward",
-    "scale_length": 0.1,
-    "validation_scale_length": 0.1,
+    "samples_per_line": 25,
+    "validation_samples_per_line": 5,
+    "sampler_mode": "backward",
+    "validation_sampler_mode": "backward",
+    "scale_length": 0.15,
+    "validation_scale_length": 0.15,
     "deterministic": true,
     "use_operator_learning": true,
     "coefficient_functions_path": null,
-    "dtype": "float64"
+    "dtype": "float64",
+	"coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion2.py"
+  },
+  "terminal": {
+    "width": 250
   },
   "model": {
     "input_dim": 2,
-    "hidden_dim": 64,
+    "hidden_dim": 128,
     "depth": 4,
-    "activation": "tanh",
+    "activation": "rational",
     "use_bias": true,
     "dropout": 0.0,
     "use_green": true,
-    "branch_input_dim": 41,
-    "use_fourier": false,
+    "branch_input_dim": 129,
+    "use_fourier": true,
+    "fourier_dim": 64,
     "dtype": "float64"
   },
   "training": {
-    "learning_rate": 0.001,
-    "epochs": 10,
-    "batch_size": 4,
+    "learning_rate": 0.0005,
+    "epochs": 4000,
+    "batch_size": 1500,
     "log_interval": 1,
     "compute_validation_rel_sol": true,
-    "device": "cpu",
-    "integration_rule": "simpson",
+    "device": "cuda:1",
+    "lbfgs_max_iter": 1000,
+    "lbfgs_history_size": 200,
+    "lbfgs_lr": 1.0,
+    "lbfgs_tolerance_grad": 1e-20,
+    "lbfgs_epochs": 100,
+    "integration_rule": "trapezoid",
     "compile": {
-      "enabled": false
-    },
-    "lbfgs_max_iter": 0
+      "enabled": true
+    }
   },
   "pipeline": {
     "run_green": true,

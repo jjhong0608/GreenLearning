@@ -127,6 +127,20 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   grid point와 degenerate boundary line은 제외하고, valid interior point가 있는
   axial chord segment만 저장하며, reconstruction weight는 physical length가 아닌
   segment-local unit coordinate 기준 nonuniform trapezoid weight로 저장한다.
+- FEniCSx complex sample generator는 optional `green_fenicsx` conda env에서만
+  실행하는 path로 둔다. Main `green_net` training env와 `pyproject.toml`에는
+  FEniCSx dependency를 섞지 않는다.
+- Complex Coupling sample generator output `.npz`는 full-grid `rhs`, `sol`,
+  `phi`, `psi` 배열을 저장하고, 모든 배열은 `[row=y, col=x]` convention을 따른다.
+  `coords_valid` 밖의 full-grid 값은 `0.0`으로 채운다.
+- FEniCSx sample generator의 `phi`/`psi`는
+  `phi=-d_x(a d_x u)+b_x d_x u+0.5*c*u`,
+  `psi=-d_y(a d_y u)+b_y d_y u+0.5*c*u`인 direction-split operator component이며,
+  valid point에서 `phi + psi ~= rhs` balance residual을 summary에 기록한다.
+- FEniCSx Gmsh script input은 `build_domain(gmsh, context)`를 제공해야 하며,
+  multi-surface disconnected domain에서는 valid point마다 들어갈 surface를
+  `point_surface_tags`로 명시해야 한다. Script mode는 valid points를 mesh internal
+  points로 embed하려고 시도하고, `.msh` mode는 vertex 보장을 기본 요구하지 않는다.
 
 ## Experiment And Figure Planning
 

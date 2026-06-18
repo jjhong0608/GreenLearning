@@ -1,0 +1,17 @@
+name: green_fenicsx
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - fenics-dolfinx=0.11.*
+  - gmsh
+  - mpi4py
+  - petsc4py
+  - numpy
+  - scipy
+  - rich
+  - plotly
+  - pytorch
+  - pytest
+  - ruff
+  - mypy
