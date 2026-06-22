@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from greenonet.coefficients import load_coefficient_functions
 from greenonet.complex_coupling_data import ComplexCouplingDataset
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_geometry import load_complex_geometry
-from greenonet.config import CouplingModelConfig, CouplingTrunkPositionalEncodingConfig
+from greenonet.config import (
+    Axis1DTrunkConfig,
+    CouplingBranchFusionConfig,
+    CouplingCoefficientTermsConfig,
+    CouplingModelConfig,
+    CouplingTrunkPositionalEncodingConfig,
+)
 from test.complex_fixtures import (
     write_coefficients,
     write_geometry_npz,
@@ -14,12 +21,94 @@ from test.complex_fixtures import (
 )
 
 
-def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
+def _build_item(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
     data_dir = tmp_path / "data"
     write_sample_npz(data_dir)
     dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    return geometry, dataset[0]
+
+
+def _model(*, fusion_mode: str = "product") -> ComplexCouplingNet:
+    torch.manual_seed(0)
+    return ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=8,
+            depth=1,
+            dtype=torch.float64,
+            branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                num_frequencies=2,
+                max_frequency=2.0,
+            ),
+        )
+    )
+
+
+def _forward(model: ComplexCouplingNet, geometry, item) -> torch.Tensor:
+    return model(
+        geometry=geometry,
+        x_source_branch=item.x_source_branch.unsqueeze(0),
+        y_source_branch=item.y_source_branch.unsqueeze(0),
+        x_source_norm=item.x_source_norm.unsqueeze(0),
+        y_source_norm=item.y_source_norm.unsqueeze(0),
+        x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
+        y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+    )
+
+
+def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model()
+
+    output = _forward(model, geometry, item)
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.branch_source is model.branch_source
+    assert model.branch_transverse is model.branch_transverse
+    assert model.branch_geometry is model.branch_geometry
+    assert model.trunk is model.trunk
+    assert model.geometry_feature_dim == 6
+    assert model.transverse_feature_dim == 4
+    assert not hasattr(model, "axis_one_hot")
+
+
+def test_complex_coupling_model_is_source_conditioned(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model()
+
+    original = _forward(model, geometry, item)
+    changed = model(
+        geometry=geometry,
+        x_source_branch=item.x_source_branch.unsqueeze(0) * 0.0,
+        y_source_branch=item.y_source_branch.unsqueeze(0) * 0.0,
+        x_source_norm=item.x_source_norm.unsqueeze(0),
+        y_source_norm=item.y_source_norm.unsqueeze(0),
+        x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
+        y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+    )
+
+    assert not torch.allclose(original, changed)
+
+
+def test_complex_model_supports_product_fuser_and_source_only_branch(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(
+        data_dir,
+        geometry,
+        coeffs,
+        branch_input_dim=4,
+        coefficient_terms=CouplingCoefficientTermsConfig(
+            diffusion=False,
+            convection=False,
+            reaction=False,
+        ),
+    )
     item = dataset[0]
     model = ComplexCouplingNet(
         CouplingModelConfig(
@@ -27,28 +116,19 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
             hidden_dim=8,
             depth=1,
             dtype=torch.float64,
-            trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
-                num_frequencies=2,
-                max_frequency=2.0,
-            ),
+            branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
+            coefficient_terms=dataset.coefficient_terms,
+            axis_1d_trunk=Axis1DTrunkConfig(num_frequencies=1, max_frequency=1.0),
         )
     )
 
-    output = model(
-        geometry=geometry,
-        x_branch=item.x_branch.unsqueeze(0),
-        y_branch=item.y_branch.unsqueeze(0),
-    )
+    output = _forward(model, geometry, item)
 
     assert output.shape == (1, 2, geometry.num_points)
-    assert model.function_branch is model.function_branch
-    assert model.geometry_branch is model.geometry_branch
-    assert model.trunk is model.trunk
-    assert model.geometry_feature_dim == 10
-    assert not hasattr(model, "axis_one_hot")
+    assert model.branch_coefficient is None
 
 
-def test_complex_geometry_feature_contract_excludes_raw_axis_label(tmp_path):
+def test_complex_transverse_features_use_global_normalized_coordinate(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     model = ComplexCouplingNet(
         CouplingModelConfig(
@@ -56,16 +136,39 @@ def test_complex_geometry_feature_contract_excludes_raw_axis_label(tmp_path):
             hidden_dim=4,
             depth=1,
             dtype=torch.float64,
-            trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
-                num_frequencies=1,
-                max_frequency=1.0,
-            ),
+            axis_1d_trunk=Axis1DTrunkConfig(num_frequencies=1, max_frequency=1.0),
         )
     )
 
+    features = model._transverse_features(geometry, "x")
+    expected_phase = 2.0 * torch.pi * geometry.x_segment_y.unsqueeze(-1)
+    expected = torch.cat((expected_phase.sin(), expected_phase.cos()), dim=-1)
+
+    torch.testing.assert_close(features, expected)
+
+
+def test_complex_geometry_feature_contract_excludes_raw_axis_label(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    model = _model()
+
     features = model._geometry_features(geometry, "x")
 
-    assert features.shape == (geometry.num_x_segments, 8)
+    assert features.shape == (geometry.num_x_segments, 6)
     torch.testing.assert_close(features[:, -3], geometry.x_segment_length)
     torch.testing.assert_close(features[:, -2], geometry.x_segment_length.pow(2))
     torch.testing.assert_close(features[:, -1], 1.0 / geometry.x_segment_length)
+
+
+def test_complex_model_rejects_trunk_positional_encoding_enabled():
+    with pytest.raises(ValueError, match="trunk_positional_encoding.enabled"):
+        ComplexCouplingNet(
+            CouplingModelConfig(
+                branch_input_dim=4,
+                hidden_dim=4,
+                depth=1,
+                dtype=torch.float64,
+                trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+                    enabled=True,
+                ),
+            )
+        )

@@ -1,0 +1,75 @@
+{
+  "dataset": {
+    "geometry_mode": "complex",
+    "geometry_path": "data/geometry/circle_radius_05_1_128.npz",
+    "training_path": "data/complex_samples/circle_radius_05_1_128/train",
+    "validation_path": "data/complex_samples/circle_radius_05_1_128/valid",
+    "test_path": "data/complex_samples/circle_radius_05_1_128/test",
+    "coefficient_functions_path": "coefficients/Pure_Poisson.py",
+    "dtype": "float64"
+  },
+  "terminal": {
+    "width": 350
+  },
+  "model": {
+    "input_dim": 2,
+    "hidden_dim": 128,
+    "depth": 4,
+    "activation": "rational",
+    "use_bias": true,
+    "dropout": 0.0,
+    "use_green": true,
+    "branch_input_dim": 129,
+    "use_fourier": true,
+    "fourier_dim": 64,
+    "dtype": "float64"
+  },
+  "coupling_model": {
+    "branch_input_dim": 129,
+    "hidden_dim": 256,
+    "depth": 4,
+    "activation": "rational",
+    "use_bias": true,
+    "dropout": 0.0,
+    "dtype": "float64",
+    "coefficient_terms": {
+      "diffusion": true,
+      "convection": false,
+      "reaction": false
+    },
+    "branch_fusion": {
+      "mode": "product_fuser"
+    },
+    "axis_1d_trunk": {
+      "enabled": true
+    }
+  },
+  "coupling_training": {
+    "learning_rate": 0.002,
+    "epochs": 4000,
+    "batch_size": 200,
+    "weight_decay": 0.05,
+    "log_interval": 1,
+    "device": "cuda:1",
+    "gradient_clip_max_norm": 1.0,
+    "use_lr_schedule": true,
+    "warmup_epochs": 3,
+    "min_lr": 1e-5,
+    "periodic_checkpoint": {
+      "enabled": true,
+      "every_epochs": 200
+    },
+    "compile": {
+      "enabled": true
+    },
+    "best_rel_sol_checkpoint": {
+      "enabled": true
+    }
+  },
+  "pipeline": {
+    "run_green": false,
+    "run_coupling": true,
+    "green_pretrained_path": "checkpoints/complex_domain_poisson/green/model.safetensors",
+    "coupling_pretrained_path": null
+  }
+}

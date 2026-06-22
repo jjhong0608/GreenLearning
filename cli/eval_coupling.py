@@ -387,6 +387,8 @@ class EvalCouplingCLI:
             coeffs,
             branch_input_dim=coupling_model_cfg.branch_input_dim,
             dtype=dataset_cfg.dtype,
+            coefficient_terms=coupling_model_cfg.coefficient_terms,
+            integration_rule=coupling_training_cfg.integration_rule,
         )
         device = torch.device(coupling_training_cfg.device)
         coupling_model = ComplexCouplingNet(coupling_model_cfg)

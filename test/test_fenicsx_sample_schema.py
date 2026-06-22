@@ -53,6 +53,11 @@ def _write_grid_geometry(path: Path) -> Path:
 
 def test_geometry_grid_loader_requires_grid_axes(tmp_path):
     path = write_geometry_npz(tmp_path / "geometry.npz")
+    with np.load(path) as raw:
+        payload = {
+            key: raw[key] for key in raw.files if key not in {"grid_x", "grid_y"}
+        }
+    np.savez(path, **payload)
 
     with pytest.raises(KeyError, match="grid_x"):
         GeometryGridLoader().load(path)

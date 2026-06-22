@@ -362,6 +362,8 @@ def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
         axis_1d_trunk=Axis1DTrunkConfig(
             enabled=True,
             boundary_aware_modes=3,
+            num_frequencies=5,
+            max_frequency=16.0,
         ),
     )
     model = CouplingNet(cfg)
@@ -376,6 +378,8 @@ def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
     assert loaded_cfg == cfg
     assert loaded_cfg.axis_1d_trunk.enabled is True
     assert loaded_cfg.axis_1d_trunk.boundary_aware_modes == 3
+    assert loaded_cfg.axis_1d_trunk.num_frequencies == 5
+    assert loaded_cfg.axis_1d_trunk.max_frequency == 16.0
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 

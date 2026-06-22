@@ -11,12 +11,12 @@ from greenonet.complex_coupling_trainer import (
 )
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
+    Axis1DTrunkConfig,
     CompileConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
     CouplingModelConfig,
     CouplingTrainingConfig,
-    CouplingTrunkPositionalEncodingConfig,
 )
 from test.complex_fixtures import (
     ConstantGreen,
@@ -38,7 +38,7 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             hidden_dim=4,
             depth=1,
             dtype=torch.float64,
-            trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+            axis_1d_trunk=Axis1DTrunkConfig(
                 num_frequencies=1,
                 max_frequency=1.0,
             ),

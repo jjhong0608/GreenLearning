@@ -1,7 +1,7 @@
 {
   "dataset": {
     "geometry_mode": "complex",
-    "geometry_path": "data/geometry/unit_circle_h005.npz",
+    "geometry_path": "data/geometry/circle_radius_05_1_128.npz",
     "samples_per_line": 25,
     "validation_samples_per_line": 5,
     "sampler_mode": "backward",
@@ -10,9 +10,8 @@
     "validation_scale_length": 0.15,
     "deterministic": true,
     "use_operator_learning": true,
-    "coefficient_functions_path": null,
     "dtype": "float64",
-	"coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion2.py"
+	"coefficient_functions_path": "coefficients/Pure_Poisson.py"
   },
   "terminal": {
     "width": 250

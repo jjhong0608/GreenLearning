@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 import numpy as np
 import torch
@@ -10,7 +10,13 @@ from torch.utils.data import Dataset
 
 from greenonet.coefficients import CoefficientFunctions
 from greenonet.complex_geometry import ComplexGeometryMetadata
-from greenonet.green_interval import build_segment_branch_samples
+from greenonet.config import CouplingCoefficientTermsConfig
+from greenonet.green_interval import (
+    IntervalBranchCoefficients,
+    build_segment_branch_samples,
+    unit_branch_grid,
+)
+from greenonet.numerics import IntegrationRule, integrate
 
 
 @dataclass(frozen=True)
@@ -21,8 +27,12 @@ class ComplexCouplingItem:
     flux_valid: torch.Tensor
     has_flux: torch.Tensor
     a_valid: torch.Tensor
-    x_branch: torch.Tensor
-    y_branch: torch.Tensor
+    x_source_branch: torch.Tensor
+    y_source_branch: torch.Tensor
+    x_source_norm: torch.Tensor
+    y_source_norm: torch.Tensor
+    x_coefficient_branch: torch.Tensor
+    y_coefficient_branch: torch.Tensor
     x_green_branch: torch.Tensor
     y_green_branch: torch.Tensor
     sample_index: torch.Tensor
@@ -37,8 +47,12 @@ class ComplexCouplingBatch:
     flux_valid: torch.Tensor
     has_flux: torch.Tensor
     a_valid: torch.Tensor
-    x_branch: torch.Tensor
-    y_branch: torch.Tensor
+    x_source_branch: torch.Tensor
+    y_source_branch: torch.Tensor
+    x_source_norm: torch.Tensor
+    y_source_norm: torch.Tensor
+    x_coefficient_branch: torch.Tensor
+    y_coefficient_branch: torch.Tensor
     x_green_branch: torch.Tensor
     y_green_branch: torch.Tensor
     sample_indices: torch.Tensor
@@ -52,8 +66,12 @@ class ComplexCouplingBatch:
             flux_valid=self.flux_valid.to(device),
             has_flux=self.has_flux.to(device),
             a_valid=self.a_valid.to(device),
-            x_branch=self.x_branch.to(device),
-            y_branch=self.y_branch.to(device),
+            x_source_branch=self.x_source_branch.to(device),
+            y_source_branch=self.y_source_branch.to(device),
+            x_source_norm=self.x_source_norm.to(device),
+            y_source_norm=self.y_source_norm.to(device),
+            x_coefficient_branch=self.x_coefficient_branch.to(device),
+            y_coefficient_branch=self.y_coefficient_branch.to(device),
             x_green_branch=self.x_green_branch.to(device),
             y_green_branch=self.y_green_branch.to(device),
             sample_indices=self.sample_indices.to(device),
@@ -72,6 +90,9 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
         *,
         branch_input_dim: int,
         dtype: torch.dtype = torch.float64,
+        coefficient_terms: CouplingCoefficientTermsConfig | None = None,
+        integration_rule: IntegrationRule = "trapezoid",
+        source_norm_eps: float = 1.0e-12,
     ) -> None:
         super().__init__()
         self.data_dir = Path(data_dir)
@@ -81,22 +102,33 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
         self.geometry = geometry
         self.coeffs = coeffs
         self.dtype = dtype
+        self.branch_input_dim = int(branch_input_dim)
+        if self.branch_input_dim < 2:
+            raise ValueError("branch_input_dim must be at least 2.")
+        self.coefficient_terms = coefficient_terms or CouplingCoefficientTermsConfig()
+        self.integration_rule = integration_rule
+        self.source_norm_eps = float(source_norm_eps)
+        self.branch_grid = unit_branch_grid(self.branch_input_dim, dtype=dtype)
         self.x_green_coefficients = build_segment_branch_samples(
             geometry,
             coeffs,
             axis="x",
-            branch_input_dim=branch_input_dim,
+            branch_input_dim=self.branch_input_dim,
             dtype=dtype,
         )
         self.y_green_coefficients = build_segment_branch_samples(
             geometry,
             coeffs,
             axis="y",
-            branch_input_dim=branch_input_dim,
+            branch_input_dim=self.branch_input_dim,
             dtype=dtype,
         )
-        self.x_branch = self.x_green_coefficients.as_coupling_branch()
-        self.y_branch = self.y_green_coefficients.as_coupling_branch()
+        self.x_coefficient_branch = self._build_coefficient_branch(
+            self.x_green_coefficients
+        )
+        self.y_coefficient_branch = self._build_coefficient_branch(
+            self.y_green_coefficients
+        )
         self.x_green_branch = torch.stack(
             (
                 self.x_green_coefficients.a_unit,
@@ -131,6 +163,14 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             sol_valid = self._gather_full_grid(raw["sol"], "sol", path)
             flux_valid, has_flux = self._gather_optional_flux(raw, path)
 
+        x_source_branch, x_source_norm = self._build_source_branch(
+            rhs_valid,
+            axis="x",
+        )
+        y_source_branch, y_source_norm = self._build_source_branch(
+            rhs_valid,
+            axis="y",
+        )
         return ComplexCouplingItem(
             geometry=self.geometry,
             rhs_valid=rhs_valid,
@@ -138,13 +178,99 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             flux_valid=flux_valid,
             has_flux=torch.tensor(has_flux, dtype=torch.bool),
             a_valid=self.a_valid,
-            x_branch=self.x_branch,
-            y_branch=self.y_branch,
+            x_source_branch=x_source_branch,
+            y_source_branch=y_source_branch,
+            x_source_norm=x_source_norm,
+            y_source_norm=y_source_norm,
+            x_coefficient_branch=self.x_coefficient_branch,
+            y_coefficient_branch=self.y_coefficient_branch,
             x_green_branch=self.x_green_branch,
             y_green_branch=self.y_green_branch,
             sample_index=torch.tensor(index, dtype=torch.long),
             file_stem=path.stem,
         )
+
+    def _build_coefficient_branch(
+        self,
+        coefficients: IntervalBranchCoefficients,
+    ) -> torch.Tensor:
+        active = []
+        if self.coefficient_terms.diffusion:
+            active.append(coefficients.a_unit)
+        if self.coefficient_terms.convection:
+            active.append(coefficients.b_unit)
+        if self.coefficient_terms.reaction:
+            active.append(coefficients.c_unit)
+        if not active:
+            return coefficients.a_unit.new_empty(
+                (
+                    coefficients.a_unit.shape[0],
+                    0,
+                    coefficients.a_unit.shape[1],
+                )
+            )
+        return torch.stack(active, dim=1)
+
+    def _build_source_branch(
+        self,
+        rhs_valid: torch.Tensor,
+        *,
+        axis: Literal["x", "y"],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if axis == "x":
+            ptr = self.geometry.x_recon_ptr
+            t_nodes = self.geometry.x_recon_t
+            valid_index = self.geometry.x_recon_valid_index
+            length = self.geometry.x_segment_length
+            segment_count = self.geometry.num_x_segments
+        else:
+            ptr = self.geometry.y_recon_ptr
+            t_nodes = self.geometry.y_recon_t
+            valid_index = self.geometry.y_recon_valid_index
+            length = self.geometry.y_segment_length
+            segment_count = self.geometry.num_y_segments
+
+        branches = []
+        for segment_index in range(segment_count):
+            start = int(ptr[segment_index].item())
+            end = int(ptr[segment_index + 1].item())
+            segment_t = t_nodes[start:end].to(dtype=self.dtype)
+            segment_valid = valid_index[start:end]
+            values = torch.zeros_like(segment_t)
+            mask = segment_valid >= 0
+            if torch.any(mask):
+                values[mask] = rhs_valid[segment_valid[mask]]
+            branches.append(self._interpolate_unit_branch(segment_t, values))
+        source_phys = torch.stack(branches, dim=0)
+        source_unit = source_phys * length.to(dtype=self.dtype).pow(2).unsqueeze(-1)
+        source_norm = (
+            integrate(
+                source_unit.pow(2),
+                x=self.branch_grid,
+                dim=-1,
+                rule=self.integration_rule,
+            )
+            .sqrt()
+            .clamp_min(self.source_norm_eps)
+        )
+        return source_unit / source_norm.unsqueeze(-1), source_norm
+
+    def _interpolate_unit_branch(
+        self,
+        t_nodes: torch.Tensor,
+        values: torch.Tensor,
+    ) -> torch.Tensor:
+        if t_nodes.numel() < 2:
+            raise ValueError("Source branch interpolation requires at least two nodes.")
+        idx = torch.searchsorted(t_nodes.contiguous(), self.branch_grid.contiguous())
+        idx = idx.clamp(1, t_nodes.numel() - 1)
+        left = idx - 1
+        right = idx
+        t_left = t_nodes[left]
+        t_right = t_nodes[right]
+        denom = (t_right - t_left).clamp_min(torch.finfo(self.dtype).eps)
+        weight = (self.branch_grid - t_left) / denom
+        return values[left] * (1.0 - weight) + values[right] * weight
 
     def _gather_optional_flux(
         self,
@@ -197,8 +323,18 @@ def complex_coupling_collate_fn(
         flux_valid=torch.stack([item.flux_valid for item in items], dim=0),
         has_flux=torch.stack([item.has_flux for item in items], dim=0),
         a_valid=torch.stack([item.a_valid for item in items], dim=0),
-        x_branch=torch.stack([item.x_branch for item in items], dim=0),
-        y_branch=torch.stack([item.y_branch for item in items], dim=0),
+        x_source_branch=torch.stack([item.x_source_branch for item in items], dim=0),
+        y_source_branch=torch.stack([item.y_source_branch for item in items], dim=0),
+        x_source_norm=torch.stack([item.x_source_norm for item in items], dim=0),
+        y_source_norm=torch.stack([item.y_source_norm for item in items], dim=0),
+        x_coefficient_branch=torch.stack(
+            [item.x_coefficient_branch for item in items],
+            dim=0,
+        ),
+        y_coefficient_branch=torch.stack(
+            [item.y_coefficient_branch for item in items],
+            dim=0,
+        ),
         x_green_branch=torch.stack([item.x_green_branch for item in items], dim=0),
         y_green_branch=torch.stack([item.y_green_branch for item in items], dim=0),
         sample_indices=torch.stack([item.sample_index for item in items], dim=0),

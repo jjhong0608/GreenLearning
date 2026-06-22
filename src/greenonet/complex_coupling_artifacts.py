@@ -24,6 +24,7 @@ from greenonet.coupling_artifacts import (
     CouplingArtifactRequest,
     load_coupling_artifact_configs,
 )
+from greenonet.config import Axis1DTrunkConfig
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.plotly_io import save_plotly_figure
@@ -74,6 +75,8 @@ class ComplexCouplingArtifactExporter:
             coeffs,
             branch_input_dim=configs.coupling_model.branch_input_dim,
             dtype=configs.dataset.dtype,
+            coefficient_terms=configs.coupling_model.coefficient_terms,
+            integration_rule=configs.coupling_training.integration_rule,
         )
         coupling_model = self._load_complex_model(configs, device)
         green_model = self._load_green_model(configs, device)
@@ -90,6 +93,7 @@ class ComplexCouplingArtifactExporter:
         self._write_selected_npz(selected_samples)
         figure_paths = self._write_figures(selected_samples, self.request.theme)
         aggregate = self._aggregate_metrics(metric_rows)
+        axis_1d_trunk = Axis1DTrunkConfig.from_raw(configs.coupling_model.axis_1d_trunk)
         summary = {
             "geometry_mode": "complex",
             "device": str(device),
@@ -103,6 +107,21 @@ class ComplexCouplingArtifactExporter:
             "save_generated_data": self.request.save_generated_data,
             "aggregate_metrics": aggregate,
             "figure_count": len(figure_paths),
+            "source_branch": {
+                "enabled": True,
+                "scaling": "f_unit=L^2*f_phys",
+                "normalization": "segment_unit_l2",
+            },
+            "coefficient_terms": {
+                "diffusion": configs.coupling_model.coefficient_terms.diffusion,
+                "convection": configs.coupling_model.coefficient_terms.convection,
+                "reaction": configs.coupling_model.coefficient_terms.reaction,
+            },
+            "transverse_encoding": {
+                "coordinate": "global_normalized_transverse",
+                "num_frequencies": axis_1d_trunk.num_frequencies,
+                "max_frequency": axis_1d_trunk.max_frequency,
+            },
         }
         (self.request.outdir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True)

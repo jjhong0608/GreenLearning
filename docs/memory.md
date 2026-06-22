@@ -116,9 +116,18 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   합치지 않는다. Trunk coordinate는 항상 unit `(t, eta) in [0,1]^2`이고,
   `dataset.samples_per_line`은 complex GreenNet mode에서 connected interval당
   synthetic sample 수를 뜻한다.
-- Complex CouplingNet function branch에는 transformed `[a,b,c]`만 넣는다.
-  `a'`는 GreenONet reconstruction query용 branch에는 보관하지만 CouplingNet
-  function branch에는 넣지 않는다.
+- Complex CouplingNet은 unit-square CouplingNet처럼 source-conditioned model이다.
+  Full-grid `rhs`를 valid point로 gather한 뒤 segment-local unit source branch로
+  변환하고, `f_unit=L^2*f_phys` scaling과 segment별 unit L2 norm normalization을
+  적용한다. Model raw unit output은 해당 segment source norm으로 다시 scale한다.
+- Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 `[a,b,c]`
+  순서로 구성한다. `a'`는 GreenONet reconstruction query용 branch에는 보관하지만
+  CouplingNet coefficient branch에는 넣지 않는다.
+- Complex CouplingNet trunk는 항상 segment-local 1D `t`를 사용한다. Transverse
+  coordinate는 global geometry extent 기준으로 normalized `r_hat`을 만들고,
+  `axis_1d_trunk.num_frequencies`와 `max_frequency`로 Fourier encoding한다.
+  `trunk_positional_encoding`은 unit-square 2D trunk coordinate encoding이므로
+  complex mode에서는 사용하지 않는다.
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
   `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
   key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.

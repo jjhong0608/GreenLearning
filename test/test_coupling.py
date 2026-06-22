@@ -1894,6 +1894,8 @@ def test_axis_1d_trunk_config_defaults():
 
     assert cfg.axis_1d_trunk.enabled is False
     assert cfg.axis_1d_trunk.boundary_aware_modes == 4
+    assert cfg.axis_1d_trunk.num_frequencies == 4
+    assert cfg.axis_1d_trunk.max_frequency == 8.0
 
 
 def test_axis_1d_trunk_extends_model_with_shared_1d_trunk():
@@ -2049,6 +2051,10 @@ def test_axis_1d_trunk_forward_preserves_balance():
 def test_axis_1d_trunk_rejects_invalid_config():
     with pytest.raises(ValueError, match="boundary_aware_modes"):
         Axis1DTrunkConfig(boundary_aware_modes=0)
+    with pytest.raises(ValueError, match="num_frequencies"):
+        Axis1DTrunkConfig(num_frequencies=0)
+    with pytest.raises(ValueError, match="max_frequency"):
+        Axis1DTrunkConfig(max_frequency=0.0)
     with pytest.raises(ValueError, match="trunk_positional_encoding"):
         CouplingNet(
             CouplingModelConfig(

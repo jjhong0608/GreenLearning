@@ -72,6 +72,10 @@ class ComplexGeometryMetadata:
     y_edges: torch.Tensor
     hx: torch.Tensor
     hy: torch.Tensor
+    x_transverse_min: torch.Tensor
+    x_transverse_max: torch.Tensor
+    y_transverse_min: torch.Tensor
+    y_transverse_max: torch.Tensor
 
     @property
     def num_points(self) -> int:
@@ -100,6 +104,14 @@ class ComplexGeometryMetadata:
     def y_lengths_for_valid_points(self) -> torch.Tensor:
         return self.y_segment_length[self.y_segment_id]
 
+    def x_transverse_normalized(self) -> torch.Tensor:
+        span = self.x_transverse_max - self.x_transverse_min
+        return (self.x_segment_y - self.x_transverse_min) / span
+
+    def y_transverse_normalized(self) -> torch.Tensor:
+        span = self.y_transverse_max - self.y_transverse_min
+        return (self.y_segment_x - self.y_transverse_min) / span
+
 
 def load_complex_geometry(
     path: Path | str,
@@ -119,8 +131,23 @@ def load_complex_geometry(
             raise KeyError(
                 f"Complex geometry NPZ is missing required keys: {', '.join(missing)}."
             )
+        coords_valid = raw["coords_valid"]
+        x_transverse_min, x_transverse_max = _extent_tensors(
+            raw["grid_y"] if "grid_y" in raw.files else None,
+            fallback=coords_valid[:, 1],
+            dtype=dtype,
+            device=device,
+            field_name="x transverse",
+        )
+        y_transverse_min, y_transverse_max = _extent_tensors(
+            raw["grid_x"] if "grid_x" in raw.files else None,
+            fallback=coords_valid[:, 0],
+            dtype=dtype,
+            device=device,
+            field_name="y transverse",
+        )
         metadata = ComplexGeometryMetadata(
-            coords_valid=_float_tensor(raw["coords_valid"], dtype, device),
+            coords_valid=_float_tensor(coords_valid, dtype, device),
             valid_grid_y_index=_long_tensor(raw["valid_grid_y_index"], device),
             valid_grid_x_index=_long_tensor(raw["valid_grid_x_index"], device),
             x_segment_id=_long_tensor(raw["x_segment_id"], device),
@@ -147,6 +174,10 @@ def load_complex_geometry(
             y_edges=_long_tensor(raw["y_edges"], device),
             hx=_scalar_tensor(raw["hx"], dtype, device),
             hy=_scalar_tensor(raw["hy"], dtype, device),
+            x_transverse_min=x_transverse_min,
+            x_transverse_max=x_transverse_max,
+            y_transverse_min=y_transverse_min,
+            y_transverse_max=y_transverse_max,
         )
 
     _validate_complex_geometry(metadata)
@@ -177,6 +208,30 @@ def _scalar_tensor(
     if tensor.numel() != 1:
         raise ValueError("hx and hy must be scalar values.")
     return tensor.reshape(())
+
+
+def _extent_tensors(
+    values: np.ndarray | None,
+    *,
+    fallback: np.ndarray,
+    dtype: torch.dtype,
+    device: torch.device | str | None,
+    field_name: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    raw_values = fallback if values is None else values
+    array = np.asarray(raw_values, dtype=np.float64).reshape(-1)
+    if array.size == 0:
+        raise ValueError(f"{field_name} extent cannot be inferred from empty values.")
+    minimum = float(np.min(array))
+    maximum = float(np.max(array))
+    if not np.isfinite(minimum) or not np.isfinite(maximum):
+        raise ValueError(f"{field_name} extent contains non-finite values.")
+    if maximum <= minimum:
+        raise ValueError(f"{field_name} extent must be non-degenerate.")
+    return (
+        torch.tensor(minimum, dtype=dtype, device=device),
+        torch.tensor(maximum, dtype=dtype, device=device),
+    )
 
 
 def _validate_complex_geometry(metadata: ComplexGeometryMetadata) -> None:
@@ -241,6 +296,26 @@ def _validate_complex_geometry(metadata: ComplexGeometryMetadata) -> None:
     )
     if metadata.hx.item() <= 0.0 or metadata.hy.item() <= 0.0:
         raise ValueError("hx and hy must be positive.")
+    _validate_transverse_extents(metadata)
+
+
+def _validate_transverse_extents(metadata: ComplexGeometryMetadata) -> None:
+    for field_name, minimum, maximum in (
+        (
+            "x_transverse",
+            metadata.x_transverse_min,
+            metadata.x_transverse_max,
+        ),
+        (
+            "y_transverse",
+            metadata.y_transverse_min,
+            metadata.y_transverse_max,
+        ),
+    ):
+        if minimum.dim() != 0 or maximum.dim() != 0:
+            raise ValueError(f"{field_name} extents must be scalar tensors.")
+        if maximum <= minimum:
+            raise ValueError(f"{field_name} extent must be non-degenerate.")
 
 
 def _validate_point_arrays(metadata: ComplexGeometryMetadata) -> int:

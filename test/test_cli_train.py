@@ -600,6 +600,8 @@ class TestTrainCLIDatasetConfig:
                 "axis_1d_trunk": {
                     "enabled": True,
                     "boundary_aware_modes": 5,
+                    "num_frequencies": 6,
+                    "max_frequency": 12.0,
                 },
             },
             "coupling_training": {},
@@ -620,6 +622,8 @@ class TestTrainCLIDatasetConfig:
         axis_1d_trunk = coupling_model_cfg.axis_1d_trunk
         assert axis_1d_trunk.enabled is True
         assert axis_1d_trunk.boundary_aware_modes == 5
+        assert axis_1d_trunk.num_frequencies == 6
+        assert axis_1d_trunk.max_frequency == 12.0
 
     def test_rejects_non_object_axis_1d_trunk_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -828,18 +832,24 @@ class TestTrainCLIDatasetConfig:
 
         assert cfg.enabled is False
         assert cfg.boundary_aware_modes == 4
+        assert cfg.num_frequencies == 4
+        assert cfg.max_frequency == 8.0
 
     def test_eval_cli_parses_axis_1d_trunk_config(self):
         cfg = EvalCouplingCLI._build_axis_1d_trunk_config(
             {
                 "enabled": True,
                 "boundary_aware_modes": 6,
+                "num_frequencies": 7,
+                "max_frequency": 14.0,
             },
             "coupling_model",
         )
 
         assert cfg.enabled is True
         assert cfg.boundary_aware_modes == 6
+        assert cfg.num_frequencies == 7
+        assert cfg.max_frequency == 14.0
 
     def test_eval_cli_rejects_non_object_axis_1d_trunk_config(self):
         with pytest.raises(TypeError, match="coupling_model.axis_1d_trunk"):

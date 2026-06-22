@@ -484,6 +484,8 @@ class TrainCLI:
             coeffs,
             branch_input_dim=coupling_model_cfg.branch_input_dim,
             dtype=dataset_cfg.dtype,
+            coefficient_terms=coupling_model_cfg.coefficient_terms,
+            integration_rule=coupling_training_cfg.integration_rule,
         )
         validation_dataset = None
         if dataset_cfg.validation_path is not None:
@@ -493,6 +495,8 @@ class TrainCLI:
                 coeffs,
                 branch_input_dim=coupling_model_cfg.branch_input_dim,
                 dtype=dataset_cfg.dtype,
+                coefficient_terms=coupling_model_cfg.coefficient_terms,
+                integration_rule=coupling_training_cfg.integration_rule,
             )
         test_dataset = None
         if dataset_cfg.test_path is not None:
@@ -502,6 +506,8 @@ class TrainCLI:
                 coeffs,
                 branch_input_dim=coupling_model_cfg.branch_input_dim,
                 dtype=dataset_cfg.dtype,
+                coefficient_terms=coupling_model_cfg.coefficient_terms,
+                integration_rule=coupling_training_cfg.integration_rule,
             )
 
         coupling_model = ComplexCouplingNet(coupling_model_cfg)

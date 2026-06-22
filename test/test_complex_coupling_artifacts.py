@@ -11,8 +11,8 @@ import torch
 from greenonet.complex_coupling_artifacts import export_complex_coupling_artifacts
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.config import (
+    Axis1DTrunkConfig,
     CouplingModelConfig,
-    CouplingTrunkPositionalEncodingConfig,
     ModelConfig,
 )
 from greenonet.coupling_artifacts import CouplingArtifactRequest
@@ -47,7 +47,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         hidden_dim=4,
         depth=1,
         dtype=torch.float64,
-        trunk_positional_encoding=CouplingTrunkPositionalEncodingConfig(
+        axis_1d_trunk=Axis1DTrunkConfig(
             num_frequencies=2,
             max_frequency=2.0,
         ),

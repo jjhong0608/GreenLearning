@@ -41,6 +41,8 @@ def write_geometry_npz(path: Path, **overrides: np.ndarray) -> Path:
         "y_edges": np.array([[0, 2]], dtype=np.int64),
         "hx": np.array(0.5, dtype=np.float64),
         "hy": np.array(0.5, dtype=np.float64),
+        "grid_x": np.linspace(0.0, 1.0, 5, dtype=np.float64),
+        "grid_y": np.linspace(0.0, 1.0, 5, dtype=np.float64),
     }
     payload.update(overrides)
     np.savez(path, **payload)
@@ -126,7 +128,7 @@ def write_complex_config(
             "activation": "tanh",
             "dropout": 0.0,
             "dtype": "float64",
-            "trunk_positional_encoding": {
+            "axis_1d_trunk": {
                 "num_frequencies": 2,
                 "max_frequency": 2.0,
             },
@@ -138,6 +140,7 @@ def write_complex_config(
             "weight_decay": 0.0,
             "log_interval": 1,
             "device": "cpu",
+            "integration_rule": "trapezoid",
             "compile": {"enabled": False},
             "losses": {
                 "cross_consistency": {"enabled": True, "weight": 99.0},

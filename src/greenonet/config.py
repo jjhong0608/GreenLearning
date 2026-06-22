@@ -144,6 +144,8 @@ class Axis1DTrunkConfig:
 
     enabled: bool = False
     boundary_aware_modes: int = 4
+    num_frequencies: int = 4
+    max_frequency: float = 8.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -155,6 +157,20 @@ class Axis1DTrunkConfig:
             raise TypeError("axis_1d_trunk.boundary_aware_modes must be an integer.")
         if self.boundary_aware_modes <= 0:
             raise ValueError("axis_1d_trunk.boundary_aware_modes must be positive.")
+        if not isinstance(self.num_frequencies, int) or isinstance(
+            self.num_frequencies,
+            bool,
+        ):
+            raise TypeError("axis_1d_trunk.num_frequencies must be an integer.")
+        if self.num_frequencies <= 0:
+            raise ValueError("axis_1d_trunk.num_frequencies must be positive.")
+        if not isinstance(self.max_frequency, (int, float)) or isinstance(
+            self.max_frequency,
+            bool,
+        ):
+            raise TypeError("axis_1d_trunk.max_frequency must be numeric.")
+        if self.max_frequency <= 0.0:
+            raise ValueError("axis_1d_trunk.max_frequency must be positive.")
 
     @classmethod
     def from_raw(
@@ -167,7 +183,15 @@ class Axis1DTrunkConfig:
             return raw
         if isinstance(raw, dict):
             data = dict(raw)
-            unknown = sorted(set(data) - {"enabled", "boundary_aware_modes"})
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "boundary_aware_modes",
+                    "num_frequencies",
+                    "max_frequency",
+                }
+            )
             if unknown:
                 raise TypeError(
                     f"axis_1d_trunk has unknown keys: {', '.join(unknown)}."
