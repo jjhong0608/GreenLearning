@@ -237,6 +237,51 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Figure 목록과 paper section별 배치 확정.
 - 결과 저장 directory naming convention 확정.
 - Run log, metric CSV, generated figure를 어떤 형식으로 archive할지 확정.
+- 학회 발표 준비 문서는 `docs/conference_presentation_preparation.md`에 작성한다.
+  GreenNet/CouplingNet 설명은 사용 중인 설정만 반영한다. Disabled option인
+  `source_stencil_lift`, `green_response_feature`, disabled losses 등은 발표 준비
+  문서의 핵심 설정 설명에서 제외한다.
+- 학회 발표 준비 문서에서 우선 다룰 coefficient family는 `Pure_Poisson.py`,
+  `Sinusoidal_Diffusion_Only.py`, `Smooth_Variable_Diffusion_Reaction.py`,
+  `Convection_Diffusion_Reaction.py`, `Sinusoidal_Diffusion_Only_Ver2.py`,
+  `Diffusion_Reaction_Ver2.py`이다.
+- 다음 단계의 학회 발표용 Markdown 문서는 영어로 작성한다. 최종 목적은 PPT 슬라이드
+  작성이지만, Markdown 자체는 슬라이드 단위로 나누지 않고 전체 흐름을 가진 발표 원고형
+  문서로 작성한다. 기준 자료는 `docs/conference_presentation_preparation.md`이다.
+- 영어 발표용 continuous narrative Markdown은
+  `docs/conference_presentation_narrative.md`에 둔다. 이 문서는 PPT slide deck이
+  아니라 PPT 제작 전 단계의 영어 발표 원고형 자료이다.
+- `docs/conference_presentation_narrative.md`는 코드/학습 설정 중심이 아니라 모델
+  구조와 수학적 아이디어 중심으로 작성한다. GreenNet은 analytic Green form과 neural
+  correction으로 1D Green function을 근사하는 모델로 설명하고, CouplingNet은
+  MIONet-style source decomposition과 smooth-mask projection으로 `phi + psi = f`
+  balance를 만족시키는 모델로 설명한다.
+- 발표 narrative의 PDE operator는
+  `L u = -div(a grad u) + b dot grad u + c u = f`로 설명한다. CouplingNet의 exact
+  decomposition은 `phi = -partial_x(a partial_x u) + b_x partial_x u + 1/2 c u`,
+  `psi = -partial_y(a partial_y u) + b_y partial_y u + 1/2 c u`로 두어
+  `phi + psi = f`가 되게 설명한다.
+- GreenNet analytic form 설명에는 Green function의 Dirac-delta property와 boundary
+  zero condition을 먼저 제시한다. Poisson Green kernel은 boundary behavior를 주고,
+  polynomial/envelope factors는 boundary compatibility를, integrated Green-type term과
+  coefficients `A(x)`, `B(x)`는 Dirac/Heaviside singular terms를 구조적으로 처리하기
+  위한 장치로 설명한다.
+- GreenNet objective는 predicted Green kernel 자체를 exact/reference Green과 직접
+  MSE로 맞추는 것이 아니다. 코드 기준 training loss는 learned Green kernel을 source와
+  xi 방향으로 적분해 reconstructed solution을 만든 뒤, 이것을 exact solution과 비교하는
+  reconstruction loss이다. `rel_green`/exact Green 비교는 별도 metric/diagnostic으로
+  설명한다.
+- `docs/conference_presentation_narrative.md`는 GreenNet 입력/출력을 coefficient line
+  profiles와 `(x, xi)`에서 complete learned kernel `G_hat(x, xi)`로 설명하고, objective는
+  `G_hat`을 source와 적분한 reconstructed solution loss로 설명하도록 수정했다. CouplingNet
+  설명에는 `phi + psi = f`, `u_x approx u_y`, energy consistency
+  `int a |grad(u_x-u_y)|^2`, alpha-only sine smooth-mask projection을 반영했다.
+- CouplingNet projection 설명은 balance relation뿐 아니라 fiberwise Green reconstruction의
+  transverse boundary compatibility를 위한 구조로 설명한다. `G_x`는 x-endpoint boundary,
+  `G_y`는 y-endpoint boundary를 자연스럽게 만족하므로, source split/projection에는
+  transverse boundary behavior를 반영하는 smooth masks가 필요하다고 설명한다.
+- `docs/conference_presentation_narrative.md`에는 위 operator, GreenNet analytic
+  property, exact `phi`/`psi` split, projection boundary-compatibility 설명을 반영했다.
 
 ## Update Policy
 

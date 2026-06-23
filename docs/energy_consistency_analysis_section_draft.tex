@@ -1,0 +1,1289 @@
+% ============================================================
+% Energy-Consistency Analysis Section Draft
+% ============================================================
+% This file contains only the analysis section intended to be
+% inserted into a larger manuscript.
+%
+% Required theorem-like environments in the manuscript preamble:
+%   \newtheorem{assumption}{Assumption}
+%   \newtheorem{lemma}{Lemma}
+%   \newtheorem{proposition}{Proposition}
+%   \newtheorem{theorem}{Theorem}
+%   \newtheorem{remark}{Remark}
+%
+% Required packages typically include:
+%   amsmath, amssymb, amsthm, mathtools
+%
+% Notation warning:
+%   We write \partial_x w and \partial_y w for derivatives.
+%   The symbols u_x and u_y denote represented solutions, not
+%   partial derivatives of u.
+% ============================================================
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{enumitem}
+\usepackage{bm}
+
+\newtheorem{assumption}{Assumption}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{remark}{Remark}
+
+\begin{document}
+
+\section{Energy-Consistency Analysis for Linewise Green Reconstructions}
+\label{sec:energy-consistency-analysis}
+
+This section analyzes how an energy-consistency loss between two
+directional reconstructions can control the source-split error variables
+used in the proposed linewise Green reconstruction framework.  The
+analysis is carried out in a continuous setting.  The main purpose is not
+to claim that the learned Green operators are exact, but to isolate the
+mathematical mechanism by which the consistency loss
+\[
+    \mathcal L_E
+    =
+    \int_\Omega a |\nabla(u_x-u_y)|^2
+\]
+controls the average and directional components of the split error under
+explicit structural assumptions.  We also discuss why an \(L^2\)-based
+consistency loss does not yield the same argument, and how the conclusion
+is perturbed when the Green reconstructions are not exact.
+
+\subsection{Setting and directional operators}
+\label{subsec:setting-directional-operators}
+
+Let
+\[
+    \Omega=(0,1)^2,
+    \qquad
+    V=H_0^1(\Omega).
+\]
+We consider a directional decomposition of a second-order operator
+\[
+    L = L_x + L_y,
+\]
+where
+\begin{align}
+    L_x u
+    &:=
+    -\partial_x\!\left(a\,\partial_x u\right)
+    + b_x\,\partial_x u
+    + c u,
+    \label{eq:Lx-definition}
+    \\
+    L_y u
+    &:=
+    -\partial_y\!\left(a\,\partial_y u\right)
+    + b_y\,\partial_y u
+    + c u.
+    \label{eq:Ly-definition}
+\end{align}
+Thus the full operator is
+\begin{equation}
+    L u
+    =
+    -\nabla\cdot(a\nabla u)
+    + b\cdot\nabla u
+    + 2c u,
+    \qquad
+    b=(b_x,b_y).
+    \label{eq:L-full-definition}
+\end{equation}
+Let \(u_*\in V\) denote the reference solution satisfying
+\begin{equation}
+    L u_* = f
+    \label{eq:reference-problem}
+\end{equation}
+in the appropriate weak sense.
+
+Throughout this section, the energy seminorm induced by the diffusion
+coefficient is denoted by
+\begin{equation}
+    \|v\|_a^2
+    :=
+    \int_\Omega a |\nabla v|^2.
+    \label{eq:energy-norm}
+\end{equation}
+Under the ellipticity assumption \(a\ge a_0>0\), this seminorm is
+equivalent to the \(H_0^1\)-seminorm on \(V\).
+
+\subsection{Fiberwise one-dimensional Green reconstructions}
+\label{subsec:fiberwise-green-reconstructions}
+
+The operators \(G_x\) and \(G_y\) used below should not be understood as
+two-dimensional inverses of the full operator \(L\).  Instead, they are
+fiberwise one-dimensional Green inverses acting on two-dimensional source
+fields.
+
+For a two-dimensional source field \(\phi=\phi(x,y)\), define
+\[
+    \phi_y(\xi) := \phi(\xi,y).
+\]
+For almost every \(y\in(0,1)\), let \(G_x^{(y)}\) denote the
+one-dimensional Green inverse associated with the \(x\)-directional
+operator
+\[
+    L_x^{(y)} w
+    =
+    -\partial_x\!\left(a(x,y)\partial_x w\right)
+    + b_x(x,y)\partial_x w
+    + c(x,y)w
+\]
+on the interval \((0,1)\), with homogeneous endpoint conditions
+\[
+    w(0)=w(1)=0.
+\]
+Then the fiberwise reconstruction \(G_x[\phi]\) is defined by
+\begin{equation}
+    (G_x\phi)(x,y)
+    :=
+    \bigl(G_x^{(y)}\phi_y\bigr)(x)
+    \qquad
+    \text{for a.e. } y\in(0,1).
+    \label{eq:Gx-fiberwise-definition}
+\end{equation}
+Equivalently, when the one-dimensional Green kernel exists,
+\[
+    (G_x\phi)(x,y)
+    =
+    \int_0^1 G_x(x,\xi;y)\,\phi(\xi,y)\,d\xi .
+\]
+
+Similarly, for \(\psi=\psi(x,y)\), define
+\[
+    \psi_x(\eta) := \psi(x,\eta).
+\]
+For almost every \(x\in(0,1)\), let \(G_y^{(x)}\) denote the
+one-dimensional Green inverse associated with
+\[
+    L_y^{(x)} w
+    =
+    -\partial_y\!\left(a(x,y)\partial_y w\right)
+    + b_y(x,y)\partial_y w
+    + c(x,y)w
+\]
+on \((0,1)\), with homogeneous endpoint conditions
+\[
+    w(0)=w(1)=0.
+\]
+Then
+\begin{equation}
+    (G_y\psi)(x,y)
+    :=
+    \bigl(G_y^{(x)}\psi_x\bigr)(y)
+    \qquad
+    \text{for a.e. } x\in(0,1).
+    \label{eq:Gy-fiberwise-definition}
+\end{equation}
+Equivalently,
+\[
+    (G_y\psi)(x,y)
+    =
+    \int_0^1 G_y(y,\eta;x)\,\psi(x,\eta)\,d\eta .
+\]
+
+\begin{remark}[Fiberwise reconstruction versus full two-dimensional admissibility]
+The reconstruction \(G_x[\phi]\) naturally enforces homogeneous boundary
+conditions only on the \(x\)-endpoints of each fiber:
+\[
+    (G_x\phi)(0,y)=(G_x\phi)(1,y)=0
+    \qquad \text{for a.e. }y.
+\]
+Likewise, \(G_y[\psi]\) naturally enforces homogeneous boundary
+conditions only on the \(y\)-endpoints:
+\[
+    (G_y\psi)(x,0)=(G_y\psi)(x,1)=0
+    \qquad \text{for a.e. }x.
+\]
+Thus, from the fiberwise construction alone, one should generally expect
+mapping properties of the form
+\[
+    G_x[\phi]\in L^2_y(0,1;H_0^1(0,1)_x),
+    \qquad
+    G_y[\psi]\in L^2_x(0,1;H_0^1(0,1)_y),
+\]
+rather than the full two-dimensional admissibility
+\[
+    G_x[\phi],\,G_y[\psi]\in H_0^1(\Omega).
+\]
+The latter property will therefore be imposed explicitly as a structural
+admissibility assumption in the theorem below.
+\end{remark}
+
+\subsection{Exact and predicted source splits}
+\label{subsec:exact-predicted-splits}
+
+The reference solution \(u_*\) induces an exact directional source split
+\begin{equation}
+    \phi_* := L_x u_*,
+    \qquad
+    \psi_* := L_y u_*.
+    \label{eq:exact-split-definition}
+\end{equation}
+Consequently,
+\begin{equation}
+    \phi_*+\psi_*
+    =
+    (L_x+L_y)u_*
+    =
+    Lu_*
+    =
+    f.
+    \label{eq:exact-split-consistency}
+\end{equation}
+The model predicts another split \((\phi,\psi)\), and the corresponding
+represented solutions are defined by
+\begin{equation}
+    u_x := G_x[\phi],
+    \qquad
+    u_y := G_y[\psi].
+    \label{eq:represented-solutions}
+\end{equation}
+The model architecture is intended to enforce the split consistency
+constraint
+\begin{equation}
+    \phi+\psi=f,
+    \label{eq:predicted-split-consistency}
+\end{equation}
+up to numerical error.  In the continuous analysis below, we impose this
+constraint exactly.
+
+\subsection{Structural assumptions}
+\label{subsec:structural-assumptions}
+
+We now state the assumptions used in the energy-consistency analysis.
+
+\begin{assumption}[Coefficient bounds]
+\label{assumption:coefficient-bounds}
+There exist constants \(a_0,a_1>0\) such that
+\begin{equation}
+    0<a_0\le a(x,y)\le a_1<\infty
+    \qquad
+    \text{for a.e. }(x,y)\in\Omega.
+    \label{eq:a-bounds}
+\end{equation}
+Moreover,
+\[
+    b\in L^\infty(\Omega)^2,
+    \qquad
+    c\in L^\infty(\Omega).
+\]
+Unless otherwise stated, \(\|b\|_{L^\infty}\) denotes the vector
+\(L^\infty\)-norm
+\[
+    \|b\|_{L^\infty}
+    :=
+    \operatorname*{ess\,sup}_{(x,y)\in\Omega}
+    \sqrt{|b_x(x,y)|^2+|b_y(x,y)|^2}.
+\]
+\end{assumption}
+
+\begin{assumption}[Boundary admissibility]
+\label{assumption:boundary-admissibility}
+The reference and represented solutions satisfy
+\begin{equation}
+    u_x,u_y,u_*\in H_0^1(\Omega).
+    \label{eq:boundary-admissibility}
+\end{equation}
+This assumption is automatic for \(u_*\) when the reference problem is a
+homogeneous Dirichlet problem.  For \(u_x\) and \(u_y\), however, it is
+not a consequence of the fiberwise Green reconstruction alone; it should
+be interpreted as a restriction to a two-dimensional admissible class.
+\end{assumption}
+
+\begin{assumption}[Exact Green reconstruction of the reference split]
+\label{assumption:exact-green-reconstruction}
+The fiberwise Green inverses exactly reconstruct the reference solution
+from the exact split:
+\begin{equation}
+    G_x[\phi_*]=u_*,
+    \qquad
+    G_y[\psi_*]=u_*.
+    \label{eq:exact-green-reconstruction}
+\end{equation}
+This assumption corresponds to an ideal Green reconstruction setting.
+A perturbation version with imperfect Green reconstruction is discussed
+in Subsection~\ref{subsec:imperfect-green-reconstruction}.
+\end{assumption}
+
+\begin{assumption}[Projection consistency]
+\label{assumption:projection-consistency}
+The predicted split satisfies
+\begin{equation}
+    \phi+\psi=f=\phi_*+\psi_*.
+    \label{eq:projection-consistency}
+\end{equation}
+Equivalently,
+\begin{equation}
+    (\phi-\phi_*)+(\psi-\psi_*)=0.
+    \label{eq:projection-consistency-error}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Weak inverse identities]
+\label{assumption:weak-inverse-identities}
+The fiberwise Green reconstructions satisfy the directional inverse
+identities in the weak sense.  In particular, for appropriate source
+terms \(\mu,\nu\),
+\begin{equation}
+    L_x G_x[\mu]=\mu,
+    \qquad
+    L_y G_y[\nu]=\nu.
+    \label{eq:weak-inverse-identities}
+\end{equation}
+Equivalently, in terms of the directional bilinear forms defined below,
+\[
+    B_x(G_x[\mu],v)=\langle \mu,v\rangle,
+    \qquad
+    B_y(G_y[\nu],v)=\langle \nu,v\rangle
+\]
+for all admissible test functions \(v\).  In particular,
+\begin{equation}
+    L_x q_x = 2(\phi-\phi_*),
+    \qquad
+    L_y q_y = 2(\psi-\psi_*),
+    \label{eq:inverse-identities-for-q}
+\end{equation}
+for the error variables \(q_x,q_y\) defined in
+Subsection~\ref{subsec:error-variables}.
+\end{assumption}
+
+\begin{assumption}[Coercivity of the full bilinear form]
+\label{assumption:coercivity}
+Let
+\begin{equation}
+    B(u,v)
+    :=
+    \int_\Omega a\nabla u\cdot\nabla v
+    +
+    \int_\Omega (b\cdot\nabla u)v
+    +
+    \int_\Omega 2cuv.
+    \label{eq:full-bilinear-form}
+\end{equation}
+There exists a constant \(\gamma_a>0\) such that
+\begin{equation}
+    B(v,v)
+    \ge
+    \gamma_a \|v\|_a^2
+    \qquad
+    \forall v\in V.
+    \label{eq:coercivity}
+\end{equation}
+\end{assumption}
+
+\subsection{Coercivity of the full bilinear form}
+\label{subsec:coercivity-discussion}
+
+We briefly discuss when Assumption~\ref{assumption:coercivity} is
+reasonable.  For \(v\in V\),
+\begin{equation}
+    B(v,v)
+    =
+    \|v\|_a^2
+    +
+    \int_\Omega (b\cdot\nabla v)v
+    +
+    \int_\Omega 2cv^2.
+    \label{eq:Bvv-expanded}
+\end{equation}
+Thus coercivity means that the lower-order advection and reaction terms
+do not destroy the positive diffusion energy.
+
+In the pure diffusion case, \(b=0\) and \(c=0\), one has
+\[
+    B(v,v)=\|v\|_a^2,
+\]
+so \(\gamma_a=1\).  Similarly, if \(b=0\) and \(c\ge0\), then
+\[
+    B(v,v)=\|v\|_a^2+\int_\Omega 2cv^2
+    \ge
+    \|v\|_a^2,
+\]
+again with \(\gamma_a=1\).
+
+If the reaction coefficient can be negative, write
+\[
+    c_-(x,y):=\max\{-c(x,y),0\}.
+\]
+Then
+\[
+    \int_\Omega 2cv^2
+    \ge
+    -2\|c_-\|_{L^\infty}\|v\|_{L^2}^2.
+\]
+Using Poincaré's inequality
+\[
+    \|v\|_{L^2}\le C_P\|\nabla v\|_{L^2}
+\]
+and the ellipticity bound \(a\ge a_0\), we get
+\[
+    \|v\|_{L^2}^2
+    \le
+    \frac{C_P^2}{a_0}\|v\|_a^2.
+\]
+Therefore, in the reaction-diffusion case \(b=0\),
+\[
+    B(v,v)
+    \ge
+    \left(
+    1-\frac{2C_P^2\|c_-\|_{L^\infty}}{a_0}
+    \right)
+    \|v\|_a^2.
+\]
+Hence a sufficient condition for coercivity is
+\[
+    2C_P^2\|c_-\|_{L^\infty}<a_0.
+\]
+
+When \(b\neq0\), a conservative sufficient condition can be obtained by
+bounding the advection term as
+\begin{align*}
+    \left|
+    \int_\Omega (b\cdot\nabla v)v
+    \right|
+    &\le
+    \|b\|_{L^\infty}
+    \|\nabla v\|_{L^2}
+    \|v\|_{L^2}
+    \\
+    &\le
+    \frac{C_P\|b\|_{L^\infty}}{a_0}
+    \|v\|_a^2.
+\end{align*}
+Combining this with the negative part of the reaction term yields
+\[
+    B(v,v)
+    \ge
+    \left(
+    1
+    -
+    \frac{C_P\|b\|_{L^\infty}}{a_0}
+    -
+    \frac{2C_P^2\|c_-\|_{L^\infty}}{a_0}
+    \right)
+    \|v\|_a^2.
+\]
+Thus one sufficient, although generally conservative, condition is
+\begin{equation}
+    C_P\|b\|_{L^\infty}
+    +
+    2C_P^2\|c_-\|_{L^\infty}
+    <
+    a_0.
+    \label{eq:conservative-coercivity-condition}
+\end{equation}
+
+A sharper interpretation is possible when \(b\) is sufficiently regular,
+for example \(b\in W^{1,\infty}(\Omega)^2\).  Since \(v\in H_0^1(\Omega)\),
+integration by parts gives
+\begin{equation}
+    \int_\Omega (b\cdot\nabla v)v
+    =
+    \frac12\int_\Omega b\cdot\nabla(v^2)
+    =
+    -\frac12\int_\Omega (\nabla\cdot b)v^2.
+    \label{eq:advection-integration-by-parts}
+\end{equation}
+Hence
+\begin{equation}
+    B(v,v)
+    =
+    \|v\|_a^2
+    +
+    \int_\Omega
+    \left(
+    2c-\frac12\nabla\cdot b
+    \right)v^2.
+    \label{eq:Bvv-effective-reaction}
+\end{equation}
+If
+\[
+    2c-\frac12\nabla\cdot b\ge0
+    \qquad
+    \text{a.e. in }\Omega,
+\]
+then \(B(v,v)\ge \|v\|_a^2\), and \(\gamma_a=1\).  More generally, if
+\[
+    2c-\frac12\nabla\cdot b\ge -\kappa
+\]
+with
+\[
+    \kappa < \frac{a_0}{C_P^2},
+\]
+then
+\[
+    B(v,v)
+    \ge
+    \left(
+    1-\frac{\kappa C_P^2}{a_0}
+    \right)
+    \|v\|_a^2.
+\]
+In particular, if \(\nabla\cdot b=0\) and \(c\ge0\), the advection term
+does not contribute to \(B(v,v)\), and coercivity follows with
+\(\gamma_a=1\).
+
+\begin{remark}[Role of coercivity]
+Coercivity is the step that turns the weak identity for \(q_c\) into an
+energy estimate.  Without a lower bound of the form
+\[
+    B(q_c,q_c)\ge \gamma_a\|q_c\|_a^2,
+\]
+the boundedness of the right-hand side alone would not control
+\(\|q_c\|_a\).
+\end{remark}
+
+\subsection{Error variables and average--difference decomposition}
+\label{subsec:error-variables}
+
+Define the directional split-error variables
+\begin{equation}
+    q_x:=2G_x(\phi-\phi_*),
+    \qquad
+    q_y:=2G_y(\psi-\psi_*).
+    \label{eq:qx-qy-definition}
+\end{equation}
+Also define the average component and the difference component by
+\begin{equation}
+    q_c:=\frac{q_x+q_y}{2},
+    \qquad
+    r:=u_x-u_y.
+    \label{eq:qc-r-definition}
+\end{equation}
+By linearity of the Green reconstructions and by
+Assumption~\ref{assumption:exact-green-reconstruction},
+\begin{align}
+    q_x
+    &=
+    2\bigl(G_x[\phi]-G_x[\phi_*]\bigr)
+    =
+    2(u_x-u_*),
+    \label{eq:qx-solution-error}
+    \\
+    q_y
+    &=
+    2\bigl(G_y[\psi]-G_y[\psi_*]\bigr)
+    =
+    2(u_y-u_*).
+    \label{eq:qy-solution-error}
+\end{align}
+Therefore,
+\[
+    q_x-q_y
+    =
+    2(u_x-u_y)
+    =
+    2r.
+\]
+Consequently,
+\begin{equation}
+    q_x=q_c+r,
+    \qquad
+    q_y=q_c-r.
+    \label{eq:average-difference-decomposition}
+\end{equation}
+The energy-consistency loss is precisely
+\begin{equation}
+    \mathcal L_E
+    :=
+    \int_\Omega a|\nabla(u_x-u_y)|^2
+    =
+    \|r\|_a^2.
+    \label{eq:energy-loss-r}
+\end{equation}
+
+\subsection{A structural identity for the average component}
+\label{subsec:structural-identity}
+
+The next lemma identifies the equation satisfied by the average component
+\(q_c\).
+
+\begin{lemma}[Structural identity for the average component]
+\label{lemma:structural-identity}
+Under Assumptions~\ref{assumption:projection-consistency} and
+\ref{assumption:weak-inverse-identities}, the average component \(q_c\)
+satisfies
+\begin{equation}
+    Lq_c=-(L_x-L_y)r
+    \label{eq:structural-identity}
+\end{equation}
+in the weak sense.
+\end{lemma}
+
+\begin{proof}
+By the weak inverse identities,
+\[
+    L_xq_x=2(\phi-\phi_*),
+    \qquad
+    L_yq_y=2(\psi-\psi_*).
+\]
+Adding these two equations gives
+\[
+    L_xq_x+L_yq_y
+    =
+    2\{(\phi-\phi_*)+(\psi-\psi_*)\}.
+\]
+By projection consistency,
+\[
+    (\phi-\phi_*)+(\psi-\psi_*)=0.
+\]
+Thus
+\[
+    L_xq_x+L_yq_y=0.
+\]
+Using the decomposition
+\[
+    q_x=q_c+r,
+    \qquad
+    q_y=q_c-r,
+\]
+we obtain
+\[
+    L_x(q_c+r)+L_y(q_c-r)=0.
+\]
+Equivalently,
+\[
+    (L_x+L_y)q_c+(L_x-L_y)r=0.
+\]
+Since \(L=L_x+L_y\), this gives
+\[
+    Lq_c=-(L_x-L_y)r.
+\]
+\end{proof}
+
+\subsection{Boundedness of the directional difference}
+\label{subsec:boundedness-directional-difference}
+
+Define the directional bilinear forms
+\begin{align}
+    B_x(w,v)
+    & :=
+    \int_\Omega a\,\partial_x w\,\partial_x v
+    +
+    \int_\Omega b_x\,\partial_x w\,v
+    +
+    \int_\Omega cwv,
+    \label{eq:Bx-definition}
+    \\
+    B_y(w,v)
+    & :=
+    \int_\Omega a\,\partial_y w\,\partial_y v
+    +
+    \int_\Omega b_y\,\partial_y w\,v
+    +
+    \int_\Omega cwv.
+    \label{eq:By-definition}
+\end{align}
+Then
+\[
+    B(w,v)=B_x(w,v)+B_y(w,v).
+\]
+
+\begin{lemma}[Boundedness of the directional difference]
+\label{lemma:boundedness-directional-difference}
+For all \(r,v\in H_0^1(\Omega)\),
+\begin{equation}
+    |B_x(r,v)-B_y(r,v)|
+    \le
+    M\|r\|_a\|v\|_a,
+    \label{eq:directional-difference-bound}
+\end{equation}
+where
+\begin{equation}
+    M
+    =
+    1+
+    \frac{C_P\|b\|_{L^\infty}}{a_0}.
+    \label{eq:M-constant}
+\end{equation}
+Here \(C_P\) is the Poincaré constant for \(H_0^1(\Omega)\):
+\[
+    \|v\|_{L^2}\le C_P\|\nabla v\|_{L^2}.
+\]
+\end{lemma}
+
+\begin{proof}
+By definition,
+\begin{align}
+    B_x(r,v)-B_y(r,v)
+    &=
+    \int_\Omega a
+    \bigl(\partial_x r\,\partial_x v
+          -\partial_y r\,\partial_y v\bigr)
+    \notag\\
+    &\quad
+    +
+    \int_\Omega
+    \bigl(b_x\partial_x r-b_y\partial_y r\bigr)v.
+    \label{eq:Bx-minus-By-expanded}
+\end{align}
+The reaction terms cancel because the same term \(\int_\Omega crv\)
+appears in both \(B_x(r,v)\) and \(B_y(r,v)\).
+
+We first estimate the diffusion part.  Write
+\[
+    P_r:=(\partial_x r,-\partial_y r),
+    \qquad
+    P_v:=(\partial_x v,\partial_y v).
+\]
+Then
+\[
+    P_r\cdot P_v
+    =
+    \partial_x r\,\partial_x v
+    -
+    \partial_y r\,\partial_y v,
+\]
+and
+\[
+    |P_r|=|\nabla r|,
+    \qquad
+    |P_v|=|\nabla v|.
+\]
+Therefore, by the weighted Cauchy--Schwarz inequality,
+\begin{align}
+    \left|
+    \int_\Omega a
+    \bigl(\partial_x r\,\partial_x v
+          -\partial_y r\,\partial_y v\bigr)
+    \right|
+    &=
+    \left|
+    \int_\Omega a\,P_r\cdot P_v
+    \right|
+    \notag\\
+    &\le
+    \left(\int_\Omega a|P_r|^2\right)^{1/2}
+    \left(\int_\Omega a|P_v|^2\right)^{1/2}
+    \notag\\
+    &=
+    \|r\|_a\|v\|_a.
+    \label{eq:diffusion-part-bound}
+\end{align}
+
+Next, define \(\widetilde b=(b_x,-b_y)\).  Since
+\(|\widetilde b|=|b|\), we have
+\[
+    \|\widetilde b\|_{L^\infty}=\|b\|_{L^\infty}.
+\]
+The advection part can be written as
+\[
+    \int_\Omega
+    \bigl(b_x\partial_x r-b_y\partial_y r\bigr)v
+    =
+    \int_\Omega
+    (\widetilde b\cdot\nabla r)v.
+\]
+Using Hölder's inequality and then Cauchy--Schwarz,
+\begin{align}
+    \left|
+    \int_\Omega
+    (\widetilde b\cdot\nabla r)v
+    \right|
+    &\le
+    \|b\|_{L^\infty}
+    \|\nabla r\|_{L^2}
+    \|v\|_{L^2}.
+    \label{eq:advection-preliminary-bound}
+\end{align}
+By \(a\ge a_0>0\),
+\[
+    \|\nabla r\|_{L^2}
+    \le
+    \frac{1}{\sqrt{a_0}}\|r\|_a.
+\]
+Moreover, by Poincaré's inequality and \(a\ge a_0\),
+\[
+    \|v\|_{L^2}
+    \le
+    C_P\|\nabla v\|_{L^2}
+    \le
+    \frac{C_P}{\sqrt{a_0}}\|v\|_a.
+\]
+Substituting these estimates into
+\eqref{eq:advection-preliminary-bound} gives
+\begin{equation}
+    \left|
+    \int_\Omega
+    \bigl(b_x\partial_x r-b_y\partial_y r\bigr)v
+    \right|
+    \le
+    \frac{C_P\|b\|_{L^\infty}}{a_0}
+    \|r\|_a\|v\|_a.
+    \label{eq:advection-part-bound}
+\end{equation}
+Combining \eqref{eq:diffusion-part-bound} and
+\eqref{eq:advection-part-bound}, we obtain
+\[
+    |B_x(r,v)-B_y(r,v)|
+    \le
+    \left(
+    1+
+    \frac{C_P\|b\|_{L^\infty}}{a_0}
+    \right)
+    \|r\|_a\|v\|_a.
+\]
+This proves the claim.
+\end{proof}
+
+\subsection{Main energy-consistency theorem}
+\label{subsec:main-energy-consistency-theorem}
+
+We now combine the structural identity, coercivity, and the boundedness
+of the directional difference.
+
+\begin{theorem}[Energy-consistency control of the split errors]
+\label{theorem:energy-consistency-control}
+Suppose Assumptions~\ref{assumption:coefficient-bounds}--
+\ref{assumption:coercivity} hold.  Let
+\[
+    \mathcal L_E
+    =
+    \|u_x-u_y\|_a^2
+    =
+    \|r\|_a^2.
+\]
+Then
+\begin{equation}
+    \|q_c\|_a
+    \le
+    C_E\sqrt{\mathcal L_E},
+    \label{eq:qc-energy-control}
+\end{equation}
+where
+\begin{equation}
+    C_E
+    =
+    \frac{M}{\gamma_a}
+    =
+    \frac{
+    1+\dfrac{C_P\|b\|_{L^\infty}}{a_0}
+    }{\gamma_a}.
+    \label{eq:CE-definition}
+\end{equation}
+Furthermore,
+\begin{equation}
+    \|q_x\|_a
+    \le
+    (1+C_E)\sqrt{\mathcal L_E},
+    \qquad
+    \|q_y\|_a
+    \le
+    (1+C_E)\sqrt{\mathcal L_E}.
+    \label{eq:qx-qy-energy-control}
+\end{equation}
+Consequently,
+\begin{equation}
+    \mathcal L_E\to0
+    \quad\Longrightarrow\quad
+    q_c,q_x,q_y\to0
+    \quad
+    \text{in the energy norm}.
+    \label{eq:energy-loss-convergence}
+\end{equation}
+Since \(q_c,q_x,q_y\in H_0^1(\Omega)\), energy-norm convergence also
+implies convergence in \(H_0^1(\Omega)\).
+\end{theorem}
+
+\begin{proof}
+By Lemma~\ref{lemma:structural-identity},
+\[
+    Lq_c=-(L_x-L_y)r
+\]
+in the weak sense.  Therefore,
+\begin{equation}
+    B(q_c,v)
+    =
+    -\{B_x(r,v)-B_y(r,v)\}
+    \qquad
+    \forall v\in V.
+    \label{eq:weak-form-structural-identity}
+\end{equation}
+Taking \(v=q_c\) gives
+\[
+    B(q_c,q_c)
+    =
+    -\{B_x(r,q_c)-B_y(r,q_c)\}.
+\]
+By coercivity,
+\[
+    \gamma_a\|q_c\|_a^2
+    \le
+    B(q_c,q_c).
+\]
+Hence
+\[
+    \gamma_a\|q_c\|_a^2
+    \le
+    |B_x(r,q_c)-B_y(r,q_c)|.
+\]
+By Lemma~\ref{lemma:boundedness-directional-difference},
+\[
+    |B_x(r,q_c)-B_y(r,q_c)|
+    \le
+    M\|r\|_a\|q_c\|_a.
+\]
+Thus
+\[
+    \gamma_a\|q_c\|_a^2
+    \le
+    M\|r\|_a\|q_c\|_a.
+\]
+If \(\|q_c\|_a=0\), then the desired estimate is trivial.  Otherwise,
+dividing by \(\|q_c\|_a\) yields
+\[
+    \|q_c\|_a
+    \le
+    \frac{M}{\gamma_a}\|r\|_a.
+\]
+Since \(\mathcal L_E=\|r\|_a^2\), we obtain
+\[
+    \|q_c\|_a
+    \le
+    C_E\sqrt{\mathcal L_E}.
+\]
+
+It remains to estimate \(q_x\) and \(q_y\).  From
+\[
+    q_x=q_c+r,
+    \qquad
+    q_y=q_c-r,
+\]
+the triangle inequality gives
+\[
+    \|q_x\|_a
+    \le
+    \|q_c\|_a+\|r\|_a
+    \le
+    (C_E+1)\sqrt{\mathcal L_E},
+\]
+and similarly
+\[
+    \|q_y\|_a
+    \le
+    \|q_c\|_a+\|r\|_a
+    \le
+    (C_E+1)\sqrt{\mathcal L_E}.
+\]
+This proves the stated estimates.
+
+Finally, if \(\mathcal L_E\to0\), then
+\[
+    \sqrt{\mathcal L_E}\to0,
+\]
+and the above estimates imply
+\[
+    q_c,q_x,q_y\to0
+    \quad
+    \text{in the energy norm}.
+\]
+Because \(a\ge a_0>0\), energy-norm convergence implies convergence of
+the gradients in \(L^2\).  Since the functions lie in \(H_0^1(\Omega)\),
+Poincaré's inequality also controls their \(L^2\)-norms.  Hence the
+convergence also holds in \(H_0^1(\Omega)\).
+\end{proof}
+
+\subsection{Why an \(L^2\)-consistency loss is insufficient}
+\label{subsec:L2-consistency-insufficient}
+
+The preceding argument relies essentially on the energy norm.  Suppose
+instead that one used the \(L^2\)-consistency loss
+\[
+    \mathcal L_0
+    :=
+    \|u_x-u_y\|_{L^2(\Omega)}^2
+    =
+    \|r\|_{L^2(\Omega)}^2.
+\]
+This loss directly controls only the amplitude of \(r\), not its
+derivatives.  However, the right-hand side of the weak structural
+identity involves
+\[
+    B_x(r,v)-B_y(r,v),
+\]
+which contains derivatives of \(r\):
+\begin{align*}
+    B_x(r,v)-B_y(r,v)
+    &=
+    \int_\Omega a
+    \bigl(\partial_x r\,\partial_x v
+          -\partial_y r\,\partial_y v\bigr)
+    \\
+    &\quad
+    +
+    \int_\Omega
+    \bigl(b_x\partial_x r-b_y\partial_y r\bigr)v.
+\end{align*}
+Therefore, the current proof requires control of \(\nabla r\), naturally
+provided by \(\|r\|_a\), but not by \(\|r\|_{L^2}\).
+
+In general, one cannot replace Lemma~\ref{lemma:boundedness-directional-difference}
+by an estimate of the form
+\[
+    |B_x(r,v)-B_y(r,v)|
+    \le
+    C\|r\|_{L^2}\|v\|_a.
+\]
+A simple high-frequency example illustrates the obstruction.  In the
+constant-coefficient pure diffusion case, let
+\[
+    r_n(x,y)=\sin(n\pi x)\sin(\pi y).
+\]
+Then
+\[
+    \|r_n\|_{L^2}=O(1),
+    \qquad
+    \|\partial_x r_n\|_{L^2}=O(n).
+\]
+Thus the derivative-dependent terms in \(B_x(r_n,v)-B_y(r_n,v)\) can
+grow while the \(L^2\)-norm of \(r_n\) remains bounded.  Consequently,
+\(L^2\)-consistency alone does not control \((L_x-L_y)r\), and hence does
+not yield the same estimate for \(q_c\) through the present weak-form
+argument.
+
+\begin{remark}
+This does not rule out all possible \(L^2\)-based estimates under
+additional structure.  For example, in very special constant-coefficient
+settings, one may attempt spectral or elliptic-regularity arguments for
+the operator \(L^{-1}(L_x-L_y)\).  Such an argument is different from the
+energy method used here and would require additional regularity and
+boundary analysis.  The present theorem explains why the energy norm is
+the natural norm for the current proof.
+\end{remark}
+
+\subsection{Perturbation by imperfect Green reconstruction}
+\label{subsec:imperfect-green-reconstruction}
+
+The main theorem assumes exact Green reconstruction of the reference
+split:
+\[
+    G_x[\phi_*]=u_*,
+    \qquad
+    G_y[\psi_*]=u_*.
+\]
+In practice, however, the Green operators may be learned or approximated.
+We therefore consider the perturbed setting
+\begin{equation}
+    G_x[\phi_*]=u_*+\varepsilon_x,
+    \qquad
+    G_y[\psi_*]=u_*+\varepsilon_y,
+    \label{eq:imperfect-green-reconstruction}
+\end{equation}
+where \(\varepsilon_x,\varepsilon_y\) measure the reference
+reconstruction errors.
+
+Assuming linearity of the approximate reconstructions, the same formal
+definitions
+\[
+    q_x:=2G_x(\phi-\phi_*),
+    \qquad
+    q_y:=2G_y(\psi-\psi_*)
+\]
+now give
+\begin{align}
+    q_x
+    &=
+    2(G_x[\phi]-G_x[\phi_*])
+    =
+    2(u_x-u_*-\varepsilon_x),
+    \label{eq:qx-imperfect-green}
+    \\
+    q_y
+    &=
+    2(G_y[\psi]-G_y[\psi_*])
+    =
+    2(u_y-u_*-\varepsilon_y).
+    \label{eq:qy-imperfect-green}
+\end{align}
+Define the branch mismatch error
+\begin{equation}
+    \delta\varepsilon
+    :=
+    \varepsilon_x-\varepsilon_y.
+    \label{eq:branch-mismatch-error}
+\end{equation}
+Then
+\[
+    q_x-q_y
+    =
+    2(u_x-u_y)-2(\varepsilon_x-\varepsilon_y)
+    =
+    2(r-\delta\varepsilon).
+\]
+Thus the effective difference component is
+\begin{equation}
+    s:=r-\delta\varepsilon.
+    \label{eq:effective-difference-component}
+\end{equation}
+With
+\[
+    q_c:=\frac{q_x+q_y}{2},
+\]
+we obtain the perturbed decomposition
+\begin{equation}
+    q_x=q_c+s,
+    \qquad
+    q_y=q_c-s.
+    \label{eq:perturbed-average-difference-decomposition}
+\end{equation}
+
+If the weak inverse identities remain valid for the error variables
+\(q_x,q_y\), then the same projection argument yields
+\[
+    L_xq_x+L_yq_y=0.
+\]
+Substituting \eqref{eq:perturbed-average-difference-decomposition} gives
+\[
+    L_x(q_c+s)+L_y(q_c-s)=0,
+\]
+and therefore
+\begin{equation}
+    Lq_c=-(L_x-L_y)s.
+    \label{eq:perturbed-structural-identity}
+\end{equation}
+Applying the same coercivity and boundedness argument as in
+Theorem~\ref{theorem:energy-consistency-control}, we obtain
+\[
+    \|q_c\|_a
+    \le
+    C_E\|s\|_a.
+\]
+Since
+\[
+    \|s\|_a
+    =
+    \|r-\delta\varepsilon\|_a
+    \le
+    \|r\|_a+\|\delta\varepsilon\|_a,
+\]
+and \(\|r\|_a=\sqrt{\mathcal L_E}\), we get
+\begin{equation}
+    \|q_c\|_a
+    \le
+    C_E
+    \left(
+    \sqrt{\mathcal L_E}
+    +
+    \|\varepsilon_x-\varepsilon_y\|_a
+    \right).
+    \label{eq:perturbed-qc-estimate}
+\end{equation}
+Similarly,
+\begin{equation}
+    \|q_x\|_a,\ \|q_y\|_a
+    \le
+    (1+C_E)
+    \left(
+    \sqrt{\mathcal L_E}
+    +
+    \|\varepsilon_x-\varepsilon_y\|_a
+    \right).
+    \label{eq:perturbed-qx-qy-estimate}
+\end{equation}
+
+However, the actual represented-solution errors include the individual
+Green reconstruction errors:
+\begin{equation}
+    2(u_x-u_*)=q_x+2\varepsilon_x,
+    \qquad
+    2(u_y-u_*)=q_y+2\varepsilon_y.
+    \label{eq:solution-error-with-green-bias}
+\end{equation}
+Thus, even if \(\mathcal L_E\) is small, the represented solution errors
+may not be small unless the Green reconstruction errors are also
+controlled.
+
+\begin{remark}[Common Green reconstruction bias]
+Energy consistency penalizes branch disagreement, not common Green
+reconstruction bias.  If
+\[
+    \varepsilon_x=\varepsilon_y=\varepsilon,
+\]
+then
+\[
+    \varepsilon_x-\varepsilon_y=0,
+\]
+so the branch mismatch term does not appear in
+\eqref{eq:perturbed-qc-estimate}.  Nevertheless,
+\[
+    2(u_x-u_*)=q_x+2\varepsilon,
+    \qquad
+    2(u_y-u_*)=q_y+2\varepsilon.
+\]
+Therefore, a common Green reconstruction bias can remain invisible to
+the consistency loss \( \|u_x-u_y\|_a^2 \), while still contributing to
+the actual solution error.
+\end{remark}
+
+\begin{remark}[Possible inverse residuals for learned Green operators]
+The perturbation discussion above accounts for reference reconstruction
+errors but assumes that the weak inverse identities remain valid for the
+error variables.  A learned Green operator may also introduce inverse
+residuals.  For example, if
+\[
+    L_x\widehat G_x[\mu]
+    =
+    \mu+\eta_x(\mu),
+    \qquad
+    L_y\widehat G_y[\nu]
+    =
+    \nu+\eta_y(\nu),
+\]
+then the structural identity acquires an additional residual term.  In a
+dual energy norm, this would lead to an additional contribution of the
+form
+\[
+    \frac{1}{\gamma_a}\|R\|_{a,*},
+\]
+where \(R\) collects the directional inverse residuals and
+\[
+    \|R\|_{a,*}
+    :=
+    \sup_{v\in V\setminus\{0\}}
+    \frac{|\langle R,v\rangle|}{\|v\|_a}.
+\]
+Thus, in a fully learned setting, the consistency estimate should be
+interpreted as controlling the split errors up to Green reconstruction
+error and inverse residual error.
+\end{remark}
+
+\subsection{Summary of the analysis}
+\label{subsec:analysis-summary}
+
+The analysis shows that, under the stated admissibility, projection,
+Green reconstruction, weak inverse, and coercivity assumptions, the
+energy-consistency loss controls the split-error variables:
+\[
+    \mathcal L_E\to0
+    \quad\Longrightarrow\quad
+    q_c,q_x,q_y\to0
+    \quad
+    \text{in the energy norm}.
+\]
+The mechanism is as follows.  The loss directly controls the difference
+component \(r=u_x-u_y\).  The projection constraint and weak inverse
+identities yield the structural identity
+\[
+    Lq_c=-(L_x-L_y)r,
+\]
+which allows the average component \(q_c\) to be controlled by \(r\)
+through coercivity of \(L\) and boundedness of \(B_x-B_y\).  Finally, the
+directional split errors \(q_x,q_y\) are controlled by the
+average--difference decomposition
+\[
+    q_x=q_c+r,
+    \qquad
+    q_y=q_c-r.
+\]
+The same argument also clarifies the limitations: an \(L^2\)-consistency
+loss does not control the derivative terms in \(B_x-B_y\), and imperfect
+Green reconstruction introduces an error floor that must be separately
+controlled.
+
+\end{document}
