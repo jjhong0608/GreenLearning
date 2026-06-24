@@ -610,9 +610,11 @@ class ComplexGreenTrainer(LoggingMixin):
         )
         for lbfgs_epoch in range(1, self.config.lbfgs_epochs + 1):
             losses: list[float] = []
+            last_batch: ComplexGreenBatch | None = None
             for batch in self._make_loader(dataset, shuffle=True):
                 batch = batch.to(self.device)
                 trunk_grid = self._build_trunk_grid(batch.unit_grid)
+                last_batch = batch
 
                 def closure() -> Tensor:
                     optimizer.zero_grad()
@@ -638,19 +640,40 @@ class ComplexGreenTrainer(LoggingMixin):
             if losses:
                 last_loss = losses[-1]
                 self.loss_history.append(last_loss)
-                train_rel_sol = self._dataset_rel_sol(dataset)
-                self.rel_sol_history.append(train_rel_sol)
-                if self.config.compute_validation_rel_sol:
-                    assert validation_dataset is not None
-                    self.val_rel_sol_history.append(
-                        self._dataset_rel_sol(validation_dataset)
-                    )
-                self.logger.info(
-                    "LBFGS epoch %s last loss: %.4e | train_rel_sol=%.4e",
-                    lbfgs_epoch,
-                    last_loss,
-                    train_rel_sol,
+                assert last_batch is not None
+                with torch.no_grad():
+                    train_rel_sol = self._dataset_rel_sol(dataset)
+                    self.rel_sol_history.append(train_rel_sol)
+                    if self.config.compute_validation_rel_sol:
+                        assert validation_dataset is not None
+                        val_rel_sol = self._dataset_rel_sol(validation_dataset)
+                        self.val_rel_sol_history.append(val_rel_sol)
+
+                    rel_green_line = self._green_kernel_rel_by_interval(last_batch)
+                    rel_green_mean = self._finite_mean(rel_green_line.detach().cpu())
+                    if rel_green_mean is not None:
+                        self.rel_green_history.append(rel_green_mean)
+
+                rel_green_text = (
+                    "nan" if rel_green_mean is None else f"{rel_green_mean:.4e}"
                 )
+                if self.config.compute_validation_rel_sol:
+                    self.logger.info(
+                        "LBFGS epoch %s last loss: %.4e | train_rel_sol=%.4e | val_rel_sol=%.4e | rel_green=%s",
+                        lbfgs_epoch,
+                        last_loss,
+                        self.rel_sol_history[-1],
+                        self.val_rel_sol_history[-1],
+                        rel_green_text,
+                    )
+                else:
+                    self.logger.info(
+                        "LBFGS epoch %s last loss: %.4e | train_rel_sol=%.4e | rel_green=%s",
+                        lbfgs_epoch,
+                        last_loss,
+                        self.rel_sol_history[-1],
+                        rel_green_text,
+                    )
 
     def _save_outputs(
         self,

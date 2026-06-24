@@ -11,7 +11,7 @@
     "deterministic": true,
     "use_operator_learning": true,
     "dtype": "float64",
-	"coefficient_functions_path": "coefficients/Pure_Poisson.py"
+	"coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py"
   },
   "terminal": {
     "width": 250

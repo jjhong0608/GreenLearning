@@ -2,27 +2,14 @@
   "dataset": {
     "geometry_mode": "complex",
     "geometry_path": "data/geometry/circle_radius_05_1_128.npz",
-    "training_path": "data/complex_samples/circle_radius_05_1_128/train",
-    "validation_path": "data/complex_samples/circle_radius_05_1_128/valid",
-    "test_path": "data/complex_samples/circle_radius_05_1_128/test",
-    "coefficient_functions_path": "coefficients/Pure_Poisson.py",
+    "training_path": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/train",
+    "validation_path": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/valid",
+    "test_path": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/test",
+    "coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py",
     "dtype": "float64"
   },
   "terminal": {
     "width": 350
-  },
-  "model": {
-    "input_dim": 2,
-    "hidden_dim": 128,
-    "depth": 4,
-    "activation": "rational",
-    "use_bias": true,
-    "dropout": 0.0,
-    "use_green": true,
-    "branch_input_dim": 129,
-    "use_fourier": true,
-    "fourier_dim": 64,
-    "dtype": "float64"
   },
   "coupling_model": {
     "branch_input_dim": 129,
@@ -46,8 +33,8 @@
   },
   "coupling_training": {
     "learning_rate": 0.002,
-    "epochs": 4000,
-    "batch_size": 200,
+    "epochs": 3000,
+    "batch_size": 400,
     "weight_decay": 0.05,
     "log_interval": 1,
     "device": "cuda:1",
@@ -69,7 +56,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/complex_domain_poisson/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/Diffusion/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

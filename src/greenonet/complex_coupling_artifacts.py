@@ -4,7 +4,7 @@ import csv
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import plotly.graph_objects as go
@@ -39,6 +39,51 @@ class ComplexSelectedSample:
 
 class ComplexCouplingArtifactExporter:
     """Export complex-geometry CouplingNet metrics, raw archives, and scatter plots."""
+
+    FIGURE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "rhs",
+        "sol",
+        "u_pred",
+        "u_phi",
+        "u_psi",
+        "u_pred_error",
+        "u_phi_error",
+        "u_psi_error",
+        "u_split_mismatch",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error",
+    )
+    SIGNED_FIGURE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "u_pred_error",
+            "u_phi_error",
+            "u_psi_error",
+            "u_split_mismatch",
+            "phi_error",
+            "psi_error",
+        }
+    )
+    FIGURE_TITLES: ClassVar[dict[str, str]] = {
+        "rhs": "Source rhs",
+        "sol": "Exact solution sol",
+        "u_pred": "Predicted solution u_pred",
+        "u_phi": "Reconstructed solution u_phi",
+        "u_psi": "Reconstructed solution u_psi",
+        "u_pred_error": "Signed error u_pred - sol",
+        "u_phi_error": "Signed error u_phi - sol",
+        "u_psi_error": "Signed error u_psi - sol",
+        "u_split_mismatch": "Mismatch u_phi - u_psi",
+        "phi": "Projected phi",
+        "psi": "Projected psi",
+        "target_phi": "Target phi",
+        "target_psi": "Target psi",
+        "phi_error": "Signed error phi - target_phi",
+        "psi_error": "Signed error psi - target_psi",
+    }
 
     def __init__(
         self,
@@ -91,7 +136,11 @@ class ComplexCouplingArtifactExporter:
         selected_samples = self._evaluate_selected(dataset, evaluator, selected, device)
         self._write_metric_csv(metric_rows)
         self._write_selected_npz(selected_samples)
-        figure_paths = self._write_figures(selected_samples, self.request.theme)
+        figure_fields = self._figure_fields(selected_samples)
+        figure_paths = self._write_figures(
+            selected_samples,
+            self.request.theme,
+        )
         aggregate = self._aggregate_metrics(metric_rows)
         axis_1d_trunk = Axis1DTrunkConfig.from_raw(configs.coupling_model.axis_1d_trunk)
         summary = {
@@ -107,6 +156,12 @@ class ComplexCouplingArtifactExporter:
             "save_generated_data": self.request.save_generated_data,
             "aggregate_metrics": aggregate,
             "figure_count": len(figure_paths),
+            "figure_fields": list(figure_fields),
+            "error_convention": "signed_difference",
+            "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
+            "optional_flux_targets_exported": self._has_flux_target_artifacts(
+                selected_samples
+            ),
             "source_branch": {
                 "enabled": True,
                 "scaling": "f_unit=L^2*f_phys",
@@ -223,36 +278,52 @@ class ComplexCouplingArtifactExporter:
             for sample_id in selected:
                 batch = complex_coupling_collate_fn([dataset[sample_id]]).to(device)
                 prediction = evaluator.predict_batch(batch)
+                rhs = prediction.batch.rhs_valid[0].detach().cpu().numpy()
+                sol = prediction.batch.sol_valid[0].detach().cpu().numpy()
+                phi = (
+                    prediction.projection.projected_physical[0, 0]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+                psi = (
+                    prediction.projection.projected_physical[0, 1]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+                u_phi = prediction.reconstruction.u_phi_valid[0].detach().cpu().numpy()
+                u_psi = prediction.reconstruction.u_psi_valid[0].detach().cpu().numpy()
+                u_pred = (
+                    prediction.reconstruction.u_mean_valid[0].detach().cpu().numpy()
+                )
                 arrays = {
                     "coords_valid": coords,
-                    "rhs": prediction.batch.rhs_valid[0].detach().cpu().numpy(),
-                    "sol": prediction.batch.sol_valid[0].detach().cpu().numpy(),
+                    "rhs": rhs,
+                    "sol": sol,
                     "raw_unit_phi": prediction.raw_unit[0, 0].detach().cpu().numpy(),
                     "raw_unit_psi": prediction.raw_unit[0, 1].detach().cpu().numpy(),
-                    "phi": prediction.projection.projected_physical[0, 0]
-                    .detach()
-                    .cpu()
-                    .numpy(),
-                    "psi": prediction.projection.projected_physical[0, 1]
-                    .detach()
-                    .cpu()
-                    .numpy(),
-                    "u_phi": prediction.reconstruction.u_phi_valid[0]
-                    .detach()
-                    .cpu()
-                    .numpy(),
-                    "u_psi": prediction.reconstruction.u_psi_valid[0]
-                    .detach()
-                    .cpu()
-                    .numpy(),
+                    "phi": phi,
+                    "psi": psi,
+                    "u_pred": u_pred,
+                    "u_phi": u_phi,
+                    "u_psi": u_psi,
+                    "u_pred_error": u_pred - sol,
+                    "u_phi_error": u_phi - sol,
+                    "u_psi_error": u_psi - sol,
+                    "u_split_mismatch": u_phi - u_psi,
                 }
                 if bool(prediction.batch.has_flux[0].item()):
-                    arrays["target_phi"] = (
+                    target_phi = (
                         prediction.batch.flux_valid[0, 0].detach().cpu().numpy()
                     )
-                    arrays["target_psi"] = (
+                    target_psi = (
                         prediction.batch.flux_valid[0, 1].detach().cpu().numpy()
                     )
+                    arrays["target_phi"] = target_phi
+                    arrays["target_psi"] = target_psi
+                    arrays["phi_error"] = phi - target_phi
+                    arrays["psi_error"] = psi - target_psi
                 samples.append(
                     ComplexSelectedSample(
                         sample_id=sample_id,
@@ -303,17 +374,49 @@ class ComplexCouplingArtifactExporter:
         figure_paths: list[str] = []
         for sample in selected_samples:
             stem = f"sample_{sample.sample_id:04d}_{sample.file_stem}"
-            for field in ("phi", "psi", "u_phi", "u_psi"):
+            for field in self._figure_fields_for_sample(sample.arrays):
                 fig = self._scatter_figure(
-                    title=f"{stem} {field}",
+                    title=f"{stem} {self.FIGURE_TITLES[field]}",
                     coords=sample.arrays["coords_valid"],
                     values=sample.arrays[field],
                     theme=theme,
+                    signed=field in self.SIGNED_FIGURE_FIELDS,
                 )
                 base_path = self.request.outdir / "figures" / field / f"{stem}_{field}"
                 save_plotly_figure(fig, base_path, logger=self.logger)
                 figure_paths.append(str(base_path.with_suffix(".json")))
         return figure_paths
+
+    @classmethod
+    def _figure_fields_for_sample(
+        cls, arrays: dict[str, np.ndarray]
+    ) -> tuple[str, ...]:
+        return tuple(field for field in cls.FIGURE_FIELDS if field in arrays)
+
+    @classmethod
+    def _figure_fields(
+        cls,
+        selected_samples: list[ComplexSelectedSample],
+    ) -> tuple[str, ...]:
+        fields: list[str] = []
+        seen: set[str] = set()
+        for sample in selected_samples:
+            for field in cls._figure_fields_for_sample(sample.arrays):
+                if field not in seen:
+                    fields.append(field)
+                    seen.add(field)
+        return tuple(fields)
+
+    @staticmethod
+    def _has_flux_target_artifacts(
+        selected_samples: list[ComplexSelectedSample],
+    ) -> bool:
+        return any(
+            {"target_phi", "target_psi", "phi_error", "psi_error"}.issubset(
+                sample.arrays
+            )
+            for sample in selected_samples
+        )
 
     @staticmethod
     def _scatter_figure(
@@ -322,7 +425,13 @@ class ComplexCouplingArtifactExporter:
         coords: np.ndarray,
         values: np.ndarray,
         theme: str,
+        signed: bool = False,
     ) -> go.Figure:
+        finite_values = values[np.isfinite(values)]
+        max_abs = float(np.max(np.abs(finite_values))) if finite_values.size else 0.0
+        color_range: dict[str, float] = {}
+        if signed and max_abs > 0.0:
+            color_range = {"cmin": -max_abs, "cmax": max_abs}
         return go.Figure(
             data=go.Scattergl(
                 x=coords[:, 0],
@@ -330,10 +439,11 @@ class ComplexCouplingArtifactExporter:
                 mode="markers",
                 marker={
                     "color": values,
-                    "colorscale": "Viridis",
+                    "colorscale": "RdBu" if signed else "Viridis",
                     "showscale": True,
                     "size": 6,
                     "colorbar": {"exponentformat": "power", "showexponent": "all"},
+                    **color_range,
                 },
             ),
             layout=go.Layout(

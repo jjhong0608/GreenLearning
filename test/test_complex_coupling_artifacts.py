@@ -91,7 +91,31 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_sample_metrics.csv").exists()
     assert (outdir / "data" / "selected_raw_arrays.npz").exists()
-    assert (outdir / "figures" / "phi" / "sample_0000_sample_0000_phi.json").exists()
+    expected_figure_fields = {
+        "rhs",
+        "sol",
+        "u_pred",
+        "u_phi",
+        "u_psi",
+        "u_pred_error",
+        "u_phi_error",
+        "u_psi_error",
+        "u_split_mismatch",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error",
+    }
+    assert set(summary["figure_fields"]) == expected_figure_fields
+    assert summary["error_convention"] == "signed_difference"
+    assert summary["solution_prediction"] == "u_pred=0.5*(u_phi+u_psi)"
+    assert summary["optional_flux_targets_exported"] is True
+    for field in expected_figure_fields:
+        assert (
+            outdir / "figures" / field / f"sample_0000_sample_0000_{field}.json"
+        ).exists()
 
     with (outdir / "metrics" / "per_sample_metrics.csv").open() as fp:
         rows = list(csv.DictReader(fp))
@@ -100,4 +124,28 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
 
     raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
     assert any(key.endswith("_raw_unit_phi") for key in raw.files)
+    for suffix in (
+        "_u_pred",
+        "_u_pred_error",
+        "_u_phi_error",
+        "_u_psi_error",
+        "_u_split_mismatch",
+        "_target_phi",
+        "_target_psi",
+        "_phi_error",
+        "_psi_error",
+    ):
+        assert any(key.endswith(suffix) for key in raw.files)
     assert all("cross" not in key for key in raw.files)
+
+    error_figure = json.loads(
+        (
+            outdir
+            / "figures"
+            / "u_pred_error"
+            / "sample_0000_sample_0000_u_pred_error.json"
+        ).read_text()
+    )
+    marker = error_figure["data"][0]["marker"]
+    assert marker["colorscale"]
+    assert marker["cmin"] == -marker["cmax"]

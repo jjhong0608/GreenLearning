@@ -131,6 +131,16 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
   `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
   key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.
+- `docs/unit_square_vs_complex_geometry.md`는 unit-square core path와 complex
+  geometry path의 canonical 비교 문서이다. 이 문서의 unit-square 설명은 complex
+  extension과 비교하는 데 필요한 GreenNet/CouplingNet core structure만 다루며,
+  complex mode에서 사용하지 않는 unit-square-only auxiliary option을 나열하지 않는
+  writing convention을 유지한다.
+- `docs/unit_square_vs_complex_geometry_math.md`는 코드 surface를 제거한
+  수학적/architecture 중심 비교 문서이다. 이 문서는 branch, trunk, projection,
+  Green reconstruction, domain representation 차이를 설명하는 데 집중하고,
+  config/file/schema/tensor-size contract는 engineering note인
+  `docs/unit_square_vs_complex_geometry.md`에 남긴다.
 - Circular complex geometry generator는 `cli/make_circular_geometry.py`이며
   center `(0, 0)` 고정, radius CLI option default `1.0`, `2 * radius / step_size`
   정수 조건을 사용한다. Grid interval은 `[-radius, radius]`이고, boundary grid point와
@@ -172,6 +182,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - 논문용 데이터 생성 전에 coefficient family, model variant, train/eval split,
   output directory, plot target을 먼저 확정한다.
 - GreenNet 결과는 `rel_green`, `train_rel_sol`, `val_rel_sol`을 함께 본다.
+- Complex GreenTrainer의 새 L-BFGS run은 Adam 단계와 같은 metric token을
+  유지해 `train_rel_sol`, validation이 있으면 `val_rel_sol`, reference가 가능하면
+  `rel_green`을 `training.log`에 기록한다. 과거 complex GreenNet run의 L-BFGS
+  log에는 validation/`rel_green` token이 없을 수 있다.
 - GreenNet 논문용 산출물은 run-level training metrics, per-line metrics,
   selected-line Green kernel data, selected-line coefficient slices,
   source-to-solution reconstruction data를 분리해서 저장하는 방향을 기본으로 한다.
@@ -222,6 +236,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `psi_pred`, signed flux-divergence errors `phi_pred - phi`, `psi_pred - psi`,
   and balance fields `phi + psi`, `f - phi - psi`. Error figures must be signed
   differences, not absolute values.
+- Complex CouplingNet selected-sample artifact figures use valid-point scatter
+  plots on `coords_valid`. The default fields are `rhs`, `sol`,
+  `u_pred=0.5*(u_phi+u_psi)`, `u_phi`, `u_psi`, signed solution errors
+  `u_pred - sol`, `u_phi - sol`, `u_psi - sol`, split mismatch `u_phi - u_psi`,
+  projected physical `phi`/`psi`, and optional target `phi`/`psi` plus signed
+  flux errors when sample flux targets are available. Complex error and mismatch
+  scatter figures use zero-centered diverging colors.
 - CouplingNet selected-sample flux-divergence figures should exclude boundary
   grid values. CouplingNet predictions use zero-padding at boundaries only for
   trapezoid-rule integration compatibility with boundary-zero Green functions;
@@ -263,6 +284,17 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   실패해도 `html`과 `json`은 저장해야 한다.
 - `plot_green_logs.py`도 GreenNet log comparison figures를 `html`, `json`으로
   항상 저장하고, 가능한 경우 `png`, `pdf`도 함께 저장한다.
+- `plot_complex_green_interval_metrics.py`는 complex GreenNet의
+  `per_interval_metrics.csv` 시각화 전용 root-level script이다. pandas로 schema를
+  검증하고 Plotly로 coordinate/length/distribution/chord-map figure를 만들며,
+  `save_plotly_figure`를 통해 `html`, `json`, 가능한 경우 `png`, `pdf`를 함께
+  저장한다.
+- `plot_complex_coupling_sample_metrics.py`는 complex CouplingNet의
+  `test_per_sample_metrics.csv` 시각화 전용 root-level script이다. pandas로
+  sample-level schema를 검증하고 Plotly로 `rel_sol`, `rel_flux`, `loss`, log-loss,
+  relative-metric distribution, `rel_sol`-`rel_flux` scatter, best/worst sample
+  ranking figure를 만든다. CSV의 `rel_sol`/`rel_flux`는 raw fraction으로
+  유지하고, figure에서는 `%` 단위(100배)로 표시한다.
 - `plot_coupling_rel_sol_boxplots.py`는 workshop용 CouplingNet test result CSV
   비교 script이다. `checkpoints/For_Workshop/CouplingNetResults`의 네
   `*_per_sample_metrics.csv` 파일에서 `rel_sol`을 읽고 문제별 Plotly boxplot을

@@ -129,3 +129,61 @@ def test_complex_green_trainer_one_epoch_outputs_safe_metrics(tmp_path):
     assert summary["num_intervals"] == 5
     assert summary["rel_green_valid"] is True
     assert not any("cross" in key for key in summary)
+
+
+def test_complex_green_trainer_lbfgs_logs_validation_and_rel_green(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(
+        _write_reaction_free_coefficients(tmp_path / "coeffs.py")
+    )
+    data = generate_complex_green_data(
+        geometry,
+        coeffs,
+        branch_input_dim=5,
+        samples_per_interval=1,
+        sampler_mode="forward",
+        scale_length=0.1,
+        deterministic=True,
+        integration_rule="trapezoid",
+        dtype=torch.float64,
+    )
+    dataset = ComplexGreenDataset(data)
+    validation_dataset = ComplexGreenDataset(data)
+    model_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        activation="tanh",
+        use_green=False,
+        branch_input_dim=5,
+        dtype=torch.float64,
+    )
+    model = CountingGreenONetModel(model_cfg)
+    trainer = ComplexGreenTrainer(
+        model=model,
+        config=TrainingConfig(
+            epochs=1,
+            batch_size=1,
+            learning_rate=1e-3,
+            log_interval=1,
+            device="cpu",
+            compute_validation_rel_sol=True,
+            integration_rule="trapezoid",
+            compile=CompileConfig(enabled=False),
+            lbfgs_epochs=1,
+            lbfgs_max_iter=1,
+        ),
+        work_dir=tmp_path / "work_lbfgs",
+        model_cfg=model_cfg,
+    )
+
+    trainer.train(dataset, validation_dataset)
+
+    training_log = (tmp_path / "work_lbfgs" / "training.log").read_text()
+    lbfgs_lines = [
+        line for line in training_log.splitlines() if "LBFGS epoch 1 last loss" in line
+    ]
+    assert len(lbfgs_lines) == 1
+    assert "train_rel_sol=" in lbfgs_lines[0]
+    assert "val_rel_sol=" in lbfgs_lines[0]
+    assert "rel_green=" in lbfgs_lines[0]
+    assert "cross" not in training_log
