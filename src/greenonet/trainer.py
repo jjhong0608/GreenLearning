@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, cast
 
@@ -18,19 +19,29 @@ from greenonet.greens import (
     exact_green_kernel_from_coefficients,
     select_green_reference_policy,
 )
+from greenonet.green_quadrature import (
+    poisson_rel_green_by_line_split_gauss_legendre,
+    reconstruct_with_split_gauss_legendre,
+    source_interpolation_energy_rel_error,
+)
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
 
 
-AxialBatch = tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]
+AxialBatch = tuple[torch.Tensor, ...]
+
+
+@dataclass(frozen=True)
+class PreparedAxialBatch:
+    coords: torch.Tensor
+    solution: torch.Tensor
+    source: torch.Tensor
+    source_fine: torch.Tensor | None
+    source_fine_grid: torch.Tensor | None
+    a_val: torch.Tensor
+    ap_val: torch.Tensor
+    b_val: torch.Tensor
+    c_val: torch.Tensor
 
 
 class Trainer(LoggingMixin):
@@ -67,6 +78,227 @@ class Trainer(LoggingMixin):
         self.rel_sol_history: List[float] = []
         self.val_rel_sol_history: List[float] = []
         self.rel_green_history: List[float] = []
+
+    def _green_quadrature_loss_enabled(self) -> bool:
+        cfg = self.config.green_quadrature
+        return bool(cfg.enabled and cfg.apply_to_loss)
+
+    def _green_quadrature_rel_green_enabled(self) -> bool:
+        cfg = self.config.green_quadrature
+        return bool(cfg.enabled and cfg.apply_to_rel_green)
+
+    def _prepare_axial_batch(self, batch: AxialBatch) -> PreparedAxialBatch:
+        if len(batch) == 7:
+            coords, solution, source, a_val, ap_val, b_val, c_val = batch
+            source_fine = None
+            source_fine_grid = None
+        elif len(batch) == 9:
+            (
+                coords,
+                solution,
+                source,
+                source_fine,
+                source_fine_grid,
+                a_val,
+                ap_val,
+                b_val,
+                c_val,
+            ) = batch
+        else:
+            raise ValueError(f"Expected 7 or 9 axial batch fields, got {len(batch)}.")
+        return PreparedAxialBatch(
+            coords=coords.to(self.device),
+            solution=solution.to(self.device),
+            source=source.to(self.device),
+            source_fine=None if source_fine is None else source_fine.to(self.device),
+            source_fine_grid=(
+                None
+                if source_fine_grid is None
+                else source_fine_grid.to(self.device)
+            ),
+            a_val=a_val.to(self.device),
+            ap_val=ap_val.to(self.device),
+            b_val=b_val.to(self.device),
+            c_val=c_val.to(self.device),
+        )
+
+    def _green_reconstruction_loss_for_batch(
+        self,
+        prediction: torch.Tensor | None,
+        source: torch.Tensor,
+        source_fine: torch.Tensor | None,
+        source_fine_grid: torch.Tensor | None,
+        solution: torch.Tensor,
+        coords: torch.Tensor,
+        trunk_grid: torch.Tensor,
+        a_val: torch.Tensor,
+        ap_val: torch.Tensor,
+        b_val: torch.Tensor,
+        c_val: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._green_quadrature_loss_enabled():
+            source_for_quadrature = source_fine if source_fine is not None else source
+            reconstruction = reconstruct_with_split_gauss_legendre(
+                model=self.model,
+                source=source_for_quadrature,
+                coords=coords,
+                a_vals=a_val,
+                ap_vals=ap_val,
+                b_vals=b_val,
+                c_vals=c_val,
+                order=self.config.green_quadrature.order,
+                source_interpolation=self.config.green_quadrature.source_interpolation,
+                source_grid=source_fine_grid,
+            )
+            x = trunk_grid[:, 0, 0]
+            residual = solution - reconstruction
+            residual_energy = integrate(
+                residual.pow(2),
+                x=x,
+                dim=-1,
+                rule=self.config.integration_rule,
+            )
+            solution_energy = integrate(
+                solution.pow(2),
+                x=x,
+                dim=-1,
+                rule=self.config.integration_rule,
+            )
+            relative = torch.sqrt(residual_energy / solution_energy).mean()
+            return residual_energy.mean(), relative
+        if prediction is None:
+            raise ValueError("prediction is required when green_quadrature loss is off.")
+        return self._green_reconstruction_loss(
+            prediction=prediction,
+            source=source,
+            solution=solution,
+            trunk_grid=trunk_grid,
+            integration_rule=self.config.integration_rule,
+        )
+
+    def _green_reconstruction_rel_by_line_for_batch(
+        self,
+        prediction: torch.Tensor | None,
+        source: torch.Tensor,
+        source_fine: torch.Tensor | None,
+        source_fine_grid: torch.Tensor | None,
+        solution: torch.Tensor,
+        coords: torch.Tensor,
+        trunk_grid: torch.Tensor,
+        a_val: torch.Tensor,
+        ap_val: torch.Tensor,
+        b_val: torch.Tensor,
+        c_val: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._green_quadrature_loss_enabled():
+            source_for_quadrature = source_fine if source_fine is not None else source
+            reconstruction = reconstruct_with_split_gauss_legendre(
+                model=self.model,
+                source=source_for_quadrature,
+                coords=coords,
+                a_vals=a_val,
+                ap_vals=ap_val,
+                b_vals=b_val,
+                c_vals=c_val,
+                order=self.config.green_quadrature.order,
+                source_interpolation=self.config.green_quadrature.source_interpolation,
+                source_grid=source_fine_grid,
+            )
+            x = trunk_grid[:, 0, 0]
+            residual = solution - reconstruction
+            residual_energy = integrate(
+                residual.pow(2),
+                x=x,
+                dim=-1,
+                rule=self.config.integration_rule,
+            )
+            solution_energy = integrate(
+                solution.pow(2),
+                x=x,
+                dim=-1,
+                rule=self.config.integration_rule,
+            ).clamp_min(1e-12)
+            return torch.sqrt(residual_energy / solution_energy)
+        if prediction is None:
+            raise ValueError("prediction is required when green_quadrature loss is off.")
+        return self._green_reconstruction_rel_by_line(
+            prediction=prediction,
+            source=source,
+            solution=solution,
+            trunk_grid=trunk_grid,
+            integration_rule=self.config.integration_rule,
+        )
+
+    def _green_kernel_rel_by_line_for_batch(
+        self,
+        prediction: torch.Tensor | None,
+        coords: torch.Tensor,
+        a_val: torch.Tensor,
+        ap_val: torch.Tensor,
+        b_val: torch.Tensor,
+        c_val: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._green_quadrature_rel_green_enabled():
+            del ap_val
+            return poisson_rel_green_by_line_split_gauss_legendre(
+                model=self.model,
+                coords=coords,
+                a_vals=a_val,
+                b_vals=b_val,
+                c_vals=c_val,
+                order=self.config.green_quadrature.order,
+                outer_rule=self.config.integration_rule,
+            )
+        if prediction is None:
+            raise ValueError("prediction is required when green_quadrature rel_green is off.")
+        return self._green_kernel_rel_by_line(
+            prediction=prediction,
+            coords=coords,
+            a_val=a_val,
+            ap_val=ap_val,
+            b_val=b_val,
+            c_val=c_val,
+            integration_rule=self.config.integration_rule,
+        )
+
+    def _green_kernel_error_for_batch(
+        self,
+        prediction: torch.Tensor | None,
+        coords: torch.Tensor,
+        a_val: torch.Tensor,
+        ap_val: torch.Tensor,
+        b_val: torch.Tensor,
+        c_val: torch.Tensor,
+    ) -> torch.Tensor:
+        rel_by_line = self._green_kernel_rel_by_line_for_batch(
+            prediction=prediction,
+            coords=coords,
+            a_val=a_val,
+            ap_val=ap_val,
+            b_val=b_val,
+            c_val=c_val,
+        )
+        return rel_by_line.mean()
+
+    def _source_interpolation_diagnostic(
+        self,
+        source: torch.Tensor,
+        source_fine: torch.Tensor | None,
+        source_fine_grid: torch.Tensor | None,
+        trunk_grid: torch.Tensor,
+    ) -> torch.Tensor | None:
+        cfg = self.config.green_quadrature
+        if not (cfg.enabled and cfg.log_source_interpolation_diagnostic):
+            return None
+        source_for_diagnostic = source_fine if source_fine is not None else source
+        return source_interpolation_energy_rel_error(
+            source=source_for_diagnostic,
+            x_axis=trunk_grid[0, :, 1],
+            order=cfg.order,
+            integration_rule=self.config.integration_rule,
+            source_interpolation=cfg.source_interpolation,
+            source_grid=source_fine_grid,
+        )
 
     @staticmethod
     def _green_reconstruction_loss(
@@ -282,37 +514,38 @@ class Trainer(LoggingMixin):
 
         self.model.eval()
         with torch.no_grad():
-            for (
-                coords,
-                solution,
-                source,
-                a_val,
-                ap_val,
-                b_val,
-                c_val,
-            ) in eval_loader:
-                coords = coords.to(self.device)
-                solution = solution.to(self.device)
-                source = source.to(self.device)
-                a_val = a_val.to(self.device)
-                ap_val = ap_val.to(self.device)
-                b_val = b_val.to(self.device)
-                c_val = c_val.to(self.device)
+            for raw_batch in eval_loader:
+                batch = self._prepare_axial_batch(raw_batch)
+                coords = batch.coords
+                solution = batch.solution
+                source = batch.source
+                a_val = batch.a_val
+                ap_val = batch.ap_val
+                b_val = batch.b_val
+                c_val = batch.c_val
 
                 trunk_grid = self._build_trunk_grid(coords.shape[2])
-                prediction = self.model(
-                    trunk_grid=trunk_grid,
-                    a_vals=a_val,
-                    ap_vals=ap_val,
-                    b_vals=b_val,
-                    c_vals=c_val,
-                )
-                rel_sol_line = self._green_reconstruction_rel_by_line(
+                prediction = None
+                if not self._green_quadrature_loss_enabled():
+                    prediction = self.model(
+                        trunk_grid=trunk_grid,
+                        a_vals=a_val,
+                        ap_vals=ap_val,
+                        b_vals=b_val,
+                        c_vals=c_val,
+                    )
+                rel_sol_line = self._green_reconstruction_rel_by_line_for_batch(
                     prediction=prediction,
                     source=source,
+                    source_fine=batch.source_fine,
+                    source_fine_grid=batch.source_fine_grid,
                     solution=solution,
+                    coords=coords,
                     trunk_grid=trunk_grid,
-                    integration_rule=self.config.integration_rule,
+                    a_val=a_val,
+                    ap_val=ap_val,
+                    b_val=b_val,
+                    c_val=c_val,
                 )
                 rel_sol_cpu = rel_sol_line.detach().cpu().to(torch.float64)
                 rel_sol_batch_sum = rel_sol_cpu.sum(dim=0)
@@ -380,50 +613,53 @@ class Trainer(LoggingMixin):
 
         self.model.eval()
         with torch.no_grad():
-            for (
-                coords,
-                solution,
-                source,
-                a_val,
-                ap_val,
-                b_val,
-                c_val,
-            ) in eval_loader:
-                coords = coords.to(self.device)
-                solution = solution.to(self.device)
-                source = source.to(self.device)
-                a_val = a_val.to(self.device)
-                ap_val = ap_val.to(self.device)
-                b_val = b_val.to(self.device)
-                c_val = c_val.to(self.device)
+            for raw_batch in eval_loader:
+                batch = self._prepare_axial_batch(raw_batch)
+                coords = batch.coords
+                solution = batch.solution
+                source = batch.source
+                a_val = batch.a_val
+                ap_val = batch.ap_val
+                b_val = batch.b_val
+                c_val = batch.c_val
 
                 if line_coords_x is None or line_coords_y is None:
                     line_coords_x = coords[0, :, 0, 1].detach().cpu()
                     line_coords_y = coords[1, :, 0, 0].detach().cpu()
 
                 trunk_grid = self._build_trunk_grid(coords.shape[2])
-                prediction = self.model(
-                    trunk_grid=trunk_grid,
-                    a_vals=a_val,
-                    ap_vals=ap_val,
-                    b_vals=b_val,
-                    c_vals=c_val,
-                )
-                rel_sol_line = self._green_reconstruction_rel_by_line(
+                prediction = None
+                if not (
+                    self._green_quadrature_loss_enabled()
+                    and self._green_quadrature_rel_green_enabled()
+                ):
+                    prediction = self.model(
+                        trunk_grid=trunk_grid,
+                        a_vals=a_val,
+                        ap_vals=ap_val,
+                        b_vals=b_val,
+                        c_vals=c_val,
+                    )
+                rel_sol_line = self._green_reconstruction_rel_by_line_for_batch(
                     prediction=prediction,
                     source=source,
+                    source_fine=batch.source_fine,
+                    source_fine_grid=batch.source_fine_grid,
                     solution=solution,
+                    coords=coords,
                     trunk_grid=trunk_grid,
-                    integration_rule=self.config.integration_rule,
+                    a_val=a_val,
+                    ap_val=ap_val,
+                    b_val=b_val,
+                    c_val=c_val,
                 )  # (B,2,n)
-                rel_green_line = self._green_kernel_rel_by_line(
+                rel_green_line = self._green_kernel_rel_by_line_for_batch(
                     prediction=prediction,
                     coords=coords,
                     a_val=a_val,
                     ap_val=ap_val,
                     b_val=b_val,
                     c_val=c_val,
-                    integration_rule=self.config.integration_rule,
                 )  # (B_or_1,2,n)
 
                 rel_sol_cpu = rel_sol_line.detach().cpu().to(torch.float64)
@@ -694,36 +930,37 @@ class Trainer(LoggingMixin):
         was_training = self.model.training
         self.model.eval()
         with torch.no_grad():
-            for (
-                coords,
-                solution,
-                source,
-                a_val,
-                ap_val,
-                b_val,
-                c_val,
-            ) in loader:
-                coords = coords.to(self.device)
-                solution = solution.to(self.device)
-                source = source.to(self.device)
-                a_val = a_val.to(self.device)
-                ap_val = ap_val.to(self.device)
-                b_val = b_val.to(self.device)
-                c_val = c_val.to(self.device)
+            for raw_batch in loader:
+                batch = self._prepare_axial_batch(raw_batch)
+                coords = batch.coords
+                solution = batch.solution
+                source = batch.source
+                a_val = batch.a_val
+                ap_val = batch.ap_val
+                b_val = batch.b_val
+                c_val = batch.c_val
                 trunk_grid = self._build_trunk_grid(coords.shape[2])
-                prediction = self.model(
-                    trunk_grid=trunk_grid,
-                    a_vals=a_val,
-                    ap_vals=ap_val,
-                    b_vals=b_val,
-                    c_vals=c_val,
-                )
-                rel_line = self._green_reconstruction_rel_by_line(
+                prediction = None
+                if not self._green_quadrature_loss_enabled():
+                    prediction = self.model(
+                        trunk_grid=trunk_grid,
+                        a_vals=a_val,
+                        ap_vals=ap_val,
+                        b_vals=b_val,
+                        c_vals=c_val,
+                    )
+                rel_line = self._green_reconstruction_rel_by_line_for_batch(
                     prediction=prediction,
                     source=source,
+                    source_fine=batch.source_fine,
+                    source_fine_grid=batch.source_fine_grid,
                     solution=solution,
+                    coords=coords,
                     trunk_grid=trunk_grid,
-                    integration_rule=self.config.integration_rule,
+                    a_val=a_val,
+                    ap_val=ap_val,
+                    b_val=b_val,
+                    c_val=c_val,
                 )
                 total += float(rel_line.sum().item())
                 count += int(rel_line.numel())
@@ -747,41 +984,42 @@ class Trainer(LoggingMixin):
         for epoch in range(1, self.config.epochs + 1):
             epoch_losses: List[float] = []
             last_batch = None
-            for (
-                coords,
-                solution,
-                source,
-                a_val,
-                ap_val,
-                b_val,
-                c_val,
-            ) in loader:
+            for raw_batch in loader:
+                batch = self._prepare_axial_batch(raw_batch)
                 # coords: (2, n, m, 2) shared; fields: (B, 2, n, m)
-                coords = coords.to(self.device)
-                solution = solution.to(self.device)
-                source = source.to(self.device)
-                a_val = a_val.to(self.device)
-                ap_val = ap_val.to(self.device)
-                b_val = b_val.to(self.device)
-                c_val = c_val.to(self.device)
+                coords = batch.coords
+                solution = batch.solution
+                source = batch.source
+                a_val = batch.a_val
+                ap_val = batch.ap_val
+                b_val = batch.b_val
+                c_val = batch.c_val
 
                 trunk_grid = self._build_trunk_grid(coords.shape[2])
 
                 optimizer.zero_grad()
-                prediction = self.model(
-                    trunk_grid=trunk_grid,
-                    a_vals=a_val,
-                    ap_vals=ap_val,
-                    b_vals=b_val,
-                    c_vals=c_val,
-                )
+                prediction = None
+                if not self._green_quadrature_loss_enabled():
+                    prediction = self.model(
+                        trunk_grid=trunk_grid,
+                        a_vals=a_val,
+                        ap_vals=ap_val,
+                        b_vals=b_val,
+                        c_vals=c_val,
+                    )
 
-                loss, _ = self._green_reconstruction_loss(
+                loss, _ = self._green_reconstruction_loss_for_batch(
                     prediction=prediction,
                     source=source,
+                    source_fine=batch.source_fine,
+                    source_fine_grid=batch.source_fine_grid,
                     solution=solution,
+                    coords=coords,
                     trunk_grid=trunk_grid,
-                    integration_rule=self.config.integration_rule,
+                    a_val=a_val,
+                    ap_val=ap_val,
+                    b_val=b_val,
+                    c_val=c_val,
                 )
                 cast(Any, loss).backward()
                 optimizer.step()
@@ -791,6 +1029,8 @@ class Trainer(LoggingMixin):
                     coords,
                     solution,
                     source,
+                    batch.source_fine,
+                    batch.source_fine_grid,
                     a_val,
                     ap_val,
                     b_val,
@@ -803,25 +1043,38 @@ class Trainer(LoggingMixin):
 
             # Logging metrics at interval using the last processed batch
             if epoch % self.config.log_interval == 0 and last_batch is not None:
-                coords, solution, source, a_val, ap_val, b_val, c_val, trunk_grid = (
-                    last_batch
-                )
+                (
+                    coords,
+                    solution,
+                    source,
+                    source_fine,
+                    source_fine_grid,
+                    a_val,
+                    ap_val,
+                    b_val,
+                    c_val,
+                    trunk_grid,
+                ) = last_batch
                 with torch.no_grad():
-                    pred_eval = self.model(
-                        trunk_grid=trunk_grid,
-                        a_vals=a_val,
-                        ap_vals=ap_val,
-                        b_vals=b_val,
-                        c_vals=c_val,
-                    )
-                    rel_green = self._green_kernel_error(
+                    pred_eval = None
+                    if not (
+                        self._green_quadrature_loss_enabled()
+                        and self._green_quadrature_rel_green_enabled()
+                    ):
+                        pred_eval = self.model(
+                            trunk_grid=trunk_grid,
+                            a_vals=a_val,
+                            ap_vals=ap_val,
+                            b_vals=b_val,
+                            c_vals=c_val,
+                        )
+                    rel_green = self._green_kernel_error_for_batch(
                         prediction=pred_eval,
                         coords=coords,
                         a_val=a_val,
                         ap_val=ap_val,
                         b_val=b_val,
                         c_val=c_val,
-                        integration_rule=self.config.integration_rule,
                     )
                     if self.config.compute_validation_rel_sol:
                         train_rel_sol = self._dataset_rel_sol(dataset)
@@ -830,32 +1083,57 @@ class Trainer(LoggingMixin):
                         self.rel_sol_history.append(train_rel_sol)
                         self.val_rel_sol_history.append(val_rel_sol)
                     else:
-                        _, rel_sol = self._green_reconstruction_loss(
+                        _, rel_sol = self._green_reconstruction_loss_for_batch(
                             prediction=pred_eval,
                             source=source,
+                            source_fine=source_fine,
+                            source_fine_grid=source_fine_grid,
                             solution=solution,
+                            coords=coords,
                             trunk_grid=trunk_grid,
-                            integration_rule=self.config.integration_rule,
+                            a_val=a_val,
+                            ap_val=ap_val,
+                            b_val=b_val,
+                            c_val=c_val,
                         )
                         self.rel_sol_history.append(float(rel_sol.detach().item()))
                     self.rel_green_history.append(float(rel_green.detach().item()))
+                    source_interp_rel = self._source_interpolation_diagnostic(
+                        source=source,
+                        source_fine=source_fine,
+                        source_fine_grid=source_fine_grid,
+                        trunk_grid=trunk_grid,
+                    )
                 if self.config.compute_validation_rel_sol:
-                    self.logger.info(
-                        "Epoch %s: loss=%.4e | train_rel_sol=%.4e | val_rel_sol=%.4e | rel_green=%.4e",
+                    log_message = (
+                        "Epoch %s: loss=%.4e | train_rel_sol=%.4e | "
+                        "val_rel_sol=%.4e | rel_green=%.4e"
+                    )
+                    log_args: tuple[object, ...] = (
                         epoch,
                         mean_loss,
                         self.rel_sol_history[-1],
                         self.val_rel_sol_history[-1],
                         self.rel_green_history[-1],
                     )
+                    if source_interp_rel is not None:
+                        log_message += " | source_interp_rel_error=%.4e"
+                        log_args = (*log_args, float(source_interp_rel.item()))
+                    self.logger.info(log_message, *log_args)
                 else:
-                    self.logger.info(
-                        "Epoch %s: loss=%.4e | rel_sol=%.4e | rel_green=%.4e",
+                    log_message = (
+                        "Epoch %s: loss=%.4e | rel_sol=%.4e | rel_green=%.4e"
+                    )
+                    log_args = (
                         epoch,
                         mean_loss,
                         self.rel_sol_history[-1],
                         self.rel_green_history[-1],
                     )
+                    if source_interp_rel is not None:
+                        log_message += " | source_interp_rel_error=%.4e"
+                        log_args = (*log_args, float(source_interp_rel.item()))
+                    self.logger.info(log_message, *log_args)
             elif epoch % self.config.log_interval == 0:
                 self.logger.info(f"Epoch {epoch}: loss={mean_loss:.4e}")
 
@@ -881,40 +1159,41 @@ class Trainer(LoggingMixin):
             for lbfgs_epoch in range(1, self.config.lbfgs_epochs + 1):
                 lbfgs_losses: List[float] = []
                 lbfgs_loader = self._make_loader(dataset)
-                for (
-                    coords,
-                    solution,
-                    source,
-                    a_val,
-                    ap_val,
-                    b_val,
-                    c_val,
-                ) in lbfgs_loader:
-                    coords = coords.to(self.device)
-                    solution = solution.to(self.device)
-                    source = source.to(self.device)
-                    a_val = a_val.to(self.device)
-                    ap_val = ap_val.to(self.device)
-                    b_val = b_val.to(self.device)
-                    c_val = c_val.to(self.device)
+                for raw_batch in lbfgs_loader:
+                    batch = self._prepare_axial_batch(raw_batch)
+                    coords = batch.coords
+                    solution = batch.solution
+                    source = batch.source
+                    a_val = batch.a_val
+                    ap_val = batch.ap_val
+                    b_val = batch.b_val
+                    c_val = batch.c_val
 
                     trunk_grid = self._build_trunk_grid(coords.shape[2])
 
                     def closure() -> torch.Tensor:
                         lbfgs_optimizer.zero_grad()
-                        prediction = self.model(
-                            trunk_grid=trunk_grid,
-                            a_vals=a_val,
-                            ap_vals=ap_val,
-                            b_vals=b_val,
-                            c_vals=c_val,
-                        )
-                        loss, _ = self._green_reconstruction_loss(
+                        prediction = None
+                        if not self._green_quadrature_loss_enabled():
+                            prediction = self.model(
+                                trunk_grid=trunk_grid,
+                                a_vals=a_val,
+                                ap_vals=ap_val,
+                                b_vals=b_val,
+                                c_vals=c_val,
+                            )
+                        loss, _ = self._green_reconstruction_loss_for_batch(
                             prediction=prediction,
                             source=source,
+                            source_fine=batch.source_fine,
+                            source_fine_grid=batch.source_fine_grid,
                             solution=solution,
+                            coords=coords,
                             trunk_grid=trunk_grid,
-                            integration_rule=self.config.integration_rule,
+                            a_val=a_val,
+                            ap_val=ap_val,
+                            b_val=b_val,
+                            c_val=c_val,
                         )
                         cast(Any, loss).backward()
                         return loss
@@ -927,21 +1206,25 @@ class Trainer(LoggingMixin):
                     self.loss_history.append(last_lbfgs)
                     # evaluate rel errors on last batch
                     with torch.no_grad():
-                        pred_eval = self.model(
-                            trunk_grid=trunk_grid,
-                            a_vals=a_val,
-                            ap_vals=ap_val,
-                            b_vals=b_val,
-                            c_vals=c_val,
-                        )
-                        rel_green = self._green_kernel_error(
+                        pred_eval = None
+                        if not (
+                            self._green_quadrature_loss_enabled()
+                            and self._green_quadrature_rel_green_enabled()
+                        ):
+                            pred_eval = self.model(
+                                trunk_grid=trunk_grid,
+                                a_vals=a_val,
+                                ap_vals=ap_val,
+                                b_vals=b_val,
+                                c_vals=c_val,
+                            )
+                        rel_green = self._green_kernel_error_for_batch(
                             prediction=pred_eval,
                             coords=coords,
                             a_val=a_val,
                             ap_val=ap_val,
                             b_val=b_val,
                             c_val=c_val,
-                            integration_rule=self.config.integration_rule,
                         )
                         if self.config.compute_validation_rel_sol:
                             train_rel_sol = self._dataset_rel_sol(dataset)
@@ -950,32 +1233,64 @@ class Trainer(LoggingMixin):
                             self.rel_sol_history.append(train_rel_sol)
                             self.val_rel_sol_history.append(val_rel_sol)
                         else:
-                            _, rel_sol = self._green_reconstruction_loss(
+                            _, rel_sol = self._green_reconstruction_loss_for_batch(
                                 prediction=pred_eval,
                                 source=source,
+                                source_fine=batch.source_fine,
+                                source_fine_grid=batch.source_fine_grid,
                                 solution=solution,
+                                coords=coords,
                                 trunk_grid=trunk_grid,
-                                integration_rule=self.config.integration_rule,
+                                a_val=a_val,
+                                ap_val=ap_val,
+                                b_val=b_val,
+                                c_val=c_val,
                             )
                             self.rel_sol_history.append(float(rel_sol.detach().item()))
                         self.rel_green_history.append(float(rel_green.detach().item()))
+                        source_interp_rel = self._source_interpolation_diagnostic(
+                            source=source,
+                            source_fine=batch.source_fine,
+                            source_fine_grid=batch.source_fine_grid,
+                            trunk_grid=trunk_grid,
+                        )
                     if self.config.compute_validation_rel_sol:
-                        self.logger.info(
-                            "LBFGS epoch %s last loss: %.4e | train_rel_sol=%.4e | val_rel_sol=%.4e | rel_green=%.4e",
+                        log_message = (
+                            "LBFGS epoch %s last loss: %.4e | train_rel_sol=%.4e | "
+                            "val_rel_sol=%.4e | rel_green=%.4e"
+                        )
+                        lbfgs_log_args: tuple[object, ...] = (
                             lbfgs_epoch,
                             last_lbfgs,
                             self.rel_sol_history[-1],
                             self.val_rel_sol_history[-1],
                             self.rel_green_history[-1],
                         )
+                        if source_interp_rel is not None:
+                            log_message += " | source_interp_rel_error=%.4e"
+                            lbfgs_log_args = (
+                                *lbfgs_log_args,
+                                float(source_interp_rel.item()),
+                            )
+                        self.logger.info(log_message, *lbfgs_log_args)
                     else:
-                        self.logger.info(
-                            "LBFGS epoch %s last loss: %.4e | rel_sol=%.4e | rel_green=%.4e",
+                        log_message = (
+                            "LBFGS epoch %s last loss: %.4e | "
+                            "rel_sol=%.4e | rel_green=%.4e"
+                        )
+                        lbfgs_log_args = (
                             lbfgs_epoch,
                             last_lbfgs,
                             self.rel_sol_history[-1],
                             self.rel_green_history[-1],
                         )
+                        if source_interp_rel is not None:
+                            log_message += " | source_interp_rel_error=%.4e"
+                            lbfgs_log_args = (
+                                *lbfgs_log_args,
+                                float(source_interp_rel.item()),
+                            )
+                        self.logger.info(log_message, *lbfgs_log_args)
 
         if self.loss_history:
             LossVisualizer.save_loss_curve(
@@ -1005,12 +1320,12 @@ class Trainer(LoggingMixin):
             # Plot a Green heatmap using the last batch from the last epoch
             try:
                 sample = next(iter(loader))
-                coords, solution, source, a_val, ap_val, b_val, c_val = sample
-                coords = coords.to(self.device)
-                a_val = a_val.to(self.device)
-                ap_val = ap_val.to(self.device)
-                b_val = b_val.to(self.device)
-                c_val = c_val.to(self.device)
+                batch = self._prepare_axial_batch(sample)
+                coords = batch.coords
+                a_val = batch.a_val
+                ap_val = batch.ap_val
+                b_val = batch.b_val
+                c_val = batch.c_val
                 trunk_grid = self._build_trunk_grid(coords.shape[2])
                 GreenVisualizer.save_green_heatmap(
                     model=self.model,
@@ -1039,36 +1354,37 @@ class Trainer(LoggingMixin):
         loader = self._make_eval_loader(dataset)
         losses: List[float] = []
         with torch.no_grad():
-            for (
-                coords,
-                solution,
-                source,
-                a_val,
-                ap_val,
-                b_val,
-                c_val,
-            ) in loader:
-                coords = coords.to(self.device)
-                solution = solution.to(self.device)
-                source = source.to(self.device)
-                a_val = a_val.to(self.device)
-                ap_val = ap_val.to(self.device)
-                b_val = b_val.to(self.device)
-                c_val = c_val.to(self.device)
+            for raw_batch in loader:
+                batch = self._prepare_axial_batch(raw_batch)
+                coords = batch.coords
+                solution = batch.solution
+                source = batch.source
+                a_val = batch.a_val
+                ap_val = batch.ap_val
+                b_val = batch.b_val
+                c_val = batch.c_val
                 trunk_grid = self._build_trunk_grid(coords.shape[2])
-                prediction = self.model(
-                    trunk_grid=trunk_grid,
-                    a_vals=a_val,
-                    ap_vals=ap_val,
-                    b_vals=b_val,
-                    c_vals=c_val,
-                )
-                loss, _ = self._green_reconstruction_loss(
+                prediction = None
+                if not self._green_quadrature_loss_enabled():
+                    prediction = self.model(
+                        trunk_grid=trunk_grid,
+                        a_vals=a_val,
+                        ap_vals=ap_val,
+                        b_vals=b_val,
+                        c_vals=c_val,
+                    )
+                loss, _ = self._green_reconstruction_loss_for_batch(
                     prediction=prediction,
                     source=source,
+                    source_fine=batch.source_fine,
+                    source_fine_grid=batch.source_fine_grid,
                     solution=solution,
+                    coords=coords,
                     trunk_grid=trunk_grid,
-                    integration_rule=self.config.integration_rule,
+                    a_val=a_val,
+                    ap_val=ap_val,
+                    b_val=b_val,
+                    c_val=c_val,
                 )
                 losses.append(loss.item())
         return float(sum(losses) / max(len(losses), 1))

@@ -6,7 +6,7 @@ import torch
 
 from greenonet.axial import make_square_axial_lines
 from greenonet.backward_sampler import BackwardSampler
-from greenonet.config import CompileConfig, TrainingConfig
+from greenonet.config import CompileConfig, GreenQuadratureConfig, TrainingConfig
 from greenonet.runner import run_green_o_net
 from greenonet.sampler import ForwardSampler, TrainingData
 
@@ -83,6 +83,75 @@ class TestForwardSampler:
 
 
 class TestRunGreenONet:
+    def test_passes_green_source_sampling_factor_to_sampler(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        captured = {}
+
+        def fake_generate_dataset(self, **kwargs):
+            del kwargs
+            captured["source_sampling_factor"] = self.source_sampling_factor
+
+            n_lines = len(self.axial_lines.xaxial_lines)
+            x_coords = self.axial_lines.xaxial_lines[0].x_coordinates
+            y_coords = self.axial_lines.yaxial_lines[0].y_coordinates
+            m_points = x_coords.numel()
+            coords_x = torch.stack(
+                [line.coordinates for line in self.axial_lines.xaxial_lines], dim=0
+            )
+            coords_y = torch.stack(
+                [line.coordinates for line in self.axial_lines.yaxial_lines], dim=0
+            )
+            coords = torch.stack((coords_x, coords_y), dim=0)
+            zeros = torch.zeros((1, 2, n_lines, m_points), dtype=torch.float64)
+            return TrainingData(
+                X=x_coords,
+                Y=y_coords,
+                U=zeros,
+                F=zeros,
+                A=zeros,
+                AP=zeros,
+                B=zeros,
+                C=zeros,
+                COORDS=coords,
+            )
+
+        def fake_train(self, dataset, validation_dataset=None):
+            del self, dataset, validation_dataset
+            return None
+
+        monkeypatch.setattr(ForwardSampler, "generate_dataset", fake_generate_dataset)
+        monkeypatch.setattr("greenonet.trainer.Trainer.train", fake_train)
+
+        run_green_o_net(
+            a_fun=a_fun,
+            apx_fun=apx_fun,
+            apy_fun=apy_fun,
+            activation="tanh",
+            work_dir=tmp_path / "run_source_sampling",
+            ndata=1,
+            seed=0,
+            scale_length=0.1,
+            use_operator_learning=True,
+            deterministic=True,
+            training_cfg=TrainingConfig(
+                epochs=1,
+                log_interval=1,
+                green_quadrature=GreenQuadratureConfig(
+                    source_sampling={
+                        "enabled": True,
+                        "factor": 3,
+                    }
+                ),
+            ),
+        )
+
+        assert captured["source_sampling_factor"] == 3
+        logging.getLogger("GreenONetRunner").handlers.clear()
+        logging.getLogger("Trainer").handlers.clear()
+
     def test_passes_b_c_functions(self, tmp_path: Path, monkeypatch) -> None:
         captured = {}
 

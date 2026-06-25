@@ -1,11 +1,15 @@
 import pytest
 import torch
 
+from greenonet.config import ModelConfig
+from greenonet.green_quadrature import poisson_rel_green_by_line_split_gauss_legendre
 from greenonet.greens import (
+    EllipticGreenFunction,
     ExactGreenFunction,
     exact_green_kernel_from_coefficients,
     select_green_reference_policy,
 )
+from greenonet.model import GreenONetModel
 from greenonet.trainer import Trainer
 
 
@@ -209,3 +213,76 @@ def test_trainer_rel_green_returns_nan_for_reaction_reference_gap() -> None:
 
     assert torch.isnan(rel_by_line).all()
     assert torch.isnan(rel_scalar)
+
+
+def test_green_model_evaluate_pairs_matches_square_forward() -> None:
+    x = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    trunk_grid = torch.stack(torch.meshgrid(x, x, indexing="ij"), dim=-1)
+    coeffs = torch.ones((2, 1, x.numel()), dtype=torch.float64)
+    zeros = torch.zeros_like(coeffs)
+    model = GreenONetModel(
+        ModelConfig(
+            input_dim=2,
+            hidden_dim=4,
+            depth=1,
+            activation="tanh",
+            use_green=True,
+            branch_input_dim=x.numel(),
+            dtype=torch.float64,
+        )
+    )
+
+    square = model(
+        trunk_grid=trunk_grid,
+        a_vals=coeffs,
+        ap_vals=zeros,
+        b_vals=zeros,
+        c_vals=zeros,
+    )
+    pairs = model.evaluate_pairs(
+        pair_coords=trunk_grid,
+        a_vals=coeffs,
+        ap_vals=zeros,
+        b_vals=zeros,
+        c_vals=zeros,
+        x_indices=torch.arange(x.numel()),
+    )
+
+    assert torch.allclose(pairs, square, atol=1e-12, rtol=1e-12)
+
+
+class _ExactPoissonPairModel(torch.nn.Module):
+    def evaluate_pairs(
+        self,
+        pair_coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        x_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        del ap_vals, b_vals, c_vals, x_indices
+        axes, n_lines = a_vals.shape[:2]
+        exact = EllipticGreenFunction()(pair_coords).squeeze(-1)
+        return exact.unsqueeze(0).unsqueeze(0).expand(axes, n_lines, *exact.shape)
+
+
+def test_split_gauss_legendre_rel_green_is_zero_for_exact_poisson_model() -> None:
+    x = torch.linspace(0.0, 1.0, steps=5, dtype=torch.float64)
+    coords = _coords(x)
+    a_vals = torch.ones((2, 1, x.numel()), dtype=torch.float64)
+    b_vals = torch.zeros_like(a_vals)
+    c_vals = torch.zeros_like(a_vals)
+
+    rel = poisson_rel_green_by_line_split_gauss_legendre(
+        model=_ExactPoissonPairModel(),
+        coords=coords,
+        a_vals=a_vals,
+        b_vals=b_vals,
+        c_vals=c_vals,
+        order=8,
+        outer_rule="trapezoid",
+    )
+
+    assert rel.shape == (1, 2, 1)
+    assert torch.allclose(rel, torch.zeros_like(rel), atol=1e-12, rtol=1e-12)

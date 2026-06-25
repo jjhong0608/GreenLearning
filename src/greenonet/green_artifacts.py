@@ -24,6 +24,11 @@ from greenonet.greens import (
     exact_green_kernel_from_coefficients,
     select_green_reference_policy,
 )
+from greenonet.green_quadrature import (
+    green_quadrature_summary,
+    poisson_rel_green_by_line_split_gauss_legendre,
+    reconstruct_with_split_gauss_legendre,
+)
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.numerics import IntegrationRule, integrate
@@ -212,6 +217,14 @@ class GreenArtifactExporter:
         coords = dataset.coords.to(device)
         solution = dataset.solutions.to(device)
         source = dataset.sources.to(device)
+        source_fine = (
+            None if dataset.sources_fine is None else dataset.sources_fine.to(device)
+        )
+        source_fine_grid = (
+            None
+            if dataset.source_fine_grid is None
+            else dataset.source_fine_grid.to(device)
+        )
         a_vals_all = dataset.a_vals.to(device)
         ap_vals_all = dataset.ap_vals.to(device)
         b_vals_all = dataset.b_vals.to(device)
@@ -237,12 +250,32 @@ class GreenArtifactExporter:
                     c_vals=c_vals,
                 ),
             )
-            reconstruction = self._reconstruct_solution(
-                kernel=kernel,
-                source=source,
-                trunk_grid=trunk_grid,
-                integration_rule=training_cfg.integration_rule,
-            )
+            if (
+                training_cfg.green_quadrature.enabled
+                and training_cfg.green_quadrature.apply_to_loss
+            ):
+                source_for_quadrature = source_fine if source_fine is not None else source
+                reconstruction = reconstruct_with_split_gauss_legendre(
+                    model=model,
+                    source=source_for_quadrature,
+                    coords=coords,
+                    a_vals=a_vals,
+                    ap_vals=ap_vals,
+                    b_vals=b_vals,
+                    c_vals=c_vals,
+                    order=training_cfg.green_quadrature.order,
+                    source_interpolation=(
+                        training_cfg.green_quadrature.source_interpolation
+                    ),
+                    source_grid=source_fine_grid,
+                )
+            else:
+                reconstruction = self._reconstruct_solution(
+                    kernel=kernel,
+                    source=source,
+                    trunk_grid=trunk_grid,
+                    integration_rule=training_cfg.integration_rule,
+                )
             rel_sol_by_line = self._relative_solution_error_by_line(
                 reconstruction=reconstruction,
                 solution=solution,
@@ -268,12 +301,26 @@ class GreenArtifactExporter:
                 b_vals=b_vals,
                 reference=rel_green_reference,
             )
-            rel_green_by_line = self._relative_green_error_by_line(
-                prediction=kernel,
-                exact_kernel=exact_kernel,
-                x_axis=trunk_grid[:, 0, 0],
-                integration_rule=training_cfg.integration_rule,
-            )
+            if (
+                training_cfg.green_quadrature.enabled
+                and training_cfg.green_quadrature.apply_to_rel_green
+            ):
+                rel_green_by_line = poisson_rel_green_by_line_split_gauss_legendre(
+                    model=model,
+                    coords=coords,
+                    a_vals=a_vals,
+                    b_vals=b_vals,
+                    c_vals=c_vals,
+                    order=training_cfg.green_quadrature.order,
+                    outer_rule=training_cfg.integration_rule,
+                ).squeeze(0)
+            else:
+                rel_green_by_line = self._relative_green_error_by_line(
+                    prediction=kernel,
+                    exact_kernel=exact_kernel,
+                    x_axis=trunk_grid[:, 0, 0],
+                    integration_rule=training_cfg.integration_rule,
+                )
 
         selected_lines = self._select_line_indices(
             n_lines=int(coords.shape[1]),
@@ -345,6 +392,18 @@ class GreenArtifactExporter:
             "device": str(device),
             "theme": self.request.theme,
             "integration_rule": training_cfg.integration_rule,
+            "green_quadrature": green_quadrature_summary(
+                training_cfg.green_quadrature
+            ),
+            "source_sampling": {
+                "enabled": source_fine is not None,
+                "factor": int(training_cfg.green_quadrature.source_sampling.factor),
+                "m_fine": (
+                    None
+                    if source_fine_grid is None
+                    else int(source_fine_grid.numel())
+                ),
+            },
             "eval_seed": self.request.eval_seed,
             "eval_split": self.request.eval_split,
             "eval_sampling": _jsonify(asdict(sampling_cfg)),
@@ -462,6 +521,11 @@ class GreenArtifactExporter:
             deterministic=dataset_cfg.deterministic,
             integration_rule=training_cfg.integration_rule,
             dtype=dataset_cfg.dtype,
+            source_sampling_factor=(
+                training_cfg.green_quadrature.source_sampling.factor
+                if training_cfg.green_quadrature.source_sampling.enabled
+                else 1
+            ),
         )
         data = sampler.generate_dataset(
             a_fun=coeffs.a_fun,
@@ -1192,15 +1256,23 @@ class GreenArtifactExporter:
     ) -> None:
         data_dir = self.request.outdir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
+        generated_payload = {
+            "coords": _tensor_to_numpy(dataset.coords),
+            "solution": _tensor_to_numpy(dataset.solutions),
+            "source": _tensor_to_numpy(dataset.sources),
+            "a_vals": _tensor_to_numpy(dataset.a_vals),
+            "ap_vals": _tensor_to_numpy(dataset.ap_vals),
+            "b_vals": _tensor_to_numpy(dataset.b_vals),
+            "c_vals": _tensor_to_numpy(dataset.c_vals),
+        }
+        if dataset.sources_fine is not None and dataset.source_fine_grid is not None:
+            generated_payload["source_fine"] = _tensor_to_numpy(dataset.sources_fine)
+            generated_payload["source_fine_grid"] = _tensor_to_numpy(
+                dataset.source_fine_grid
+            )
         np.savez_compressed(
             data_dir / "generated_eval_data.npz",
-            coords=_tensor_to_numpy(dataset.coords),
-            solution=_tensor_to_numpy(dataset.solutions),
-            source=_tensor_to_numpy(dataset.sources),
-            a_vals=_tensor_to_numpy(dataset.a_vals),
-            ap_vals=_tensor_to_numpy(dataset.ap_vals),
-            b_vals=_tensor_to_numpy(dataset.b_vals),
-            c_vals=_tensor_to_numpy(dataset.c_vals),
+            **cast(Any, generated_payload),
         )
 
         selected_pairs = [

@@ -101,12 +101,17 @@ class GreenONetRunner(LoggingMixin):
             sampler_scale_length: float | tuple[float, float],
         ) -> ForwardSampler | BackwardSampler:
             sampler_cls = resolve_sampler_cls(mode)
+            source_sampling = cfg_training.green_quadrature.source_sampling
+            source_sampling_factor = (
+                source_sampling.factor if source_sampling.enabled else 1
+            )
             return sampler_cls(
                 axial_lines=axial_lines,
                 data_size_per_each_line=sample_count,
                 scale_length=sampler_scale_length,
                 deterministic=deterministic,
                 integration_rule=cfg_training.integration_rule,
+                source_sampling_factor=source_sampling_factor,
             )
 
         sampler = make_sampler(sampler_mode, ndata, scale_length)

@@ -17,14 +17,14 @@
     "sampler_mode": "backward",
     "use_operator_learning": true,
     "dtype": "float64",
-    "coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion2.py"
+    "coefficient_functions_path": "coefficients/Pure_Poisson.py"
   },
   "terminal": {
     "width": 250
   },
   "model": {
     "input_dim": 2,
-    "hidden_dim": 256,
+    "hidden_dim": 128,
     "depth": 4,
     "activation": "rational",
     "use_bias": true,
@@ -32,7 +32,7 @@
     "use_green": true,
     "branch_input_dim": 129,
     "use_fourier": true,
-    "fourier_dim": 64,
+    "fourier_dim": 32,
     "dtype": "float64"
   },
   "training": {
@@ -48,6 +48,19 @@
     "lbfgs_tolerance_grad": 1e-20,
     "lbfgs_epochs": 100,
     "integration_rule": "trapezoid",
+    "green_quadrature": {
+      "enabled": true,
+      "rule": "split_gauss_legendre",
+      "order": 32,
+      "source_interpolation": "cubic",
+      "apply_to_loss": true,
+      "apply_to_rel_green": true,
+      "log_source_interpolation_diagnostic": true,
+      "source_sampling": {
+        "enabled": true,
+        "factor": 4
+      }
+    },
     "compile": {
       "enabled": true
     }

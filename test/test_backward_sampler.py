@@ -1,4 +1,5 @@
 import torch
+from torch import Tensor
 
 from greenonet.axial import make_square_axial_lines
 from greenonet.backward_sampler import BackwardSampler
@@ -39,6 +40,67 @@ class TestBackwardSampler:
         assert torch.isfinite(data.F).all()
         assert data.U[..., 0].abs().max().item() < 1e-6
         assert data.U[..., -1].abs().max().item() < 1e-6
+
+    def test_fine_source_uses_fine_bvp_grid_and_coarse_solution_output(
+        self,
+        monkeypatch,
+    ) -> None:
+        factor = 2
+        lines = make_square_axial_lines(step_size=0.5, n_points_per_line=5)
+        sampler = BackwardSampler(
+            axial_lines=lines,
+            data_size_per_each_line=1,
+            scale_length=0.1,
+            deterministic=True,
+            source_sampling_factor=factor,
+        )
+        captured: list[tuple[int, int]] = []
+
+        def fake_solve_bvp_line(
+            self: BackwardSampler,
+            x: Tensor,
+            f: Tensor,
+            a_val: Tensor,
+            ap_val: Tensor,
+            b_val: Tensor,
+            c_val: Tensor,
+            output_x: Tensor | None = None,
+        ) -> Tensor:
+            del self, f, a_val, ap_val, b_val, c_val
+            if output_x is None:
+                output_x = x
+            captured.append((int(x.numel()), int(output_x.numel())))
+            return output_x * (1.0 - output_x)
+
+        monkeypatch.setattr(
+            BackwardSampler,
+            "_solve_bvp_line",
+            fake_solve_bvp_line,
+        )
+
+        def a_fun(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return torch.ones_like(x + y)
+
+        def zero_fun(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return torch.zeros_like(x + y)
+
+        torch.manual_seed(0)
+        data = sampler.generate_dataset(
+            a_fun=a_fun,
+            ap_fun=zero_fun,
+            b_fun=zero_fun,
+            c_fun=zero_fun,
+        )
+
+        assert data.F_FINE is not None
+        assert data.F_FINE_GRID is not None
+        assert data.F_FINE.shape[-1] == factor * (data.F.shape[-1] - 1) + 1
+        assert captured
+        assert all(fine_points == data.F_FINE.shape[-1] for fine_points, _ in captured)
+        assert all(coarse_points == data.F.shape[-1] for _, coarse_points in captured)
+        assert torch.isfinite(data.U).all()
+        assert torch.isfinite(data.F).all()
+        assert torch.isfinite(data.F_FINE).all()
 
     def test_solve_bvp_line_matches_analytic_solution(self) -> None:
         lines = make_square_axial_lines(step_size=0.5, n_points_per_line=21)

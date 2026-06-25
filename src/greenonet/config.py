@@ -292,6 +292,125 @@ class CompileConfig:
 
 
 @dataclass
+class GreenSourceSamplingConfig:
+    """Optional fine source sampling for GreenNet split quadrature."""
+
+    enabled: bool = False
+    factor: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError(
+                "green_quadrature.source_sampling.enabled must be a boolean."
+            )
+        if not isinstance(self.factor, int) or isinstance(self.factor, bool):
+            raise TypeError(
+                "green_quadrature.source_sampling.factor must be an integer."
+            )
+        if self.factor < 1:
+            raise ValueError("green_quadrature.source_sampling.factor must be positive.")
+        if self.enabled and self.factor <= 1:
+            raise ValueError(
+                "green_quadrature.source_sampling.factor must be > 1 when enabled."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: GreenSourceSamplingConfig | dict[str, Any] | None,
+    ) -> GreenSourceSamplingConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "factor"})
+            if unknown:
+                raise TypeError(
+                    "green_quadrature.source_sampling has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("green_quadrature.source_sampling must be an object.")
+
+
+@dataclass
+class GreenQuadratureConfig:
+    """GreenNet-only high-order quadrature settings."""
+
+    enabled: bool = False
+    rule: Literal["split_gauss_legendre"] = "split_gauss_legendre"
+    order: int = 16
+    source_interpolation: Literal["linear", "cubic"] = "linear"
+    apply_to_loss: bool = True
+    apply_to_rel_green: bool = True
+    log_source_interpolation_diagnostic: bool = True
+    source_sampling: GreenSourceSamplingConfig = field(
+        default_factory=GreenSourceSamplingConfig
+    )
+
+    def __post_init__(self) -> None:
+        self.source_sampling = GreenSourceSamplingConfig.from_raw(
+            self.source_sampling
+        )
+        if not isinstance(self.enabled, bool):
+            raise TypeError("green_quadrature.enabled must be a boolean.")
+        if self.rule != "split_gauss_legendre":
+            raise ValueError(
+                "green_quadrature.rule must be 'split_gauss_legendre'."
+            )
+        if not isinstance(self.order, int) or isinstance(self.order, bool):
+            raise TypeError("green_quadrature.order must be an integer.")
+        if self.order <= 0:
+            raise ValueError("green_quadrature.order must be positive.")
+        if self.source_interpolation not in {"linear", "cubic"}:
+            raise ValueError(
+                "green_quadrature.source_interpolation must be 'linear' or 'cubic'."
+            )
+        if not isinstance(self.apply_to_loss, bool):
+            raise TypeError("green_quadrature.apply_to_loss must be a boolean.")
+        if not isinstance(self.apply_to_rel_green, bool):
+            raise TypeError("green_quadrature.apply_to_rel_green must be a boolean.")
+        if not isinstance(self.log_source_interpolation_diagnostic, bool):
+            raise TypeError(
+                "green_quadrature.log_source_interpolation_diagnostic must be a boolean."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: GreenQuadratureConfig | dict[str, Any] | None,
+    ) -> GreenQuadratureConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "rule",
+                    "order",
+                    "source_interpolation",
+                    "apply_to_loss",
+                    "apply_to_rel_green",
+                    "log_source_interpolation_diagnostic",
+                    "source_sampling",
+                }
+            )
+            if unknown:
+                raise TypeError(
+                    "green_quadrature has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("green_quadrature must be an object.")
+
+
+@dataclass
 class CouplingLossTermConfig:
     """Single CouplingNet loss toggle and weight."""
 
@@ -377,12 +496,16 @@ class TrainingConfig:
     device: str = "cpu"
     compute_validation_rel_sol: bool = False
     integration_rule: IntegrationRule = "simpson"
+    green_quadrature: GreenQuadratureConfig = field(default_factory=GreenQuadratureConfig)
     compile: CompileConfig = field(default_factory=CompileConfig)
     lbfgs_max_iter: int = 0
     lbfgs_history_size: int = 10
     lbfgs_lr: float = 1.0
     lbfgs_tolerance_grad: float = 1e-7
     lbfgs_epochs: int = 1
+
+    def __post_init__(self) -> None:
+        self.green_quadrature = GreenQuadratureConfig.from_raw(self.green_quadrature)
 
 
 @dataclass

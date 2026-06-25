@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from greenonet.config import CouplingBranchFusionConfig, CouplingModelConfig
+from greenonet.config import (
+    CouplingBranchFusionConfig,
+    CouplingModelConfig,
+    GreenQuadratureConfig,
+)
 from greenonet.model import GreenONetModel
 from cli.eval_coupling import EvalCouplingCLI
 from cli.train import TrainCLI
@@ -201,6 +205,19 @@ class TestTrainCLIDatasetConfig:
             "model": {},
             "training": {
                 "integration_rule": "trapezoid",
+                "green_quadrature": {
+                    "enabled": True,
+                    "rule": "split_gauss_legendre",
+                    "order": 8,
+                    "source_interpolation": "cubic",
+                    "apply_to_loss": True,
+                    "apply_to_rel_green": False,
+                    "log_source_interpolation_diagnostic": True,
+                    "source_sampling": {
+                        "enabled": True,
+                        "factor": 4,
+                    },
+                },
                 "compile": {
                     "enabled": True,
                 },
@@ -263,6 +280,17 @@ class TestTrainCLIDatasetConfig:
         ) = TrainCLI()._build_configs(config_path)
 
         assert training_cfg.integration_rule == "trapezoid"
+        assert training_cfg.green_quadrature.enabled is True
+        assert training_cfg.green_quadrature.rule == "split_gauss_legendre"
+        assert training_cfg.green_quadrature.order == 8
+        assert training_cfg.green_quadrature.source_interpolation == "cubic"
+        assert training_cfg.green_quadrature.apply_to_loss is True
+        assert training_cfg.green_quadrature.apply_to_rel_green is False
+        assert (
+            training_cfg.green_quadrature.log_source_interpolation_diagnostic is True
+        )
+        assert training_cfg.green_quadrature.source_sampling.enabled is True
+        assert training_cfg.green_quadrature.source_sampling.factor == 4
         assert training_cfg.compile.enabled is True
         assert coupling_training_cfg.integration_rule == "trapezoid"
         assert coupling_training_cfg.losses.l2_consistency.enabled is True
@@ -313,6 +341,25 @@ class TestTrainCLIDatasetConfig:
         assert not hasattr(coupling_model_cfg, "fourier_dim")
         assert not hasattr(coupling_model_cfg, "fourier_scale")
         assert not hasattr(coupling_model_cfg, "fourier_include_input")
+
+    def test_green_quadrature_invalid_source_interpolation_raises(self):
+        with pytest.raises(ValueError):
+            GreenQuadratureConfig(source_interpolation="nearest")  # type: ignore[arg-type]
+
+    def test_green_quadrature_source_sampling_defaults(self):
+        cfg = GreenQuadratureConfig()
+
+        assert cfg.source_sampling.enabled is False
+        assert cfg.source_sampling.factor == 1
+
+    def test_green_quadrature_source_sampling_invalid_factor_raises(self):
+        with pytest.raises(ValueError, match="factor must be > 1"):
+            GreenQuadratureConfig(
+                source_sampling={
+                    "enabled": True,
+                    "factor": 1,
+                }
+            )
 
     def test_parses_balance_projection_object_config(self, tmp_path):
         config_path = tmp_path / "config.json"

@@ -23,6 +23,7 @@ def _write_config(
     path: Path,
     coefficient_path: Path | None = None,
     training_device: str = "cpu",
+    green_quadrature: dict[str, object] | None = None,
 ) -> None:
     dataset: dict[str, object] = {
         "step_size": 0.5,
@@ -70,6 +71,8 @@ def _write_config(
             "coupling_pretrained_path": None,
         },
     }
+    if green_quadrature is not None:
+        payload["training"]["green_quadrature"] = green_quadrature
     path.write_text(json.dumps(payload))
 
 
@@ -191,6 +194,72 @@ def test_export_green_artifacts_seed_reproduces_generated_eval_data(
     data_b = np.load(tmp_path / "run_b" / "data" / "generated_eval_data.npz")
     np.testing.assert_allclose(data_a["source"], data_b["source"])
     np.testing.assert_allclose(data_a["solution"], data_b["solution"])
+
+
+def test_export_green_artifacts_records_green_quadrature_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    checkpoint_path = tmp_path / "green.safetensors"
+    config_path = tmp_path / "config.json"
+    outdir = tmp_path / "artifacts"
+    _write_checkpoint(checkpoint_path)
+    _write_config(
+        config_path,
+        green_quadrature={
+            "enabled": True,
+            "rule": "split_gauss_legendre",
+            "order": 4,
+            "source_interpolation": "cubic",
+            "apply_to_loss": True,
+            "apply_to_rel_green": True,
+            "log_source_interpolation_diagnostic": False,
+            "source_sampling": {
+                "enabled": True,
+                "factor": 2,
+            },
+        },
+    )
+
+    summary = export_green_artifacts(
+        GreenArtifactRequest(
+            checkpoint=checkpoint_path,
+            config=config_path,
+            outdir=outdir,
+            eval_seed=7,
+            line_indices=(0,),
+            xi_fractions=(0.5,),
+            theme="plotly_white",
+        )
+    )
+
+    assert summary["green_quadrature"] == {
+        "enabled": True,
+        "rule": "split_gauss_legendre",
+        "order": 4,
+        "source_interpolation": "cubic",
+        "apply_to_loss": True,
+        "apply_to_rel_green": True,
+        "log_source_interpolation_diagnostic": False,
+        "source_sampling": {
+            "enabled": True,
+            "factor": 2,
+        },
+    }
+    assert summary["source_sampling"] == {
+        "enabled": True,
+        "factor": 2,
+        "m_fine": 9,
+    }
+    saved_summary = json.loads((outdir / "summary.json").read_text())
+    assert saved_summary["green_quadrature"]["order"] == 4
+    assert saved_summary["source_sampling"]["m_fine"] == 9
+    generated = np.load(outdir / "data" / "generated_eval_data.npz")
+    assert "source_fine" in generated
+    assert "source_fine_grid" in generated
+    assert generated["source_fine"].shape[-1] == 9
+    assert generated["source_fine_grid"].shape == (9,)
 
 
 def test_export_green_artifacts_device_override_beats_config(

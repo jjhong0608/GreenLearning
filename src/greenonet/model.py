@@ -299,6 +299,93 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMix
             + a_recip * green_b
         )
 
+    def _apply_analytic_green_wrap_pairs(
+        self,
+        pair_coords: torch.Tensor,
+        learned_output: torch.Tensor,
+        a_used: torch.Tensor,
+        ap_used: torch.Tensor,
+        b_used: torch.Tensor,
+        x_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        ap_used = torch.where(ap_used.abs() < 1e-15, torch.zeros_like(ap_used), ap_used)
+        x_indices = x_indices.to(device=a_used.device, dtype=torch.long)
+        a_x = a_used.index_select(-1, x_indices).unsqueeze(-1).expand_as(
+            learned_output
+        )
+        ap_x = ap_used.index_select(-1, x_indices).unsqueeze(-1).expand_as(
+            learned_output
+        )
+        b_x = b_used.index_select(-1, x_indices).unsqueeze(-1).expand_as(
+            learned_output
+        )
+
+        envelope = self._envelope(pair_coords).squeeze(-1)
+        remain = self._remain(pair_coords).squeeze(-1)
+        bias_term = self._bias_term(pair_coords).squeeze(-1)
+        green_term = cast(torch.Tensor, self.green(pair_coords)).squeeze(-1)
+        igreen_term = cast(torch.Tensor, self.igreen(pair_coords)).squeeze(-1)
+
+        envelope_b = envelope.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        remain_b = remain.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        bias_term_b = bias_term.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        green_b = green_term.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+        igreen_b = igreen_term.unsqueeze(0).unsqueeze(0).expand_as(learned_output)
+
+        a_recip = 1.0 / (a_x + self.EPS)
+        b_coeff = (ap_x + b_x) * a_recip.pow(2)
+        return (
+            envelope_b * remain_b * learned_output
+            + b_coeff * (igreen_b + envelope_b * bias_term_b)
+            + a_recip * green_b
+        )
+
+    def evaluate_pairs(
+        self,
+        pair_coords: torch.Tensor,
+        a_vals: torch.Tensor,
+        ap_vals: torch.Tensor,
+        b_vals: torch.Tensor,
+        c_vals: torch.Tensor,
+        x_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """Evaluate the Green kernel on arbitrary ``(x, xi)`` coordinate pairs."""
+        if pair_coords.shape[-1] != 2:
+            raise ValueError("pair_coords must have final dimension 2.")
+        if a_vals.dim() == 4:
+            _, n_axis, n_lines, _ = a_vals.shape
+            a_used = a_vals[0]
+            ap_used = ap_vals[0]
+            b_used = b_vals[0]
+            c_used = c_vals[0]
+        elif a_vals.dim() == 3:
+            n_axis, n_lines, _ = a_vals.shape
+            a_used = a_vals
+            ap_used = ap_vals
+            b_used = b_vals
+            c_used = c_vals
+        else:
+            raise ValueError("a_vals must be 3D or 4D")
+
+        pair_shape = pair_coords.shape[:-1]
+        trunk_flat = pair_coords.reshape(-1, 2)
+        trunk_flat = self._build_trunk_inputs(trunk_flat)
+        trunk_out = cast(torch.Tensor, self.trunk(trunk_flat))
+
+        branch_feat = self._fuse_branch_features(a_used, ap_used, b_used, c_used)
+        core = branch_feat @ trunk_out.T
+        output = core.view(n_axis, n_lines, *pair_shape) + self.output_bias
+        if not self.use_green:
+            return output
+        return self._apply_analytic_green_wrap_pairs(
+            pair_coords=pair_coords,
+            learned_output=output,
+            a_used=a_used,
+            ap_used=ap_used,
+            b_used=b_used,
+            x_indices=x_indices,
+        )
+
     def forward(
         self,
         trunk_grid: torch.Tensor,

@@ -63,6 +63,83 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Green accuracy가 좋아도 solution reconstruction이 나쁠 수 있다. 이런 경우
   kernel 사용 경로, coefficient alignment, axis convention, normalization,
   quadrature/integration path를 우선 의심한다.
+- 현재 numerical integration rule은 `trapezoid`, `simpson` 중심이며, 수치 적분
+  오차를 줄이기 위한 새 `adaptive Gaussian quadrature` rule 추가를 검토한다.
+- 고차 정확도 수치적분의 우선 적용 대상은 CouplingNet이 아니라 GreenNet이다.
+  특히 Poisson GreenNet에서 exact/reference Green function과 predicted Green
+  kernel 사이의 `rel_green` error가 적분 구간 폭을 줄일수록 함께 줄어드는 현상을
+  보고, model error와 quadrature error를 분리하기 위해 Green kernel error 계산의
+  수치적분 오차를 줄이는 것이 목표이다. GreenNet training loss도 Green kernel을
+  source와 적분해 solution reconstruction error를 계산하므로 같은 quadrature error를
+  포함할 수 있고, 새 고차 적분 rule은 GreenNet loss 계산에도 적용 대상으로 본다.
+- GreenNet용 Romberg 후보는 Green kernel의 diagonal kink를 고려해 `xi = x`에서
+  적분 구간을 나누는 `split Romberg`를 우선 논의한다. 단순 whole-interval
+  Romberg는 Richardson extrapolation의 smoothness 가정이 diagonal kink에서 약해질
+  수 있다.
+- 전역 Romberg를 129 grid points(`2^7 + 1`)에서 쓰면 absolute quadrature error가
+  반드시 크게 폭발한다고 보기는 어렵지만, coarse Romberg levels에서 diagonal kink가
+  grid node와 정렬되지 않는 `x_i`가 많아 고차 수렴 이득이 약해질 수 있다. 따라서
+  model error가 이미 작다면 129 points에서도 quadrature error floor가 관찰될 수 있다.
+- `split_gauss_legendre`는 adaptive Gaussian보다 계산 비용과 batching 리스크가 낮은
+  GreenNet loss용 고차 적분 후보로 검토한다. `xi = x`에서 구간을 나누고 각 smooth
+  subinterval에 fixed Gauss-Legendre nodes/weights를 적용하는 deterministic rule이다.
+- `split_gauss_legendre` 적용 방향은 먼저 source-free `rel_green` 고정밀 diagnostic에
+  적용하고, 이후 GreenNet training loss에는 기존 GP sampled source grid를 Gaussian
+  nodes로 보간하는 source interpolation 기반으로 시도한다. Source interpolation error는
+  별도 diagnostic으로 분리해 확인해야 한다.
+- GreenNet `split_gauss_legendre` 구현은 `training.green_quadrature` config로
+  제어한다. 기본값은 `enabled=false`이며, `rule="split_gauss_legendre"`를 사용한다.
+  `source_interpolation` 기본값은 재현성을 위해 `"linear"`이고, 명시적 실험 옵션으로
+  natural cubic spline인 `"cubic"`도 지원한다. `apply_to_loss=true`이면 Gaussian
+  node에서 GreenNet을 직접 평가하고 source grid를 선택된 interpolation method로
+  보간해 reconstruction loss를 계산한다. `apply_to_rel_green=true`이면 Poisson
+  constant-coefficient source-free diagnostic에서 Gaussian node의 predicted/exact
+  Green kernel을 비교한다. `source_interp_rel_error`는 interpolation diagnostic
+  logging key이다. Cubic source interpolation은 `rel_green` path가 아니라 GreenNet
+  reconstruction loss/artifact reconstruction의 `f_grid -> f(xi_q)` 보간 path에만
+  직접 영향을 준다.
+- `split_gauss_legendre`의 `xi` 방향 적분 정확도는 Gaussian node에서 integrand를
+  직접 평가할 수 있는 source-free `rel_green`에서는 기존 `xi` grid 간격에 직접
+  묶이지 않고, quadrature order와 split 구간 내 smoothness가 지배한다. 하지만
+  GreenNet reconstruction loss에서는 source `f`가 grid sample로만 주어져 Gaussian
+  node source 값을 보간하므로 source interpolation error는 여전히 grid 간격과
+  interpolation method에 의존한다. 또한 현재 v1은 바깥 `x` 방향 residual/norm 적분은
+  기존 sampled grid와 `training.integration_rule`을 사용하므로 그 부분도 grid 간격의
+  영향을 받는다.
+- `split_gauss_legendre` node 위치는 같은 physical evaluation point `x_i`와 같은
+  quadrature `order`에 대해서는 grid spacing과 무관하게 동일하다. 표준
+  Gauss-Legendre nodes를 `[0, x_i]`, `[x_i, 1]`로 affine mapping하기 때문이다.
+  단, `x_i = xi` diagonal point 자체는 Gaussian node가 아니라 split interval boundary이며,
+  Gauss-Legendre rule은 endpoint를 평가하지 않는다. Grid를 refine하면 새 `x_i`가
+  추가되어 그 새 point들에 대한 node set이 추가되는 것이고, 기존과 같은 physical
+  `x_i`의 node set은 바뀌지 않는다.
+- GreenNet reconstruction에서 source interpolation error를 더 줄이려면 GP/source
+  sampling grid만 더 fine하게 두는 방향도 가능하다. 다만 현재 `ForwardSampler`는
+  source, solution, coefficient grid가 같은 line grid에 묶여 있고 RBF centers/alpha도
+  `x.size(0)`에 의존하므로, 단순히 source grid만 키우면 같은 realization의 더 촘촘한
+  평가가 아니라 다른 realization이 될 수 있다. 올바른 구현은 latent RBF/GP realization을
+  먼저 고정하고 coarse solution grid와 fine source/quad grid에서 같은 realization을
+  평가하거나, quadrature node의 source 값을 직접 생성/저장하는 방식이어야 한다.
+- Fine source grid 방식은 `TrainingData`/`AxialDataset`에 coarse `F`와 별도 fine
+  source tensor/grid를 추가하고, GreenNet `split_gauss_legendre` reconstruction path가
+  fine source에서 Gaussian node 값을 보간하게 하는 방향이 안전하다. `ForwardSampler`는
+  같은 RBF mixture와 같은 normalization scale을 coarse/fine grid에서 평가해야 한다.
+  `BackwardSampler`는 target solution과 RHS 일관성을 위해 fine RHS representation으로
+  BVP를 solve하거나, coarse RHS target과 fine RHS loss가 서로 다른 문제가 되지 않도록
+  정책을 고정해야 한다.
+- GreenNet fine source grid는 `training.green_quadrature.source_sampling`으로
+  제어한다. 기본값은 `{"enabled": false, "factor": 1}`이고, 켜는 경우
+  `factor > 1`이어야 하며 `m_fine = factor * (m - 1) + 1`이다. `TrainingData`는
+  optional `F_FINE`, `F_FINE_GRID`를 갖고, `AxialDataset`은 fine source가 없으면
+  legacy 7-field batch, 있으면
+  `coords, solution, source, source_fine, source_fine_grid, a, ap, b, c`의 9-field
+  batch를 반환한다. `ForwardSampler`와 `BackwardSampler`는 같은 latent RBF
+  realization을 coarse/fine grid에서 평가하고 같은 coarse-solution normalization
+  scale을 사용한다. `BackwardSampler`는 fine source가 켜지면 fine RHS/coefficient
+  grid로 BVP를 solve하고 coarse grid에서 target solution을 저장한다. GreenNet
+  `split_gauss_legendre` reconstruction loss와 artifact reconstruction은 fine
+  source가 있으면 그 grid에서 `linear` 또는 `cubic` interpolation을 수행하고,
+  source-free `rel_green` path는 fine source를 사용하지 않는다.
 - Convection-diffusion 문제에서 `bx_fun`은 x-direction line/operator에,
   `by_fun`은 y-direction line/operator에 들어간다.
 
