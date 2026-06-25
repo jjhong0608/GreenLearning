@@ -40,6 +40,12 @@ class ComplexSelectedSample:
 class ComplexCouplingArtifactExporter:
     """Export complex-geometry CouplingNet metrics, raw archives, and scatter plots."""
 
+    COLOR_RANGE_POLICY: ClassVar[str] = "shared_reference_prediction_groups"
+    COLOR_RANGE_GROUPS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "solution": ("sol", "u_pred", "u_phi", "u_psi"),
+        "phi": ("target_phi", "phi"),
+        "psi": ("target_psi", "psi"),
+    }
     FIGURE_FIELDS: ClassVar[tuple[str, ...]] = (
         "rhs",
         "sol",
@@ -159,6 +165,10 @@ class ComplexCouplingArtifactExporter:
             "figure_fields": list(figure_fields),
             "error_convention": "signed_difference",
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
+            "non_error_color_range_policy": self.COLOR_RANGE_POLICY,
+            "non_error_color_range_groups": {
+                name: list(fields) for name, fields in self.COLOR_RANGE_GROUPS.items()
+            },
             "optional_flux_targets_exported": self._has_flux_target_artifacts(
                 selected_samples
             ),
@@ -374,6 +384,7 @@ class ComplexCouplingArtifactExporter:
         figure_paths: list[str] = []
         for sample in selected_samples:
             stem = f"sample_{sample.sample_id:04d}_{sample.file_stem}"
+            color_ranges = self._color_ranges_for_sample(sample.arrays)
             for field in self._figure_fields_for_sample(sample.arrays):
                 fig = self._scatter_figure(
                     title=f"{stem} {self.FIGURE_TITLES[field]}",
@@ -381,11 +392,48 @@ class ComplexCouplingArtifactExporter:
                     values=sample.arrays[field],
                     theme=theme,
                     signed=field in self.SIGNED_FIGURE_FIELDS,
+                    color_range=color_ranges.get(field),
                 )
                 base_path = self.request.outdir / "figures" / field / f"{stem}_{field}"
                 save_plotly_figure(fig, base_path, logger=self.logger)
                 figure_paths.append(str(base_path.with_suffix(".json")))
         return figure_paths
+
+    @classmethod
+    def _color_ranges_for_sample(
+        cls,
+        arrays: dict[str, np.ndarray],
+    ) -> dict[str, dict[str, float]]:
+        ranges: dict[str, dict[str, float]] = {}
+        for fields in cls.COLOR_RANGE_GROUPS.values():
+            color_range = cls._shared_color_range(arrays, fields)
+            if not color_range:
+                continue
+            for field in fields:
+                if field in arrays:
+                    ranges[field] = color_range
+        return ranges
+
+    @staticmethod
+    def _shared_color_range(
+        arrays: dict[str, np.ndarray],
+        fields: tuple[str, ...],
+    ) -> dict[str, float]:
+        finite_values: list[np.ndarray] = []
+        for field in fields:
+            if field not in arrays:
+                continue
+            values = np.asarray(arrays[field])
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                finite_values.append(finite)
+        if not finite_values:
+            return {}
+        joined = np.concatenate(finite_values)
+        return {
+            "cmin": float(np.min(joined)),
+            "cmax": float(np.max(joined)),
+        }
 
     @classmethod
     def _figure_fields_for_sample(
@@ -426,12 +474,13 @@ class ComplexCouplingArtifactExporter:
         values: np.ndarray,
         theme: str,
         signed: bool = False,
+        color_range: dict[str, float] | None = None,
     ) -> go.Figure:
         finite_values = values[np.isfinite(values)]
         max_abs = float(np.max(np.abs(finite_values))) if finite_values.size else 0.0
-        color_range: dict[str, float] = {}
+        marker_color_range: dict[str, float] = dict(color_range or {})
         if signed and max_abs > 0.0:
-            color_range = {"cmin": -max_abs, "cmax": max_abs}
+            marker_color_range = {"cmin": -max_abs, "cmax": max_abs}
         return go.Figure(
             data=go.Scattergl(
                 x=coords[:, 0],
@@ -443,7 +492,7 @@ class ComplexCouplingArtifactExporter:
                     "showscale": True,
                     "size": 6,
                     "colorbar": {"exponentformat": "power", "showexponent": "all"},
-                    **color_range,
+                    **marker_color_range,
                 },
             ),
             layout=go.Layout(

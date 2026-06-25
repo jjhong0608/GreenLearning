@@ -6,6 +6,7 @@ import plotly.io as pio
 
 from plot_coupling_logs import (
     LOG_Y_FLOOR,
+    main,
     make_fig_loss,
     make_fig_metric,
     parse_log,
@@ -81,6 +82,94 @@ def test_parse_log_current_coupling_format_with_train_and_val_loss(
     assert metrics["energy_cons_val"] == [2.7298e-02, 2.7019e-02]
     assert metrics["rel_flux_train"] == [2.8326e-01, 2.8305e-01]
     assert metrics["rel_sol_val"] == [3.8722e-01, 3.8492e-01]
+
+
+def test_parse_log_complex_coupling_format_pairs_separate_train_val(
+    tmp_path: Path,
+) -> None:
+    lines = ["maybe_compile_model - Compiling ComplexCouplingNet with torch.compile"]
+    for epoch in range(1, 4001):
+        train_loss = 1.0 / epoch
+        val_loss = 1.5 / epoch
+        lines.extend(
+            [
+                (
+                    f"_log_epoch - epoch {epoch:04d} train loss={train_loss:.6e} "
+                    f"loss_energy_consistency={train_loss:.6e} "
+                    f"rel_sol={2.0 / epoch:.6e} rel_flux={3.0 / epoch:.6e}"
+                ),
+                (
+                    f"_log_epoch - epoch {epoch:04d} val loss={val_loss:.6e} "
+                    f"loss_energy_consistency={val_loss:.6e} "
+                    f"rel_sol={2.5 / epoch:.6e} rel_flux={3.5 / epoch:.6e}"
+                ),
+            ]
+        )
+    path = tmp_path / "training.log"
+    path.write_text("\n".join(lines))
+
+    metrics = parse_log(path)
+
+    assert len(metrics["epoch"]) == 4000
+    assert metrics["epoch"][:3] == [1.0, 2.0, 3.0]
+    assert metrics["epoch"][-1] == 4000.0
+    assert metrics["loss_train"][0] == 1.0
+    assert math.isclose(metrics["loss_val"][-1], 1.5 / 4000)
+    assert metrics["energy_cons_train"] == metrics["loss_train"]
+    assert metrics["energy_cons_val"] == metrics["loss_val"]
+    assert math.isclose(metrics["rel_sol_val"][-1], 2.5 / 4000)
+    assert math.isclose(metrics["rel_flux_train"][-1], 3.0 / 4000)
+    assert all(math.isnan(value) for value in metrics["l2_cons_train"])
+    assert all(math.isnan(value) for value in metrics["l2_cons_val"])
+    assert not any("cross" in key for key in metrics)
+
+
+def test_main_skips_l2_figure_when_complex_log_has_no_l2(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    path = tmp_path / "training.log"
+    path.write_text(
+        "\n".join(
+            [
+                (
+                    "_log_epoch - epoch 0001 train loss=1.000000e-02 "
+                    "loss_energy_consistency=1.000000e-02 "
+                    "rel_sol=2.000000e-01 rel_flux=3.000000e-01"
+                ),
+                (
+                    "_log_epoch - epoch 0001 val loss=1.500000e-02 "
+                    "loss_energy_consistency=1.500000e-02 "
+                    "rel_sol=2.500000e-01 rel_flux=3.500000e-01"
+                ),
+            ]
+        )
+    )
+    saved: list[str] = []
+
+    def fake_save_fig(fig: go.Figure, base_path: Path) -> None:
+        del fig
+        saved.append(base_path.name)
+
+    monkeypatch.setattr("plot_coupling_logs.save_fig", fake_save_fig)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "plot_coupling_logs.py",
+            "--logs",
+            str(path),
+            "--labels",
+            "complex",
+            "--outdir",
+            str(tmp_path / "figures"),
+        ],
+    )
+
+    main()
+
+    assert saved == ["loss", "energy_consistency", "rel_flux", "rel_sol"]
+    assert "skipping l2_consistency" in capsys.readouterr().out
 
 
 def test_coupling_figures_apply_plotly_theme() -> None:

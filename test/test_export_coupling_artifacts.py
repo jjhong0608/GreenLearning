@@ -101,6 +101,11 @@ def _write_checkpoints(tmp_path: Path) -> tuple[Path, Path]:
     return coupling_path, green_path
 
 
+def _heatmap_for_path(path: Path) -> dict:
+    figure = json.loads(path.read_text())
+    return figure["data"][0]
+
+
 def _write_config(
     path: Path,
     *,
@@ -352,3 +357,65 @@ def test_export_coupling_artifacts_smoke(
     assert saved_summary["selected_sample_policy"] == "rel_sol_quantiles"
     assert saved_summary["source_grid_policy"] == ["npz_rhs_resampled_to_model_grid"]
     assert saved_summary["coefficients"] == str(coefficient_path)
+    assert (
+        saved_summary["non_error_color_range_policy"]
+        == "shared_reference_prediction_groups"
+    )
+    assert saved_summary["non_error_color_range_groups"]["solution"] == [
+        "u",
+        "u_pred",
+        "u_pred_x",
+        "u_pred_y",
+    ]
+
+    solution_ranges = {
+        (
+            _heatmap_for_path(
+                outdir / "figures" / "solution" / f"sample_0000_sample_{field}.json"
+            )["zmin"],
+            _heatmap_for_path(
+                outdir / "figures" / "solution" / f"sample_0000_sample_{field}.json"
+            )["zmax"],
+        )
+        for field in ("u", "u_pred", "u_pred_x", "u_pred_y")
+    }
+    assert len(solution_ranges) == 1
+
+    phi_range = (
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_phi.json"
+        )["zmin"],
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_phi.json"
+        )["zmax"],
+    )
+    assert phi_range == (
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_phi_pred.json"
+        )["zmin"],
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_phi_pred.json"
+        )["zmax"],
+    )
+    psi_range = (
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_psi.json"
+        )["zmin"],
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_psi.json"
+        )["zmax"],
+    )
+    assert psi_range == (
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_psi_pred.json"
+        )["zmin"],
+        _heatmap_for_path(
+            outdir / "figures" / "phi_psi" / "sample_0000_sample_psi_pred.json"
+        )["zmax"],
+    )
+
+    error_heatmap = _heatmap_for_path(
+        outdir / "figures" / "solution" / "sample_0000_sample_u_error.json"
+    )
+    assert error_heatmap["colorscale"]
+    assert error_heatmap["zmin"] == -error_heatmap["zmax"]

@@ -236,13 +236,19 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `psi_pred`, signed flux-divergence errors `phi_pred - phi`, `psi_pred - psi`,
   and balance fields `phi + psi`, `f - phi - psi`. Error figures must be signed
   differences, not absolute values.
+- CouplingNet selected-sample non-error comparison figures use shared color ranges
+  within each selected sample for reference/prediction groups. Unit-square groups
+  are `u/u_pred/u_pred_x/u_pred_y`, `phi/phi_pred`, and `psi/psi_pred`.
 - Complex CouplingNet selected-sample artifact figures use valid-point scatter
   plots on `coords_valid`. The default fields are `rhs`, `sol`,
   `u_pred=0.5*(u_phi+u_psi)`, `u_phi`, `u_psi`, signed solution errors
   `u_pred - sol`, `u_phi - sol`, `u_psi - sol`, split mismatch `u_phi - u_psi`,
   projected physical `phi`/`psi`, and optional target `phi`/`psi` plus signed
   flux errors when sample flux targets are available. Complex error and mismatch
-  scatter figures use zero-centered diverging colors.
+  scatter figures use zero-centered diverging colors. Complex non-error comparison
+  groups are `sol/u_pred/u_phi/u_psi`, `target_phi/phi`, and `target_psi/psi`
+  when flux targets exist; `rhs` and target-free flux diagnostics keep independent
+  ranges.
 - CouplingNet selected-sample flux-divergence figures should exclude boundary
   grid values. CouplingNet predictions use zero-padding at boundaries only for
   trapezoid-rule integration compatibility with boundary-zero Green functions;
@@ -266,6 +272,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - `plot_coupling_logs.py`는 paper-facing run-level curve 전용으로 유지한다. 출력은
   `loss`, `l2_consistency`, `energy_consistency`, `rel_flux`, `rel_sol` 5개만 생성하며,
   optional auxiliary loss curve는 debug용 `plot_logs.py`에서 다룬다.
+- `plot_coupling_logs.py`는 complex CouplingNet의 `_log_epoch - epoch ... train/val ...`
+  별도 줄 형식을 지원한다. Complex log는 `loss_energy_consistency`, `rel_sol`,
+  `rel_flux`를 기록하고 cross metric을 남기지 않으므로, `loss_energy_consistency`는
+  `energy_consistency` curve로 그리며 값이 없는 `l2_consistency` figure는 건너뛴다.
 - `plot_coupling_logs.py`는 `--show-annotations` 옵션을 켜면 각 train/val trace의
   마지막 값과 최소값을 표시한다. 기본값은 꺼짐으로 유지한다. 값 표시는
   실제 curve point에 연결된 Plotly annotation으로 두고, last/min 위치에는 작은

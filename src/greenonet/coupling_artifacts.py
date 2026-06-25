@@ -6,7 +6,7 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence, cast
+from typing import Any, ClassVar, Sequence, cast
 
 import numpy as np
 import plotly.graph_objects as go
@@ -287,6 +287,13 @@ def load_coupling_artifact_configs(config_path: Path) -> CouplingArtifactConfigs
 class CouplingArtifactExporter:
     """Export paper-facing CouplingNet metrics and selected sample figures."""
 
+    COLOR_RANGE_POLICY: ClassVar[str] = "shared_reference_prediction_groups"
+    COLOR_RANGE_GROUPS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "solution": ("u", "u_pred", "u_pred_x", "u_pred_y"),
+        "phi": ("phi", "phi_pred"),
+        "psi": ("psi", "psi_pred"),
+    }
+
     def __init__(
         self,
         request: CouplingArtifactRequest,
@@ -425,6 +432,10 @@ class CouplingArtifactExporter:
             "source_grid_policy": sorted(source_policies),
             "figures": figure_paths,
             "aggregate_metrics": aggregate,
+            "non_error_color_range_policy": self.COLOR_RANGE_POLICY,
+            "non_error_color_range_groups": {
+                name: list(fields) for name, fields in self.COLOR_RANGE_GROUPS.items()
+            },
             "balance_projection": _jsonify(asdict(balance_projection)),
             "losses": _jsonify(asdict(configs.coupling_training.losses)),
             "coupling_model": _jsonify(asdict(configs.coupling_model)),
@@ -874,11 +885,19 @@ class CouplingArtifactExporter:
         theme: str,
         *,
         signed: bool = False,
+        color_range: dict[str, float] | None = None,
     ) -> go.Figure:
         z = grid.detach().cpu().numpy()
         z_abs = float(np.nanmax(np.abs(z))) if np.isfinite(z).any() else 0.0
-        zmin = -z_abs if signed and z_abs > 0.0 else None
-        zmax = z_abs if signed and z_abs > 0.0 else None
+        if signed and z_abs > 0.0:
+            zmin: float | None = -z_abs
+            zmax: float | None = z_abs
+        elif color_range is not None:
+            zmin = color_range["zmin"]
+            zmax = color_range["zmax"]
+        else:
+            zmin = None
+            zmax = None
         return go.Figure(
             data=go.Heatmap(
                 z=z,
@@ -919,6 +938,7 @@ class CouplingArtifactExporter:
     def _write_sample_figures(self, evaluation: SampleEvaluation) -> list[str]:
         stem = f"sample_{evaluation.sample_id:04d}_{evaluation.file_stem}"
         written: list[str] = []
+        color_ranges = self._heatmap_color_ranges(evaluation)
         figure_specs: list[tuple[str, str, Tensor, str, bool, bool]] = [
             ("solution", "f", evaluation.source_grid, "Source f", False, False),
             (
@@ -1040,7 +1060,13 @@ class CouplingArtifactExporter:
             plot_grid = self._interior_grid(grid) if crop_boundary else grid
             base_path = self.request.outdir / "figures" / directory / f"{stem}_{name}"
             save_plotly_figure(
-                self._heatmap(title, plot_grid, self.request.theme, signed=signed),
+                self._heatmap(
+                    title,
+                    plot_grid,
+                    self.request.theme,
+                    signed=signed,
+                    color_range=color_ranges.get(name),
+                ),
                 base_path,
                 logger=self.logger,
             )
@@ -1057,6 +1083,49 @@ class CouplingArtifactExporter:
             )
             written.append(str(base_path.with_suffix(".html")))
         return written
+
+    def _heatmap_color_ranges(
+        self,
+        evaluation: SampleEvaluation,
+    ) -> dict[str, dict[str, float]]:
+        groups: dict[str, Sequence[Tensor]] = {
+            "solution": [
+                evaluation.solution_grids[field]
+                for field in self.COLOR_RANGE_GROUPS["solution"]
+            ],
+            "phi": [
+                self._interior_grid(evaluation.flux_grids[field])
+                for field in self.COLOR_RANGE_GROUPS["phi"]
+            ],
+            "psi": [
+                self._interior_grid(evaluation.flux_grids[field])
+                for field in self.COLOR_RANGE_GROUPS["psi"]
+            ],
+        }
+        ranges: dict[str, dict[str, float]] = {}
+        for group_name, grids in groups.items():
+            color_range = self._shared_heatmap_range(grids)
+            if not color_range:
+                continue
+            for field in self.COLOR_RANGE_GROUPS[group_name]:
+                ranges[field] = color_range
+        return ranges
+
+    @staticmethod
+    def _shared_heatmap_range(grids: Sequence[Tensor]) -> dict[str, float]:
+        finite_values: list[Tensor] = []
+        for grid in grids:
+            values = grid.detach()
+            finite = values[torch.isfinite(values)]
+            if finite.numel() > 0:
+                finite_values.append(finite)
+        if not finite_values:
+            return {}
+        joined = torch.cat(finite_values)
+        return {
+            "zmin": float(joined.min().item()),
+            "zmax": float(joined.max().item()),
+        }
 
     def _ensure_output_tree(self) -> None:
         for directory in (

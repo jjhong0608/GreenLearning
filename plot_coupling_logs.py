@@ -21,6 +21,38 @@ def _parse_float(value: str | None, default: float = float("nan")) -> float:
     return float(value)
 
 
+def _empty_entry(raw_epoch: float) -> Dict[str, float]:
+    return {
+        "raw_epoch": raw_epoch,
+        "loss_train": float("nan"),
+        "loss_val": float("nan"),
+        "l2_cons_train": float("nan"),
+        "energy_cons_train": float("nan"),
+        "rel_flux_train": float("nan"),
+        "rel_sol_train": float("nan"),
+        "l2_cons_val": float("nan"),
+        "energy_cons_val": float("nan"),
+        "rel_flux_val": float("nan"),
+        "rel_sol_val": float("nan"),
+    }
+
+
+def _set_complex_split(
+    entry: Dict[str, float],
+    split: str,
+    *,
+    loss: float,
+    energy_consistency: float,
+    rel_sol: float,
+    rel_flux: float,
+) -> None:
+    suffix = "train" if split == "train" else "val"
+    entry[f"loss_{suffix}"] = loss
+    entry[f"energy_cons_{suffix}"] = energy_consistency
+    entry[f"rel_sol_{suffix}"] = rel_sol
+    entry[f"rel_flux_{suffix}"] = rel_flux
+
+
 def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
     pattern_current = re.compile(
         rf"epoch\s+(?P<epoch>\d+).*?\|\s*train\s+loss=(?P<loss_tr>{VALUE_RE})"
@@ -65,7 +97,16 @@ def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
         rf"[^|]*?rel_sol=(?P<rsol_val>{VALUE_RE}))?",
         re.IGNORECASE,
     )
+    pattern_complex = re.compile(
+        rf"_log_epoch\s+-\s+epoch\s+(?P<epoch>\d+)\s+"
+        rf"(?P<split>train|val)\s+loss=(?P<loss>{VALUE_RE})"
+        rf"\s+loss_energy_consistency=(?P<energy_cons>{VALUE_RE})"
+        rf"\s+rel_sol=(?P<rsol>{VALUE_RE})"
+        rf"\s+rel_flux=(?P<rflux>{VALUE_RE})",
+        re.IGNORECASE,
+    )
     entries: List[Dict[str, float]] = []
+    complex_pending: Dict[float, Dict[str, float]] = {}
 
     for line in lines:
         match = pattern_current.search(line)
@@ -120,6 +161,29 @@ def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
                     "rel_flux_val": _parse_float(match.group("rflux_val")),
                     "rel_sol_val": _parse_float(match.group("rsol_val")),
                 }
+            )
+            continue
+        match = pattern_complex.search(line)
+        if match:
+            raw_epoch = _parse_float(match.group("epoch"))
+            split = match.group("split").lower()
+            if split == "train":
+                entry = _empty_entry(raw_epoch)
+                entries.append(entry)
+                complex_pending[raw_epoch] = entry
+            else:
+                entry = complex_pending.get(raw_epoch)
+                if entry is None or not math.isnan(entry["loss_val"]):
+                    entry = _empty_entry(raw_epoch)
+                    entries.append(entry)
+                complex_pending[raw_epoch] = entry
+            _set_complex_split(
+                entry,
+                split,
+                loss=_parse_float(match.group("loss")),
+                energy_consistency=_parse_float(match.group("energy_cons")),
+                rel_sol=_parse_float(match.group("rsol")),
+                rel_flux=_parse_float(match.group("rflux")),
             )
     return entries
 
@@ -182,6 +246,18 @@ def _mask_nan(values: List[float]) -> List[float | None]:
 
 def _has_visible_values(values: List[float | None]) -> bool:
     return any(value is not None for value in values)
+
+
+def _series_has_visible_metric(
+    series: List[Tuple[str, Dict[str, List[float]]]],
+    metric_key: str,
+) -> bool:
+    for _, metrics in series:
+        for split in ("train", "val"):
+            values = metrics.get(f"{metric_key}_{split}", [])
+            if _has_visible_values(_mask_nan(values)):
+                return True
+    return False
 
 
 def _format_annotation_value(value: float) -> str:
@@ -507,6 +583,34 @@ def save_fig(fig: go.Figure, base_path: Path) -> None:
     save_plotly_figure(fig, base_path)
 
 
+def _save_metric_if_visible(
+    series: List[Tuple[str, Dict[str, List[float]]]],
+    *,
+    metric_key: str,
+    title: str,
+    yaxis_title: str,
+    log_scale: bool,
+    font: Dict[str, object],
+    theme: str,
+    show_annotations: bool,
+    out_path: Path,
+) -> None:
+    if not _series_has_visible_metric(series, metric_key):
+        print(f"Warning: skipping {out_path.name}; no {metric_key} values parsed.")
+        return
+    fig = make_fig_metric(
+        series,
+        metric_key=metric_key,
+        title=title,
+        yaxis_title=yaxis_title,
+        log_scale=log_scale,
+        font=font,
+        theme=theme,
+        show_annotations=show_annotations,
+    )
+    save_fig(fig, out_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot CouplingNet training logs with separate error figures."
@@ -568,7 +672,8 @@ def main() -> None:
     font = {"family": args.font_family, "size": 14}
 
     fig_loss = make_fig_loss(series, font, args.theme, args.show_annotations)
-    fig_l2 = make_fig_metric(
+    save_fig(fig_loss, args.outdir / "loss")
+    _save_metric_if_visible(
         series,
         metric_key="l2_cons",
         title="L2 Consistency",
@@ -577,8 +682,9 @@ def main() -> None:
         font=font,
         theme=args.theme,
         show_annotations=args.show_annotations,
+        out_path=args.outdir / "l2_consistency",
     )
-    fig_energy = make_fig_metric(
+    _save_metric_if_visible(
         series,
         metric_key="energy_cons",
         title="Energy Consistency",
@@ -587,8 +693,9 @@ def main() -> None:
         font=font,
         theme=args.theme,
         show_annotations=args.show_annotations,
+        out_path=args.outdir / "energy_consistency",
     )
-    fig_flux = make_fig_metric(
+    _save_metric_if_visible(
         series,
         metric_key="rel_flux",
         title="Flux-Divergence Relative Error",
@@ -597,8 +704,9 @@ def main() -> None:
         font=font,
         theme=args.theme,
         show_annotations=args.show_annotations,
+        out_path=args.outdir / "rel_flux",
     )
-    fig_sol = make_fig_metric(
+    _save_metric_if_visible(
         series,
         metric_key="rel_sol",
         title="Solution Relative Error",
@@ -607,13 +715,8 @@ def main() -> None:
         font=font,
         theme=args.theme,
         show_annotations=args.show_annotations,
+        out_path=args.outdir / "rel_sol",
     )
-
-    save_fig(fig_loss, args.outdir / "loss")
-    save_fig(fig_l2, args.outdir / "l2_consistency")
-    save_fig(fig_energy, args.outdir / "energy_consistency")
-    save_fig(fig_flux, args.outdir / "rel_flux")
-    save_fig(fig_sol, args.outdir / "rel_sol")
 
 
 if __name__ == "__main__":

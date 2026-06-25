@@ -34,6 +34,15 @@ def _patch_static_export(monkeypatch) -> None:
     monkeypatch.setattr(go.Figure, "write_image", fake_write_image)
 
 
+def _marker_for_field(outdir: Path, field: str) -> dict:
+    figure = json.loads(
+        (
+            outdir / "figures" / field / f"sample_0000_sample_0000_{field}.json"
+        ).read_text()
+    )
+    return figure["data"][0]["marker"]
+
+
 def test_complex_artifact_export_writes_outputs_without_cross_fields(
     tmp_path, monkeypatch
 ):
@@ -111,6 +120,15 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert set(summary["figure_fields"]) == expected_figure_fields
     assert summary["error_convention"] == "signed_difference"
     assert summary["solution_prediction"] == "u_pred=0.5*(u_phi+u_psi)"
+    assert (
+        summary["non_error_color_range_policy"] == "shared_reference_prediction_groups"
+    )
+    assert summary["non_error_color_range_groups"]["solution"] == [
+        "sol",
+        "u_pred",
+        "u_phi",
+        "u_psi",
+    ]
     assert summary["optional_flux_targets_exported"] is True
     for field in expected_figure_fields:
         assert (
@@ -149,3 +167,28 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     marker = error_figure["data"][0]["marker"]
     assert marker["colorscale"]
     assert marker["cmin"] == -marker["cmax"]
+
+    solution_ranges = {
+        (
+            _marker_for_field(outdir, field)["cmin"],
+            _marker_for_field(outdir, field)["cmax"],
+        )
+        for field in ("sol", "u_pred", "u_phi", "u_psi")
+    }
+    assert len(solution_ranges) == 1
+    phi_range = (
+        _marker_for_field(outdir, "target_phi")["cmin"],
+        _marker_for_field(outdir, "target_phi")["cmax"],
+    )
+    assert phi_range == (
+        _marker_for_field(outdir, "phi")["cmin"],
+        _marker_for_field(outdir, "phi")["cmax"],
+    )
+    psi_range = (
+        _marker_for_field(outdir, "target_psi")["cmin"],
+        _marker_for_field(outdir, "target_psi")["cmax"],
+    )
+    assert psi_range == (
+        _marker_for_field(outdir, "psi")["cmin"],
+        _marker_for_field(outdir, "psi")["cmax"],
+    )
