@@ -23,6 +23,7 @@ from greenonet.config import (
     CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
     SourceStencilLiftConfig,
+    TransverseTrunkConfig,
 )
 from greenonet.numerics import line_operator_fd
 
@@ -1896,6 +1897,8 @@ def test_axis_1d_trunk_config_defaults():
     assert cfg.axis_1d_trunk.boundary_aware_modes == 4
     assert cfg.axis_1d_trunk.num_frequencies == 4
     assert cfg.axis_1d_trunk.max_frequency == 8.0
+    assert cfg.axis_1d_trunk.transverse_trunk.enabled is False
+    assert cfg.axis_1d_trunk.transverse_trunk.fusion == "product"
 
 
 def test_axis_1d_trunk_extends_model_with_shared_1d_trunk():
@@ -2055,6 +2058,14 @@ def test_axis_1d_trunk_rejects_invalid_config():
         Axis1DTrunkConfig(num_frequencies=0)
     with pytest.raises(ValueError, match="max_frequency"):
         Axis1DTrunkConfig(max_frequency=0.0)
+    with pytest.raises(ValueError, match="transverse_trunk.fusion"):
+        TransverseTrunkConfig(fusion="sum")
+    with pytest.raises(TypeError, match="transverse_trunk.enabled"):
+        TransverseTrunkConfig(enabled="yes")
+    with pytest.raises(TypeError, match="transverse_trunk has unknown keys"):
+        Axis1DTrunkConfig.from_raw({"transverse_trunk": {"unknown": True}})
+    with pytest.raises(TypeError, match="transverse_trunk must be an object"):
+        Axis1DTrunkConfig.from_raw({"transverse_trunk": "enabled"})
     with pytest.raises(ValueError, match="trunk_positional_encoding"):
         CouplingNet(
             CouplingModelConfig(

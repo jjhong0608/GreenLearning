@@ -111,6 +111,42 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             dropout=config.dropout,
             last_activation=True,
         )
+        transverse_trunk = axis_cfg.transverse_trunk
+        self.transverse_trunk_enabled = bool(transverse_trunk.enabled)
+        self.transverse_trunk_fusion_mode = transverse_trunk.fusion
+        self.trunk_transverse: MLP | None
+        self.trunk_fuser: nn.Linear | None
+        self.trunk_fuser_activation: nn.Module
+        self.trunk_fuser_dropout: nn.Module
+        if self.transverse_trunk_enabled:
+            self.trunk_transverse = MLP(
+                input_dim=1,
+                hidden_dim=config.hidden_dim,
+                depth=config.depth,
+                activation=config.activation,
+                use_bias=config.use_bias,
+                dropout=config.dropout,
+                last_activation=True,
+            )
+            if self.transverse_trunk_fusion_mode == "product_fuser":
+                self.trunk_fuser = nn.Linear(
+                    3 * config.hidden_dim,
+                    config.hidden_dim,
+                    bias=config.use_bias,
+                )
+                self.trunk_fuser_activation = self.build_activation(config.activation)
+                self.trunk_fuser_dropout = (
+                    nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()
+                )
+            else:
+                self.trunk_fuser = None
+                self.trunk_fuser_activation = nn.Identity()
+                self.trunk_fuser_dropout = nn.Identity()
+        else:
+            self.trunk_transverse = None
+            self.trunk_fuser = None
+            self.trunk_fuser_activation = nn.Identity()
+            self.trunk_fuser_dropout = nn.Identity()
 
         branch_fusion = CouplingBranchFusionConfig.from_raw(config.branch_fusion)
         self.branch_fusion_mode = branch_fusion.mode
@@ -139,8 +175,9 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             raise ValueError(
                 "ComplexCouplingNet uses local 1D trunk coordinates; "
                 "trunk_positional_encoding.enabled must be false. Use "
-                "axis_1d_trunk.num_frequencies/max_frequency for normalized "
-                "transverse encoding."
+                "axis_1d_trunk.num_frequencies/max_frequency for fixed-line "
+                "transverse branch encoding or axis_1d_trunk.transverse_trunk "
+                "for pointwise transverse trunk coordinates."
             )
         balance_projection = BalanceProjectionConfig.from_raw(config.balance_projection)
         if not balance_projection.enabled:
@@ -204,11 +241,9 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         if axis == "x":
             expected_segments = geometry.num_x_segments
             segment_id = geometry.x_segment_id
-            local_t = geometry.x_local_t
         else:
             expected_segments = geometry.num_y_segments
             segment_id = geometry.y_segment_id
-            local_t = geometry.y_local_t
         if segment_count != expected_segments:
             raise ValueError(
                 f"{axis}_source_branch segment count {segment_count} does not match "
@@ -244,10 +279,68 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         segment_features = self._fuse_branch_components(branch_components)
 
         gathered_segment = segment_features[:, segment_id]
-        trunk_features = self.trunk(local_t.to(source_branch.device).unsqueeze(-1))
+        primary_t, transverse_t = self._trunk_coordinates(geometry, axis)
+        trunk_features = self._pointwise_trunk_features(
+            primary_t=primary_t,
+            transverse_t=transverse_t,
+            device=source_branch.device,
+        )
         trunk_features = trunk_features.unsqueeze(0).expand(bsz, -1, -1)
         output_tilde = (gathered_segment * trunk_features).sum(dim=-1)
-        return cast(torch.Tensor, output_tilde * source_norm[:, segment_id])
+        return output_tilde * source_norm[:, segment_id]
+
+    @staticmethod
+    def _trunk_coordinates(
+        geometry: ComplexGeometryMetadata,
+        axis: Literal["x", "y"],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if axis == "x":
+            return geometry.x_local_t, geometry.y_local_t
+        return geometry.y_local_t, geometry.x_local_t
+
+    def _pointwise_trunk_features(
+        self,
+        *,
+        primary_t: torch.Tensor,
+        transverse_t: torch.Tensor,
+        device: torch.device,
+    ) -> torch.Tensor:
+        primary_features = cast(
+            torch.Tensor,
+            self.trunk(primary_t.to(device).unsqueeze(-1)),
+        )
+        if not self.transverse_trunk_enabled:
+            return primary_features
+        if self.trunk_transverse is None:
+            raise RuntimeError(
+                "trunk_transverse must be initialized when "
+                "axis_1d_trunk.transverse_trunk.enabled=true."
+            )
+        transverse_features = cast(
+            torch.Tensor,
+            self.trunk_transverse(transverse_t.to(device).unsqueeze(-1)),
+        )
+        product_features = primary_features * transverse_features
+        if self.transverse_trunk_fusion_mode == "product":
+            return product_features
+        if self.transverse_trunk_fusion_mode == "product_fuser":
+            if self.trunk_fuser is None:
+                raise RuntimeError(
+                    "trunk_fuser must be initialized when "
+                    "axis_1d_trunk.transverse_trunk.fusion='product_fuser'."
+                )
+            fused = self.trunk_fuser(
+                torch.cat(
+                    (primary_features, transverse_features, product_features),
+                    dim=-1,
+                )
+            )
+            fused = cast(torch.Tensor, self.trunk_fuser_activation(fused))
+            return cast(torch.Tensor, self.trunk_fuser_dropout(fused))
+        raise ValueError(
+            "Unsupported axis_1d_trunk.transverse_trunk.fusion: "
+            f"{self.transverse_trunk_fusion_mode}"
+        )
 
     def _source_features(self, source_branch: torch.Tensor) -> torch.Tensor:
         bsz, segment_count, _samples = source_branch.shape

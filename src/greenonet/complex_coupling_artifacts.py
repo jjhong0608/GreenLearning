@@ -187,6 +187,14 @@ class ComplexCouplingArtifactExporter:
                 "num_frequencies": axis_1d_trunk.num_frequencies,
                 "max_frequency": axis_1d_trunk.max_frequency,
             },
+            "transverse_trunk": {
+                "enabled": axis_1d_trunk.transverse_trunk.enabled,
+                "fusion": axis_1d_trunk.transverse_trunk.fusion,
+                "coordinate": {
+                    "x_path": "y_local_t",
+                    "y_path": "x_local_t",
+                },
+            },
         }
         (self.request.outdir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True)

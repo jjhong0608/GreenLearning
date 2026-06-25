@@ -17,6 +17,7 @@ from greenonet.config import (
     CouplingLossesConfig,
     CouplingModelConfig,
     CouplingTrainingConfig,
+    TransverseTrunkConfig,
 )
 from test.complex_fixtures import (
     ConstantGreen,
@@ -41,6 +42,7 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             axis_1d_trunk=Axis1DTrunkConfig(
                 num_frequencies=1,
                 max_frequency=1.0,
+                transverse_trunk=TransverseTrunkConfig(enabled=True),
             ),
         )
     )

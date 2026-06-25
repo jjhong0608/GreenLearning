@@ -13,6 +13,7 @@ from greenonet.config import (
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
+    TransverseTrunkConfig,
 )
 from test.complex_fixtures import (
     write_coefficients,
@@ -30,7 +31,12 @@ def _build_item(tmp_path):
     return geometry, dataset[0]
 
 
-def _model(*, fusion_mode: str = "product") -> ComplexCouplingNet:
+def _model(
+    *,
+    fusion_mode: str = "product",
+    transverse_trunk_enabled: bool = False,
+    transverse_trunk_fusion: str = "product",
+) -> ComplexCouplingNet:
     torch.manual_seed(0)
     return ComplexCouplingNet(
         CouplingModelConfig(
@@ -42,6 +48,10 @@ def _model(*, fusion_mode: str = "product") -> ComplexCouplingNet:
             axis_1d_trunk=Axis1DTrunkConfig(
                 num_frequencies=2,
                 max_frequency=2.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=transverse_trunk_enabled,
+                    fusion=transverse_trunk_fusion,
+                ),
             ),
         )
     )
@@ -70,9 +80,50 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
     assert model.branch_transverse is model.branch_transverse
     assert model.branch_geometry is model.branch_geometry
     assert model.trunk is model.trunk
+    assert model.trunk_transverse is None
+    assert not any(key.startswith("trunk_transverse.") for key in model.state_dict())
     assert model.geometry_feature_dim == 6
     assert model.transverse_feature_dim == 4
     assert not hasattr(model, "axis_one_hot")
+
+
+def test_complex_pointwise_transverse_trunk_product_fusion_outputs_shape(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(transverse_trunk_enabled=True, transverse_trunk_fusion="product")
+
+    output = _forward(model, geometry, item)
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.trunk_transverse is not None
+    assert model.trunk_fuser is None
+    assert any(key.startswith("trunk_transverse.") for key in model.state_dict())
+
+
+def test_complex_pointwise_transverse_trunk_product_fuser_outputs_shape(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(
+        transverse_trunk_enabled=True,
+        transverse_trunk_fusion="product_fuser",
+    )
+
+    output = _forward(model, geometry, item)
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.trunk_transverse is not None
+    assert model.trunk_fuser is not None
+
+
+def test_complex_pointwise_transverse_trunk_uses_cross_axis_local_coordinates(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    model = _model(transverse_trunk_enabled=True)
+
+    x_primary, x_transverse = model._trunk_coordinates(geometry, "x")
+    y_primary, y_transverse = model._trunk_coordinates(geometry, "y")
+
+    torch.testing.assert_close(x_primary, geometry.x_local_t)
+    torch.testing.assert_close(x_transverse, geometry.y_local_t)
+    torch.testing.assert_close(y_primary, geometry.y_local_t)
+    torch.testing.assert_close(y_transverse, geometry.x_local_t)
 
 
 def test_complex_coupling_model_is_source_conditioned(tmp_path):

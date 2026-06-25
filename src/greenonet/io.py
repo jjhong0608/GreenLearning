@@ -110,7 +110,7 @@ def _deserialize_config(
             )
         axis_1d_trunk_raw = data.get("axis_1d_trunk")
         if isinstance(axis_1d_trunk_raw, dict):
-            data["axis_1d_trunk"] = Axis1DTrunkConfig(**axis_1d_trunk_raw)
+            data["axis_1d_trunk"] = Axis1DTrunkConfig.from_raw(axis_1d_trunk_raw)
     allowed_keys = {field.name for field in fields(config_cls)}
     filtered = {key: value for key, value in data.items() if key in allowed_keys}
     return config_cls(**filtered)

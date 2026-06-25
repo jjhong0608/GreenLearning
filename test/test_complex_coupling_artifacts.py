@@ -130,6 +130,14 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "u_psi",
     ]
     assert summary["optional_flux_targets_exported"] is True
+    assert summary["transverse_trunk"] == {
+        "enabled": False,
+        "fusion": "product",
+        "coordinate": {
+            "x_path": "y_local_t",
+            "y_path": "x_local_t",
+        },
+    }
     for field in expected_figure_fields:
         assert (
             outdir / "figures" / field / f"sample_0000_sample_0000_{field}.json"

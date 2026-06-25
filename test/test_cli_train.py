@@ -602,6 +602,10 @@ class TestTrainCLIDatasetConfig:
                     "boundary_aware_modes": 5,
                     "num_frequencies": 6,
                     "max_frequency": 12.0,
+                    "transverse_trunk": {
+                        "enabled": True,
+                        "fusion": "product_fuser",
+                    },
                 },
             },
             "coupling_training": {},
@@ -624,6 +628,8 @@ class TestTrainCLIDatasetConfig:
         assert axis_1d_trunk.boundary_aware_modes == 5
         assert axis_1d_trunk.num_frequencies == 6
         assert axis_1d_trunk.max_frequency == 12.0
+        assert axis_1d_trunk.transverse_trunk.enabled is True
+        assert axis_1d_trunk.transverse_trunk.fusion == "product_fuser"
 
     def test_rejects_non_object_axis_1d_trunk_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -842,6 +848,10 @@ class TestTrainCLIDatasetConfig:
                 "boundary_aware_modes": 6,
                 "num_frequencies": 7,
                 "max_frequency": 14.0,
+                "transverse_trunk": {
+                    "enabled": True,
+                    "fusion": "product",
+                },
             },
             "coupling_model",
         )
@@ -850,6 +860,8 @@ class TestTrainCLIDatasetConfig:
         assert cfg.boundary_aware_modes == 6
         assert cfg.num_frequencies == 7
         assert cfg.max_frequency == 14.0
+        assert cfg.transverse_trunk.enabled is True
+        assert cfg.transverse_trunk.fusion == "product"
 
     def test_eval_cli_rejects_non_object_axis_1d_trunk_config(self):
         with pytest.raises(TypeError, match="coupling_model.axis_1d_trunk"):

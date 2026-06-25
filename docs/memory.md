@@ -123,9 +123,14 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 `[a,b,c]`
   순서로 구성한다. `a'`는 GreenONet reconstruction query용 branch에는 보관하지만
   CouplingNet coefficient branch에는 넣지 않는다.
-- Complex CouplingNet trunk는 항상 segment-local 1D `t`를 사용한다. Transverse
-  coordinate는 global geometry extent 기준으로 normalized `r_hat`을 만들고,
-  `axis_1d_trunk.num_frequencies`와 `max_frequency`로 Fourier encoding한다.
+- Complex CouplingNet primary trunk는 항상 segment-local 1D `t`를 사용한다.
+  Fixed-line transverse branch는 global geometry extent 기준으로 normalized
+  `r_hat`을 만들고, `axis_1d_trunk.num_frequencies`와 `max_frequency`로
+  Fourier encoding한다. Optional `axis_1d_trunk.transverse_trunk.enabled=true`
+  path는 pointwise cross-axis local coordinate를 별도 trunk에 넣는다. x/Phi
+  path는 primary `x_local_t`와 transverse `y_local_t`를 쓰고, y/Psi path는
+  primary `y_local_t`와 transverse `x_local_t`를 쓴다. `fusion`은 `product` 또는
+  `product_fuser`이고, disabled이면 이전 complex behavior를 보존한다.
   `trunk_positional_encoding`은 unit-square 2D trunk coordinate encoding이므로
   complex mode에서는 사용하지 않는다.
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
@@ -147,6 +152,14 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   degenerate boundary line은 제외하며, valid interior point가 있는 axial chord segment만
   저장한다. Reconstruction weight는 physical length가 아닌 segment-local unit coordinate
   기준 nonuniform trapezoid weight로 저장한다.
+- Annulus complex geometry generator는 `cli/make_annular_geometry.py`이며
+  2D PDE code path에서의 torus shape를 두 동심원 사이 영역으로 해석한다. Center는
+  `(0, 0)` 고정이고, valid point는
+  `inner_radius < sqrt(x^2+y^2) < outer_radius`인 strict interior point만 저장한다.
+  Grid interval은 `[-outer_radius, outer_radius]`이고,
+  `2 * outer_radius / step_size` 정수 조건을 사용한다. Inner hole을 지나거나 접하는
+  axial line은 disconnected segment row로 나눠 저장해서 edge/reconstruction이 hole을
+  가로지르지 않게 한다.
 - FEniCSx complex sample generator는 optional `green_fenicsx` conda env에서만
   실행하는 path로 둔다. Main `green_net` training env와 `pyproject.toml`에는
   FEniCSx dependency를 섞지 않는다.

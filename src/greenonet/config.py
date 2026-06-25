@@ -139,6 +139,43 @@ class CouplingTrunkPositionalEncodingConfig:
 
 
 @dataclass
+class TransverseTrunkConfig:
+    """Optional pointwise cross-axis trunk settings for complex geometry."""
+
+    enabled: bool = False
+    fusion: Literal["product", "product_fuser"] = "product"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("axis_1d_trunk.transverse_trunk.enabled must be a boolean.")
+        if self.fusion not in {"product", "product_fuser"}:
+            raise ValueError(
+                "axis_1d_trunk.transverse_trunk.fusion must be "
+                "'product' or 'product_fuser'."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: TransverseTrunkConfig | dict[str, Any] | None,
+    ) -> TransverseTrunkConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "fusion"})
+            if unknown:
+                raise TypeError(
+                    "axis_1d_trunk.transverse_trunk has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("axis_1d_trunk.transverse_trunk must be an object.")
+
+
+@dataclass
 class Axis1DTrunkConfig:
     """Shared 1D trunk with boundary-aware transverse branch settings."""
 
@@ -146,8 +183,12 @@ class Axis1DTrunkConfig:
     boundary_aware_modes: int = 4
     num_frequencies: int = 4
     max_frequency: float = 8.0
+    transverse_trunk: TransverseTrunkConfig = field(
+        default_factory=TransverseTrunkConfig
+    )
 
     def __post_init__(self) -> None:
+        self.transverse_trunk = TransverseTrunkConfig.from_raw(self.transverse_trunk)
         if not isinstance(self.enabled, bool):
             raise TypeError("axis_1d_trunk.enabled must be a boolean.")
         if not isinstance(self.boundary_aware_modes, int) or isinstance(
@@ -190,11 +231,16 @@ class Axis1DTrunkConfig:
                     "boundary_aware_modes",
                     "num_frequencies",
                     "max_frequency",
+                    "transverse_trunk",
                 }
             )
             if unknown:
                 raise TypeError(
                     f"axis_1d_trunk has unknown keys: {', '.join(unknown)}."
+                )
+            if "transverse_trunk" in data:
+                data["transverse_trunk"] = TransverseTrunkConfig.from_raw(
+                    data["transverse_trunk"]
                 )
             return cls(**data)
         raise TypeError("axis_1d_trunk must be an object.")

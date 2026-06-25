@@ -28,7 +28,13 @@
       "mode": "product_fuser"
     },
     "axis_1d_trunk": {
-      "enabled": true
+      "enabled": true,
+      "num_frequencies": 4,
+      "max_frequency": 8.0,
+      "transverse_trunk": {
+        "enabled": true,
+        "fusion": "product"
+      }
     }
   },
   "coupling_training": {

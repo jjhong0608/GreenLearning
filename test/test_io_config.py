@@ -9,6 +9,7 @@ from greenonet.config import (
     GreenResponseFeatureConfig,
     ModelConfig,
     SourceStencilLiftConfig,
+    TransverseTrunkConfig,
 )
 from greenonet.coupling_model import CouplingNet
 from greenonet.model import GreenONetModel
@@ -364,6 +365,10 @@ def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
             boundary_aware_modes=3,
             num_frequencies=5,
             max_frequency=16.0,
+            transverse_trunk=TransverseTrunkConfig(
+                enabled=True,
+                fusion="product_fuser",
+            ),
         ),
     )
     model = CouplingNet(cfg)
@@ -380,6 +385,8 @@ def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
     assert loaded_cfg.axis_1d_trunk.boundary_aware_modes == 3
     assert loaded_cfg.axis_1d_trunk.num_frequencies == 5
     assert loaded_cfg.axis_1d_trunk.max_frequency == 16.0
+    assert loaded_cfg.axis_1d_trunk.transverse_trunk.enabled is True
+    assert loaded_cfg.axis_1d_trunk.transverse_trunk.fusion == "product_fuser"
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
