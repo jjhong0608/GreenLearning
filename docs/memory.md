@@ -119,9 +119,11 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Complex GreenNet의 `training.green_quadrature.enabled=true`는
   reconstruction loss, train/validation `rel_sol`, `evaluate(...)`, complex Green
   artifact reconstruction에만 split Gauss-Legendre 적분을 적용한다. Fine source는
-  `source_sampling_factor`로 생성하고 Gaussian source node에서 linear interpolation
-  한다. `rel_green`은 기존 uniform-grid diagnostic으로 유지하며, CouplingNet
-  reconstruction/loss/evaluation에는 이 설정을 적용하지 않는다.
+  `source_sampling_factor`로 생성하고 Gaussian source node에서 `linear` 또는
+  natural cubic source interpolation을 선택해 사용한다. Default는 `linear`이고,
+  `cubic`은 smooth source 실험용 opt-in이다. `rel_green`은 기존 uniform-grid
+  diagnostic으로 유지하며, CouplingNet reconstruction/loss/evaluation에는 이 설정을
+  적용하지 않는다.
 - Complex CouplingNet은 unit-square CouplingNet처럼 source-conditioned model이다.
   Full-grid `rhs`를 valid point로 gather한 뒤 segment-local unit source branch로
   변환하고, `f_unit=L^2*f_phys` scaling과 segment별 unit L2 norm normalization을

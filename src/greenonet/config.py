@@ -441,7 +441,7 @@ class GreenQuadratureConfig:
     rule: Literal["split_gauss_legendre"] = "split_gauss_legendre"
     order: int = 4
     source_sampling_factor: int = 1
-    source_interpolation: Literal["linear"] = "linear"
+    source_interpolation: Literal["linear", "cubic"] = "linear"
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -463,8 +463,10 @@ class GreenQuadratureConfig:
             raise ValueError(
                 "green_quadrature.source_sampling_factor must be positive."
             )
-        if self.source_interpolation != "linear":
-            raise ValueError("green_quadrature.source_interpolation must be 'linear'.")
+        if self.source_interpolation not in {"linear", "cubic"}:
+            raise ValueError(
+                "green_quadrature.source_interpolation must be 'linear' or 'cubic'."
+            )
 
     @classmethod
     def from_raw(

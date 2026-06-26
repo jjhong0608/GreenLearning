@@ -9,7 +9,7 @@ from torch import Tensor
 from greenonet.coefficients import CoefficientFunctions
 
 
-SourceInterpolation = Literal["linear"]
+SourceInterpolation = Literal["linear", "cubic"]
 
 
 def gauss_legendre_nodes_weights(
@@ -72,16 +72,48 @@ def interpolate_source_on_unit_grid(
 ) -> Tensor:
     """Interpolate source values from a unit grid to arbitrary query points."""
 
-    if method != "linear":
-        raise ValueError("Only linear source interpolation is supported.")
+    if method == "linear":
+        return linear_interpolate_source_on_unit_grid(
+            unit_grid=unit_grid,
+            source=source,
+            query_points=query_points,
+        )
+    if method == "cubic":
+        return natural_cubic_interpolate_source_on_unit_grid(
+            unit_grid=unit_grid,
+            source=source,
+            query_points=query_points,
+        )
+    raise ValueError(f"Unsupported source interpolation method: {method}.")
+
+
+def _validate_source_interpolation_inputs(
+    *,
+    unit_grid: Tensor,
+    source: Tensor,
+) -> Tensor:
     if unit_grid.dim() != 1:
         raise ValueError("unit_grid must be one-dimensional.")
     if unit_grid.numel() < 2:
         raise ValueError("Need at least two source grid points for interpolation.")
     if source.shape[-1] != unit_grid.numel():
         raise ValueError("source last dimension must match unit_grid length.")
-
     grid = unit_grid.to(device=source.device, dtype=source.dtype).contiguous()
+    if torch.any(grid[1:] <= grid[:-1]):
+        raise ValueError("unit_grid must be strictly increasing.")
+    return grid
+
+
+def linear_interpolate_source_on_unit_grid(
+    *,
+    unit_grid: Tensor,
+    source: Tensor,
+    query_points: Tensor,
+) -> Tensor:
+    grid = _validate_source_interpolation_inputs(
+        unit_grid=unit_grid,
+        source=source,
+    )
     query = query_points.to(device=source.device, dtype=source.dtype).clamp(0.0, 1.0)
     idx_right = torch.searchsorted(grid, query).clamp(1, grid.numel() - 1)
     idx_left = idx_right - 1
@@ -97,6 +129,81 @@ def interpolate_source_on_unit_grid(
     left_values = flat_source.gather(1, flat_left)
     right_values = flat_source.gather(1, flat_right)
     flat_interp = left_values + (right_values - left_values) * weight.reshape(1, -1)
+    return flat_interp.reshape(*source.shape[:-1], *query.shape)
+
+
+def natural_cubic_interpolate_source_on_unit_grid(
+    *,
+    unit_grid: Tensor,
+    source: Tensor,
+    query_points: Tensor,
+) -> Tensor:
+    grid = _validate_source_interpolation_inputs(
+        unit_grid=unit_grid,
+        source=source,
+    )
+    if grid.numel() == 2:
+        return linear_interpolate_source_on_unit_grid(
+            unit_grid=grid,
+            source=source,
+            query_points=query_points,
+        )
+
+    query = query_points.to(device=source.device, dtype=source.dtype).clamp(
+        float(grid[0].item()),
+        float(grid[-1].item()),
+    )
+    n_points = grid.numel()
+    h = grid[1:] - grid[:-1]
+    flat_source = source.reshape(-1, n_points)
+    n_inner = n_points - 2
+
+    matrix = torch.zeros(
+        (n_inner, n_inner),
+        dtype=source.dtype,
+        device=source.device,
+    )
+    matrix.diagonal().copy_(2.0 * (h[:-1] + h[1:]))
+    if n_inner > 1:
+        matrix.diagonal(offset=1).copy_(h[1:-1])
+        matrix.diagonal(offset=-1).copy_(h[1:-1])
+
+    slopes = (flat_source[:, 1:] - flat_source[:, :-1]) / h.reshape(1, -1)
+    rhs = 6.0 * (slopes[:, 1:] - slopes[:, :-1])
+    inner_second = torch.linalg.solve(matrix, rhs.T).T
+    second_derivatives = torch.zeros_like(flat_source)
+    second_derivatives[:, 1:-1] = inner_second
+
+    idx_right = torch.searchsorted(grid, query).clamp(1, n_points - 1)
+    idx_left = idx_right - 1
+    interval_h = h[idx_left]
+    x_left = grid[idx_left]
+    x_right = grid[idx_right]
+    left_weight = (x_right - query) / interval_h
+    right_weight = (query - x_left) / interval_h
+
+    flat_left = idx_left.reshape(1, -1).expand(flat_source.shape[0], -1)
+    flat_right = idx_right.reshape(1, -1).expand(flat_source.shape[0], -1)
+    y_left = flat_source.gather(1, flat_left)
+    y_right = flat_source.gather(1, flat_right)
+    m_left = second_derivatives.gather(1, flat_left)
+    m_right = second_derivatives.gather(1, flat_right)
+
+    interval_h_flat = interval_h.reshape(1, -1)
+    left_weight_flat = left_weight.reshape(1, -1)
+    right_weight_flat = right_weight.reshape(1, -1)
+    flat_interp = (
+        m_left
+        * (left_weight_flat.pow(3) - left_weight_flat)
+        * interval_h_flat.pow(2)
+        / 6.0
+        + m_right
+        * (right_weight_flat.pow(3) - right_weight_flat)
+        * interval_h_flat.pow(2)
+        / 6.0
+        + y_left * left_weight_flat
+        + y_right * right_weight_flat
+    )
     return flat_interp.reshape(*source.shape[:-1], *query.shape)
 
 

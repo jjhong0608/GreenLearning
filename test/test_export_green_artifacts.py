@@ -79,6 +79,7 @@ def _write_complex_config(
     geometry_path: Path,
     *,
     split_quadrature: bool = False,
+    source_interpolation: str = "linear",
 ) -> None:
     payload = {
         "dataset": {
@@ -129,7 +130,7 @@ def _write_complex_config(
             "rule": "split_gauss_legendre",
             "order": 2,
             "source_sampling_factor": 2,
-            "source_interpolation": "linear",
+            "source_interpolation": source_interpolation,
         }
     path.write_text(json.dumps(payload))
 
@@ -465,7 +466,12 @@ def test_export_green_artifacts_complex_split_quadrature_saves_fine_source(
     config_path = tmp_path / "config.json"
     outdir = tmp_path / "artifacts_split"
     _write_checkpoint(checkpoint_path)
-    _write_complex_config(config_path, geometry_path, split_quadrature=True)
+    _write_complex_config(
+        config_path,
+        geometry_path,
+        split_quadrature=True,
+        source_interpolation="cubic",
+    )
 
     summary = export_green_artifacts(
         GreenArtifactRequest(
@@ -479,6 +485,7 @@ def test_export_green_artifacts_complex_split_quadrature_saves_fine_source(
     )
 
     assert summary["green_quadrature"]["enabled"] is True
+    assert summary["green_quadrature"]["source_interpolation"] == "cubic"
     assert summary["green_quadrature"]["rel_green"] == "uniform_grid_existing"
     generated = np.load(outdir / "data" / "generated_eval_data.npz")
     assert "source_fine" in generated
