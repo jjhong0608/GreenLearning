@@ -339,6 +339,77 @@ def test_unit_circle_gmsh_radius_reader_uses_geometry_metadata(tmp_path):
         )
 
 
+def test_annulus_gmsh_example_imports():
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "annulus_gmsh.py"
+    spec = importlib.util.spec_from_file_location("annulus_gmsh", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load annulus_gmsh.py.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert callable(module.build_domain)
+
+
+def test_annulus_gmsh_radii_reader_uses_geometry_metadata(tmp_path):
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "annulus_gmsh.py"
+    spec = importlib.util.spec_from_file_location("annulus_gmsh_radii", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load annulus_gmsh.py.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    path = tmp_path / "annulus_radii.npz"
+    np.savez(
+        path,
+        inner_radius=np.array(0.5, dtype=np.float64),
+        outer_radius=np.array(1.0, dtype=np.float64),
+    )
+
+    inner_radius, outer_radius = module.AnnulusDomainBuilder.radii_from_context(
+        SimpleNamespace(geometry_path=path)
+    )
+
+    assert inner_radius == pytest.approx(0.5)
+    assert outer_radius == pytest.approx(1.0)
+
+
+def test_annulus_gmsh_radii_reader_rejects_missing_or_invalid_metadata(tmp_path):
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "annulus_gmsh.py"
+    spec = importlib.util.spec_from_file_location("annulus_gmsh_invalid", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load annulus_gmsh.py.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    missing_path = tmp_path / "missing.npz"
+    np.savez(missing_path, inner_radius=np.array(0.5, dtype=np.float64))
+    with pytest.raises(KeyError, match="outer_radius"):
+        module.AnnulusDomainBuilder.radii_from_context(
+            SimpleNamespace(geometry_path=missing_path)
+        )
+
+    bad_inner_path = tmp_path / "bad_inner.npz"
+    np.savez(
+        bad_inner_path,
+        inner_radius=np.array(0.0, dtype=np.float64),
+        outer_radius=np.array(1.0, dtype=np.float64),
+    )
+    with pytest.raises(ValueError, match="inner_radius"):
+        module.AnnulusDomainBuilder.radii_from_context(
+            SimpleNamespace(geometry_path=bad_inner_path)
+        )
+
+    bad_order_path = tmp_path / "bad_order.npz"
+    np.savez(
+        bad_order_path,
+        inner_radius=np.array(1.0, dtype=np.float64),
+        outer_radius=np.array(1.0, dtype=np.float64),
+    )
+    with pytest.raises(ValueError, match="greater than inner_radius"):
+        module.AnnulusDomainBuilder.radii_from_context(
+            SimpleNamespace(geometry_path=bad_order_path)
+        )
+
+
 def test_gmsh_io_adapter_normalizes_tuple_return():
     class TupleGmshModule:
         @staticmethod

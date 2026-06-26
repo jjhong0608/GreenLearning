@@ -13,7 +13,12 @@ from greenonet.complex_green_data import (
     generate_complex_green_data,
 )
 from greenonet.complex_green_trainer import ComplexGreenTrainer
-from greenonet.config import CompileConfig, ModelConfig, TrainingConfig
+from greenonet.config import (
+    CompileConfig,
+    GreenQuadratureConfig,
+    ModelConfig,
+    TrainingConfig,
+)
 from greenonet.model import GreenONetModel
 from test.complex_fixtures import write_geometry_npz
 
@@ -22,6 +27,8 @@ class CountingGreenONetModel(GreenONetModel):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__(config)
         self.forward_pairs_calls = 0
+        self.split_pair_calls = 0
+        self.eval_tensor_calls = 0
 
     def forward_pairs(
         self,
@@ -30,9 +37,26 @@ class CountingGreenONetModel(GreenONetModel):
         ap_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
+        *,
+        a_eval: torch.Tensor | None = None,
+        ap_eval: torch.Tensor | None = None,
+        b_eval: torch.Tensor | None = None,
     ) -> torch.Tensor:
         self.forward_pairs_calls += 1
-        return super().forward_pairs(trunk_coords, a_vals, ap_vals, b_vals, c_vals)
+        if trunk_coords.dim() == 3 and trunk_coords.shape[1] != trunk_coords.shape[0]:
+            self.split_pair_calls += 1
+        if a_eval is not None or ap_eval is not None or b_eval is not None:
+            self.eval_tensor_calls += 1
+        return super().forward_pairs(
+            trunk_coords,
+            a_vals,
+            ap_vals,
+            b_vals,
+            c_vals,
+            a_eval=a_eval,
+            ap_eval=ap_eval,
+            b_eval=b_eval,
+        )
 
     def forward(
         self,
@@ -129,6 +153,66 @@ def test_complex_green_trainer_one_epoch_outputs_safe_metrics(tmp_path):
     assert summary["num_intervals"] == 5
     assert summary["rel_green_valid"] is True
     assert not any("cross" in key for key in summary)
+
+
+def test_complex_green_trainer_split_quadrature_uses_eval_coefficients(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(
+        _write_reaction_free_coefficients(tmp_path / "coeffs.py")
+    )
+    data = generate_complex_green_data(
+        geometry,
+        coeffs,
+        branch_input_dim=5,
+        samples_per_interval=1,
+        sampler_mode="forward",
+        scale_length=0.1,
+        deterministic=True,
+        integration_rule="trapezoid",
+        source_sampling_factor=2,
+        dtype=torch.float64,
+    )
+    dataset = ComplexGreenDataset(data)
+    model_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        activation="tanh",
+        use_green=True,
+        branch_input_dim=5,
+        dtype=torch.float64,
+    )
+    model = CountingGreenONetModel(model_cfg)
+    trainer = ComplexGreenTrainer(
+        model=model,
+        config=TrainingConfig(
+            epochs=1,
+            batch_size=1,
+            learning_rate=1e-3,
+            log_interval=1,
+            device="cpu",
+            integration_rule="trapezoid",
+            green_quadrature=GreenQuadratureConfig(
+                enabled=True,
+                order=2,
+                source_sampling_factor=2,
+            ),
+            compile=CompileConfig(enabled=False),
+            lbfgs_max_iter=0,
+        ),
+        work_dir=tmp_path / "work_split",
+        model_cfg=model_cfg,
+        coeffs=coeffs,
+    )
+
+    trainer.train(dataset)
+
+    assert model.split_pair_calls > 0
+    assert model.eval_tensor_calls > 0
+    summary = json.loads(
+        (tmp_path / "work_split" / "per_interval_metrics_summary.json").read_text()
+    )
+    assert summary["green_quadrature"]["enabled"] is True
+    assert summary["green_quadrature"]["rel_green"] == "uniform_grid_existing"
 
 
 def test_complex_green_trainer_lbfgs_logs_validation_and_rel_green(tmp_path):

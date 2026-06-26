@@ -74,7 +74,12 @@ def _write_config(
     path.write_text(json.dumps(payload))
 
 
-def _write_complex_config(path: Path, geometry_path: Path) -> None:
+def _write_complex_config(
+    path: Path,
+    geometry_path: Path,
+    *,
+    split_quadrature: bool = False,
+) -> None:
     payload = {
         "dataset": {
             "geometry_mode": "complex",
@@ -118,6 +123,14 @@ def _write_complex_config(path: Path, geometry_path: Path) -> None:
             "coupling_pretrained_path": None,
         },
     }
+    if split_quadrature:
+        payload["training"]["green_quadrature"] = {
+            "enabled": True,
+            "rule": "split_gauss_legendre",
+            "order": 2,
+            "source_sampling_factor": 2,
+            "source_interpolation": "linear",
+        }
     path.write_text(json.dumps(payload))
 
 
@@ -440,3 +453,34 @@ def test_export_green_artifacts_complex_geometry_uses_flat_intervals(
     assert (outdir / "data" / "generated_eval_data.npz").exists()
     assert (outdir / "data" / "selected_green_kernels.npz").exists()
     assert (outdir / "data" / "selected_reconstructions.npz").exists()
+
+
+def test_export_green_artifacts_complex_split_quadrature_saves_fine_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    checkpoint_path = tmp_path / "green.safetensors"
+    config_path = tmp_path / "config.json"
+    outdir = tmp_path / "artifacts_split"
+    _write_checkpoint(checkpoint_path)
+    _write_complex_config(config_path, geometry_path, split_quadrature=True)
+
+    summary = export_green_artifacts(
+        GreenArtifactRequest(
+            checkpoint=checkpoint_path,
+            config=config_path,
+            outdir=outdir,
+            eval_seed=19,
+            line_indices=(0,),
+            xi_fractions=(0.5,),
+        )
+    )
+
+    assert summary["green_quadrature"]["enabled"] is True
+    assert summary["green_quadrature"]["rel_green"] == "uniform_grid_existing"
+    generated = np.load(outdir / "data" / "generated_eval_data.npz")
+    assert "source_fine" in generated
+    assert "source_fine_grid" in generated
+    assert generated["source_fine"].shape[-1] == 9

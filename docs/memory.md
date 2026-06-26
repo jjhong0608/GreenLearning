@@ -116,6 +116,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   합치지 않는다. Trunk coordinate는 항상 unit `(t, eta) in [0,1]^2`이고,
   `dataset.samples_per_line`은 complex GreenNet mode에서 connected interval당
   synthetic sample 수를 뜻한다.
+- Complex GreenNet의 `training.green_quadrature.enabled=true`는
+  reconstruction loss, train/validation `rel_sol`, `evaluate(...)`, complex Green
+  artifact reconstruction에만 split Gauss-Legendre 적분을 적용한다. Fine source는
+  `source_sampling_factor`로 생성하고 Gaussian source node에서 linear interpolation
+  한다. `rel_green`은 기존 uniform-grid diagnostic으로 유지하며, CouplingNet
+  reconstruction/loss/evaluation에는 이 설정을 적용하지 않는다.
 - Complex CouplingNet은 unit-square CouplingNet처럼 source-conditioned model이다.
   Full-grid `rhs`를 valid point로 gather한 뒤 segment-local unit source branch로
   변환하고, `f_unit=L^2*f_phys` scaling과 segment별 unit L2 norm normalization을
@@ -181,6 +187,11 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   points로 embed하려고 시도하고, `.msh` mode는 vertex 보장을 기본 요구하지 않는다.
   `examples/unit_circle_gmsh.py`는 geometry `.npz`의 `radius` metadata를 읽어서
   non-unit circular geometry와 Gmsh disk mesh radius를 일치시킨다.
+- Annulus FEniCSx sample generation은 `examples/annulus_gmsh.py`를 사용한다.
+  이 script는 geometry `.npz`의 `inner_radius`와 `outer_radius` metadata를 읽고,
+  Gmsh OCC cut으로 inner hole을 가진 single annulus surface를 반환한다. Surface가
+  하나이므로 `point_surface_tags`는 필요 없고, 기존 valid-point embedding은 모든
+  valid point를 같은 surface에 embed한다.
 - Circular sample generation workflow는 `examples/unit_circle_gmsh.py`를 기본
   Gmsh domain script로 사용한다. Smoke default는 `h=0.25`, `mesh_size=0.035`,
   `solution_degree=3`, `target_degree=2`, `train=1`; small dataset default는

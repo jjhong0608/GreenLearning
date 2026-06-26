@@ -21,6 +21,8 @@ class TrainingData:
     B: Tensor
     C: Tensor
     COORDS: Tensor
+    F_FINE: Tensor | None = None
+    F_FINE_GRID: Tensor | None = None
 
 
 class ForwardSampler:
@@ -42,7 +44,15 @@ class ForwardSampler:
         dtype: torch.dtype = torch.float64,
         deterministic: bool = True,
         integration_rule: IntegrationRule = "simpson",
+        source_sampling_factor: int = 1,
     ) -> None:
+        if not isinstance(source_sampling_factor, int) or isinstance(
+            source_sampling_factor,
+            bool,
+        ):
+            raise TypeError("source_sampling_factor must be an integer.")
+        if source_sampling_factor < 1:
+            raise ValueError("source_sampling_factor must be positive.")
         self.axial_lines = axial_lines
         self.data_size_per_each_line = data_size_per_each_line
         self.deterministic = deterministic
@@ -50,6 +60,7 @@ class ForwardSampler:
         self.device = device
         self.dtype = dtype
         self.integration_rule = integration_rule
+        self.source_sampling_factor = source_sampling_factor
 
     def _sample_scale_length(self) -> float:
         if isinstance(self.scale_length, tuple):
@@ -87,6 +98,35 @@ class ForwardSampler:
         k_xx = diff.pow(2).div(scale_length**4).sub(1.0 / (scale_length**2)).mul(k)
         return k_x, k_xx
 
+    def _fine_source_grid(self, x: Tensor) -> Tensor | None:
+        if self.source_sampling_factor <= 1:
+            return None
+        n_fine = self.source_sampling_factor * (x.numel() - 1) + 1
+        return torch.linspace(
+            x[0].item(),
+            x[-1].item(),
+            n_fine,
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+    def _sample_rbf_latent(self, x: Tensor) -> tuple[Tensor, Tensor, float]:
+        alpha = torch.randn(x.shape, device=self.device, dtype=self.dtype)
+        centers = self._centers(x)
+        scale_length = self._sample_scale_length()
+        return alpha, centers, scale_length
+
+    def _evaluate_rbf_mixture(
+        self,
+        x: Tensor,
+        alpha: Tensor,
+        centers: Tensor,
+        scale_length: float,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        k = self._rbf_kernel(x, centers, scale_length)
+        k_x, k_xx = self._rbf_derivatives(x, centers, scale_length, k)
+        return k @ alpha, k_x @ alpha, k_xx @ alpha
+
     @staticmethod
     def _linear_interpolant(x: Tensor, u: Tensor) -> tuple[Tensor, Tensor]:
         ul = u[0].item()
@@ -109,8 +149,11 @@ class ForwardSampler:
         self, x: Tensor, u: Tensor, f: Tensor
     ) -> tuple[Tensor, Tensor]:
         # Use the configured line integral on u^2 to keep |u| <= 1 and avoid degenerate scales.
-        scale = max(self._line_integral(x, u**2).sqrt().item(), self.EPS)
+        scale = self._normalization_scale(x, u)
         return u.div(scale), f.div(scale)
+
+    def _normalization_scale(self, x: Tensor, u: Tensor) -> float:
+        return max(self._line_integral(x, u**2).sqrt().item(), self.EPS)
 
     def generate_sample(
         self,
@@ -121,17 +164,35 @@ class ForwardSampler:
         c_fun: Callable[[Tensor], Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Generate a single axial sample: returns (u, f, a, ap, b, c)."""
+        u, f, a_val, ap_val, b_val, c_val, _f_fine = (
+            self.generate_sample_with_fine_source(
+                x,
+                a_fun,
+                ap_fun,
+                b_line_fun,
+                c_fun,
+            )
+        )
+        return u, f, a_val, ap_val, b_val, c_val
+
+    def generate_sample_with_fine_source(
+        self,
+        x: Tensor,
+        a_fun: Callable[[Tensor], Tensor],
+        ap_fun: Callable[[Tensor], Tensor],
+        b_line_fun: Callable[[Tensor], Tensor],
+        c_fun: Callable[[Tensor], Tensor],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor | None]:
+        """Generate a sample and optional fine source on the same RBF latent field."""
+
         x = x.to(device=self.device, dtype=self.dtype)
-        alpha = torch.randn(x.shape, device=self.device, dtype=self.dtype)
-        centers = self._centers(x)
-        scale_length = self._sample_scale_length()
-
-        k = self._rbf_kernel(x, centers, scale_length)
-        k_x, k_xx = self._rbf_derivatives(x, centers, scale_length, k)
-
-        u = k @ alpha
-        du_dx = k_x @ alpha
-        du_dxx = k_xx @ alpha
+        alpha, centers, scale_length = self._sample_rbf_latent(x)
+        u, du_dx, du_dxx = self._evaluate_rbf_mixture(
+            x=x,
+            alpha=alpha,
+            centers=centers,
+            scale_length=scale_length,
+        )
 
         boundary_interpolant, dl_dx = self._linear_interpolant(x, u)
 
@@ -146,11 +207,48 @@ class ForwardSampler:
         f = -dv_dx + b_val * du_dx + c_val * u
         g = -dm_dx + b_val * dl_dx + c_val * boundary_interpolant
 
+        boundary_left = boundary_interpolant[0].item()
+        boundary_slope = dl_dx[0].item()
         u = u.sub(boundary_interpolant).detach()
         f = f.sub(g).detach()
-        u, f = self._normalize_sample(x, u, f)
+        scale = self._normalization_scale(x, u)
+        u = u.div(scale)
+        f = f.div(scale)
 
-        return u, f, a_val.detach(), ap_val.detach(), b_val.detach(), c_val.detach()
+        f_fine = None
+        x_fine = self._fine_source_grid(x)
+        if x_fine is not None:
+            u_fine, du_dx_fine, du_dxx_fine = self._evaluate_rbf_mixture(
+                x=x_fine,
+                alpha=alpha,
+                centers=centers,
+                scale_length=scale_length,
+            )
+            boundary_fine = boundary_slope * (x_fine - x[0]) + boundary_left
+            dl_dx_fine = torch.full_like(x_fine, boundary_slope)
+            a_fine = a_fun(x_fine)
+            ap_fine = ap_fun(x_fine)
+            b_fine = b_line_fun(x_fine)
+            c_fine = c_fun(x_fine)
+            dv_dx_fine = ap_fine * du_dx_fine + a_fine * du_dxx_fine
+            dm_dx_fine = ap_fine * dl_dx_fine
+            f_fine = (
+                -dv_dx_fine
+                + b_fine * du_dx_fine
+                + c_fine * u_fine
+                - (-dm_dx_fine + b_fine * dl_dx_fine + c_fine * boundary_fine)
+            ).detach()
+            f_fine = f_fine.div(scale)
+
+        return (
+            u,
+            f,
+            a_val.detach(),
+            ap_val.detach(),
+            b_val.detach(),
+            c_val.detach(),
+            f_fine,
+        )
 
     def _generate_sample_on_x_line(
         self,

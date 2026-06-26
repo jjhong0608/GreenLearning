@@ -108,6 +108,38 @@ def test_complex_green_collate_keeps_shared_metadata(tmp_path):
     torch.testing.assert_close(batch.physical_coords, data.physical_coords)
 
 
+def test_complex_green_data_generates_fine_source_on_same_unit_grid(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+
+    data = generate_complex_green_data(
+        geometry,
+        coeffs,
+        branch_input_dim=5,
+        samples_per_interval=1,
+        sampler_mode="forward",
+        scale_length=0.1,
+        deterministic=True,
+        integration_rule="trapezoid",
+        source_sampling_factor=3,
+        dtype=torch.float64,
+    )
+
+    assert data.source_fine is not None
+    assert data.source_fine_grid is not None
+    assert data.source_fine.shape == (1, 5, 13)
+    torch.testing.assert_close(
+        data.source_fine_grid,
+        torch.linspace(0.0, 1.0, 13, dtype=torch.float64),
+    )
+    torch.testing.assert_close(data.source_fine[..., ::3], data.source)
+
+    batch = complex_green_collate_fn([ComplexGreenDataset(data)[0]]).to("cpu")
+    assert batch.source_fine is not None
+    assert batch.source_fine_grid is not None
+    torch.testing.assert_close(batch.source_fine[..., ::3], batch.source)
+
+
 def test_complex_green_data_preserves_duplicate_fixed_disconnected_segments(tmp_path):
     geometry_path = write_geometry_npz(
         tmp_path / "geometry.npz",

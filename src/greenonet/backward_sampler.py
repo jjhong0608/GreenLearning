@@ -27,9 +27,7 @@ class BackwardSampler(ForwardSampler):
 
     def _sample_rhs(self, x: Tensor) -> Tensor:
         x = x.to(device=self.device, dtype=self.dtype)
-        alpha = torch.randn(x.shape, device=self.device, dtype=self.dtype)
-        centers = self._centers(x)
-        scale_length = self._sample_scale_length()
+        alpha, centers, scale_length = self._sample_rbf_latent(x)
         k = self._rbf_kernel(x, centers, scale_length)
         return k @ alpha
 
@@ -41,6 +39,7 @@ class BackwardSampler(ForwardSampler):
         ap_val: Tensor,
         b_val: Tensor,
         c_val: Tensor,
+        output_x: Tensor | None = None,
     ) -> Tensor:
         x_np = x.detach().cpu().numpy().astype(np.float64)
         f_np = f.detach().cpu().numpy().astype(np.float64)
@@ -48,6 +47,11 @@ class BackwardSampler(ForwardSampler):
         ap_np = ap_val.detach().cpu().numpy().astype(np.float64)
         b_np = b_val.detach().cpu().numpy().astype(np.float64)
         c_np = c_val.detach().cpu().numpy().astype(np.float64)
+        output_np = (
+            x_np
+            if output_x is None
+            else output_x.detach().cpu().numpy().astype(np.float64)
+        )
 
         # Avoid numerical blow-up when coefficient is too close to zero.
         a_np = np.where(np.abs(a_np) < self.A_EPS, np.sign(a_np) * self.A_EPS, a_np)
@@ -87,7 +91,7 @@ class BackwardSampler(ForwardSampler):
                 verbose=0,
             )
             if sol.success:
-                u_np = sol.sol(x_np)[0]
+                u_np = sol.sol(output_np)[0]
                 return torch.from_numpy(u_np).to(device=self.device, dtype=self.dtype)
 
         raise RuntimeError(
@@ -103,24 +107,74 @@ class BackwardSampler(ForwardSampler):
         b_fun: Callable[[Tensor], Tensor],
         c_fun: Callable[[Tensor], Tensor],
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        u, f, a_val, ap_val, b_val, c_val, _f_fine = (
+            self.generate_sample_with_fine_source(
+                x,
+                a_fun,
+                ap_fun,
+                b_fun,
+                c_fun,
+            )
+        )
+        return u, f, a_val, ap_val, b_val, c_val
+
+    def generate_sample_with_fine_source(
+        self,
+        x: Tensor,
+        a_fun: Callable[[Tensor], Tensor],
+        ap_fun: Callable[[Tensor], Tensor],
+        b_fun: Callable[[Tensor], Tensor],
+        c_fun: Callable[[Tensor], Tensor],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor | None]:
         x = x.to(device=self.device, dtype=self.dtype)
-        f = self._sample_rhs(x)
+        alpha, centers, scale_length = self._sample_rbf_latent(x)
+        f = self._rbf_kernel(x, centers, scale_length) @ alpha
 
         a_val = a_fun(x)
         ap_val = ap_fun(x)
         b_val = b_fun(x)
         c_val = c_fun(x)
 
+        f_fine = None
+        x_solve = x
+        f_solve = f
+        a_solve = a_val
+        ap_solve = ap_val
+        b_solve = b_val
+        c_solve = c_val
+        x_fine = self._fine_source_grid(x)
+        if x_fine is not None:
+            f_fine = self._rbf_kernel(x_fine, centers, scale_length) @ alpha
+            x_solve = x_fine
+            f_solve = f_fine
+            a_solve = a_fun(x_fine)
+            ap_solve = ap_fun(x_fine)
+            b_solve = b_fun(x_fine)
+            c_solve = c_fun(x_fine)
+
         u = self._solve_bvp_line(
-            x=x,
-            f=f,
-            a_val=a_val,
-            ap_val=ap_val,
-            b_val=b_val,
-            c_val=c_val,
+            x=x_solve,
+            f=f_solve,
+            a_val=a_solve,
+            ap_val=ap_solve,
+            b_val=b_solve,
+            c_val=c_solve,
+            output_x=x,
         )
 
         u = u.detach()
         f = f.detach()
-        u, f = self._normalize_sample(x, u, f)
-        return u, f, a_val.detach(), ap_val.detach(), b_val.detach(), c_val.detach()
+        scale = self._normalization_scale(x, u)
+        u = u.div(scale)
+        f = f.div(scale)
+        if f_fine is not None:
+            f_fine = f_fine.detach().div(scale)
+        return (
+            u,
+            f,
+            a_val.detach(),
+            ap_val.detach(),
+            b_val.detach(),
+            c_val.detach(),
+            f_fine,
+        )

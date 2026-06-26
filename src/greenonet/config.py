@@ -434,6 +434,68 @@ class CouplingTrainingConfig:
 
 
 @dataclass
+class GreenQuadratureConfig:
+    """GreenNet-only reconstruction quadrature settings."""
+
+    enabled: bool = False
+    rule: Literal["split_gauss_legendre"] = "split_gauss_legendre"
+    order: int = 4
+    source_sampling_factor: int = 1
+    source_interpolation: Literal["linear"] = "linear"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("green_quadrature.enabled must be a boolean.")
+        if self.rule != "split_gauss_legendre":
+            raise ValueError("green_quadrature.rule must be 'split_gauss_legendre'.")
+        if not isinstance(self.order, int) or isinstance(self.order, bool):
+            raise TypeError("green_quadrature.order must be an integer.")
+        if self.order <= 0:
+            raise ValueError("green_quadrature.order must be positive.")
+        if not isinstance(self.source_sampling_factor, int) or isinstance(
+            self.source_sampling_factor,
+            bool,
+        ):
+            raise TypeError(
+                "green_quadrature.source_sampling_factor must be an integer."
+            )
+        if self.source_sampling_factor < 1:
+            raise ValueError(
+                "green_quadrature.source_sampling_factor must be positive."
+            )
+        if self.source_interpolation != "linear":
+            raise ValueError("green_quadrature.source_interpolation must be 'linear'.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: GreenQuadratureConfig | dict[str, Any] | None,
+    ) -> GreenQuadratureConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "rule",
+                    "order",
+                    "source_sampling_factor",
+                    "source_interpolation",
+                }
+            )
+            if unknown:
+                raise TypeError(
+                    f"green_quadrature has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("green_quadrature must be an object.")
+
+
+@dataclass
 class TrainingConfig:
     """Training hyperparameters."""
 
@@ -444,12 +506,18 @@ class TrainingConfig:
     device: str = "cpu"
     compute_validation_rel_sol: bool = False
     integration_rule: IntegrationRule = "simpson"
+    green_quadrature: GreenQuadratureConfig = field(
+        default_factory=GreenQuadratureConfig
+    )
     compile: CompileConfig = field(default_factory=CompileConfig)
     lbfgs_max_iter: int = 0
     lbfgs_history_size: int = 10
     lbfgs_lr: float = 1.0
     lbfgs_tolerance_grad: float = 1e-7
     lbfgs_epochs: int = 1
+
+    def __post_init__(self) -> None:
+        self.green_quadrature = GreenQuadratureConfig.from_raw(self.green_quadrature)
 
 
 @dataclass

@@ -39,6 +39,8 @@ class ComplexGreenData:
     length: Tensor
     solution: Tensor
     source: Tensor
+    source_fine: Tensor | None
+    source_fine_grid: Tensor | None
     a_vals: Tensor
     ap_vals: Tensor
     b_vals: Tensor
@@ -71,6 +73,8 @@ class ComplexGreenItem:
     length: Tensor
     solution: Tensor
     source: Tensor
+    source_fine: Tensor | None
+    source_fine_grid: Tensor | None
     a_vals: Tensor
     ap_vals: Tensor
     b_vals: Tensor
@@ -91,6 +95,8 @@ class ComplexGreenBatch:
     length: Tensor
     solution: Tensor
     source: Tensor
+    source_fine: Tensor | None
+    source_fine_grid: Tensor | None
     a_vals: Tensor
     ap_vals: Tensor
     b_vals: Tensor
@@ -108,6 +114,14 @@ class ComplexGreenBatch:
             length=self.length.to(device),
             solution=self.solution.to(device),
             source=self.source.to(device),
+            source_fine=(
+                None if self.source_fine is None else self.source_fine.to(device)
+            ),
+            source_fine_grid=(
+                None
+                if self.source_fine_grid is None
+                else self.source_fine_grid.to(device)
+            ),
             a_vals=self.a_vals.to(device),
             ap_vals=self.ap_vals.to(device),
             b_vals=self.b_vals.to(device),
@@ -124,6 +138,25 @@ class ComplexGreenDataset(Dataset[ComplexGreenItem]):
             raise ValueError("solution and source must have matching shapes.")
         if data.solution.dim() != 3:
             raise ValueError("solution/source must have shape (samples, intervals, M).")
+        if data.source_fine is not None:
+            if data.source_fine.dim() != 3:
+                raise ValueError(
+                    "source_fine must have shape (samples, intervals, M_fine)."
+                )
+            if data.source_fine.shape[:2] != data.source.shape[:2]:
+                raise ValueError(
+                    "source_fine must match source sample/interval dimensions."
+                )
+            if data.source_fine_grid is None:
+                raise ValueError("source_fine_grid is required with source_fine.")
+            if data.source_fine_grid.dim() != 1:
+                raise ValueError("source_fine_grid must be one-dimensional.")
+            if data.source_fine_grid.numel() != data.source_fine.shape[-1]:
+                raise ValueError(
+                    "source_fine_grid length must match source_fine last dimension."
+                )
+        elif data.source_fine_grid is not None:
+            raise ValueError("source_fine_grid requires source_fine.")
         expected_interval_shape = (data.num_intervals, data.branch_input_dim)
         for field_name, values in (
             ("a_vals", data.a_vals),
@@ -152,6 +185,10 @@ class ComplexGreenDataset(Dataset[ComplexGreenItem]):
             length=self.data.length,
             solution=self.data.solution[index],
             source=self.data.source[index],
+            source_fine=(
+                None if self.data.source_fine is None else self.data.source_fine[index]
+            ),
+            source_fine_grid=self.data.source_fine_grid,
             a_vals=self.data.a_vals,
             ap_vals=self.data.ap_vals,
             b_vals=self.data.b_vals,
@@ -174,11 +211,26 @@ def complex_green_collate_fn(batch: Sequence[ComplexGreenItem]) -> ComplexGreenB
         length=first.length,
         solution=torch.stack([item.solution for item in batch], dim=0),
         source=torch.stack([item.source for item in batch], dim=0),
+        source_fine=(
+            None
+            if first.source_fine is None
+            else torch.stack(
+                [_require_source_fine(item.source_fine) for item in batch],
+                dim=0,
+            )
+        ),
+        source_fine_grid=first.source_fine_grid,
         a_vals=first.a_vals,
         ap_vals=first.ap_vals,
         b_vals=first.b_vals,
         c_vals=first.c_vals,
     )
+
+
+def _require_source_fine(source_fine: Tensor | None) -> Tensor:
+    if source_fine is None:
+        raise ValueError("All batch items must include source_fine or none may.")
+    return source_fine
 
 
 class ComplexGreenDataBuilder:
@@ -195,11 +247,19 @@ class ComplexGreenDataBuilder:
         scale_length: float | tuple[float, float],
         deterministic: bool,
         integration_rule: IntegrationRule,
+        source_sampling_factor: int = 1,
         dtype: torch.dtype,
         device: torch.device | str = "cpu",
     ) -> None:
         if samples_per_interval <= 0:
             raise ValueError("samples_per_interval must be positive.")
+        if not isinstance(source_sampling_factor, int) or isinstance(
+            source_sampling_factor,
+            bool,
+        ):
+            raise TypeError("source_sampling_factor must be an integer.")
+        if source_sampling_factor < 1:
+            raise ValueError("source_sampling_factor must be positive.")
         self.geometry = geometry
         self.coeffs = coeffs
         self.branch_input_dim = branch_input_dim
@@ -208,6 +268,7 @@ class ComplexGreenDataBuilder:
         self.scale_length = scale_length
         self.deterministic = deterministic
         self.integration_rule = integration_rule
+        self.source_sampling_factor = source_sampling_factor
         self.dtype = dtype
         self.device = torch.device(device)
         self.unit_grid = unit_branch_grid(
@@ -215,11 +276,22 @@ class ComplexGreenDataBuilder:
             dtype=dtype,
             device=self.device,
         )
+        self.source_fine_grid = (
+            None
+            if source_sampling_factor <= 1
+            else torch.linspace(
+                0.0,
+                1.0,
+                (branch_input_dim - 1) * source_sampling_factor + 1,
+                dtype=dtype,
+                device=self.device,
+            )
+        )
 
     def build(self) -> ComplexGreenData:
         interval_meta = self._build_interval_metadata()
         a_vals, ap_vals, b_vals, c_vals = self._build_branch_coefficients()
-        solution, source = self._sample_interval_data(
+        solution, source, source_fine = self._sample_interval_data(
             left=interval_meta.left,
             fixed=interval_meta.fixed,
             length=interval_meta.length,
@@ -236,6 +308,12 @@ class ComplexGreenDataBuilder:
             length=interval_meta.length.detach().cpu(),
             solution=solution.detach().cpu(),
             source=source.detach().cpu(),
+            source_fine=None if source_fine is None else source_fine.detach().cpu(),
+            source_fine_grid=(
+                None
+                if self.source_fine_grid is None
+                else self.source_fine_grid.detach().cpu()
+            ),
             a_vals=a_vals.detach().cpu(),
             ap_vals=ap_vals.detach().cpu(),
             b_vals=b_vals.detach().cpu(),
@@ -320,7 +398,7 @@ class ComplexGreenDataBuilder:
         fixed: Tensor,
         length: Tensor,
         axis_id: Tensor,
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor | None]:
         sampler = self._make_sampler()
         num_intervals = int(axis_id.numel())
         solution = torch.empty(
@@ -329,6 +407,19 @@ class ComplexGreenDataBuilder:
             device=self.device,
         )
         source = torch.empty_like(solution)
+        source_fine = (
+            None
+            if self.source_fine_grid is None
+            else torch.empty(
+                (
+                    self.samples_per_interval,
+                    num_intervals,
+                    int(self.source_fine_grid.numel()),
+                ),
+                dtype=self.dtype,
+                device=self.device,
+            )
+        )
         for interval_idx in range(num_intervals):
             functions = self._unit_coefficient_functions(
                 axis="x" if int(axis_id[interval_idx].item()) == 0 else "y",
@@ -337,16 +428,22 @@ class ComplexGreenDataBuilder:
                 length=length[interval_idx],
             )
             for sample_idx in range(self.samples_per_interval):
-                u, f, _a, _ap, _b, _c = sampler.generate_sample(
-                    self.unit_grid,
-                    functions[0],
-                    functions[1],
-                    functions[2],
-                    functions[3],
+                u, f, _a, _ap, _b, _c, f_fine = (
+                    sampler.generate_sample_with_fine_source(
+                        self.unit_grid,
+                        functions[0],
+                        functions[1],
+                        functions[2],
+                        functions[3],
+                    )
                 )
                 solution[sample_idx, interval_idx] = u
                 source[sample_idx, interval_idx] = f
-        return solution, source
+                if source_fine is not None:
+                    if f_fine is None:
+                        raise RuntimeError("Sampler did not return fine source data.")
+                    source_fine[sample_idx, interval_idx] = f_fine
+        return solution, source, source_fine
 
     def _make_sampler(self) -> ForwardSampler | BackwardSampler:
         if self.sampler_mode == "forward":
@@ -363,6 +460,7 @@ class ComplexGreenDataBuilder:
             dtype=self.dtype,
             deterministic=self.deterministic,
             integration_rule=self.integration_rule,
+            source_sampling_factor=self.source_sampling_factor,
         )
 
     def _unit_coefficient_functions(
@@ -413,6 +511,7 @@ def generate_complex_green_data(
     scale_length: float | tuple[float, float],
     deterministic: bool,
     integration_rule: IntegrationRule,
+    source_sampling_factor: int = 1,
     dtype: torch.dtype,
     device: torch.device | str = "cpu",
 ) -> ComplexGreenData:
@@ -425,6 +524,7 @@ def generate_complex_green_data(
         scale_length=scale_length,
         deterministic=deterministic,
         integration_rule=integration_rule,
+        source_sampling_factor=source_sampling_factor,
         dtype=dtype,
         device=device,
     ).build()

@@ -340,12 +340,29 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMix
         a_used: torch.Tensor,
         ap_used: torch.Tensor,
         b_used: torch.Tensor,
+        a_eval: torch.Tensor | None = None,
+        ap_eval: torch.Tensor | None = None,
+        b_eval: torch.Tensor | None = None,
     ) -> torch.Tensor:
         ap_used = torch.where(ap_used.abs() < 1e-15, torch.zeros_like(ap_used), ap_used)
         x = trunk_coords[..., 0]
-        a_x = self._interpolate_unit_samples(a_used, x)
-        ap_x = self._interpolate_unit_samples(ap_used, x)
-        b_x = self._interpolate_unit_samples(b_used, x)
+        if a_eval is None:
+            a_x = self._interpolate_unit_samples(a_used, x)
+        else:
+            a_x = a_eval
+        if ap_eval is None:
+            ap_x = self._interpolate_unit_samples(ap_used, x)
+        else:
+            ap_x = ap_eval
+        if b_eval is None:
+            b_x = self._interpolate_unit_samples(b_used, x)
+        else:
+            b_x = b_eval
+        expected_shape = (a_used.shape[0], *trunk_coords.shape[:-1])
+        if not (a_x.shape == ap_x.shape == b_x.shape == expected_shape):
+            raise ValueError(
+                f"a_eval/ap_eval/b_eval must have shape {expected_shape} when provided."
+            )
 
         envelope = self._envelope(trunk_coords).squeeze(-1).unsqueeze(0)
         remain = self._remain(trunk_coords).squeeze(-1).unsqueeze(0)
@@ -372,6 +389,10 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMix
         ap_vals: torch.Tensor,
         b_vals: torch.Tensor,
         c_vals: torch.Tensor,
+        *,
+        a_eval: torch.Tensor | None = None,
+        ap_eval: torch.Tensor | None = None,
+        b_eval: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Evaluate Green values for arbitrary unit-interval ``(t, eta)`` pairs.
 
@@ -407,6 +428,9 @@ class GreenONetModel(nn.Module, ActivationFactoryMixin, StructuredGreenKernelMix
             a_used=a_used,
             ap_used=ap_used,
             b_used=b_used,
+            a_eval=a_eval,
+            ap_eval=ap_eval,
+            b_eval=b_eval,
         )
 
     def forward(

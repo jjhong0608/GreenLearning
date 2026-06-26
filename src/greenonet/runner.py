@@ -340,6 +340,11 @@ def run_complex_green_o_net(
         scale_length=scale_length,
         deterministic=deterministic,
         integration_rule=cfg_training.integration_rule,
+        source_sampling_factor=(
+            cfg_training.green_quadrature.source_sampling_factor
+            if cfg_training.green_quadrature.enabled
+            else 1
+        ),
         dtype=cfg_model.dtype,
     )
     train_dataset = ComplexGreenDataset(train_data)
@@ -374,6 +379,11 @@ def run_complex_green_o_net(
             scale_length=val_scale_length,
             deterministic=deterministic,
             integration_rule=cfg_training.integration_rule,
+            source_sampling_factor=(
+                cfg_training.green_quadrature.source_sampling_factor
+                if cfg_training.green_quadrature.enabled
+                else 1
+            ),
             dtype=cfg_model.dtype,
         )
         validation_dataset = ComplexGreenDataset(validation_data)
@@ -384,6 +394,7 @@ def run_complex_green_o_net(
         config=cfg_training,
         work_dir=work_dir,
         model_cfg=cfg_model,
+        coeffs=coeffs,
         terminal_width=terminal_width,
     )
     trainer.train(train_dataset, validation_dataset)

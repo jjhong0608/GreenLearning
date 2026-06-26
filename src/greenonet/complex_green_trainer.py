@@ -16,6 +16,7 @@ from greenonet.compile_utils import (
     model_state_dict_for_save,
     unwrap_compiled_model,
 )
+from greenonet.coefficients import CoefficientFunctions
 from greenonet.complex_green_data import (
     ComplexGreenBatch,
     ComplexGreenDataset,
@@ -26,6 +27,12 @@ from greenonet.config import ModelConfig, TrainingConfig
 from greenonet.greens import (
     exact_green_kernel_from_unit_coefficients,
     select_green_reference_policy,
+)
+from greenonet.green_quadrature import (
+    build_split_pair_coords,
+    evaluate_unit_line_coefficients,
+    reconstruct_split_gauss_legendre,
+    split_gauss_legendre_nodes,
 )
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
@@ -53,11 +60,13 @@ class ComplexGreenTrainer(LoggingMixin):
         config: TrainingConfig,
         work_dir: Path | str,
         model_cfg: ModelConfig | None = None,
+        coeffs: CoefficientFunctions | None = None,
         terminal_width: int | None = None,
     ) -> None:
         self.model = model
         self.config = config
         self.model_cfg = model_cfg
+        self.coeffs = coeffs
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         super().__init__(
@@ -93,6 +102,10 @@ class ComplexGreenTrainer(LoggingMixin):
         ap_vals: Tensor,
         b_vals: Tensor,
         c_vals: Tensor,
+        *,
+        a_eval: Tensor | None = None,
+        ap_eval: Tensor | None = None,
+        b_eval: Tensor | None = None,
     ) -> Tensor:
         pair_forward = getattr(self.model, "forward_pairs", None)
         if not callable(pair_forward):
@@ -100,7 +113,20 @@ class ComplexGreenTrainer(LoggingMixin):
             pair_forward = getattr(original, "forward_pairs", None)
         if not callable(pair_forward):
             raise TypeError("Complex GreenNet training requires model.forward_pairs().")
-        return cast(Tensor, pair_forward(trunk_grid, a_vals, ap_vals, b_vals, c_vals))
+        kwargs: dict[str, Tensor] = {}
+        if a_eval is not None:
+            kwargs["a_eval"] = a_eval
+        if ap_eval is not None:
+            kwargs["ap_eval"] = ap_eval
+        if b_eval is not None:
+            kwargs["b_eval"] = b_eval
+        return cast(
+            Tensor,
+            pair_forward(trunk_grid, a_vals, ap_vals, b_vals, c_vals, **kwargs),
+        )
+
+    def _green_quadrature_enabled(self) -> bool:
+        return self.config.green_quadrature.enabled
 
     @staticmethod
     def _reconstruct_solution(
@@ -111,6 +137,68 @@ class ComplexGreenTrainer(LoggingMixin):
     ) -> Tensor:
         rhs = source.unsqueeze(-2) * kernel.unsqueeze(0)
         return integrate(rhs, x=unit_grid, dim=-1, rule=integration_rule)
+
+    def _split_kernel_nodes(self, batch: ComplexGreenBatch) -> Tensor:
+        eta_nodes, _weights = split_gauss_legendre_nodes(
+            batch.unit_grid,
+            self.config.green_quadrature.order,
+        )
+        pair_coords = build_split_pair_coords(batch.unit_grid, eta_nodes)
+        a_eval: Tensor | None = None
+        ap_eval: Tensor | None = None
+        b_eval: Tensor | None = None
+        if self.coeffs is not None:
+            a_eval, ap_eval, b_eval = evaluate_unit_line_coefficients(
+                self.coeffs,
+                axis_id=batch.axis_id,
+                left=batch.left,
+                fixed=batch.fixed,
+                length=batch.length,
+                t_nodes=pair_coords[..., 0],
+            )
+        return self._forward_pairs(
+            pair_coords,
+            batch.a_vals,
+            batch.ap_vals,
+            batch.b_vals,
+            batch.c_vals,
+            a_eval=a_eval,
+            ap_eval=ap_eval,
+            b_eval=b_eval,
+        )
+
+    def _reconstruct_solution_for_batch(
+        self,
+        batch: ComplexGreenBatch,
+        *,
+        prediction: Tensor | None,
+    ) -> Tensor:
+        if self._green_quadrature_enabled():
+            source = (
+                batch.source_fine if batch.source_fine is not None else batch.source
+            )
+            source_grid = (
+                batch.source_fine_grid
+                if batch.source_fine_grid is not None
+                else batch.unit_grid
+            )
+            kernel_nodes = self._split_kernel_nodes(batch)
+            return reconstruct_split_gauss_legendre(
+                kernel_nodes=kernel_nodes,
+                source=source,
+                source_grid=source_grid,
+                target_grid=batch.unit_grid,
+                order=self.config.green_quadrature.order,
+                source_interpolation=self.config.green_quadrature.source_interpolation,
+            )
+        if prediction is None:
+            raise ValueError("prediction is required for uniform reconstruction.")
+        return self._reconstruct_solution(
+            kernel=prediction,
+            source=batch.source,
+            unit_grid=batch.unit_grid,
+            integration_rule=self.config.integration_rule,
+        )
 
     @classmethod
     def _green_reconstruction_loss(
@@ -144,6 +232,32 @@ class ComplexGreenTrainer(LoggingMixin):
         rel_sol = torch.sqrt(residual_energy / solution_energy).mean()
         return residual_energy.mean(), rel_sol
 
+    def _green_reconstruction_loss_for_batch(
+        self,
+        batch: ComplexGreenBatch,
+        *,
+        prediction: Tensor | None,
+    ) -> tuple[Tensor, Tensor]:
+        reconstruction = self._reconstruct_solution_for_batch(
+            batch,
+            prediction=prediction,
+        )
+        residual = batch.solution - reconstruction
+        residual_energy = integrate(
+            residual.pow(2),
+            x=batch.unit_grid,
+            dim=-1,
+            rule=self.config.integration_rule,
+        )
+        solution_energy = integrate(
+            batch.solution.pow(2),
+            x=batch.unit_grid,
+            dim=-1,
+            rule=self.config.integration_rule,
+        ).clamp_min(1.0e-12)
+        rel_sol = torch.sqrt(residual_energy / solution_energy).mean()
+        return residual_energy.mean(), rel_sol
+
     @classmethod
     def _green_reconstruction_rel_by_interval(
         cls,
@@ -172,6 +286,31 @@ class ComplexGreenTrainer(LoggingMixin):
             x=unit_grid,
             dim=-1,
             rule=integration_rule,
+        ).clamp_min(1.0e-12)
+        return torch.sqrt(residual_energy / solution_energy)
+
+    def _green_reconstruction_rel_by_interval_for_batch(
+        self,
+        batch: ComplexGreenBatch,
+        *,
+        prediction: Tensor | None,
+    ) -> Tensor:
+        reconstruction = self._reconstruct_solution_for_batch(
+            batch,
+            prediction=prediction,
+        )
+        residual = batch.solution - reconstruction
+        residual_energy = integrate(
+            residual.pow(2),
+            x=batch.unit_grid,
+            dim=-1,
+            rule=self.config.integration_rule,
+        )
+        solution_energy = integrate(
+            batch.solution.pow(2),
+            x=batch.unit_grid,
+            dim=-1,
+            rule=self.config.integration_rule,
         ).clamp_min(1.0e-12)
         return torch.sqrt(residual_energy / solution_energy)
 
@@ -254,20 +393,19 @@ class ComplexGreenTrainer(LoggingMixin):
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(self.device)
-                trunk_grid = self._build_trunk_grid(batch.unit_grid)
-                prediction = self._forward_pairs(
-                    trunk_grid,
-                    batch.a_vals,
-                    batch.ap_vals,
-                    batch.b_vals,
-                    batch.c_vals,
-                )
-                rel_line = self._green_reconstruction_rel_by_interval(
-                    kernel=prediction,
-                    source=batch.source,
-                    solution=batch.solution,
-                    unit_grid=batch.unit_grid,
-                    integration_rule=self.config.integration_rule,
+                prediction = None
+                if not self._green_quadrature_enabled():
+                    trunk_grid = self._build_trunk_grid(batch.unit_grid)
+                    prediction = self._forward_pairs(
+                        trunk_grid,
+                        batch.a_vals,
+                        batch.ap_vals,
+                        batch.b_vals,
+                        batch.c_vals,
+                    )
+                rel_line = self._green_reconstruction_rel_by_interval_for_batch(
+                    batch,
+                    prediction=prediction,
                 )
                 total += float(rel_line.sum().item())
                 count += int(rel_line.numel())
@@ -312,21 +450,20 @@ class ComplexGreenTrainer(LoggingMixin):
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(self.device)
-                trunk_grid = self._build_trunk_grid(batch.unit_grid)
-                prediction = self._forward_pairs(
-                    trunk_grid,
-                    batch.a_vals,
-                    batch.ap_vals,
-                    batch.b_vals,
-                    batch.c_vals,
-                )
+                prediction = None
+                if not self._green_quadrature_enabled():
+                    trunk_grid = self._build_trunk_grid(batch.unit_grid)
+                    prediction = self._forward_pairs(
+                        trunk_grid,
+                        batch.a_vals,
+                        batch.ap_vals,
+                        batch.b_vals,
+                        batch.c_vals,
+                    )
                 rel_values.append(
-                    self._green_reconstruction_rel_by_interval(
-                        kernel=prediction,
-                        source=batch.source,
-                        solution=batch.solution,
-                        unit_grid=batch.unit_grid,
-                        integration_rule=self.config.integration_rule,
+                    self._green_reconstruction_rel_by_interval_for_batch(
+                        batch,
+                        prediction=prediction,
                     )
                     .detach()
                     .cpu()
@@ -429,6 +566,15 @@ class ComplexGreenTrainer(LoggingMixin):
             "num_intervals": dataset.data.num_intervals,
             "num_x_segments": int((dataset.data.axis_id == 0).sum().item()),
             "num_y_segments": int((dataset.data.axis_id == 1).sum().item()),
+            "green_quadrature": {
+                "enabled": self.config.green_quadrature.enabled,
+                "rule": self.config.green_quadrature.rule,
+                "order": self.config.green_quadrature.order,
+                "source_sampling_factor": self.config.green_quadrature.source_sampling_factor,
+                "source_interpolation": self.config.green_quadrature.source_interpolation,
+                "applies_to": "reconstruction_loss_and_rel_sol",
+                "rel_green": "uniform_grid_existing",
+            },
             "mean_rel_sol_interval": float(train_stats.mean.mean().item()),
             "max_rel_sol_interval": float(train_stats.max.max().item()),
             "rel_green_valid": bool(torch.isfinite(rel_green).all().item()),
@@ -502,21 +648,20 @@ class ComplexGreenTrainer(LoggingMixin):
             last_batch: ComplexGreenBatch | None = None
             for batch in loader:
                 batch = batch.to(self.device)
-                trunk_grid = self._build_trunk_grid(batch.unit_grid)
                 optimizer.zero_grad()
-                prediction = self._forward_pairs(
-                    trunk_grid,
-                    batch.a_vals,
-                    batch.ap_vals,
-                    batch.b_vals,
-                    batch.c_vals,
-                )
-                loss, _rel_sol = self._green_reconstruction_loss(
-                    kernel=prediction,
-                    source=batch.source,
-                    solution=batch.solution,
-                    unit_grid=batch.unit_grid,
-                    integration_rule=self.config.integration_rule,
+                prediction = None
+                if not self._green_quadrature_enabled():
+                    trunk_grid = self._build_trunk_grid(batch.unit_grid)
+                    prediction = self._forward_pairs(
+                        trunk_grid,
+                        batch.a_vals,
+                        batch.ap_vals,
+                        batch.b_vals,
+                        batch.c_vals,
+                    )
+                loss, _rel_sol = self._green_reconstruction_loss_for_batch(
+                    batch,
+                    prediction=prediction,
                 )
                 cast(Any, loss).backward()
                 optimizer.step()
@@ -528,14 +673,6 @@ class ComplexGreenTrainer(LoggingMixin):
 
             if epoch % self.config.log_interval == 0 and last_batch is not None:
                 with torch.no_grad():
-                    trunk_grid = self._build_trunk_grid(last_batch.unit_grid)
-                    pred_eval = self._forward_pairs(
-                        trunk_grid,
-                        last_batch.a_vals,
-                        last_batch.ap_vals,
-                        last_batch.b_vals,
-                        last_batch.c_vals,
-                    )
                     if self.config.compute_validation_rel_sol:
                         train_rel_sol = self._dataset_rel_sol(dataset)
                         assert validation_dataset is not None
@@ -543,12 +680,19 @@ class ComplexGreenTrainer(LoggingMixin):
                         self.rel_sol_history.append(train_rel_sol)
                         self.val_rel_sol_history.append(val_rel_sol)
                     else:
-                        _loss, rel_sol = self._green_reconstruction_loss(
-                            kernel=pred_eval,
-                            source=last_batch.source,
-                            solution=last_batch.solution,
-                            unit_grid=last_batch.unit_grid,
-                            integration_rule=self.config.integration_rule,
+                        pred_eval = None
+                        if not self._green_quadrature_enabled():
+                            trunk_grid = self._build_trunk_grid(last_batch.unit_grid)
+                            pred_eval = self._forward_pairs(
+                                trunk_grid,
+                                last_batch.a_vals,
+                                last_batch.ap_vals,
+                                last_batch.b_vals,
+                                last_batch.c_vals,
+                            )
+                        _loss, rel_sol = self._green_reconstruction_loss_for_batch(
+                            last_batch,
+                            prediction=pred_eval,
                         )
                         self.rel_sol_history.append(float(rel_sol.detach().item()))
 
@@ -613,24 +757,23 @@ class ComplexGreenTrainer(LoggingMixin):
             last_batch: ComplexGreenBatch | None = None
             for batch in self._make_loader(dataset, shuffle=True):
                 batch = batch.to(self.device)
-                trunk_grid = self._build_trunk_grid(batch.unit_grid)
                 last_batch = batch
 
                 def closure() -> Tensor:
                     optimizer.zero_grad()
-                    prediction = self._forward_pairs(
-                        trunk_grid,
-                        batch.a_vals,
-                        batch.ap_vals,
-                        batch.b_vals,
-                        batch.c_vals,
-                    )
-                    loss, _rel_sol = self._green_reconstruction_loss(
-                        kernel=prediction,
-                        source=batch.source,
-                        solution=batch.solution,
-                        unit_grid=batch.unit_grid,
-                        integration_rule=self.config.integration_rule,
+                    closure_prediction = None
+                    if not self._green_quadrature_enabled():
+                        trunk_grid = self._build_trunk_grid(batch.unit_grid)
+                        closure_prediction = self._forward_pairs(
+                            trunk_grid,
+                            batch.a_vals,
+                            batch.ap_vals,
+                            batch.b_vals,
+                            batch.c_vals,
+                        )
+                    loss, _rel_sol = self._green_reconstruction_loss_for_batch(
+                        batch,
+                        prediction=closure_prediction,
                     )
                     cast(Any, loss).backward()
                     return loss
@@ -724,20 +867,19 @@ class ComplexGreenTrainer(LoggingMixin):
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(self.device)
-                trunk_grid = self._build_trunk_grid(batch.unit_grid)
-                prediction = self._forward_pairs(
-                    trunk_grid,
-                    batch.a_vals,
-                    batch.ap_vals,
-                    batch.b_vals,
-                    batch.c_vals,
-                )
-                loss, _rel_sol = self._green_reconstruction_loss(
-                    kernel=prediction,
-                    source=batch.source,
-                    solution=batch.solution,
-                    unit_grid=batch.unit_grid,
-                    integration_rule=self.config.integration_rule,
+                prediction = None
+                if not self._green_quadrature_enabled():
+                    trunk_grid = self._build_trunk_grid(batch.unit_grid)
+                    prediction = self._forward_pairs(
+                        trunk_grid,
+                        batch.a_vals,
+                        batch.ap_vals,
+                        batch.b_vals,
+                        batch.c_vals,
+                    )
+                loss, _rel_sol = self._green_reconstruction_loss_for_batch(
+                    batch,
+                    prediction=prediction,
                 )
                 losses.append(float(loss.item()))
         return float(sum(losses) / max(len(losses), 1))

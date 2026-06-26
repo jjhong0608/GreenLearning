@@ -47,6 +47,8 @@ class GeometryGridLoader:
     OPTIONAL_METADATA_KEYS: tuple[str, ...] = (
         "domain_type",
         "radius",
+        "inner_radius",
+        "outer_radius",
         "center",
         "step_size",
         "boundary_tol",

@@ -42,6 +42,13 @@
     "lbfgs_tolerance_grad": 1e-20,
     "lbfgs_epochs": 100,
     "integration_rule": "trapezoid",
+    "green_quadrature": {
+      "enabled": true,
+      "rule": "split_gauss_legendre",
+      "order": 4,
+      "source_sampling_factor": 4,
+      "source_interpolation": "linear"
+    },
     "compile": {
       "enabled": true
     }

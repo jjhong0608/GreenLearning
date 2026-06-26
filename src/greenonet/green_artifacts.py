@@ -30,6 +30,12 @@ from greenonet.greens import (
     exact_green_kernel_from_unit_coefficients,
     select_green_reference_policy,
 )
+from greenonet.green_quadrature import (
+    build_split_pair_coords,
+    evaluate_unit_line_coefficients,
+    reconstruct_split_gauss_legendre,
+    split_gauss_legendre_nodes,
+)
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.numerics import IntegrationRule, integrate
@@ -527,12 +533,21 @@ class GreenArtifactExporter:
             scale_length=sampling_cfg.scale_length,
             deterministic=dataset_cfg.deterministic,
             integration_rule=training_cfg.integration_rule,
+            source_sampling_factor=(
+                training_cfg.green_quadrature.source_sampling_factor
+                if training_cfg.green_quadrature.enabled
+                else 1
+            ),
             dtype=model_cfg.dtype,
         )
         dataset = ComplexGreenDataset(data)
         unit_grid = data.unit_grid.to(device)
         solution = data.solution.to(device)
         source = data.source.to(device)
+        source_fine = None if data.source_fine is None else data.source_fine.to(device)
+        source_fine_grid = (
+            None if data.source_fine_grid is None else data.source_fine_grid.to(device)
+        )
         a_vals = data.a_vals.to(device)
         ap_vals = data.ap_vals.to(device)
         b_vals = data.b_vals.to(device)
@@ -548,12 +563,35 @@ class GreenArtifactExporter:
                 b_vals=b_vals,
                 c_vals=c_vals,
             )
-            reconstruction = self._reconstruct_solution(
-                kernel=kernel,
-                source=source,
-                trunk_grid=trunk_grid,
-                integration_rule=training_cfg.integration_rule,
-            )
+            if training_cfg.green_quadrature.enabled:
+                split_kernel = self._complex_split_kernel_nodes(
+                    model=model,
+                    coeffs=coeffs,
+                    dataset=dataset,
+                    unit_grid=unit_grid,
+                    a_vals=a_vals,
+                    ap_vals=ap_vals,
+                    b_vals=b_vals,
+                    c_vals=c_vals,
+                    order=training_cfg.green_quadrature.order,
+                )
+                reconstruction = reconstruct_split_gauss_legendre(
+                    kernel_nodes=split_kernel,
+                    source=source_fine if source_fine is not None else source,
+                    source_grid=(
+                        source_fine_grid if source_fine_grid is not None else unit_grid
+                    ),
+                    target_grid=unit_grid,
+                    order=training_cfg.green_quadrature.order,
+                    source_interpolation=training_cfg.green_quadrature.source_interpolation,
+                )
+            else:
+                reconstruction = self._reconstruct_solution(
+                    kernel=kernel,
+                    source=source,
+                    trunk_grid=trunk_grid,
+                    integration_rule=training_cfg.integration_rule,
+                )
             rel_sol_by_interval = self._relative_solution_error_by_line(
                 reconstruction=reconstruction,
                 solution=solution,
@@ -657,6 +695,15 @@ class GreenArtifactExporter:
             "eval_seed": self.request.eval_seed,
             "eval_split": self.request.eval_split,
             "eval_sampling": _jsonify(asdict(sampling_cfg)),
+            "green_quadrature": {
+                "enabled": training_cfg.green_quadrature.enabled,
+                "rule": training_cfg.green_quadrature.rule,
+                "order": training_cfg.green_quadrature.order,
+                "source_sampling_factor": training_cfg.green_quadrature.source_sampling_factor,
+                "source_interpolation": training_cfg.green_quadrature.source_interpolation,
+                "applies_to": "reconstruction_and_rel_sol",
+                "rel_green": "uniform_grid_existing",
+            },
             "geometry_mode": "complex",
             "geometry_path": str(dataset_cfg.geometry_path),
             "num_intervals": data.num_intervals,
@@ -707,11 +754,60 @@ class GreenArtifactExporter:
         ap_vals: Tensor,
         b_vals: Tensor,
         c_vals: Tensor,
+        a_eval: Tensor | None = None,
+        ap_eval: Tensor | None = None,
+        b_eval: Tensor | None = None,
     ) -> Tensor:
         pair_forward = getattr(model, "forward_pairs", None)
         if not callable(pair_forward):
             raise TypeError("Complex Green artifact export requires forward_pairs().")
-        return cast(Tensor, pair_forward(trunk_grid, a_vals, ap_vals, b_vals, c_vals))
+        kwargs: dict[str, Tensor] = {}
+        if a_eval is not None:
+            kwargs["a_eval"] = a_eval
+        if ap_eval is not None:
+            kwargs["ap_eval"] = ap_eval
+        if b_eval is not None:
+            kwargs["b_eval"] = b_eval
+        return cast(
+            Tensor,
+            pair_forward(trunk_grid, a_vals, ap_vals, b_vals, c_vals, **kwargs),
+        )
+
+    def _complex_split_kernel_nodes(
+        self,
+        *,
+        model: GreenONetModel,
+        coeffs: CoefficientFunctions,
+        dataset: ComplexGreenDataset,
+        unit_grid: Tensor,
+        a_vals: Tensor,
+        ap_vals: Tensor,
+        b_vals: Tensor,
+        c_vals: Tensor,
+        order: int,
+    ) -> Tensor:
+        eta_nodes, _weights = split_gauss_legendre_nodes(unit_grid, order)
+        pair_coords = build_split_pair_coords(unit_grid, eta_nodes)
+        data = dataset.data
+        a_eval, ap_eval, b_eval = evaluate_unit_line_coefficients(
+            coeffs,
+            axis_id=data.axis_id.to(device=unit_grid.device),
+            left=data.left.to(device=unit_grid.device, dtype=unit_grid.dtype),
+            fixed=data.fixed.to(device=unit_grid.device, dtype=unit_grid.dtype),
+            length=data.length.to(device=unit_grid.device, dtype=unit_grid.dtype),
+            t_nodes=pair_coords[..., 0],
+        )
+        return self._forward_pairs_model(
+            model=model,
+            trunk_grid=pair_coords,
+            a_vals=a_vals,
+            ap_vals=ap_vals,
+            b_vals=b_vals,
+            c_vals=c_vals,
+            a_eval=a_eval,
+            ap_eval=ap_eval,
+            b_eval=b_eval,
+        )
 
     @staticmethod
     def _complex_axis_name(axis_id: int) -> str:
@@ -1222,23 +1318,29 @@ class GreenArtifactExporter:
         data_dir = self.request.outdir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         data = dataset.data
-        np.savez_compressed(
-            data_dir / "generated_eval_data.npz",
-            unit_grid=_tensor_to_numpy(data.unit_grid),
-            physical_coords=_tensor_to_numpy(data.physical_coords),
-            axis_id=_tensor_to_numpy(data.axis_id),
-            segment_id=_tensor_to_numpy(data.segment_id),
-            left=_tensor_to_numpy(data.left),
-            right=_tensor_to_numpy(data.right),
-            fixed=_tensor_to_numpy(data.fixed),
-            length=_tensor_to_numpy(data.length),
-            solution=_tensor_to_numpy(data.solution),
-            source=_tensor_to_numpy(data.source),
-            a_vals=_tensor_to_numpy(data.a_vals),
-            ap_vals=_tensor_to_numpy(data.ap_vals),
-            b_vals=_tensor_to_numpy(data.b_vals),
-            c_vals=_tensor_to_numpy(data.c_vals),
-        )
+        generated_payload: dict[str, np.ndarray] = {
+            "unit_grid": _tensor_to_numpy(data.unit_grid),
+            "physical_coords": _tensor_to_numpy(data.physical_coords),
+            "axis_id": _tensor_to_numpy(data.axis_id),
+            "segment_id": _tensor_to_numpy(data.segment_id),
+            "left": _tensor_to_numpy(data.left),
+            "right": _tensor_to_numpy(data.right),
+            "fixed": _tensor_to_numpy(data.fixed),
+            "length": _tensor_to_numpy(data.length),
+            "solution": _tensor_to_numpy(data.solution),
+            "source": _tensor_to_numpy(data.source),
+            "a_vals": _tensor_to_numpy(data.a_vals),
+            "ap_vals": _tensor_to_numpy(data.ap_vals),
+            "b_vals": _tensor_to_numpy(data.b_vals),
+            "c_vals": _tensor_to_numpy(data.c_vals),
+        }
+        if data.source_fine is not None and data.source_fine_grid is not None:
+            generated_payload["source_fine"] = _tensor_to_numpy(data.source_fine)
+            generated_payload["source_fine_grid"] = _tensor_to_numpy(
+                data.source_fine_grid
+            )
+        savez_compressed = cast(Any, np.savez_compressed)
+        savez_compressed(data_dir / "generated_eval_data.npz", **generated_payload)
 
         selected_pred = torch.stack([kernel[idx] for idx in selected_intervals], dim=0)
         if exact_kernel is None:
