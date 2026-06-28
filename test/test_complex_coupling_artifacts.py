@@ -12,6 +12,7 @@ from greenonet.complex_coupling_artifacts import export_complex_coupling_artifac
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.config import (
     Axis1DTrunkConfig,
+    CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     ModelConfig,
 )
@@ -56,6 +57,11 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         hidden_dim=4,
         depth=1,
         dtype=torch.float64,
+        coefficient_terms=CouplingCoefficientTermsConfig(
+            diffusion=True,
+            convection=True,
+            reaction=True,
+        ),
         axis_1d_trunk=Axis1DTrunkConfig(
             num_frequencies=2,
             max_frequency=2.0,
@@ -81,6 +87,13 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         test_path=data_dir,
         coefficient_path=coeff_path,
     )
+    config_payload = json.loads(config_path.read_text())
+    config_payload["coupling_model"]["coefficient_terms"] = {
+        "diffusion": True,
+        "convection": True,
+        "reaction": True,
+    }
+    config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
 
     summary = export_complex_coupling_artifacts(
@@ -130,6 +143,17 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "u_psi",
     ]
     assert summary["optional_flux_targets_exported"] is True
+    assert summary["coefficient_branch_channel_order"] == [
+        "a",
+        "b_primary",
+        "b_transverse",
+        "c",
+    ]
+    assert summary["coefficient_branch_convection"] == "primary_transverse"
+    assert (
+        summary["coefficient_branch_transverse_convection_scaling"]
+        == "primary_segment_length"
+    )
     assert summary["transverse_trunk"] == {
         "enabled": False,
         "fusion": "product",

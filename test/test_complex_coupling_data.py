@@ -144,6 +144,8 @@ def test_complex_dataset_respects_coefficient_terms(tmp_path):
             reaction=True,
         ),
     )
+    assert dataset.x_coefficient_branch.shape == (2, 4, 4)
+    assert dataset.y_coefficient_branch.shape == (3, 4, 4)
     torch.testing.assert_close(
         dataset.x_coefficient_branch[:, 0],
         torch.ones((2, 4), dtype=torch.float64),
@@ -158,7 +160,29 @@ def test_complex_dataset_respects_coefficient_terms(tmp_path):
     torch.testing.assert_close(
         dataset.x_coefficient_branch[:, 2],
         torch.tensor(
+            [[5.0, 5.0, 5.0, 5.0], [2.5, 2.5, 2.5, 2.5]],
+            dtype=torch.float64,
+        ),
+    )
+    torch.testing.assert_close(
+        dataset.x_coefficient_branch[:, 3],
+        torch.tensor(
             [[6.0, 6.0, 6.0, 6.0], [1.5, 1.5, 1.5, 1.5]],
+            dtype=torch.float64,
+        ),
+    )
+    torch.testing.assert_close(
+        dataset.y_coefficient_branch[:, 1],
+        torch.full((3, 4), 5.0, dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        dataset.y_coefficient_branch[:, 2],
+        torch.full((3, 4), 4.0, dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        dataset.x_green_branch[:, 2],
+        torch.tensor(
+            [[4.0, 4.0, 4.0, 4.0], [2.0, 2.0, 2.0, 2.0]],
             dtype=torch.float64,
         ),
     )

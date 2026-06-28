@@ -359,6 +359,33 @@ Complex geometry에서 coefficient는 interval-local coordinate 위에서 해석
 어떤 axial interval을 따라 보느냐에 따라 다른 1차원 coefficient profile이 된다. 따라서 coefficient branch는
 “이 connected interval에서 어떤 differential operator가 작동하는가”를 알려준다.
 
+Convection의 경우에는 primary axial direction의 coefficient만으로는 충분하지 않다. Direction-split source는
+한 축 방향 Green reconstruction에 들어가지만, 같은 physical point는 동시에 transverse axial interval 위에도
+놓인다. Complex geometry에서는 이 transverse interval의 boundary와 length가 point마다 달라질 수 있으므로,
+coefficient branch는 convection을
+
+\[
+b_{\mathrm{primary}},
+\qquad
+b_{\mathrm{transverse}}
+\]
+
+로 분리해 전달한다. \(\phi\)-path에서는 primary direction이 \(x\), transverse direction이 \(y\)이므로
+
+\[
+\phi\text{-path}:\quad [L_x b_x,\ L_x b_y],
+\]
+
+이고, \(\psi\)-path에서는 primary direction이 \(y\), transverse direction이 \(x\)이므로
+
+\[
+\psi\text{-path}:\quad [L_y b_y,\ L_y b_x]
+\]
+
+로 해석된다. 이 정보는 CouplingNet이 source를 두 directional component로 나누기 위한 operator context이다.
+반면 Green reconstruction 자체는 각 connected interval의 primary 1차원 operator만 사용하므로, transverse
+convection은 Green operator coefficient로 추가되지 않는다.
+
 Source branch와 coefficient branch의 개념적 차이도 중요하다. Source branch는 문제 instance마다 달라지는
 forcing profile을 나타낸다. Coefficient branch는 해당 PDE family와 spatial operator를 나타낸다. 두 branch가
 곱해지거나 결합될 때, network는 “이 operator 아래에서 이 source가 만들 split field”를 표현하게 된다.
@@ -467,7 +494,7 @@ Green reconstruction을 통해 연결된다.
 | GreenNet branch | Line-wise operator coefficient를 encoding한다. | Connected interval마다 scaled operator coefficient를 encoding한다. |
 | GreenNet trunk | Green kernel의 evaluation coordinate와 source coordinate를 표현한다. | Normalized coordinate pair \((t,\eta)\)를 표현한다. |
 | Source branch | Source profile이 split field를 결정하므로 source-conditioned decomposition을 가능하게 한다. | Physical source를 interval-local normalized forcing profile로 해석한다. |
-| Coefficient branch | Operator family와 spatial coefficient variation을 알려준다. | 각 connected interval에서 작동하는 local 1차원 operator를 알려준다. |
+| Coefficient branch | Operator family와 spatial coefficient variation을 알려준다. | Primary 1차원 operator와 transverse convection context를 함께 알려준다. |
 | Geometry information | Domain geometry가 regular structure에 거의 암묵적으로 들어 있다. | Endpoint, length, scale, transverse position이 explicit mathematical context가 된다. |
 | Trunk role | Spatial coordinate에 따른 output variation을 표현한다. | Local coordinate \(t\)에 따른 interval-internal variation을 표현한다. |
 | Projection | Split field가 \(\phi+\psi=f\)를 만족하도록 조정한다. | Physical split field 위에서 \(\phi+\psi=f\)를 만족하도록 조정한다. |

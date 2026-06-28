@@ -12,8 +12,8 @@ from greenonet.coefficients import CoefficientFunctions
 from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.config import CouplingCoefficientTermsConfig
 from greenonet.green_interval import (
-    IntervalBranchCoefficients,
     build_segment_branch_samples,
+    physical_interval_coordinates,
     unit_branch_grid,
 )
 from greenonet.numerics import IntegrationRule, integrate
@@ -123,12 +123,8 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             branch_input_dim=self.branch_input_dim,
             dtype=dtype,
         )
-        self.x_coefficient_branch = self._build_coefficient_branch(
-            self.x_green_coefficients
-        )
-        self.y_coefficient_branch = self._build_coefficient_branch(
-            self.y_green_coefficients
-        )
+        self.x_coefficient_branch = self._build_coefficient_branch(axis="x")
+        self.y_coefficient_branch = self._build_coefficient_branch(axis="y")
         self.x_green_branch = torch.stack(
             (
                 self.x_green_coefficients.a_unit,
@@ -192,13 +188,18 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
 
     def _build_coefficient_branch(
         self,
-        coefficients: IntervalBranchCoefficients,
+        *,
+        axis: Literal["x", "y"],
     ) -> torch.Tensor:
+        coefficients = (
+            self.x_green_coefficients if axis == "x" else self.y_green_coefficients
+        )
         active = []
         if self.coefficient_terms.diffusion:
             active.append(coefficients.a_unit)
         if self.coefficient_terms.convection:
             active.append(coefficients.b_unit)
+            active.append(self._build_transverse_convection_branch(axis=axis))
         if self.coefficient_terms.reaction:
             active.append(coefficients.c_unit)
         if not active:
@@ -210,6 +211,30 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
                 )
             )
         return torch.stack(active, dim=1)
+
+    def _build_transverse_convection_branch(
+        self,
+        *,
+        axis: Literal["x", "y"],
+    ) -> torch.Tensor:
+        t = self.branch_grid
+        if axis == "x":
+            left = self.geometry.x_segment_left.to(dtype=self.dtype)
+            right = self.geometry.x_segment_right.to(dtype=self.dtype)
+            fixed = self.geometry.x_segment_y.to(dtype=self.dtype)
+            length = self.geometry.x_segment_length.to(dtype=self.dtype)
+            x = physical_interval_coordinates(left, right, t)
+            y = fixed.unsqueeze(-1).expand_as(x)
+            b_transverse = self.coeffs.by_fun(x, y).to(dtype=self.dtype)
+        else:
+            left = self.geometry.y_segment_bottom.to(dtype=self.dtype)
+            right = self.geometry.y_segment_top.to(dtype=self.dtype)
+            fixed = self.geometry.y_segment_x.to(dtype=self.dtype)
+            length = self.geometry.y_segment_length.to(dtype=self.dtype)
+            y = physical_interval_coordinates(left, right, t)
+            x = fixed.unsqueeze(-1).expand_as(y)
+            b_transverse = self.coeffs.bx_fun(x, y).to(dtype=self.dtype)
+        return length.unsqueeze(-1) * b_transverse
 
     def _build_source_branch(
         self,

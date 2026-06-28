@@ -34,7 +34,9 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         if coefficient_terms.diffusion:
             active_coefficient_terms.append("diffusion")
         if coefficient_terms.convection:
-            active_coefficient_terms.append("convection")
+            active_coefficient_terms.extend(
+                ("convection_primary", "convection_transverse")
+            )
         if coefficient_terms.reaction:
             active_coefficient_terms.append("reaction")
         self.active_coefficient_terms = tuple(active_coefficient_terms)

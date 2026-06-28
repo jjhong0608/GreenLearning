@@ -36,6 +36,7 @@ def _model(
     fusion_mode: str = "product",
     transverse_trunk_enabled: bool = False,
     transverse_trunk_fusion: str = "product",
+    coefficient_terms: CouplingCoefficientTermsConfig | None = None,
 ) -> ComplexCouplingNet:
     torch.manual_seed(0)
     return ComplexCouplingNet(
@@ -44,6 +45,7 @@ def _model(
             hidden_dim=8,
             depth=1,
             dtype=torch.float64,
+            coefficient_terms=coefficient_terms or CouplingCoefficientTermsConfig(),
             branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
             axis_1d_trunk=Axis1DTrunkConfig(
                 num_frequencies=2,
@@ -142,6 +144,39 @@ def test_complex_coupling_model_is_source_conditioned(tmp_path):
     )
 
     assert not torch.allclose(original, changed)
+
+
+def test_complex_convection_term_adds_primary_and_transverse_channels(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    coefficient_terms = CouplingCoefficientTermsConfig(
+        diffusion=True,
+        convection=True,
+        reaction=True,
+    )
+    dataset = ComplexCouplingDataset(
+        data_dir,
+        geometry,
+        coeffs,
+        branch_input_dim=4,
+        coefficient_terms=coefficient_terms,
+    )
+    item = dataset[0]
+    model = _model(coefficient_terms=coefficient_terms)
+
+    output = _forward(model, geometry, item)
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.active_coefficient_terms == (
+        "diffusion",
+        "convection_primary",
+        "convection_transverse",
+        "reaction",
+    )
+    assert model.coefficient_branch_channels == 4
+    assert model.coefficient_branch_input_dim == 16
 
 
 def test_complex_model_supports_product_fuser_and_source_only_branch(tmp_path):

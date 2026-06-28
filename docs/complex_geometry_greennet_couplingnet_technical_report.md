@@ -807,6 +807,55 @@ propagate through the axial Green reconstruction. The coefficient branch answers
 the question: under this local operator, what kind of source decomposition is
 appropriate?
 
+For convection, the relevant operator context is not only the convection along
+the primary axial direction.  In a complex domain, the same physical point also
+lies on a transverse axial interval whose boundary locations and length may
+change from point to point.  CouplingNet therefore separates the convection
+context into
+
+\[
+b_{\mathrm{primary}}
+\qquad\text{and}\qquad
+b_{\mathrm{transverse}}.
+\]
+
+For the \(\phi\)-path, the primary direction is horizontal and the transverse
+direction is vertical, so the convection information is interpreted as
+
+\[
+\phi\text{-path}:
+\qquad
+\left[
+L_x b_x,\,
+L_x b_y
+\right].
+\]
+
+For the \(\psi\)-path, the primary direction is vertical and the transverse
+direction is horizontal, so the corresponding interpretation is
+
+\[
+\psi\text{-path}:
+\qquad
+\left[
+L_y b_y,\,
+L_y b_x
+\right].
+\]
+
+The same primary interval length scales both convection components in the
+corresponding path.  This convention gives CouplingNet both the axial transport
+coefficient that belongs to the one-dimensional split operator and the
+orthogonal transport context that can affect how the source should be divided
+near transverse boundaries.
+
+This coefficient-branch convention is separate from Green reconstruction.  The
+axial Green operator for a connected interval uses the primary one-dimensional
+operator: diffusion, its primary axial derivative, primary convection, and
+reaction.  The transverse convection context is used for source-split
+prediction, not as an additional coefficient in the one-dimensional Green
+reconstruction operator.
+
 The geometry branch provides information about the connected interval as a
 physical object. Its mathematical role is to tell the network where the interval
 lies, how long it is, and what scale conversion relates local coordinate to

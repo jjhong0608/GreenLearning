@@ -265,21 +265,30 @@ Coefficient branch는 source branch와 다르게 sample에서 interpolation하�
 `a_fun`, `apx_fun`, `apy_fun`, `bx_fun`, `by_fun`, `c_fun`으로 주어진 function이므로, 필요한 unit branch
 grid point에서 직접 evaluate할 수 있다.
 
-Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 `[a,b,c]` 순서로 구성된다.
-Diffusion term이 켜지면 `a_unit`, convection term이 켜지면 `b_unit`, reaction term이 켜지면
-`c_unit`이 들어간다. 모든 term이 꺼져 있으면 coefficient branch 없이 source-only branch path가 된다.
+Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 active
+`[a,b_primary,b_transverse,c]` 순서로 구성된다. Diffusion term이 켜지면
+`a_unit`, convection term이 켜지면 primary/transverse convection 두 channel, reaction term이
+켜지면 `c_unit`이 들어간다. 모든 term이 꺼져 있으면 coefficient branch 없이 source-only branch
+path가 된다.
+
+Convection이 켜진 경우 x/Phi path는 primary direction이 x이므로
+`[L_x*b_x, L_x*b_y]`를 사용한다. 여기서 `L_x*b_x`는 primary convection이고
+`L_x*b_y`는 transverse convection이다. y/Psi path는 primary direction이 y이므로
+`[L_y*b_y, L_y*b_x]`를 사용한다. 두 convection component는 해당 path의 primary segment
+length로 scaling된다.
 
 중요한 구분은 `a'`의 역할이다. `a'`는 GreenNet reconstruction query에는 필요하므로
 `x_green_branch`, `y_green_branch`에 보관된다. 하지만 CouplingNet coefficient branch에는 넣지 않는다.
-CouplingNet coefficient branch는 unit-square의 generic coefficient branch 의미에 맞춰 `[a,b,c]`만
-제어한다.
+반대로 transverse convection은 CouplingNet coefficient branch에는 들어가지만 GreenNet reconstruction
+branch에는 들어가지 않는다. GreenNet reconstruction branch는 primary 1D operator contract인
+`[a,ap,b_primary,c]`를 유지한다.
 
 ### Geometry branch, transverse branch, local trunk
 
 Complex CouplingNet은 point prediction을 위해 네 종류의 branch/trunk 정보를 결합한다.
 
 - `source branch`: segment-local normalized `f_unit`.
-- `coefficient branch`: 선택된 `[a,b,c]` coefficient samples.
+- `coefficient branch`: 선택된 `[a,b_primary,b_transverse,c]` coefficient samples.
 - `geometry branch`: `[s_left, s_right, s_mid, L, L^2, 1/L]`.
 - `transverse branch`: globally normalized transverse coordinate `r_hat`의 Fourier features.
 - `trunk`: valid point의 segment-local coordinate `t`.
@@ -406,4 +415,3 @@ branch grid에서 직접 evaluate한다.
 
 넷째, complex artifact의 기본 좌표계는 `coords_valid`이다. Full-grid sample array는 저장과 gather를 위한
 container이고, model output과 metric의 의미 있는 support는 valid point set이다.
-

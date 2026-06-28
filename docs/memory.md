@@ -128,9 +128,14 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Full-grid `rhs`를 valid point로 gather한 뒤 segment-local unit source branch로
   변환하고, `f_unit=L^2*f_phys` scaling과 segment별 unit L2 norm normalization을
   적용한다. Model raw unit output은 해당 segment source norm으로 다시 scale한다.
-- Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 `[a,b,c]`
-  순서로 구성한다. `a'`는 GreenONet reconstruction query용 branch에는 보관하지만
-  CouplingNet coefficient branch에는 넣지 않는다.
+- Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 active
+  `[a,b_primary,b_transverse,c]` 순서로 구성한다. `convection=true`이면 x/Phi
+  path는 `[L_x*b_x, L_x*b_y]`, y/Psi path는 `[L_y*b_y, L_y*b_x]`를 넣는다.
+  GreenNet과 Green reconstruction branch는 primary convection만 사용하며
+  `[a,ap,b_primary,c]` contract를 유지한다. `a'`는 GreenONet reconstruction
+  query용 branch에는 보관하지만 CouplingNet coefficient branch에는 넣지 않는다.
+  Technical/comparison 문서에서도 이 구분을 유지한다: transverse convection은
+  CouplingNet의 source-split prediction context이고 Green reconstruction coefficient가 아니다.
 - Complex CouplingNet primary trunk는 항상 segment-local 1D `t`를 사용한다.
   Fixed-line transverse branch는 global geometry extent 기준으로 normalized
   `r_hat`을 만들고, `axis_1d_trunk.num_frequencies`와 `max_frequency`로

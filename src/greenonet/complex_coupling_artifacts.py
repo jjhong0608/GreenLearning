@@ -182,6 +182,17 @@ class ComplexCouplingArtifactExporter:
                 "convection": configs.coupling_model.coefficient_terms.convection,
                 "reaction": configs.coupling_model.coefficient_terms.reaction,
             },
+            "coefficient_branch_channel_order": self._coefficient_branch_channel_order(
+                configs
+            ),
+            "coefficient_branch_convection": (
+                "primary_transverse"
+                if configs.coupling_model.coefficient_terms.convection
+                else "disabled"
+            ),
+            "coefficient_branch_transverse_convection_scaling": (
+                "primary_segment_length"
+            ),
             "transverse_encoding": {
                 "coordinate": "global_normalized_transverse",
                 "num_frequencies": axis_1d_trunk.num_frequencies,
@@ -200,6 +211,20 @@ class ComplexCouplingArtifactExporter:
             json.dumps(summary, indent=2, sort_keys=True)
         )
         return summary
+
+    @staticmethod
+    def _coefficient_branch_channel_order(
+        configs: CouplingArtifactConfigs,
+    ) -> list[str]:
+        terms = configs.coupling_model.coefficient_terms
+        order: list[str] = []
+        if terms.diffusion:
+            order.append("a")
+        if terms.convection:
+            order.extend(("b_primary", "b_transverse"))
+        if terms.reaction:
+            order.append("c")
+        return order
 
     def _load_complex_model(
         self,
