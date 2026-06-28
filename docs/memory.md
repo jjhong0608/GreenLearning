@@ -154,6 +154,37 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Green reconstruction, domain representation 차이를 설명하는 데 집중하고,
   config/file/schema/tensor-size contract는 engineering note인
   `docs/unit_square_vs_complex_geometry.md`에 남긴다.
+- `docs/complex_geometry_greennet_couplingnet_technical_report.md`는 학회 발표자료
+  준비를 위한 complex-mode-only technical report이다. 이 문서는 unit-square 확장
+  narrative 없이 complex geometry PDE, axial connected interval decomposition,
+  GreenNet unit pull-back, source-conditioned CouplingNet, physical balance
+  projection, Green reconstruction, training/evaluation 해석을 수식과 알고리즘
+  중심으로 설명하며, 코드 surface와 complex mode에서 사용하지 않는 기능은 넣지 않는다.
+- 이 technical report의 GreenNet section은 branch-trunk learned correction과
+  analytic Green structure의 결합식을 포함한다. 수식은 코드 surface 없이
+  \(R_\theta\), \(G_0\), \(J_0\), \(A\), \(B\), \(E\), \(M\) 중심으로 설명하고,
+  reaction coefficient는 analytic factor가 아니라 learned correction을 통해 반영된다고
+  기록한다.
+- 같은 report의 GreenNet dataset 설명은 forward construction만 다룬다. Smooth
+  target solution은 Gaussian Process sample로 설명하고, GreenNet supervision은 exact
+  kernel label이 아니라 source-to-solution reconstruction target으로 기록한다. Fine
+  source와 quadrature 설명은 이 dataset construction 설명에서 제외한다.
+- 같은 report의 GreenNet analytic wrapping 설명은 \(A(t)G_0\)를
+  Dirac-\(\delta\) property를 만드는 jump/singularity 구조로 해석하고,
+  \(B(t)(J_0-\frac12E)\)를 그 과정에서 생기는 Heaviside-type contribution
+  cancellation term으로 설명한다. Learned correction은 이 analytic singular/cancellation
+  구조 이후에 남는 smooth residual을 담당한다고 기록한다.
+- 같은 report의 CouplingNet 설명에서는 "local trunk" 대신 "axial local trunk" 용어를
+  사용한다. Axial local trunk는 primary axial coordinate \(t_{\parallel}\)를 담당하고,
+  pointwise transverse trunk는 transverse axial interval의 normalized coordinate
+  \(t_{\perp}\)를 통해 pointwise boundary context를 전달한다. Transverse branch는
+  global transverse placement만 담당하며 pointwise transverse boundary 정보를 대체하지
+  않는다.
+- 같은 report의 activation 설명에서는 rational activation을 fixed activation이 아니라
+  learnable activation으로 설명한다. \(P_\alpha\)와 \(Q_\beta\)의 coefficient는
+  현재 초기값에서 시작하지만 학습 중 업데이트되는 parameter이며, activation은 analytic
+  Green wrapping이나 physical balance projection을 대체하지 않고 branch/trunk 내부의
+  representation nonlinearity 역할을 한다.
 - Circular complex geometry generator는 `cli/make_circular_geometry.py`이며
   center `(0, 0)` 고정, radius CLI option default `1.0`, `2 * radius / step_size`
   정수 조건을 사용한다. Grid interval은 `[-radius, radius]`이고, boundary grid point와

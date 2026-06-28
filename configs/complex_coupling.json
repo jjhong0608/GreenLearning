@@ -1,11 +1,11 @@
 {
   "dataset": {
     "geometry_mode": "complex",
-    "geometry_path": "data/geometry/circle_radius_05_1_128.npz",
-    "training_path": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/train",
-    "validation_path": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/valid",
-    "test_path": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/test",
-    "coefficient_functions_path": "coefficients/Sinusoidal_Diffusion_Only.py",
+    "geometry_path": "data/geometry/annulars_05_1_1_128.npz",
+    "training_path": "data/complex_samples/annulars_05_1_1_128/train",
+    "validation_path": "data/complex_samples/annulars_05_1_1_128/valid",
+    "test_path": "data/complex_samples/annulars_05_1_1_128/test",
+    "coefficient_functions_path": "coefficients/Convection_Diffusion_Reaction.py",
     "dtype": "float64"
   },
   "terminal": {
@@ -21,8 +21,8 @@
     "dtype": "float64",
     "coefficient_terms": {
       "diffusion": true,
-      "convection": false,
-      "reaction": false
+      "convection": true,
+      "reaction": true
     },
     "branch_fusion": {
       "mode": "product_fuser"
@@ -62,7 +62,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Diffusion/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/Convection_Diffusion_Reaction_Annulus/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }
