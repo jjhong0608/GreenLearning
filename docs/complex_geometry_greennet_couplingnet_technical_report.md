@@ -812,7 +812,6 @@ the primary axial direction.  In a complex domain, the same physical point also
 lies on a transverse axial interval whose boundary locations and length may
 change from point to point.  CouplingNet therefore separates the convection
 context into
-
 \[
 b_{\mathrm{primary}}
 \qquad\text{and}\qquad
@@ -883,7 +882,6 @@ t_{\parallel}\in[0,1]
 denote the normalized coordinate inside the connected interval on which the
 direction-split source is being predicted. For the \(\phi\)-path, the primary
 direction is the horizontal axial direction, so
-
 \[
 \phi\text{-path}: \qquad t_{\parallel}=t_x.
 \]
@@ -1186,6 +1184,149 @@ final reconstructed solution is accurate. Split-field error measures whether the
 learned decomposition matches a particular direction-wise operator split.
 Energy consistency measures whether the two Green reconstructions agree as
 solutions of the same physical PDE.
+
+### Energy-Norm Error Bound Proposition
+
+**Setup.**  Energy consistency is interpreted through the diffusion-weighted
+energy norm
+
+\[
+\|v\|_a^2
+=
+\int_\Omega a|\nabla v|^2,
+\qquad
+\mathcal{E}_{\mathrm{split}}
+=
+\|u_\phi-u_\psi\|_a^2.
+\]
+
+The directional split operators use the same reaction convention as the
+framework:
+
+\[
+L_xu
+=
+-\partial_x(a\partial_xu)
++b_x\partial_xu
++\frac12cu,
+\qquad
+L_yu
+=
+-\partial_y(a\partial_yu)
++b_y\partial_yu
++\frac12cu.
+\]
+
+After projection, the split fields satisfy the physical balance
+
+\[
+\phi+\psi=f.
+\]
+
+The two represented solutions are reconstructed from the split sources by
+connected-interval Green operators:
+
+\[
+u_\phi=G_x[\phi],
+\qquad
+u_\psi=G_y[\psi].
+\]
+
+**Proposition (exact energy-loss error bound).**  Assume exact
+connected-interval Green reconstruction for the reference split, source-linearity
+of the reconstructions, weak inverse identities, projected balance
+\(\phi+\psi=f\), and full-domain admissibility
+
+\[
+u_\phi,u_\psi,u_*\in H_0^1(\Omega).
+\]
+
+Then the final prediction
+
+\[
+u_{\mathrm{pred}}
+=
+\frac12(u_\phi+u_\psi)
+\]
+
+satisfies the energy-error bound
+
+\[
+\|u_{\mathrm{pred}}-u_*\|_a
+\le
+\frac{C_E}{2}\sqrt{\mathcal{E}_{\mathrm{split}}}.
+\]
+
+Moreover, the two represented solutions satisfy
+
+\[
+\|u_\phi-u_*\|_a,\ \|u_\psi-u_*\|_a
+\le
+\frac{1+C_E}{2}\sqrt{\mathcal{E}_{\mathrm{split}}}.
+\]
+
+The reason is that, in the exact case, the split-error variable \(q_c\) satisfies
+
+\[
+u_{\mathrm{pred}}-u_*=\frac12q_c,
+\]
+
+and the energy-consistency estimate gives
+
+\[
+\|q_c\|_a\le C_E\sqrt{\mathcal{E}_{\mathrm{split}}}.
+\]
+
+Thus the energy loss is not merely an agreement signal.  Under the stated
+structural assumptions, it directly bounds the final solution error in the
+energy norm.
+
+**Perturbed Green reconstruction.**  If the Green reconstructions of the exact
+split are imperfect,
+
+\[
+G_x[\phi_*]=u_*+\varepsilon_x,
+\qquad
+G_y[\psi_*]=u_*+\varepsilon_y,
+\]
+
+then the final prediction satisfies the perturbed bound
+
+\[
+\|u_{\mathrm{pred}}-u_*\|_a
+\le
+\frac{C_E}{2}
+\left(
+\sqrt{\mathcal{E}_{\mathrm{split}}}
++
+\|\varepsilon_x-\varepsilon_y\|_a
+\right)
++
+\frac12\|\varepsilon_x+\varepsilon_y\|_a.
+\]
+
+The term \(\varepsilon_x-\varepsilon_y\) measures directional reconstruction
+mismatch, while \(\varepsilon_x+\varepsilon_y\) contains the common Green bias.
+A common Green bias can remain invisible to \(\mathcal{E}_{\mathrm{split}}\), so learned
+GreenNet error must be accounted for separately.
+
+**Interpretation.**  This proposition is a conditional error-bound statement.
+It explains why energy consistency is stronger than an \(L^2\)-only agreement:
+the \(L^2\) norm controls amplitude, while \(\mathcal{E}_{\mathrm{split}}\) controls the
+derivative-level error that enters the elliptic energy argument.
+
+The admissibility condition is essential in complex geometry.  Zero endpoint
+values on connected intervals provide the correct one-dimensional Dirichlet
+compatibility, but endpoint zero alone does not prove
+\(u_\phi,u_\psi\in H_0^1(\Omega)\).  Full-domain admissibility also requires
+transverse Sobolev regularity of the assembled slice-wise reconstructions.
+
+**Limitations.**  The exact error bound is not an unconditional statement about
+all learned models.  It assumes exact Green reconstruction, source-linearity,
+weak inverse identities, projected balance, and full-domain admissibility.  In
+the imperfect case, the perturbation terms above are part of the bound.  If a
+learned reconstruction fails to behave as a weak inverse, additional inverse
+residuals are outside what energy agreement alone can remove.
 
 ## 9. End-to-End Algorithm
 

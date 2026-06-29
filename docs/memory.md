@@ -190,6 +190,46 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   현재 초기값에서 시작하지만 학습 중 업데이트되는 parameter이며, activation은 analytic
   Green wrapping이나 physical balance projection을 대체하지 않고 branch/trunk 내부의
   representation nonlinearity 역할을 한다.
+- 같은 report는 energy analysis 문서를 단순 reference로 넘기지 않고, energy loss가
+  final solution energy error를 bound한다는 핵심 의미를 독립적인 proposition 형식으로
+  설명한다. Technical report 안에서는
+  \(\mathcal{E}_{\mathrm{split}}=\|u_\phi-u_\psi\|_a^2\), \(H_0^1(\Omega)\) admissibility,
+  source-linear weak inverse assumption,
+  \(\|u_{\mathrm{pred}}-u_*\|_a\le\frac{C_E}{2}\sqrt{\mathcal{E}_{\mathrm{split}}}\) exact
+  bound, imperfect Green reconstruction perturbation, common Green bias limitation을
+  presentation-ready mathematical structural statement로 설명한다. 이 proposition은
+  proof 대체가 아니며, proof-level theorem과 final solution error-bound corollaries는
+  `docs/complex_geometry_energy_consistency_analysis.md`에 유지한다. Energy loss/error-bound
+  notation은 \(\mathcal{E}_{\mathrm{split}}\)로 통일하고 이전 L-subscript-E 표기는 더 이상 쓰지 않는다.
+- `docs/complex_geometry_energy_consistency_analysis.md`는 complex geometry energy
+  consistency를 위한 continuous-domain Markdown analysis이다. 이 문서는
+  connected-interval Green reconstruction을 전제로 하고, split operator는
+  \(\frac12cu\) reaction split을 사용한다. Exact Green reconstruction theorem,
+  exact/perturbed final solution error-bound corollaries, imperfect Green
+  reconstruction perturbation을 모두 포함한다. Green reconstruction은 source에 대해 linear하다고 가정하며,
+  approximate reconstruction perturbation에서는 최소한 source-difference identity를 요구한다.
+  \(u_\phi,u_\psi,u_*\in H_0^1(\Omega)\) admissibility는 theorem assumption으로 두고
+  별도 discussion에서 다룬다. 특히 represented solutions \(u_\phi,u_\psi\)의
+  \(H_0^1(\Omega)\) membership은 interval endpoint zero에서 자동으로 나오지 않으며,
+  connected-interval Green operators가 admissible source spaces에서
+  \(H_0^1(\Omega)\)로 mapping된다는 조건으로 읽는다. Section 8은 transverse
+  derivative, moving interval geometry, degenerating interval length를 별도
+  regularity issue로 설명한다. \(L^2\)-consistency insufficiency는 local
+  high-frequency example로 설명한다.
+- `docs/wccm_eccomas_2026_presentation_outline.md`는 WCCM-ECCOMAS 2026,
+  MS165 - Methods and Applications of Model Order Reduction 발표를 위한 영어 slide
+  outline planning document이다. 발표 제목은 "Hybrid Green's Function Learning With
+  Axial Reduction for Multi-Dimensional Elliptic Problems"로 둔다. 발표 흐름은 MOR
+  motivation, axial reduction, unit-interval pull-back and scaling, GreenNet,
+  CouplingNet, projection/reconstruction, Energy-Norm Error Bound Proposition,
+  numerical evidence, conclusion 순서로 유지한다. Complex geometry는 axial line
+  construction이 아니라 non-square/non-unit interval의 unit-interval normalization
+  motivation으로만 가볍게 다룬다. GreenNet은 3-slide block으로 설명하며, analytic
+  Green structure and learned correction은 main-flow 독립 slide로 둔다. Main slide에서는
+  Dirac-\(\delta\) jump, Heaviside-type cancellation, learned smooth correction의 role
+  decomposition만 설명하고, full Dirac/Heaviside derivation은 technical report 또는 backup
+  discussion으로 남긴다. Code/config/schema/checkpoint/dataset generation detail은
+  outline에서 제외한다.
 - Circular complex geometry generator는 `cli/make_circular_geometry.py`이며
   center `(0, 0)` 고정, radius CLI option default `1.0`, `2 * radius / step_size`
   정수 조건을 사용한다. Grid interval은 `[-radius, radius]`이고, boundary grid point와
