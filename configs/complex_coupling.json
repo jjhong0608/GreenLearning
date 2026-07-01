@@ -2,10 +2,10 @@
   "dataset": {
     "geometry_mode": "complex",
     "geometry_path": "data/geometry/annulars_05_1_1_128.npz",
-    "training_path": "data/complex_samples/annulars_05_1_1_128/train",
-    "validation_path": "data/complex_samples/annulars_05_1_1_128/valid",
-    "test_path": "data/complex_samples/annulars_05_1_1_128/test",
-    "coefficient_functions_path": "coefficients/Convection_Diffusion_Reaction.py",
+    "training_path": "data/complex_samples/Smooth_Variable_Diffusion_Reaction_Annulus/train",
+    "validation_path": "data/complex_samples/Smooth_Variable_Diffusion_Reaction_Annulus/valid",
+    "test_path": "data/complex_samples/Smooth_Variable_Diffusion_Reaction_Annulus/test",
+    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py",
     "dtype": "float64"
   },
   "terminal": {
@@ -21,7 +21,7 @@
     "dtype": "float64",
     "coefficient_terms": {
       "diffusion": true,
-      "convection": true,
+      "convection": false,
       "reaction": true
     },
     "branch_fusion": {
@@ -62,7 +62,7 @@
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Convection_Diffusion_Reaction_Annulus/green/model.safetensors",
+    "green_pretrained_path": "checkpoints/Smooth_Variable_Diffusion_Reaction/green/model.safetensors",
     "coupling_pretrained_path": null
   }
 }

@@ -219,17 +219,49 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - `docs/wccm_eccomas_2026_presentation_outline.md`는 WCCM-ECCOMAS 2026,
   MS165 - Methods and Applications of Model Order Reduction 발표를 위한 영어 slide
   outline planning document이다. 발표 제목은 "Hybrid Green's Function Learning With
-  Axial Reduction for Multi-Dimensional Elliptic Problems"로 둔다. 발표 흐름은 MOR
-  motivation, axial reduction, unit-interval pull-back and scaling, GreenNet,
-  CouplingNet, projection/reconstruction, Energy-Norm Error Bound Proposition,
-  numerical evidence, conclusion 순서로 유지한다. Complex geometry는 axial line
-  construction이 아니라 non-square/non-unit interval의 unit-interval normalization
-  motivation으로만 가볍게 다룬다. GreenNet은 3-slide block으로 설명하며, analytic
-  Green structure and learned correction은 main-flow 독립 slide로 둔다. Main slide에서는
-  Dirac-\(\delta\) jump, Heaviside-type cancellation, learned smooth correction의 role
-  decomposition만 설명하고, full Dirac/Heaviside derivation은 technical report 또는 backup
-  discussion으로 남긴다. Code/config/schema/checkpoint/dataset generation detail은
-  outline에서 제외한다.
+  Axial Reduction for Multi-Dimensional Elliptic Problems"로 둔다. Canonical main-flow
+  slide ordering은 title, merged MOR motivation + axial reduction, merged unit-interval
+  pull-back + operator scaling, GreenNet 3-slide block, CouplingNet 3-slide block,
+  Energy-Norm Error Bound Proposition, separated GreenNet/CouplingNet numerical
+  evidence, conclusion 순서다. Complex geometry는 axial line construction이 아니라
+  non-square/non-unit interval의 unit-interval normalization motivation으로만 가볍게
+  다룬다. GreenNet analytic structure and learned correction은 main-flow 독립 slide로
+  두며, Main slide에서는 Dirac-\(\delta\) jump, Heaviside-type cancellation, learned
+  smooth correction의 role decomposition만 설명한다. CouplingNet은 source-conditioned
+  split, branches/local context for split prediction, projection/reconstruction으로
+  설명한다. Numerical evidence는 GreenNet reconstruction quality와 CouplingNet solution
+  reconstruction으로 분리한다. Code/config/schema/checkpoint/dataset generation detail은
+  outline에서 제외한다. WCCM presentation 문서는 fixed coefficient problem에서의
+  source-to-solution reconstruction framing을 사용한다. Coefficient field는 문제별로
+  고정된 heterogeneous operator를 정의하고, sample variation은 source \(f\) 중심으로
+  설명한다. Coefficient branch/profile/context는 operator context로만 설명하며,
+  sample-varying coefficient family learning claim으로 쓰지 않는다. WCCM presentation
+  문서의 2D PDE 표기는 vector convection \(\mathbf b=(b_x,b_y)\)를 사용하고,
+  Slide 2는 fixed 2D operator와 physical-coordinate \(L_x,L_y\) split operator를 함께
+  보여준다. 이때 reaction split은 \(\frac12cu\) convention을 사용한다. Slide 3는
+  generic physical 1D axial operator \(\mathcal L_{\mathrm{phys}}\)를 unit interval로
+  pull-back하는 step이며, \(L_x,L_y\) 전체 split을 반복하지 않는다. Unit-interval
+  pull-back/scaling에서는 full vector가 아니라 primary axial component \(b_\parallel\)를 써서
+  \(b_{\parallel,\mathrm{unit}}=L b_{\parallel,\mathrm{phys}}\)로 표기한다. Slide 4는
+  Green operator를
+  \(\mathcal G_{\mathrm{unit}}[f_{\mathrm{unit}}](t)=\int_0^1G_{\mathrm{unit}}(t,\eta)f_{\mathrm{unit}}(\eta)\,d\eta\)
+  형태의 normalized axial source-to-solution 적분 작용으로 정의한다. Slide 6는
+  learned Green kernel \(G_\theta\)의 source-to-solution supervision을 설명한다.
+  Main slide flow에서는 full-domain 2D Green function integral보다 normalized axial
+  1D Green operator 수식을 사용한다. Slide 5는 \(G_0\) piecewise formula와
+  \(\partial_t^2G_0=-\delta\)를 main-flow에 포함하고, \(J_0\)를 \(G_0\)의
+  \(t\)-antiderivative \(\partial_tJ_0=G_0\)로 설명한다. \(S=J_0-\frac12E\)와
+  \(\partial_t^2S=\partial_tG_0\), \(A/B\) coefficient factors, \(E/M\) envelope
+  factors도 Slide 5의 analytic ingredient로 둔다. \(J_0\) full piecewise formula와
+  full Dirac/Heaviside derivation은 main slide가 아니라 backup 또는 technical report
+  수준으로 둔다.
+- `docs/wccm_eccomas_2026_slide_content_plan.md`는 WCCM-ECCOMAS 2026 발표 deck을
+  만들기 위한 slide-by-slide content blueprint이다. Outline 문서는 macro flow와 timing을
+  담당하고, content plan은 각 slide의 title, subtitle, main claim, must include,
+  optional/can omit, suggested visual, equations/notation, slide text draft, speaker
+  emphasis를 정리한다. 모든 slide section은 반드시 필수 내용과 생략 가능 내용을
+  구분한다. 실제 slide deck은 아직 생성하지 않으며, numerical evidence는 rendered
+  figure가 아니라 required panel/diagnostic placeholder와 selection criteria로 둔다.
 - Circular complex geometry generator는 `cli/make_circular_geometry.py`이며
   center `(0, 0)` 고정, radius CLI option default `1.0`, `2 * radius / step_size`
   정수 조건을 사용한다. Grid interval은 `[-radius, radius]`이고, boundary grid point와

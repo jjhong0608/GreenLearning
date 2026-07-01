@@ -11,7 +11,7 @@
     "deterministic": true,
     "use_operator_learning": true,
     "dtype": "float64",
-	"coefficient_functions_path": "coefficients/Convection_Diffusion_Reaction.py"
+	"coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py"
   },
   "terminal": {
     "width": 250
@@ -43,7 +43,7 @@
     "lbfgs_epochs": 100,
     "integration_rule": "trapezoid",
     "green_quadrature": {
-      "enabled": true,
+      "enabled": false,
       "rule": "split_gauss_legendre",
       "order": 16,
       "source_sampling_factor": 4,
