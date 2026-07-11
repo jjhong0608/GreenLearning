@@ -1,0 +1,3 @@
+load_selected_samples - Loaded 5 selected CouplingNet samples from checkpoints/Disk_CDR/coupling/artifacts/data/selected_raw_arrays.npz
+save_outputs - Saved 20 separated CouplingNet evidence field panels.
+save_outputs - Saved CouplingNet evidence summary to docs/presentations/wccm_eccomas_2026/assets/coupling_cdr_evidence_rel_sol_quantiles_summary.json

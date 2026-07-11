@@ -1,0 +1,39 @@
+\documentclass{DTE2027_abstracts}
+
+\usepackage{amsmath}
+\usepackage{hyperref}
+
+\title{An Operator-Learning Framework Based on Coupled One-Dimensional Green's Functions for 2D Elliptic PDEs on Complex Domains}
+
+\author{Junhong Jo$^{*,1}$, Taeyoung Ha$^{1}$ and Chang-Ock Lee$^{2}$}
+
+\address{
+$^{1}$ National Institute for Mathematical Sciences
+\\Daejeon 34047, Korea
+\\E-mail: jjhong0608@nims.re.kr, tha@nims.re.kr
+\vspace{8pt}
+\\$^{2}$ Department of Mathematical Sciences, KAIST
+\\Daejeon 34141, Korea
+\\E-mail: colee@kaist.edu
+}
+
+\keywords{Scientific machine learning, Operator learning, Green's functions, Complex geometries, Elliptic PDEs}
+
+\begin{document}
+\begin{abstract}
+For linear elliptic boundary value problems, Green's functions provide a source-to-solution integral representation. However, on complex domains with variable coefficients, the relevant kernels are rarely available in closed form and must encode singular, boundary-compatible structure. We propose an operator-learning framework that represents the solution operator of a two-dimensional elliptic problem through coupled one-dimensional Green-function reconstructions on axial intervals.
+
+Complex geometry is handled by decomposing each axial intersection into its connected components, each treated as an independent one-dimensional boundary value problem and pulled back to the unit interval. The physical interval length is absorbed into the transformed coefficients and source term, so the normalized Green operator still represents the geometry-dependent physical problem. The line-wise Green-kernel model, GreenNet, uses a boundary-compatible analytic Green kernel as its base structure and learns a smooth correction for the local variable-coefficient operator.
+
+These line-wise Green inverses alone do not determine how a two-dimensional source term should be distributed across axial directions. The directional source-coupling model, CouplingNet, supplies this missing geometry-aware coupling. It predicts directional source components for the axial Green reconstructions and constrains them to recombine into the original source term. These coupled line-wise reconstructions are then assembled into a coherent two-dimensional solution prediction.
+
+Numerical results for variable-coefficient elliptic PDEs on complex domains show that the learned one-dimensional Green kernels capture the singular Green structure on axial intervals and that the coupled source split reconstructs two-dimensional solutions across representative source samples. These results indicate that classical Green-function structure can provide useful structural guidance for operator-learning surrogates of elliptic PDEs on complex domains.
+\end{abstract}
+
+
+\begin{thebibliography}{99}
+\bibitem{AxialGF} D. W. Kim, S.-K. Park and S. Jun. Axial Green's function method for multi-dimensional elliptic boundary value problems. International Journal for Numerical Methods in Engineering, 76(8):697--726, 2008.
+\bibitem{Ha2025AxialGreen} T. Ha, J. Jo and C.-O. Lee. Learning axial Green surrogates for elliptic problems with variable coefficients. In Proceedings of the 29th International Conference on Domain Decomposition Methods (DD29), 2025.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,58 @@
+{
+  "artifact_root": "checkpoints/Diffusion/coupling/artifacts",
+  "field_labels": {
+    "rhs": "Source",
+    "sol": "Reference",
+    "u_pred": "Prediction",
+    "u_pred_error": "Signed error"
+  },
+  "metric": "rel_sol",
+  "roles": [
+    {
+      "file_stem": "sample_000045",
+      "loss_energy_consistency": 0.0007475749832242,
+      "rel_flux": 0.1501755772621207,
+      "rel_sol": 0.0187213649385412,
+      "role": "min",
+      "sample_id": 45
+    },
+    {
+      "file_stem": "sample_000014",
+      "loss_energy_consistency": 0.0008588427151518,
+      "rel_flux": 0.1528166164789937,
+      "rel_sol": 0.0310225134826433,
+      "role": "q25",
+      "sample_id": 14
+    },
+    {
+      "file_stem": "sample_000010",
+      "loss_energy_consistency": 0.0007413738254142,
+      "rel_flux": 0.1367438871456189,
+      "rel_sol": 0.0395229917203639,
+      "role": "q50",
+      "sample_id": 10
+    },
+    {
+      "file_stem": "sample_000038",
+      "loss_energy_consistency": 0.0006872401967146,
+      "rel_flux": 0.2004804786167814,
+      "rel_sol": 0.0533025081259844,
+      "role": "q75",
+      "sample_id": 38
+    },
+    {
+      "file_stem": "sample_000004",
+      "loss_energy_consistency": 0.0004767820653403,
+      "rel_flux": 0.1796693135448833,
+      "rel_sol": 0.0883731212746982,
+      "role": "max",
+      "sample_id": 4
+    }
+  ],
+  "row_scale_policy": {
+    "rhs": "independent per selected sample",
+    "sol_u_pred": "per selected sample; reference and prediction share the same scale within each sample",
+    "u_pred_error": "zero-centered shared scale over selected signed errors"
+  },
+  "visible_panel_policy": "panel images omit titles, axes, and colorbars; slide-native labels and metric tables provide context"
+}

@@ -220,48 +220,342 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   MS165 - Methods and Applications of Model Order Reduction 발표를 위한 영어 slide
   outline planning document이다. 발표 제목은 "Hybrid Green's Function Learning With
   Axial Reduction for Multi-Dimensional Elliptic Problems"로 둔다. Canonical main-flow
-  slide ordering은 title, merged MOR motivation + axial reduction, merged unit-interval
-  pull-back + operator scaling, GreenNet 3-slide block, CouplingNet 3-slide block,
+  slide ordering은 title, merged MOR motivation + axial reduction, figure-first
+  graphic abstract, merged unit-interval pull-back + operator scaling,
+  GreenNet 3-slide block, CouplingNet 3-slide block,
   Energy-Norm Error Bound Proposition, separated GreenNet/CouplingNet numerical
   evidence, conclusion 순서다. Complex geometry는 axial line construction이 아니라
   non-square/non-unit interval의 unit-interval normalization motivation으로만 가볍게
   다룬다. GreenNet analytic structure and learned correction은 main-flow 독립 slide로
-  두며, Main slide에서는 Dirac-\(\delta\) jump, Heaviside-type cancellation, learned
-  smooth correction의 role decomposition만 설명한다. CouplingNet은 source-conditioned
+  두며, Main slide에서는 Dirac delta jump, Heaviside cancellation, boundary-compatible
+  learned smooth correction의 role decomposition만 설명한다. CouplingNet은 directional source
   split, branches/local context for split prediction, projection/reconstruction으로
-  설명한다. Numerical evidence는 GreenNet reconstruction quality와 CouplingNet solution
+  설명한다. Numerical evidence는 GreenNet kernel approximation과 CouplingNet solution
   reconstruction으로 분리한다. Code/config/schema/checkpoint/dataset generation detail은
   outline에서 제외한다. WCCM presentation 문서는 fixed coefficient problem에서의
   source-to-solution reconstruction framing을 사용한다. Coefficient field는 문제별로
   고정된 heterogeneous operator를 정의하고, sample variation은 source \(f\) 중심으로
-  설명한다. Coefficient branch/profile/context는 operator context로만 설명하며,
+  설명한다. Coefficient branch/profile/context는 coefficient profiles 또는
+  operator-coefficient profiles로 설명하며,
   sample-varying coefficient family learning claim으로 쓰지 않는다. WCCM presentation
   문서의 2D PDE 표기는 vector convection \(\mathbf b=(b_x,b_y)\)를 사용하고,
-  Slide 2는 fixed 2D operator와 physical-coordinate \(L_x,L_y\) split operator를 함께
-  보여준다. 이때 reaction split은 \(\frac12cu\) convention을 사용한다. Slide 3는
-  generic physical 1D axial operator \(\mathcal L_{\mathrm{phys}}\)를 unit interval로
-  pull-back하는 step이며, \(L_x,L_y\) 전체 split을 반복하지 않는다. Unit-interval
-  pull-back/scaling에서는 full vector가 아니라 primary axial component \(b_\parallel\)를 써서
-  \(b_{\parallel,\mathrm{unit}}=L b_{\parallel,\mathrm{phys}}\)로 표기한다. Slide 4는
-  Green operator를
+  Slide 2의 opening PDE block은 homogeneous Dirichlet boundary condition
+  \(u=0\) on \(\partial\Omega\)를 함께 표시한다. Slide 2는 fixed 2D operator와
+  physical-coordinate \(L_x,L_y\) split operator를 함께 보여준다. 이때 reaction
+  split은 \(\frac12cu\) convention을 사용한다. Slide 3은 figure-first graphic
+  abstract로 두고, two-dimensional forcing \(f(x,y)\) on a general domain
+  \(\Omega\) \(\rightarrow\) axial interval intersections \(\rightarrow\)
+  GreenNet KaTeX math card \(v(t)=\int_0^1G_\theta(t,\eta)\rho(\eta)d\eta\)
+  for a generic line-source profile \(\rho\) \(\rightarrow\) CouplingNet KaTeX math card for \(f\mapsto(\phi,\psi)\), split
+  paths through \(G_x,G_y\), and 2D solution \(u\) 흐름을 그림 위주로 보여준다.
+  이 slide는 analytic Green structure, CouplingNet
+  branch/trunk detail, energy bound를 설명하지 않고 전체 계산 흐름만 orient한다.
+  Slide 4는
+  generic physical 1D axial operator \(\mathcal L_{\mathrm{phys}}\)를 \(s\in[s_0,s_1]\)에서
+  unit interval로 pull-back하는 step이며, \(L_x,L_y\) 전체 split을 반복하지 않는다.
+  Interval visual은 endpoint를 \(s_0,s_1\)로 표기하고 \(L=s_1-s_0\)를 명시하며,
+  fragment reveal로 unit interval \(0\to1\)을 아래에 보여준다.
+  Unit-interval pull-back/scaling에서는 full vector가 아니라 primary axial component
+  \(b_\parallel\)를 써서 \(b_{\parallel,\mathrm{unit}}=L b_{\parallel,\mathrm{phys}}\)로
+  표기하고, 결론 수식으로 conservative-form normalized equation on \(t\in[0,1]\)을
+  보여준다. Slide 5는 GreenNet을 one-dimensional Green kernels로 소개하고,
+  center object는 \(G_{\mathrm{unit}}(t,\eta)\) with "kernel integral operator"로
+  표시한다. Axial coefficient profiles define each local 1D operator라는 문구로
+  coefficient profile의 역할을 설명한다. Green operator는
   \(\mathcal G_{\mathrm{unit}}[f_{\mathrm{unit}}](t)=\int_0^1G_{\mathrm{unit}}(t,\eta)f_{\mathrm{unit}}(\eta)\,d\eta\)
-  형태의 normalized axial source-to-solution 적분 작용으로 정의한다. Slide 6는
+  형태의 normalized axial source-to-solution 적분 작용으로 정의한다. Slide 7는
   learned Green kernel \(G_\theta\)의 source-to-solution supervision을 설명한다.
   Main slide flow에서는 full-domain 2D Green function integral보다 normalized axial
-  1D Green operator 수식을 사용한다. Slide 5는 \(G_0\) piecewise formula와
+  1D Green operator 수식을 사용한다. Slide 6는 \(G_0\) piecewise formula와
   \(\partial_t^2G_0=-\delta\)를 main-flow에 포함하고, \(J_0\)를 \(G_0\)의
   \(t\)-antiderivative \(\partial_tJ_0=G_0\)로 설명한다. \(S=J_0-\frac12E\)와
   \(\partial_t^2S=\partial_tG_0\), \(A/B\) coefficient factors, \(E/M\) envelope
-  factors도 Slide 5의 analytic ingredient로 둔다. \(J_0\) full piecewise formula와
+  factors도 Slide 6의 analytic ingredient로 둔다. \(J_0\) full piecewise formula와
   full Dirac/Heaviside derivation은 main slide가 아니라 backup 또는 technical report
-  수준으로 둔다.
+  수준으로 둔다. Animation plan에서는 Slide 1을 static/no-animation title slide로 두고,
+  Slide 2는 Auto-Animate와 progressive reveal을 사용해 fixed 2D operator, direct
+  \(f\mapsto u\) challenge, \(L_x,L_y\) directional split, axial Green reconstructions
+  plus learned coupling diagram을 3-click sequence로 보여준다. Slide 4는 Auto-Animate로
+  physical interval \([s_0,s_1]\) with \(L=s_1-s_0\)에서 unit interval \([0,1]\)과
+  pull-back map을 같은 fragment로 reveal하고, 이후 fragments로
+  "length is not discarded" callout, full scaling rule,
+  expanded normalized unit equation을 4-click sequence로 보여준다. \(b_\parallel\)
+  clarification은 initial state에 두지 않고 scaling/normalized-equation stage 이후에
+  작은 note로 보여준다. Slide 4의 length-preservation callout은 interval visual의
+  caption처럼 보이지 않도록 전용 spacing을 둔 독립 card로 보여준다. Slide 5는 light Auto-Animate continuity와 progressive reveal로
+  Green operator action을 source profile \(f_{\mathrm{unit}}(\eta)\), kernel panel
+  \(G_{\mathrm{unit}}(t,\eta)\), integral action, output profile \(v(t)\) 순서로
+  보여준다. Slide 5에서는 analytic kernel formula와 training loss를 다루지 않고,
+  각각 Slide 6와 Slide 7로 넘긴다. Slide 6는 같은 heading을 가진 3개의
+  Auto-Animate state로 구현한다. State 1은
+  \(G_\theta=\text{Dirac delta structure}+\text{Heaviside cancellation}+\text{learned smooth correction}\)
+  thesis만 보여주고, State 2는 full formula에서 \(A(t)G_0\) Dirac delta jump와
+  \(B(t)(J_0-\frac12E)\) Heaviside cancellation을 강조하며 \(G_0\), \(J_0/S\),
+  \(A/B\) identities와 "The analytic terms handle the Green-function singularity before learning."
+  takeaway를 보여준다. State 3은 \(E M R_\theta\) learned smooth correction을
+  강조하고 analytic terms를 muted 처리하며 \(E/M\) boundary-compatible envelope와
+  final note를 보여준다. 세 state 모두 아래 여백에는 compact takeaway strip을 둔다.
+  \(J_0\) full piecewise formula와 full distributional proof는 main
+  reveal에 넣지 않는다. Slide 7는 GreenNet source-to-solution supervision slide로,
+  pointwise Green-kernel label이 아니라 GP-generated target solution과 그 target
+  solution에서 생성한 source의 reconstruction loss를 보여준다. Main slide에는
+  \(w(t)\sim\mathcal{GP}(0,k_\ell)\),
+  \(v(t)=w(t)-((1-t)w(0)+t\,w(1))\), \(v(0)=v(1)=0\),
+  \(f_{\mathrm{unit}}=\mathcal L_{\mathrm{unit}}v\),
+  \(v_\theta(t)=\int_0^1G_\theta(t,\eta)f_{\mathrm{unit}}(\eta)\,d\eta\), 그리고
+  \(\mathcal J_{\mathrm{Green}}\sim\mathbb E[\int_0^1|v_\theta(t)-v(t)|^2dt]\)를
+  포함한다. Animation은 "No pointwise Green-kernel labels."를 먼저 보이고, GP target
+  construction, source generated from the target solution, learned reconstruction,
+  expected reconstruction loss, "sources generated from target solutions" takeaway를
+  순서대로 reveal한다. GP covariance detail, normalization, quadrature detail은
+  Slide 7 main reveal에서 제외한다. Slide 8은 GreenNet block에서 CouplingNet block으로
+  넘어가는 "CouplingNet I: Directional Source Split" transition slide로 둔다. Animation은
+  ghosted \(G_x[\cdot]\), \(G_y[\cdot]\) directional Green inverse context와
+  "What source should each axial inverse receive?" 질문에서 시작하고,
+  \(f\to(\phi,\psi)\), directional source definitions \(\phi=L_xu\), \(\psi=L_yu\),
+  compact \(L_x,L_y\) formulas with \(\frac12cu\), balance \(\phi+\psi=f\), final
+  takeaway "CouplingNet learns the directional source split that couples the axial Green
+  reconstructions."를 4-click sequence로 reveal한다. Slide 8에서는
+  source-conditioned branch/context 설명, projection, \(u_\phi\), \(u_\psi\),
+  \(u_{\mathrm{pred}}\)를 다루지 않고 각각 Slide 9과 Slide 10로 넘긴다. Slide 9은 CouplingNet
+  branch-net/trunk-net context slide로 둔다. Animation은 central split predictor와
+  two grouped reveal stages를 사용한다. Branch nets group은 source profile,
+  coefficient profiles, line-geometry structure를 처리하고, trunk nets group은
+  axial local coordinate \(t_{\parallel}\)와 pointwise transverse coordinate
+  \(t_{\perp}\)를 처리한다. \(t_{\parallel}\)는 primary axial interval 안의 pointwise
+  coordinate이고, \(t_{\perp}\)는 같은 physical point를 지나는 transverse interval 안의
+  coordinate로 설명한다. Visible slide에서는 "fixed operator context" 표현을 쓰지 않고,
+  coefficient profiles가 coefficient problem은 fixed여도 axial line마다 달라질 수 있다는
+  점을 speaker note로 설명한다. Final state에는
+  \((\text{branch features},\text{trunk features})\to(\phi,\psi)\) conceptual map과
+  \(\underbrace{\text{profiles and line geometry}}_{\text{branch nets}}+
+  \underbrace{\text{pointwise coordinates}}_{\text{trunk nets}}\Rightarrow
+  \text{directional source split}\) underbrace takeaway strip을 남긴다. Slide 9에서는 projection/reconstruction과 implementation surface를
+  다루지 않는다. Slide 10는 CouplingNet physical balance projection and Green
+  reconstruction slide로 둔다. Projection은 unit interval quantity가 아니라 physical
+  split variables에서 설명한다. Layout은 dense two-stage solver pipeline을 사용한다:
+  Stage 1은 CouplingNet raw split \((\phi_{\mathrm{raw}},\psi_{\mathrm{raw}})\), projection residual
+  \(r=f-(\phi_{\mathrm{raw}}+\psi_{\mathrm{raw}})\), projection formula
+  \(\phi=\phi_{\mathrm{raw}}+\frac12r\), \(\psi=\psi_{\mathrm{raw}}+\frac12r\), balanced
+  split \(\phi+\psi=f\) 순서이고, Stage 2는 two Green reconstructions
+  \(u_\phi=G_x[\phi]\), \(u_\psi=G_y[\psi]\), final average
+  \(u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi)\) 순서다. Animation은 raw split,
+  projection step, balanced split, reconstruction stage, compact bottom pipeline
+  equation 순서의 fragment reveal로 둔다. The compact bottom pipeline uses a one-line
+  flow and the arrow label `projection`. Pipeline arrows must reveal with the
+  destination boxes they point to, not before the boxes, so the initial state never shows
+  standalone arrows inside an empty stage. Slide 10에서는 energy bound와 branch/context
+  details를 다루지 않고 각각 Slide 11과 Slide 9로 넘긴다. Slide 11은
+  Energy-Norm Error Bound Proposition slide로 둔다. Main claim은
+  \(\mathcal{E}_{\mathrm{split}}\)가 단순 diagnostic이 아니라 structural assumptions
+  아래 final solution energy error를 bound한다는 것이다. Main slide에는
+  diffusion coefficient \(a(x)>0\)를 명시한
+  \(\|v\|_a^2=\int_\Omega a(x)|\nabla v(x)|^2\,dx\),
+  \(\mathcal{E}_{\mathrm{split}}=\|u_\phi-u_\psi\|_a^2\),
+  reference solution \(\mathcal Lu_*=f,\ u_*|_{\partial\Omega}=0\),
+  \(\|u_{\mathrm{pred}}-u_*\|_a\le\frac{C_E}{2}\sqrt{\mathcal{E}_{\mathrm{split}}}\)를
+  포함한다. \(C_E\)는 fixed elliptic operator의 stability constant로 짧게 label한다.
+  Animation은 \(u_\phi,u_\psi,u_{\mathrm{pred}}\) diagram, energy norm,
+  split-energy bracket, reference solution \(u_*\), final error-bound proposition,
+  final assumption footer 순서로 reveal한다. Assumption footer는 처음부터 보이지 않게
+  마지막 fragment로 두며, exact/controlled Green reconstruction과
+  \(H_0^1(\Omega)\)-admissible represented solutions를 조건으로 쓴다.
+  Full proof, \(q_c,q_x,q_y\) proof variables, full perturbation bound는
+  main slide에 넣지 않고, learned Green reconstruction errors add perturbation terms라는
+  message만 verbal/backup 수준으로 둔다. GreenNet evidence는 GreenNet III 직후,
+  CouplingNet 소개 전에 배치한다. 이 slide는 GreenNet-only kernel-structure evidence로
+  확정하고, `plot_wccm_green_evidence_panel.py`가 `checkpoints/Disk_CD/green/artifacts`에서
+  생성한 separated PNG assets를 사용한다. Current canonical command는 interval 158,
+  \(\eta=0.75\), basename `greennet_cd_evidence_interval158_eta075`를 사용한다.
+  Main Quarto slide는 reference Green kernel, learned Green kernel, signed error
+  heatmap, fixed-η slice를 각각 별도 image로 배치하고, kernel/slice relative error와
+  diagonal-band diagnostic은 slide-native diagnostic card로 구성한다. Compact line-context
+  tag는 physical axial line을 \(y\)-directed interval at \(x=-0.25\), \(L=0.866\)로
+  표시하고 artifact interval id는 노출하지 않는다. Visible
+  `Kernel-level evidence` label은 사용하지 않는다. Slide title, subtitle, 위치,
+  speaker notes가 GreenNet kernel validation임을 설명한다. Diagonal-band definition은
+  grid-step count가 아니라 normalized unit-coordinate length로 표시하며,
+  \(|t-η|\le 5/128=0.0391\)로 표기한다. Boundary residual은 generated summary에는
+  보관하되 main slide diagnostic card에서는 제거한다.
+  Training/artifact context such as sampler mode, epochs, batch size, branch input size,
+  device, and checkpoint path is not shown on the slide. Instead, the slide includes a
+  compact visible reaction-free convection-diffusion problem setup strip:
+  \(\Omega=\{x^2+y^2<0.5^2\}\),
+  \(-\nabla\cdot(a\nabla u)+\mathbf b\cdot\nabla u=f\), \(c=0\),
+  \(a(x,y)=1+\frac12\sin(2\pi x)\sin(2\pi y)\), and
+  \(\mathbf b=(\frac12\sin(\pi x)\cos(\pi y),-\frac12\cos(\pi x)\sin(\pi y))\).
+  The GreenNet evidence uses three Reveal.js states: (1) reference/learned/signed-error
+  heatmaps plus diagnostics, (2) enlarged fixed-η=0.75 slice while signed error and
+  diagnostics stay visible, and (3) the takeaway. The takeaway is
+  "The learned kernel captures the singular Green structure, and the signed error is not
+  concentrated near the singular diagonal." In the fixed-η slice plot, the learned
+  curve is drawn underneath and the reference curve is drawn last as a thicker dashed
+  curve, so near-perfect overlap still leaves the reference visible.
+  Generated Plotly HTML은 interactive Q&A aid로 사용할 수 있지만,
+  timed Quarto/Reveal.js main deck에서는 reliable projection, navigation, handout
+  export를 위해 static PNG/PDF-ready separated assets를 사용한다. Slide-facing GreenNet
+  evidence labels use the Unicode η character in text labels, not the literal word eta,
+  and the generated Plotly assets use enlarged axis, tick, colorbar, legend, and card
+  label fonts for projection readability. Diagonal concentration diagnostics are labeled
+  as `Error mass / band area` and `Mean error / off-band mean` rather than the ambiguous
+  `Diag. mass / area` and `Diag. mean ratio`. Slide 13는 CouplingNet final solver
+  evidence slide로 확정하고, `plot_wccm_coupling_evidence_panel.py`가 생성한 separated
+  field assets를 사용한다. Main slide는 relative-solution-error 기준 `min`, `q25`,
+  `q50`, `q75`, `max` 5개 selected samples를 column으로 두고, `Source`,
+  `Reference`, `Prediction`, `Signed error` 4개 row를 slide-native table로 조립한다.
+  Individual field panels에는 title, axis, colorbar, sample id, artifact-specific text를
+  넣지 않고, row/column label과 metric table은 Quarto slide 안에서 따로 구성한다.
+  Source row는 per-sample scale을 사용한다. Reference와 prediction row는 같은 selected
+  sample column 안에서만 shared solution color scale을 사용하고, 서로 다른 sample column은
+  independent solution scale을 사용한다. Signed-error row는 selected samples 전체에 대해
+  zero-centered shared diverging scale을 사용해 error magnitude comparison을 유지한다.
+  Slide-native metric card는 relative solution
+  error를 `rel. sol. err.`로 label하고 split-energy loss만 compact하게 표시하며 첫 slide
+  state부터 보이게 한다. Source row와 metric card는 initial state에 두고, Reference,
+  Prediction, Signed error row는 row 단위 fragment로 순차 reveal한다. Flux target/error와
+  \(u_\phi-u_\psi\) split mismatch는 main slide가 복잡해질 경우 verbal/backup으로 둔다.
+  Slide 13에는 별도의 `Solver-level evidence` pill을 두지 않고, slide title, CouplingNet
+  pipeline 뒤의 배치, CDR problem strip, metric card로 CouplingNet final solver
+  reconstruction을 검증하는 slide임을 명확히 한다. Slide 13 takeaway는 quantile-selected samples가 observed relative-error range 전반에서
+  2D solution reconstruction을 support한다는 claim으로 쓰고, single favorable case만
+  보여준다는 인상을 피한다.
+  Numerical evidence slides는 heavy Auto-Animate보다
+  figure-first minimal reveal을 사용한다. Slide 14은 `Takeaway: Coupled Axial Green
+  Solvers` closing slide로 둔다. Subtitle은 "GreenNet learns line-wise Green kernels;
+  CouplingNet learns the directional source split."로 두고, thesis sentence는
+  "A 2D elliptic problem is solved through axial Green inversions and a learned,
+  balance-preserving source decomposition."로 둔다. 이 thesis sentence는 중앙 정렬
+  slogan이 아니라 left-aligned technical callout으로 표시한다. Four contribution blocks는
+  Axial Green kernels, Analytic structure, Source split, Energy bound로 정리하되,
+  taller cards를 사용해 slide 하단 여백을 줄인다. Card text는 각각 axial interval
+  normalization/line-wise inverse kernels, singular Green behavior before neural
+  correction, reference-solution 또는 split label 없이 학습되는 phi/psi source split,
+  structural assumptions 아래 unsupervised split consistency와 final solution error의
+  연결을 설명한다. CouplingNet training loss는 reference solution을 직접 쓰지 않는
+  split-energy consistency이며, reference solution은 evidence/evaluation metric에만
+  사용한다는 speaker note를 둔다. Closing line은 wide bottom banner로 배치하고
+  "GreenNet supplies line-wise Green inverses; CouplingNet learns the source split
+  that turns them into a 2D elliptic solver."로 둔다. Animation은 light progressive reveal만 사용하고, new
+  equations, numerical metrics, proof detail, future-work list는 Slide 14에 넣지 않는다.
+  Backup/Q&A slides는 숫자 기반 backup naming을 쓰지 않고
+  `Backup A`, `Backup B`, `Backup C`로 통일한다.
 - `docs/wccm_eccomas_2026_slide_content_plan.md`는 WCCM-ECCOMAS 2026 발표 deck을
   만들기 위한 slide-by-slide content blueprint이다. Outline 문서는 macro flow와 timing을
   담당하고, content plan은 각 slide의 title, subtitle, main claim, must include,
   optional/can omit, suggested visual, equations/notation, slide text draft, speaker
   emphasis를 정리한다. 모든 slide section은 반드시 필수 내용과 생략 가능 내용을
-  구분한다. 실제 slide deck은 아직 생성하지 않으며, numerical evidence는 rendered
-  figure가 아니라 required panel/diagnostic placeholder와 selection criteria로 둔다.
+  구분한다. 실제 Quarto + Reveal.js deck source는 `docs/presentations/wccm_eccomas_2026/`
+  아래에 생성되어 있으며, GreenNet numerical evidence는 separated kernel-structure
+  assets와 slide-native diagnostic card로 확정하고 CouplingNet numerical evidence는
+  separated 5-by-4 quantile field matrix와 slide-native metric card로 확정한다.
+- `docs/wccm_eccomas_2026_slide_deck_critical_review.md`는 현재 WCCM-ECCOMAS 2026 deck의
+  revision checklist로 사용한다. 이 문서는 한국어 critical review이며 각 critique를 Issue,
+  Why it matters, Recommended fix 구조로 정리한다. 후속 slide 수정에서는 특히 backup numbering
+  inconsistency, Slide 12 takeaway clipping, Slide 13 metric-card density, 초반 contribution
+  sentence anchoring, Slide 6 GreenNet analytic-structure timing risk를 high-priority item으로
+  우선 확인한다.
+- WCCM-ECCOMAS 2026 backup slides는 main 14-slide timing에 포함하지 않는 Q&A 전용
+  support material이다. Ready backup은 Dirac/Heaviside derivation sketch, imperfect
+  Green reconstruction perturbation, connected-interval pull-back detail의 3장으로
+  구성한다. Extra GreenNet reconstruction evidence와 extra CouplingNet split/energy
+  evidence는 final numerical figures가 준비될 때까지 deferred figure-dependent backup으로
+  둔다. Backup slides는 self-contained하게 작성하되 code/config/schema/checkpoint나
+  geometry/sample generation detail은 넣지 않는다.
+- WCCM-ECCOMAS 2026 deck remaining-fixes revision convention: active deck만 수정하고
+  `docs/presentations_backup/`은 baseline으로 유지한다. Slide 3 graphic abstract는 source
+  card를 작게 두고 axial interval view와 CouplingNet directional coupling card의 비중을
+  키운다. Slide 5는 "Previous step: normalize the operator. This step: learn its
+  Green inverse." contrast strip으로 Slide 4와 역할을 분리한다. Slide 6 timed-talk
+  main state에는 Dirac jump, Heaviside cancellation, boundary-compatible learned smooth
+  correction의 세 역할과 최소 \(G_0,J_0,S,E,M\) identity만 두고, \(A/B\) coefficient
+  factor details와 operator-application interpretation은 Backup A로 이동한다. Backup A는
+  "Operator application creates two effects" heading 아래 Dirac jump, Heaviside leftover,
+  analytic compensation을 구분하고, Backup B는 directional mismatch
+  \(\varepsilon_x-\varepsilon_y\)와 common bias \(\varepsilon_x+\varepsilon_y\)를 two-channel
+  visual로 구분하며, Backup C는 non-square slice SVG와 "connected intervals are not merged
+  across outside-domain gaps" 메시지를 우선 보여준다.
+- WCCM-ECCOMAS 2026 submitted-abstract alignment: Slide 6 GreenNet II는
+  "Do not learn the Green singularity from scratch."를 compact visible motivation으로
+  두고, variable-coefficient Green kernels are rarely available in closed form,
+  source-point singularity와 homogeneous boundary constraints are hard for a plain
+  neural network, analytic component supplies the delta-induced jump, flux-jump
+  behavior, and boundary structure before learning이라고 speaker note에 둔다.
+  Slide 7은 GreenNet이 one-dimensional source-to-solution reconstruction pairs로
+  supervised되고, CouplingNet은 reference-solution 또는 split label 없이 balance, Green
+  reconstruction, split-energy consistency로 학습된다는 contrast를 명시한다. Slide 8은
+  CouplingNet이 solution을 직접 예측하는 것이 아니라 horizontal/vertical line-wise
+  flux-divergence 또는 source components를 예측한다고 설명한다. Slide 9는 coefficient
+  field는 problem에 대해 fixed이지만 axial profiles가 line마다 달라지고, 같은
+  operator-learning model이 line-wise로 재사용된다는 phrasing을 사용한다. Slide 14는
+  reference solutions are used only for evaluation; CouplingNet is trained through
+  balance, Green reconstruction, and split consistency라는 wording을 유지한다.
+- WCCM-ECCOMAS 2026 실제 발표 deck source는
+  `docs/presentations/wccm_eccomas_2026/wccm_eccomas_2026.qmd`인 Quarto + Reveal.js
+  deck이고, deck-local style은 `docs/presentations/wccm_eccomas_2026/styles.scss`에 둔다.
+  Render command는
+  `quarto render docs/presentations/wccm_eccomas_2026/wccm_eccomas_2026.qmd`로 고정한다.
+  Decktape validation은 user Node environment의 `decktape` 3.16.1과 Chrome for Testing
+  executable
+  `~/.local/share/decktape-browsers/chrome/linux-150.0.7871.46/chrome-linux64/chrome`를
+  사용한다. Decktape는 output PDF path를 screenshot basename에 포함시키므로,
+  `docs/presentations/wccm_eccomas_2026/` 안에서 basename PDF로 export한 뒤
+  `checks/wccm_eccomas_2026_decktape.pdf`로 이동한다. Check screenshots는
+  `docs/presentations/wccm_eccomas_2026/checks/screenshots/`에 둔다.
+  Title slide metadata는 presenter `Junhong Jo` with affiliation
+  `National Institute for Mathematical Sciences`,
+  `Joint work with Taeyoung Ha (NIMS) and Chang-Ock Lee (KAIST)`, presentation date
+  `Tuesday, July 21, 2026`로 둔다. Title slide subtitle은 reduced solver가 아니라
+  two-dimensional elliptic solver, axial Green operators, learned directional source split을
+  드러내고, Reduce/Recover cards는 각각 "a multi-dimensional elliptic problem into axial
+  Green subproblems"와 "coupled axial Green operators" 표현을 사용한다. Quarto heading에서
+  생성되는 title-slide `h2`는 custom title과 중복되지 않도록 deck-local CSS에서 숨긴다.
+  Slide 2 title은 전통적인 MOR로 과하게 보이지 않도록 "Axial Reduction of Elliptic
+  Operators"로 둔다. Fixed-coefficient framing은 긴 설명문보다
+  \(\mathcal S_{a,\mathbf b,c}:f\mapsto u\) source-to-solution map 수식으로 직접 보여주고,
+  "Operator fixed; source varies." caption은 작고 secondary하게 둔다. 같은 수식을 Direct
+  map card에 반복하지 않고, card에는 "one global source-to-solution representation"처럼
+  역할 설명만 둔다. Reduced view card는 줄바꿈을 줄이기 위해 "directional 1-D operators
+  + learned coupling"으로 축약한다. GreenNet Evidence는 GreenNet III 직후에 배치하고
+  Disk_CD convection-diffusion separated GreenNet evidence assets, fixed-η=0.75,
+  physical axial-line context tag, three-state reveal, no visible `Kernel-level evidence` label을 사용한다. Slide 13은
+  `checkpoints/Disk_CDR/coupling/artifacts`에서 생성한
+  `coupling_cdr_evidence_rel_sol_quantiles` separated CouplingNet evidence assets를
+  사용해 convection-diffusion-reaction solver-level evidence를 보여주며, 5-by-4
+  relative-error quantile matrix와 처음부터 보이는 right-side metric card로 조립한다.
+  Slide 3은 deck-native SVG/HTML graphic abstract로 구성하며, 일반 경계 domain의
+  two-dimensional forcing \(f(x,y)\), clipped axial intervals, GreenNet direct
+  KaTeX kernel-integration card, CouplingNet direct KaTeX split/reconstruction card,
+  bottom takeaway를 사용한다. 우선 Quarto/KaTeX로 직접 수식을 렌더링하고, 수식 card가
+  깨질 때만 고해상도 PNG panel fallback을 고려한다. Main content는 그림 위주로
+  유지하고, 3-4 click reveal plus takeaway reveal 정도의 가벼운 animation만 사용한다.
+- WCCM-ECCOMAS 2026 speaker script는 `docs/wccm_eccomas_2026_speaker_script.md`를
+  Quarto speaker notes 삽입 전 canonical editable English draft로 둔다. 이 문서는
+  14개 main slide에 대해 14-15분 spoken script를 목표로 하며, 각 slide section은
+  target time, reveal/click cues, speaker script, compression option, transition sentence
+  구조를 사용한다. Backup A/B/C는 timed talk가 아니라 Q&A-only prompt snippet으로
+  유지한다. 사용자가 script-level revision을 마치기 전에는 QMD의 `::: {.notes}` block에
+  최종 대본을 복사하지 않는다.
+- DTE 2027 abstract source는 `docs/dte2027_abstract/DTE2027_abstracts.tex`이고,
+  official `DTE2027_abstracts.cls` template를 같은 폴더에 보관한다. 초록은
+  `MS018 - Scientific Machine Learning for PDEs in Complex Geometries` minisymposium용이며,
+  title은 "An Operator-Learning Framework Based on Coupled One-Dimensional Green's
+  Functions for 2D Elliptic PDEs on Complex Domains"로 둔다. Junhong Jo는 presenting
+  author로 asterisk를 붙이고, Taeyoung Ha와 Chang-Ock Lee는 coauthor로 둔다. Address
+  block은 template 예시처럼 affiliation, postal address, e-mail을 직접 포함한다:
+  NIMS는 `National Institute for Mathematical Sciences`, `Daejeon 34047, Korea`,
+  `jjhong0608@nims.re.kr, tha@nims.re.kr`로 쓰고, KAIST는
+  `Department of Mathematical Sciences, KAIST`, `Daejeon 34141, Korea`,
+  `colee@kaist.edu`로 쓴다. 내용 framing은 Green-function source-to-solution
+  integral representation에서 출발하고 references는 axial Green's function method와
+  DD29 axial Green surrogate proceeding을 사용하며, SciML for complex geometries에 맞춰 axial intersections decomposed into
+  connected components, each as an independent 1D boundary value problem,
+  unit-interval pull-back, the line-wise Green-kernel model GreenNet,
+  the directional source-coupling model CouplingNet, geometry-aware directional source
+  decomposition, and coherent 2D reconstruction을
+  중심으로 유지한다. DTE abstract에서는 label-free training이나 energy-norm theory를
+  핵심 claim으로 전면화하지 않고, numerical results 문장에서도 disk-type 등 특정
+  domain family를 전면화하지 않는다. Keyword line은 `Neural operators` 대신
+  `Operator learning`을 사용한다.
 - Circular complex geometry generator는 `cli/make_circular_geometry.py`이며
   center `(0, 0)` 고정, radius CLI option default `1.0`, `2 * radius / step_size`
   정수 조건을 사용한다. Grid interval은 `[-radius, radius]`이고, boundary grid point와
@@ -383,6 +677,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   groups are `sol/u_pred/u_phi/u_psi`, `target_phi/phi`, and `target_psi/psi`
   when flux targets exist; `rhs` and target-free flux diagnostics keep independent
   ranges.
+- Complex CouplingNet projection-rule comparison is a post-hoc diagnostic, not a
+  training-time projection change. `cli/compare_complex_projection_posthoc.py`
+  consumes `artifacts/data/selected_raw_arrays.npz`, applies both hard symmetric
+  projection and direct length-squared `geometry_weighted` projection to the same
+  `raw_unit_phi/raw_unit_psi`, reuses the supplied GreenNet checkpoint for
+  reconstruction, and exports per-sample, transition-zone, and
+  weighted-minus-symmetric delta artifacts. It must not rerun CouplingNet.
 - CouplingNet selected-sample flux-divergence figures should exclude boundary
   grid values. CouplingNet predictions use zero-padding at boundaries only for
   trapezoid-rule integration compatibility with boundary-zero Green functions;
@@ -439,6 +740,19 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   relative-metric distribution, `rel_sol`-`rel_flux` scatter, best/worst sample
   ranking figure를 만든다. CSV의 `rel_sol`/`rel_flux`는 raw fraction으로
   유지하고, figure에서는 `%` 단위(100배)로 표시한다.
+- `plot_wccm_coupling_evidence_panel.py`는 WCCM-ECCOMAS Slide 13 전용
+  CouplingNet evidence asset generator이다. Script default artifact root는
+  `checkpoints/Diffusion/coupling/artifacts`로 남아 있지만, 현재 WCCM deck의 canonical
+  Slide 13 asset command는 `--artifact-root checkpoints/Disk_CDR/coupling/artifacts`
+  와 `--basename coupling_cdr_evidence_rel_sol_quantiles`를 사용한다. 이 CDR artifact는
+  \( -\nabla\cdot(a\nabla u)+\mathbf b\cdot\nabla u+c u=f \) disk problem의
+  solver-level evidence이며, `selected_raw_arrays.npz`, `summary.json`,
+  `metrics/per_sample_metrics.csv`를 읽어 relative-solution-error quantile roles
+  `min/q25/q50/q75/max`에 대한 separated `rhs`, `sol`, `u_pred`, `u_pred_error`
+  field panels를 생성한다. Panel images는 title/axis/colorbar/sample id를 제거하고,
+  row/column labels와 metric table은 Quarto slide에서 따로 구성한다. Slide-facing
+  deck에서는 Source row를 먼저 보이고 Reference, Prediction, Signed error row를 순차
+  reveal한다.
 - `plot_coupling_rel_sol_boxplots.py`는 workshop용 CouplingNet test result CSV
   비교 script이다. `checkpoints/For_Workshop/CouplingNetResults`의 네
   `*_per_sample_metrics.csv` 파일에서 `rel_sol`을 읽고 문제별 Plotly boxplot을
