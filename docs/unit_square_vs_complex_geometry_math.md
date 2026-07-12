@@ -335,20 +335,26 @@ direction-split fields \(\phi\), \(\psi\)를 만든 뒤, projection과 Green rec
 
 ### Source branch
 
-Source branch는 physical source \(f\)를 connected interval 위의 normalized forcing profile로 해석한다.
-각 interval의 source는 unit coordinate 위에서
+Source branch는 physical source \(f\)를 connected interval 위의 normalized physical forcing profile로
+해석한다. Physical source를 unit coordinate에서 sampling한 뒤 amplitude를
 
 \[
-f_{\mathrm{unit}}(t)=L^2 f_{\mathrm{phys}}(s_0+Lt)
+A
+=
+\left(
+\int_0^1
+|f_{\mathrm{phys}}(s_0+Lt)|^2\,dt
+\right)^{1/2}
 \]
 
-로 표현된다. Source branch는 이 profile의 형태를 encoding한다. 이는 CouplingNet이 source-dependent
+로 정의하고, source branch에는 \(f_{\mathrm{phys}}/A\)를 넣는다. Model의 directional output은 다시
+\(A\)로 scale되어 physical raw split field가 된다. 이는 CouplingNet이 source-dependent
 split field를 만들기 위해 반드시 필요하다. 같은 geometry와 coefficient라도 source profile이 바뀌면
 \(\phi\), \(\psi\)의 적절한 분해도 달라지기 때문이다.
 
-Source branch는 또한 interval length에 따른 source scaling을 반영한다. 긴 interval과 짧은 interval에서
-같은 physical source amplitude를 보더라도, normalized Green problem 안에서 source의 effective strength는
-달라진다.
+Interval length effect는 source amplitude에 \(L^2\)를 미리 곱하는 방식이 아니라 geometry branch와
+unit-scaled coefficient context를 통해 network에 제공된다. \(L^2\) source conversion은 physical symmetric
+projection이 끝난 뒤 Green reconstruction source를 만들 때 적용된다.
 
 ### Coefficient branch
 
@@ -452,10 +458,18 @@ r=f-\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}},
 \psi_{\mathrm{raw}}+\frac12 r.
 \]
 
-Complex geometry에서 중요한 점은 projection이 physical split field에 대해 적용되어야 한다는 것이다.
-Normalized interval 위에서 network가 계산한 source-like quantity는 physical \(\phi\), \(\psi\)와 scale이
-다를 수 있다. PDE balance \(\phi+\psi=f\)는 physical domain에서의 equation이므로, projection도 physical
-field 해석 위에서 이루어져야 한다.
+Complex geometry에서 CouplingNet의 두 raw channel은 처음부터 physical
+\(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\)를 나타낸다. PDE balance \(\phi+\psi=f\)는 physical
+domain에서의 equation이므로 symmetric projection도 이 physical raw fields에 직접 적용한다. Equal-half
+correction은 raw difference mode를 보존한다.
+
+Projection이 끝난 뒤에만 connected interval Green reconstruction을 위한 unit source를 만든다.
+
+\[
+\Phi_{\mathrm{unit}}=L_x^2\phi_{\mathrm{proj}},
+\qquad
+\Psi_{\mathrm{unit}}=L_y^2\psi_{\mathrm{proj}}.
+\]
 
 Projection 이후에는 두 split field를 각각 Green reconstruction source로 본다.
 

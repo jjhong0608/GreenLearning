@@ -12,6 +12,7 @@ from greenonet.complex_coupling_artifacts import export_complex_coupling_artifac
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.config import (
     Axis1DTrunkConfig,
+    BalanceProjectionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     ModelConfig,
@@ -57,6 +58,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         hidden_dim=4,
         depth=1,
         dtype=torch.float64,
+        balance_projection=BalanceProjectionConfig(mode="symmetric"),
         coefficient_terms=CouplingCoefficientTermsConfig(
             diffusion=True,
             convection=True,
@@ -92,6 +94,10 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "diffusion": True,
         "convection": True,
         "reaction": True,
+    }
+    config_payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "symmetric",
     }
     config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
@@ -133,6 +139,18 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert set(summary["figure_fields"]) == expected_figure_fields
     assert summary["error_convention"] == "signed_difference"
     assert summary["solution_prediction"] == "u_pred=0.5*(u_phi+u_psi)"
+    assert summary["raw_output_space"] == "physical"
+    assert summary["output_contract_version"] == 2
+    assert summary["balance_projection"] == {
+        "enabled": True,
+        "mode": "symmetric",
+        "space": "physical",
+        "residual_split": "equal_half",
+    }
+    assert summary["post_projection_unit_conversion"] == {
+        "phi": "Phi_unit=Lx^2*phi_physical",
+        "psi": "Psi_unit=Ly^2*psi_physical",
+    }
     assert (
         summary["non_error_color_range_policy"] == "shared_reference_prediction_groups"
     )
@@ -173,7 +191,10 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert all("cross" not in key for key in rows[0])
 
     raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
-    assert any(key.endswith("_raw_unit_phi") for key in raw.files)
+    assert any(key.endswith("_raw_physical_phi") for key in raw.files)
+    assert any(key.endswith("_raw_physical_psi") for key in raw.files)
+    assert any(key.endswith("_projected_unit_phi") for key in raw.files)
+    assert any(key.endswith("_projected_unit_psi") for key in raw.files)
     for suffix in (
         "_u_pred",
         "_u_pred_error",

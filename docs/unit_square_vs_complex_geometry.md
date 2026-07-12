@@ -246,14 +246,13 @@ Complex CouplingNet의 source branch는 mandatory input이다. `rhs_valid`는 x/
 2. `valid_index == -1`인 endpoint source value는 hard-zero로 둔다.
 3. Interior node는 `rhs_valid`에서 값을 가져온다.
 4. Segment-local node values를 fixed unit branch grid `linspace(0, 1, M)`으로 linear interpolation한다.
-5. Physical source를 unit source로 변환한다.
+5. Unit coordinate에서 physical source profile의 amplitude를 계산한다.
 
 ```text
-f_unit=L^2*f_phys
+A=sqrt(integral_0^1 f_phys(s(t))^2 dt)
 ```
 
-6. Unit interval에서 source L2 norm을 계산하고, branch input은 normalized source로 넣는다.
-7. Model output은 segment별 source norm으로 다시 scale된다.
+6. Branch input은 `f_phys/A`이고, model output은 segment별 amplitude `A`로 다시 scale된다.
 
 Source branch에 interpolation이 필요한 이유는 sample source가 full-grid valid point에서만 주어지기
 때문이다. CouplingNet branch input은 fixed length `M`의 unit grid를 기대하므로, 각 segment의 irregular
@@ -287,7 +286,7 @@ branch에는 들어가지 않는다. GreenNet reconstruction branch는 primary 1
 
 Complex CouplingNet은 point prediction을 위해 네 종류의 branch/trunk 정보를 결합한다.
 
-- `source branch`: segment-local normalized `f_unit`.
+- `source branch`: segment-local normalized physical source `f_phys/A`.
 - `coefficient branch`: 선택된 `[a,b_primary,b_transverse,c]` coefficient samples.
 - `geometry branch`: `[s_left, s_right, s_mid, L, L^2, 1/L]`.
 - `transverse branch`: globally normalized transverse coordinate `r_hat`의 Fourier features.
@@ -303,11 +302,12 @@ Trunk는 항상 local 1D coordinate `t`만 본다. Physical coordinate 자체를
 GreenNet과 CouplingNet의 segment-local unit interval contract를 일관되게 유지하기 위해서다. Physical
 위치와 length 정보는 geometry/transverse branch가 담당한다.
 
-### Raw unit output, physical projection, unit reconstruction
+### Physical raw output, physical projection, unit reconstruction
 
-Complex CouplingNet model output은 raw unit quantity `(B, 2, P)`이다. 첫 번째 channel은 x-direction
-`Phi_raw`, 두 번째 channel은 y-direction `Psi_raw`에 대응한다. 이 raw unit output은 source norm으로
-scale된 뒤 segment length를 사용해 physical `phi`, `psi`로 변환된다.
+Complex CouplingNet model output은 raw physical quantity `(B, 2, P)`이다. 첫 번째 channel은
+x-direction `phi_raw`, 두 번째 channel은 y-direction `psi_raw`에 대응한다. 두 channel은 각각
+horizontal/vertical path에서 예측되며, normalized source branch의 segment amplitude로 physical
+source scale을 복원한다.
 
 Projection은 physical variable에서 적용된다. 현재 complex mode는 hard symmetric projection만 사용한다.
 
@@ -317,8 +317,16 @@ phi = phi_raw + 0.5 residual
 psi = psi_raw + 0.5 residual
 ```
 
-이 projection 이후 `phi + psi = rhs`가 valid point에서 강하게 맞춰진다. Projected physical `phi`, `psi`는
-다시 unit quantity로 변환되어 GreenNet reconstruction에 들어간다. Reconstruction은 segment별
+이 projection 이후 `phi + psi = rhs`가 valid point에서 강하게 맞춰지고,
+`phi-psi=phi_raw-psi_raw` difference mode는 보존된다. 그 뒤에만 projected physical fields를
+Green reconstruction source로 변환한다.
+
+```text
+Phi_unit=L_x^2*phi
+Psi_unit=L_y^2*psi
+```
+
+Reconstruction은 segment별
 precomputed nonuniform trapezoid weight를 사용한다. Endpoint는 hard-zero node로 포함되지만 CouplingNet을
 endpoint에서 평가하지 않는다.
 

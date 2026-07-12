@@ -813,7 +813,8 @@ Add a complex-geometry forward path that:
 - processes x/y segments separately if necessary;
 - shares function/geometry/trunk networks across x/y segments;
 - uses segment-local \(t\) as trunk input;
-- interprets raw outputs as unit quantities \(\Phi,\Psi\);
+- interprets the two raw outputs as physical quantities
+  \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\);
 - returns enough intermediate outputs for projection and reconstruction.
 
 Do not force complex geometry into a rectangular `(B, 2, m, n)` tensor.
@@ -824,11 +825,12 @@ Implement projection in physical variables.
 
 The projection path must:
 
-1. convert raw unit outputs to physical \(\phi,\psi\);
-2. compute physical residual \(f-\phi-\psi\);
-3. apply symmetric split;
-4. convert projected physical outputs back to projected unit outputs;
-5. use projected unit outputs for reconstruction.
+1. receive physical raw \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\) directly;
+2. compute physical residual \(f-\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}}\);
+3. apply the equal-half symmetric split in physical variables;
+4. convert projected physical outputs to unit outputs with the axis-specific
+   \(L_x^2\) and \(L_y^2\) factors;
+5. use only those post-projection unit outputs for reconstruction.
 
 Remove or bypass smooth masked projection and balance loss in complex-geometry mode.
 
@@ -918,9 +920,11 @@ Test that:
 
 Test that:
 
-- raw unit \(\Phi\) converts to physical \(\phi\) by division by \(L_x^2\);
-- raw unit \(\Psi\) converts to physical \(\psi\) by division by \(L_y^2\);
-- projected physical outputs convert back to unit outputs with the correct \(L^2\) factors.
+- raw model channels are physical \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\);
+- symmetric projection preserves the raw difference mode while enforcing balance;
+- projected physical outputs convert to unit reconstruction outputs with the correct
+  axis-specific \(L^2\) factors;
+- unversioned legacy complex CouplingNet checkpoints are rejected as raw-unit contracts.
 
 ### 7.4 Projection tests
 

@@ -25,7 +25,7 @@ from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
     reconstruct_from_projected_unit,
 )
-from greenonet.config import CouplingModelConfig, CouplingTrainingConfig
+from greenonet.config import CouplingTrainingConfig
 from greenonet.io import save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
 
@@ -55,12 +55,10 @@ class ComplexCouplingTrainer(LoggingMixin):
         config: CouplingTrainingConfig,
         work_dir: Path | str,
         green_model: torch.nn.Module,
-        model_cfg: CouplingModelConfig | None = None,
         terminal_width: int | None = None,
     ) -> None:
         self.model: torch.nn.Module = model
         self.config = config
-        self.model_cfg = model_cfg
         self.green_model = green_model
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -187,17 +185,17 @@ class ComplexCouplingTrainer(LoggingMixin):
         return self._average(totals, batches)
 
     def _forward_batch(self, batch: ComplexCouplingBatch) -> ComplexForwardResult:
-        raw_unit = self.model(
+        raw_physical = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
             y_source_branch=batch.y_source_branch,
-            x_source_norm=batch.x_source_norm,
-            y_source_norm=batch.y_source_norm,
+            x_source_amplitude=batch.x_source_amplitude,
+            y_source_amplitude=batch.y_source_amplitude,
             x_coefficient_branch=batch.x_coefficient_branch,
             y_coefficient_branch=batch.y_coefficient_branch,
         )
         projection = apply_hard_symmetric_projection(
-            raw_unit=raw_unit,
+            raw_physical=raw_physical,
             rhs_phys=batch.rhs_valid,
             geometry=batch.geometry,
         )

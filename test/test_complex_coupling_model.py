@@ -9,12 +9,14 @@ from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     Axis1DTrunkConfig,
+    BalanceProjectionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
     TransverseTrunkConfig,
 )
+from greenonet.io import load_state_dict_auto, save_state_dict_safetensors
 from test.complex_fixtures import (
     write_coefficients,
     write_geometry_npz,
@@ -64,8 +66,8 @@ def _forward(model: ComplexCouplingNet, geometry, item) -> torch.Tensor:
         geometry=geometry,
         x_source_branch=item.x_source_branch.unsqueeze(0),
         y_source_branch=item.y_source_branch.unsqueeze(0),
-        x_source_norm=item.x_source_norm.unsqueeze(0),
-        y_source_norm=item.y_source_norm.unsqueeze(0),
+        x_source_amplitude=item.x_source_amplitude.unsqueeze(0),
+        y_source_amplitude=item.y_source_amplitude.unsqueeze(0),
         x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
         y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
     )
@@ -87,6 +89,7 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
     assert model.geometry_feature_dim == 6
     assert model.transverse_feature_dim == 4
     assert not hasattr(model, "axis_one_hot")
+    assert int(model._output_contract_version.item()) == 2
 
 
 def test_complex_pointwise_transverse_trunk_product_fusion_outputs_shape(tmp_path):
@@ -137,13 +140,31 @@ def test_complex_coupling_model_is_source_conditioned(tmp_path):
         geometry=geometry,
         x_source_branch=item.x_source_branch.unsqueeze(0) * 0.0,
         y_source_branch=item.y_source_branch.unsqueeze(0) * 0.0,
-        x_source_norm=item.x_source_norm.unsqueeze(0),
-        y_source_norm=item.y_source_norm.unsqueeze(0),
+        x_source_amplitude=item.x_source_amplitude.unsqueeze(0),
+        y_source_amplitude=item.y_source_amplitude.unsqueeze(0),
         x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
         y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
     )
 
     assert not torch.allclose(original, changed)
+
+
+def test_complex_model_scales_physical_output_by_source_amplitude(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model()
+
+    original = _forward(model, geometry, item)
+    doubled = model(
+        geometry=geometry,
+        x_source_branch=item.x_source_branch.unsqueeze(0),
+        y_source_branch=item.y_source_branch.unsqueeze(0),
+        x_source_amplitude=2.0 * item.x_source_amplitude.unsqueeze(0),
+        y_source_amplitude=2.0 * item.y_source_amplitude.unsqueeze(0),
+        x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
+        y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+    )
+
+    torch.testing.assert_close(doubled, 2.0 * original)
 
 
 def test_complex_convection_term_adds_primary_and_transverse_channels(tmp_path):
@@ -258,3 +279,38 @@ def test_complex_model_rejects_trunk_positional_encoding_enabled():
                 ),
             )
         )
+
+
+def test_complex_model_rejects_smooth_mask_balance_projection():
+    with pytest.raises(ValueError, match="only symmetric"):
+        ComplexCouplingNet(
+            CouplingModelConfig(
+                branch_input_dim=4,
+                hidden_dim=4,
+                depth=1,
+                dtype=torch.float64,
+                balance_projection=BalanceProjectionConfig(mode="smooth_mask"),
+            )
+        )
+
+
+def test_complex_model_rejects_legacy_raw_unit_checkpoint(tmp_path):
+    model = _model()
+    legacy_state = dict(model.state_dict())
+    legacy_state.pop("_output_contract_version")
+    checkpoint = tmp_path / "legacy_complex_coupling.safetensors"
+    save_state_dict_safetensors(legacy_state, checkpoint)
+
+    with pytest.raises(ValueError, match="Legacy complex CouplingNet checkpoint"):
+        load_state_dict_auto(_model(), checkpoint)
+
+
+def test_complex_model_loads_matching_output_contract_checkpoint(tmp_path):
+    model = _model()
+    checkpoint = tmp_path / "complex_coupling_v2.safetensors"
+    save_state_dict_safetensors(model.state_dict(), checkpoint)
+
+    loaded = _model()
+    load_state_dict_auto(loaded, checkpoint)
+
+    assert int(loaded._output_contract_version.item()) == 2

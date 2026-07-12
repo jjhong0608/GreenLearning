@@ -50,8 +50,8 @@ def test_complex_dataset_gathers_full_grid_and_preferred_flux(tmp_path):
     assert dataset.y_green_branch.shape == (3, 4, 4)
     assert item.x_source_branch.shape == (2, 4)
     assert item.y_source_branch.shape == (3, 4)
-    assert item.x_source_norm.shape == (2,)
-    assert item.y_source_norm.shape == (3,)
+    assert item.x_source_amplitude.shape == (2,)
+    assert item.y_source_amplitude.shape == (3,)
     torch.testing.assert_close(
         item.x_source_branch[:, 0],
         torch.zeros(2, dtype=torch.float64),
@@ -99,32 +99,37 @@ def test_complex_dataset_allows_missing_optional_flux(tmp_path):
     )
 
 
-def test_complex_dataset_builds_source_branch_with_unit_scaling(tmp_path):
+def test_complex_dataset_normalizes_physical_source_without_length_scaling(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
     data_dir = tmp_path / "data"
     write_sample_npz(data_dir)
 
-    item = ComplexCouplingDataset(
+    dataset = ComplexCouplingDataset(
         data_dir,
         geometry,
         coeffs,
         branch_input_dim=4,
         integration_rule="trapezoid",
-    )[0]
+    )
+    item = dataset[0]
 
-    expected_x1_unit = torch.tensor(
-        [0.0, 17.0 / 6.0, 17.0 / 6.0, 0.0],
+    expected_x1_physical = torch.tensor(
+        [0.0, 34.0 / 3.0, 34.0 / 3.0, 0.0],
         dtype=torch.float64,
     )
     torch.testing.assert_close(
-        item.x_source_branch[1] * item.x_source_norm[1],
-        expected_x1_unit,
+        item.x_source_branch[1] * item.x_source_amplitude[1],
+        expected_x1_physical,
     )
     torch.testing.assert_close(
-        item.y_source_branch[2] * item.y_source_norm[2],
+        item.y_source_branch[2] * item.y_source_amplitude[2],
         torch.zeros(4, dtype=torch.float64),
     )
+    expected_amplitude = torch.sqrt(
+        torch.trapezoid(expected_x1_physical.square(), dataset.branch_grid)
+    )
+    torch.testing.assert_close(item.x_source_amplitude[1], expected_amplitude)
 
 
 def test_complex_dataset_respects_coefficient_terms(tmp_path):

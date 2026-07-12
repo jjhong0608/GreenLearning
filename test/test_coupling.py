@@ -2228,6 +2228,15 @@ def test_balance_projection_config_normalizes_legacy_and_object():
     object_cfg = CouplingModelConfig(
         balance_projection={"enabled": False, "mode": "smooth_mask", "mask": "sin"}
     )
+    with pytest.warns(DeprecationWarning, match="retired"):
+        legacy_metadata_cfg = CouplingModelConfig(
+            balance_projection={
+                "enabled": True,
+                "mode": "symmetric",
+                "geometry_weighted_rule": "swapped_length_squared",
+                "geometry_weighted_lambda": 0.25,
+            }
+        )
 
     assert isinstance(legacy_cfg.balance_projection, BalanceProjectionConfig)
     assert legacy_cfg.balance_projection.enabled is True
@@ -2237,6 +2246,21 @@ def test_balance_projection_config_normalizes_legacy_and_object():
     assert object_cfg.balance_projection.enabled is False
     assert object_cfg.balance_projection.mode == "smooth_mask"
     assert object_cfg.balance_projection.mask == "sin"
+    assert legacy_metadata_cfg.balance_projection.mode == "symmetric"
+    assert not hasattr(
+        legacy_metadata_cfg.balance_projection,
+        "geometry_weighted_rule",
+    )
+
+
+def test_balance_projection_config_rejects_retired_geometry_weighted_mode():
+    with pytest.raises(ValueError, match="has been removed"):
+        CouplingModelConfig(
+            balance_projection={
+                "enabled": True,
+                "mode": "geometry_weighted",
+            }
+        )
 
 
 def test_balance_projection_config_rejects_invalid_mask():

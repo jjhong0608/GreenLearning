@@ -125,9 +125,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   diagnostic으로 유지하며, CouplingNet reconstruction/loss/evaluation에는 이 설정을
   적용하지 않는다.
 - Complex CouplingNet은 unit-square CouplingNet처럼 source-conditioned model이다.
-  Full-grid `rhs`를 valid point로 gather한 뒤 segment-local unit source branch로
-  변환하고, `f_unit=L^2*f_phys` scaling과 segment별 unit L2 norm normalization을
-  적용한다. Model raw unit output은 해당 segment source norm으로 다시 scale한다.
+  Full-grid `rhs`를 valid point로 gather한 뒤 endpoint hard-zero를 포함한
+  segment-local physical source profile로 interpolation한다. Source amplitude는
+  `sqrt(integral_0^1 f_phys(s(t))^2 dt)`이고, normalized physical profile을 branch에
+  넣은 뒤 model의 두 directional raw output을 이 amplitude로 다시 scale한다.
+  Complex CouplingNet raw output contract version 2는 `(B,2,P)` physical
+  `[phi_raw,psi_raw]`이며, legacy unversioned raw-unit checkpoint는 load하지 않는다.
 - Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 active
   `[a,b_primary,b_transverse,c]` 순서로 구성한다. `convection=true`이면 x/Phi
   path는 `[L_x*b_x, L_x*b_y]`, y/Psi path는 `[L_y*b_y, L_y*b_x]`를 넣는다.
@@ -146,6 +149,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `product_fuser`이고, disabled이면 이전 complex behavior를 보존한다.
   `trunk_positional_encoding`은 unit-square 2D trunk coordinate encoding이므로
   complex mode에서는 사용하지 않는다.
+- Complex CouplingNet balance projection은 `enabled=true, mode="symmetric"`만
+  지원한다. Physical raw `[phi_raw,psi_raw]`에 equal-half residual correction을
+  적용해 `phi+psi=rhs`를 enforce하고 raw difference mode를 보존한다. 그 뒤에만
+  Green reconstruction source를 `Phi_unit=Lx^2*phi`, `Psi_unit=Ly^2*psi`로 만든다.
+  `smooth_mask`는 unit-square-only이다. Geometry-weighted projection은 PDE
+  derivation이 없고 topology/line-length 변화에 민감한 추가 weighting이므로
+  complex public config, runtime, artifact, diagnostic path에서 폐기했다.
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
   `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
   key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.
@@ -676,14 +686,8 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   scatter figures use zero-centered diverging colors. Complex non-error comparison
   groups are `sol/u_pred/u_phi/u_psi`, `target_phi/phi`, and `target_psi/psi`
   when flux targets exist; `rhs` and target-free flux diagnostics keep independent
-  ranges.
-- Complex CouplingNet projection-rule comparison is a post-hoc diagnostic, not a
-  training-time projection change. `cli/compare_complex_projection_posthoc.py`
-  consumes `artifacts/data/selected_raw_arrays.npz`, applies both hard symmetric
-  projection and direct length-squared `geometry_weighted` projection to the same
-  `raw_unit_phi/raw_unit_psi`, reuses the supplied GreenNet checkpoint for
-  reconstruction, and exports per-sample, transition-zone, and
-  weighted-minus-symmetric delta artifacts. It must not rerun CouplingNet.
+  ranges. The raw archive stores `raw_physical_phi/psi` and
+  `projected_unit_phi/psi` for audit; raw/projected-unit fields are not primary figures.
 - CouplingNet selected-sample flux-divergence figures should exclude boundary
   grid values. CouplingNet predictions use zero-padding at boundaries only for
   trapezoid-rule integration compatibility with boundary-zero Green functions;

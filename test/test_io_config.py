@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from greenonet.config import (
@@ -253,6 +254,29 @@ def test_save_load_coupling_model_with_balance_projection_object_config(tmp_path
     assert loaded_cfg.balance_projection.mode == "smooth_mask"
     assert loaded_cfg.balance_projection.mask == "sin"
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
+
+
+def test_deserialize_ignores_retired_geometry_metadata_for_symmetric_config():
+    from greenonet.io import _deserialize_config
+
+    payload = {
+        "branch_input_dim": 5,
+        "dtype": "float64",
+        "balance_projection": {
+            "enabled": True,
+            "mode": "symmetric",
+            "geometry_weighted_rule": "swapped_length_squared",
+            "geometry_weighted_lambda": 0.5,
+        },
+    }
+
+    with pytest.warns(DeprecationWarning, match="retired"):
+        loaded_cfg = _deserialize_config(payload, CouplingModelConfig)
+
+    assert loaded_cfg.balance_projection.enabled is True
+    assert loaded_cfg.balance_projection.mode == "symmetric"
+    assert not hasattr(loaded_cfg.balance_projection, "geometry_weighted_rule")
+    assert not hasattr(loaded_cfg.balance_projection, "geometry_weighted_lambda")
 
 
 def test_save_load_coupling_model_with_green_response_feature_config(tmp_path):

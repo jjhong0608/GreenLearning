@@ -29,7 +29,7 @@ from greenonet.logging_mixin import LoggingMixin
 @dataclass(frozen=True)
 class ComplexPredictionBatch:
     batch: ComplexCouplingBatch
-    raw_unit: torch.Tensor
+    raw_physical: torch.Tensor
     projection: ComplexProjectionResult
     reconstruction: ComplexReconstructionResult
     metrics: dict[str, torch.Tensor]
@@ -94,17 +94,17 @@ class ComplexCouplingEvaluator(LoggingMixin):
         return summary
 
     def predict_batch(self, batch: ComplexCouplingBatch) -> ComplexPredictionBatch:
-        raw_unit = self.model(
+        raw_physical = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
             y_source_branch=batch.y_source_branch,
-            x_source_norm=batch.x_source_norm,
-            y_source_norm=batch.y_source_norm,
+            x_source_amplitude=batch.x_source_amplitude,
+            y_source_amplitude=batch.y_source_amplitude,
             x_coefficient_branch=batch.x_coefficient_branch,
             y_coefficient_branch=batch.y_coefficient_branch,
         )
         projection = apply_hard_symmetric_projection(
-            raw_unit=raw_unit,
+            raw_physical=raw_physical,
             rhs_phys=batch.rhs_valid,
             geometry=batch.geometry,
         )
@@ -137,7 +137,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             ).detach()
         return ComplexPredictionBatch(
             batch=batch,
-            raw_unit=raw_unit,
+            raw_physical=raw_physical,
             projection=projection,
             reconstruction=reconstruction,
             metrics=metrics,

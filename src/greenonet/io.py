@@ -165,15 +165,26 @@ def load_state_dict_auto(
     model: torch.nn.Module, path: Path, map_location: str | None = "cpu"
 ) -> None:
     """Load weights from safetensors if possible, otherwise torch.load."""
+    state: dict[str, torch.Tensor]
     try:
         from safetensors.torch import load_file
 
         state = load_file(str(path), device=map_location or "cpu")
-        model.load_state_dict(state)
-        return
-    except Exception:
-        state = torch.load(str(path), map_location=map_location)
-        model.load_state_dict(state)
+    except Exception as safetensors_error:
+        try:
+            loaded = torch.load(str(path), map_location=map_location)
+        except Exception:
+            raise safetensors_error
+        if not isinstance(loaded, dict):
+            raise ValueError("Checkpoint state must be a tensor dictionary.")
+        state = loaded.get("state_dict", loaded)
+        if not isinstance(state, dict):
+            raise ValueError("Checkpoint state_dict must be a tensor dictionary.")
+
+    validator = getattr(model, "validate_checkpoint_state_dict", None)
+    if callable(validator):
+        validator(state)
+    model.load_state_dict(state)
 
 
 def load_model_with_config(

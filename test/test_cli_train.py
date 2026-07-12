@@ -322,9 +322,8 @@ class TestTrainCLIDatasetConfig:
             "training": {},
             "coupling_model": {
                 "balance_projection": {
-                    "enabled": False,
-                    "mode": "smooth_mask",
-                    "mask": "sin",
+                    "enabled": True,
+                    "mode": "symmetric",
                 },
             },
             "coupling_training": {},
@@ -342,9 +341,8 @@ class TestTrainCLIDatasetConfig:
             _terminal_cfg,
         ) = TrainCLI()._build_configs(config_path)
 
-        assert coupling_model_cfg.balance_projection.enabled is False
-        assert coupling_model_cfg.balance_projection.mode == "smooth_mask"
-        assert coupling_model_cfg.balance_projection.mask == "sin"
+        assert coupling_model_cfg.balance_projection.enabled is True
+        assert coupling_model_cfg.balance_projection.mode == "symmetric"
         assert coupling_training_cfg.losses.balance_loss.enabled is False
 
     def test_parses_branch_fusion_object_config(self, tmp_path):
@@ -898,16 +896,14 @@ class TestTrainCLIDatasetConfig:
     def test_eval_cli_parses_balance_projection_object_config(self):
         cfg = EvalCouplingCLI._build_balance_projection_config(
             {
-                "enabled": False,
-                "mode": "smooth_mask",
-                "mask": "sin",
+                "enabled": True,
+                "mode": "symmetric",
             },
             "coupling_model",
         )
 
-        assert cfg.enabled is False
-        assert cfg.mode == "smooth_mask"
-        assert cfg.mask == "sin"
+        assert cfg.enabled is True
+        assert cfg.mode == "symmetric"
 
     def test_eval_cli_parses_source_stencil_lift_config(self):
         config_kwargs = {

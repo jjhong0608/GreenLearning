@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, cast
@@ -257,7 +258,14 @@ class BalanceProjectionConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
             raise TypeError("balance_projection.enabled must be a boolean.")
-        if self.mode not in {"symmetric", "smooth_mask"}:
+        mode = str(self.mode)
+        if mode == "geometry_weighted":
+            raise ValueError(
+                "balance_projection.mode='geometry_weighted' has been removed. "
+                "Complex CouplingNet now requires physical symmetric projection; "
+                "retrain the complex CouplingNet with mode='symmetric'."
+            )
+        if mode not in {"symmetric", "smooth_mask"}:
             raise ValueError(
                 "balance_projection.mode must be 'symmetric' or 'smooth_mask'."
             )
@@ -276,11 +284,35 @@ class BalanceProjectionConfig:
         if isinstance(raw, str):
             return cls(
                 enabled=True,
-                mode=cast(Literal["symmetric", "smooth_mask"], raw),
+                mode=cast(
+                    Literal["symmetric", "smooth_mask"],
+                    raw,
+                ),
             )
         if isinstance(raw, dict):
             data = dict(raw)
-            unknown = sorted(set(data) - {"enabled", "mode", "mask"})
+            retired_keys = {
+                "geometry_weighted_rule",
+                "geometry_weighted_lambda",
+            }.intersection(data)
+            if retired_keys:
+                warnings.warn(
+                    "Ignoring retired balance_projection metadata: "
+                    f"{', '.join(sorted(retired_keys))}. Geometry-weighted "
+                    "projection has been removed.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                for key in retired_keys:
+                    data.pop(key)
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "mode",
+                    "mask",
+                }
+            )
             if unknown:
                 raise TypeError(
                     f"balance_projection has unknown keys: {', '.join(unknown)}."
@@ -296,7 +328,10 @@ class BalanceProjectionConfig:
                 raise TypeError("balance_projection.mask must be a string.")
             return cls(
                 enabled=enabled,
-                mode=cast(Literal["symmetric", "smooth_mask"], mode),
+                mode=cast(
+                    Literal["symmetric", "smooth_mask"],
+                    mode,
+                ),
                 mask=cast(Literal["quadratic", "sin"], mask),
             )
         raise TypeError("balance_projection must be a string or an object.")

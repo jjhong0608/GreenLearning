@@ -518,7 +518,6 @@ class TrainCLI:
             config=coupling_training_cfg,
             work_dir=work_dir,
             green_model=green_model,
-            model_cfg=coupling_model_cfg,
             terminal_width=terminal_cfg.width,
         )
         trainer.train(train_dataset, validation_dataset)

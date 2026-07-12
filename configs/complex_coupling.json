@@ -19,6 +19,10 @@
     "use_bias": true,
     "dropout": 0.0,
     "dtype": "float64",
+    "balance_projection": {
+      "enabled": true,
+      "mode": "symmetric"
+    },
     "coefficient_terms": {
       "diffusion": true,
       "convection": false,

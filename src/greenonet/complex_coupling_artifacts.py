@@ -165,6 +165,18 @@ class ComplexCouplingArtifactExporter:
             "figure_fields": list(figure_fields),
             "error_convention": "signed_difference",
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
+            "raw_output_space": "physical",
+            "output_contract_version": ComplexCouplingNet.OUTPUT_CONTRACT_VERSION,
+            "balance_projection": {
+                "enabled": True,
+                "mode": "symmetric",
+                "space": "physical",
+                "residual_split": "equal_half",
+            },
+            "post_projection_unit_conversion": {
+                "phi": "Phi_unit=Lx^2*phi_physical",
+                "psi": "Psi_unit=Ly^2*psi_physical",
+            },
             "non_error_color_range_policy": self.COLOR_RANGE_POLICY,
             "non_error_color_range_groups": {
                 name: list(fields) for name, fields in self.COLOR_RANGE_GROUPS.items()
@@ -174,8 +186,9 @@ class ComplexCouplingArtifactExporter:
             ),
             "source_branch": {
                 "enabled": True,
-                "scaling": "f_unit=L^2*f_phys",
-                "normalization": "segment_unit_l2",
+                "space": "physical",
+                "normalization": "unit_coordinate_l2_of_physical_source",
+                "amplitude": "sqrt(integral_0^1 f_phys(s(t))^2 dt)",
             },
             "coefficient_terms": {
                 "diffusion": configs.coupling_model.coefficient_terms.diffusion,
@@ -344,8 +357,24 @@ class ComplexCouplingArtifactExporter:
                     "coords_valid": coords,
                     "rhs": rhs,
                     "sol": sol,
-                    "raw_unit_phi": prediction.raw_unit[0, 0].detach().cpu().numpy(),
-                    "raw_unit_psi": prediction.raw_unit[0, 1].detach().cpu().numpy(),
+                    "raw_physical_phi": (
+                        prediction.raw_physical[0, 0].detach().cpu().numpy()
+                    ),
+                    "raw_physical_psi": (
+                        prediction.raw_physical[0, 1].detach().cpu().numpy()
+                    ),
+                    "projected_unit_phi": (
+                        prediction.projection.projected_unit[0, 0]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    ),
+                    "projected_unit_psi": (
+                        prediction.projection.projected_unit[0, 1]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    ),
                     "phi": phi,
                     "psi": psi,
                     "u_pred": u_pred,

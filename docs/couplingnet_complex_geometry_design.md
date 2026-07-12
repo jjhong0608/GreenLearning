@@ -254,41 +254,27 @@ t_q^y
 
 ## 5. CouplingNet Raw-Output Convention
 
-### 5.1 Raw output is a segment-local unit quantity
+### 5.1 Raw outputs are physical directional fields
 
-`CouplingNet` raw output is **not** interpreted as physical \\(\phi\\) and \\(\psi\\).
-
-Instead, the raw output is interpreted as a segment-local unit-domain source-like quantity.
-
-For a horizontal segment,
+`CouplingNet` keeps two axis-conditioned outputs, but both are interpreted directly
+in physical source space:
 
 \\[
-\Phi_k^{\mathrm{raw}}(t)
-\approx
-(L_k^x)^2
-\phi_{\mathrm{phys}}(x_k^-+L_k^x t,y_k).
-\\]
-
-For a vertical segment,
-
-\\[
-\Psi_l^{\mathrm{raw}}(t)
-\approx
-(L_l^y)^2
-\psi_{\mathrm{phys}}(x_l,y_l^-+L_l^y t).
-\\]
-
-Thus,
-
-\\[
-\boxed{
-\Phi=L_x^2\phi_{\mathrm{phys}},
+\phi_k^{\mathrm{raw}}(t),
 \qquad
-\Psi=L_y^2\psi_{\mathrm{phys}}.
-}
+\psi_l^{\mathrm{raw}}(t).
 \\]
 
-This convention aligns `CouplingNet` output with the segment-local reference-domain Green reconstruction.
+The horizontal path predicts \\(\phi_{\mathrm{raw}}\\), and the vertical path predicts
+\\(\psi_{\mathrm{raw}}\\). No \\(L^2\\) conversion is applied before physical balance
+projection. The axis-specific unit quantities are created only after projection for
+Green reconstruction:
+
+\\[
+\Phi^{\mathrm{proj}}=L_x^2\phi^{\mathrm{proj}},
+\qquad
+\Psi^{\mathrm{proj}}=L_y^2\psi^{\mathrm{proj}}.
+\\]
 
 ### 5.2 `axis_1d_trunk=true`
 
@@ -320,15 +306,19 @@ The trunk does not receive the physical axial coordinate directly in this design
 
 ### 6.1 Function branch channels
 
-The function branch uses only
+The source branch is mandatory. It receives the segment-local physical source
+profile normalized by
 
 \\[
-a,\quad b,\quad c.
+A=\left(\int_0^1 |f_{\mathrm{phys}}(s(t))|^2\,dt\right)^{1/2},
 \\]
 
-No source branch, Green response feature, source stencil lift, or \\(a'\\) branch is included in the default complex-geometry `CouplingNet` design.
-
-However, \\(a,b,c\\) must be transformed into the segment-local reference-domain operator convention.
+and the model output is multiplied by \\(A\\) to restore physical source amplitude.
+The optional coefficient branch uses enabled channels from
+\\(a,b_{\mathrm{primary}},b_{\mathrm{transverse}},c\\). The Green response feature,
+source stencil lift, and \\(a'\\) coefficient channel remain excluded from the complex
+CouplingNet branch. Coefficients are transformed into the segment-local
+reference-domain operator convention.
 
 ### 6.2 Horizontal transformed coefficients
 
@@ -627,7 +617,7 @@ No balance loss is used.
 
 No smooth masked projection is used.
 
-### 8.2 Unit raw output to physical raw output
+### 8.2 Physical raw output
 
 At a valid point \\(p_q=(x_q,y_q)\\), let
 
@@ -637,27 +627,16 @@ At a valid point \\(p_q=(x_q,y_q)\\), let
 \beta(q)=y\_segment\_id(q).
 \\]
 
-The raw unit outputs are
+The model directly returns the physical raw outputs
 
 \\[
-\Phi_q^{\mathrm{raw}},
+\phi_q^{\mathrm{raw}},
 \qquad
-\Psi_q^{\mathrm{raw}}.
+\psi_q^{\mathrm{raw}}.
 \\]
 
-They are converted to physical quantities by
-
-\\[
-\phi_q^{\mathrm{raw}}
-=
-\frac{\Phi_q^{\mathrm{raw}}}{(L_{\alpha(q)}^x)^2},
-\\]
-
-\\[
-\psi_q^{\mathrm{raw}}
-=
-\frac{\Psi_q^{\mathrm{raw}}}{(L_{\beta(q)}^y)^2}.
-\\]
+Segment lengths remain available to the geometry branch, but they do not rescale
+these raw fields before projection.
 
 ### 8.3 Physical residual
 
@@ -701,24 +680,6 @@ For Green reconstruction, the projected physical quantities are converted back t
 =
 (L_{\beta(q)}^y)^2
 \psi_q^{\mathrm{proj}}.
-\\]
-
-Equivalently,
-
-\\[
-\Phi_q^{\mathrm{proj}}
-=
-\Phi_q^{\mathrm{raw}}
-+
-\frac12 (L_{\alpha(q)}^x)^2 r_q,
-\\]
-
-\\[
-\Psi_q^{\mathrm{proj}}
-=
-\Psi_q^{\mathrm{raw}}
-+
-\frac12 (L_{\beta(q)}^y)^2 r_q.
 \\]
 
 ### 8.6 Smooth masked projection is excluded
@@ -860,7 +821,7 @@ The source-like values at endpoints are zero, so endpoint contributions vanish.
 
 Green reconstruction uses only the projected unit output.
 
-Raw unit output reconstruction loss is not used.
+Raw physical output reconstruction loss is not used.
 
 \\[
 \boxed{
@@ -1109,11 +1070,11 @@ No cross-consistency metric or logging entry is produced.
 
 ### 13.2 Visualization output
 
-Raw unit output is not the default visualization output.
+Raw physical output is not the default visualization output.
 
 \\[
 \boxed{
-\text{Raw unit output is not saved as the default visualization.}
+\text{Raw physical output is archived for audit, not used as the default figure.}
 }
 \\]
 
@@ -1153,17 +1114,18 @@ p_q\in\Omega.
 - [ ] Vertical segments store \(y^-\), \(y^+\), \(x\), and \(L^y\).
 - [ ] Disconnected intervals are stored as separate segments.
 
-### Function branch
+### Function branches
 
-- [ ] Function branch uses only transformed \(a,b,c\).
-- [ ] Horizontal branch uses \(a^x_{\mathrm{unit}}, b^x_{\mathrm{unit}}, c^x_{\mathrm{unit}}\).
-- [ ] Vertical branch uses \(a^y_{\mathrm{unit}}, b^y_{\mathrm{unit}}, c^y_{\mathrm{unit}}\).
-- [ ] x/y branches use the same network.
+- [ ] Mandatory source branch uses normalized physical source profiles.
+- [ ] Source amplitude is restored on the two physical raw outputs.
+- [ ] Coefficient branch follows active \([a,b_{\mathrm{primary}},b_{\mathrm{transverse}},c]\) channels.
+- [ ] x/y source and coefficient paths use shared networks.
 - [ ] Axis-wise processing is preserved internally.
 
 ### Geometry branch
 
-- [ ] Geometry feature is \([\operatorname{PE}(r),s^-,s^+,s_{\mathrm{mid}},L,L^2,1/L]\).
+- [ ] Geometry feature is \([s^-,s^+,s_{\mathrm{mid}},L,L^2,1/L]\).
+- [ ] Fixed-line transverse Fourier features use a separate shared branch.
 - [ ] Raw \(r\) is not included.
 - [ ] Axis one-hot is not included.
 - [ ] Fourier frequencies follow config.
@@ -1171,9 +1133,9 @@ p_q\in\Omega.
 
 ### Projection
 
-- [ ] Raw unit output is converted to physical output.
+- [ ] Model output is physical \((\phi_{\mathrm{raw}},\psi_{\mathrm{raw}})\).
 - [ ] Hard symmetric projection is applied in physical variables.
-- [ ] Projected physical output is converted back to unit output.
+- [ ] Projected physical output is converted to unit output only after projection.
 - [ ] Balance loss is not used.
 - [ ] Smooth masked projection is not used.
 
@@ -1207,7 +1169,7 @@ p_q\in\Omega.
 ### Visualization
 
 - [ ] Default visualization uses projected physical \(\phi,\psi\).
-- [ ] Raw unit output is not the default visualization target.
+- [ ] Raw physical output is archived but is not the default visualization target.
 - [ ] Reconstructed solutions are stored at physical valid points.
 
 ---
@@ -1234,15 +1196,15 @@ p_q\in\Omega.
 
 \\[
 \boxed{
-\text{CouplingNet raw output is segment-local unit quantity.}
+\text{CouplingNet raw output is a pair of physical directional fields.}
 }
 \\]
 
 \\[
 \boxed{
-\Phi=L_x^2\phi_{\mathrm{phys}},
+\Phi_{\mathrm{proj}}=L_x^2\phi_{\mathrm{proj}},
 \qquad
-\Psi=L_y^2\psi_{\mathrm{phys}}.
+\Psi_{\mathrm{proj}}=L_y^2\psi_{\mathrm{proj}}.
 }
 \\]
 
@@ -1365,7 +1327,7 @@ The complex-geometry `CouplingNet` design is based on the following principle:
 
 \\[
 \boxed{
-\text{CouplingNet operates on segment-local reference coordinates for raw output,}
+\text{CouplingNet predicts physical raw fields on segment-local coordinates,}
 }
 \\]
 
@@ -1377,6 +1339,9 @@ while
 }
 \\]
 
-The raw network output is a unit-domain source-like quantity, hard symmetric projection enforces physical balance at valid interior points, and segment-wise Green reconstruction uses projected unit quantities on segment-local reference nodes.
+The raw network output is a pair of physical directional source fields. Hard
+symmetric projection enforces physical balance at valid interior points, and only
+then does segment-wise Green reconstruction use axis-scaled projected unit quantities
+on segment-local reference nodes.
 
 Cross consistency is not part of the design and must not appear in loss computation, metrics, logs, or summaries.

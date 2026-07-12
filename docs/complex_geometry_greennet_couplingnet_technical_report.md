@@ -787,19 +787,23 @@ right-hand side \(f\). Even with the same geometry and the same coefficients, a
 different source can require a different distribution of forcing between the
 x-direction and y-direction axial reconstructions.
 
-The source branch encodes the forcing profile on each connected interval. In
-normalized coordinates, the source is interpreted as
+The source branch encodes the physical forcing profile on each connected interval.
+After endpoint handling and interpolation on the unit coordinate, its amplitude is
 
 \[
-f_{\mathrm{unit}}(t)
+A
 =
-L^2f_{\mathrm{phys}}(s_0+Lt).
+\left(
+\int_0^1
+|f_{\mathrm{phys}}(s_0+Lt)|^2\,dt
+\right)^{1/2}.
 \]
 
-This scaling makes the amplitude of the forcing compatible with the
-unit-interval Green operator. The source branch therefore communicates not only
-the profile of the forcing but also its effective strength in the normalized
-one-dimensional problem.
+The source branch receives \(f_{\mathrm{phys}}/A\), and each directional model
+output is multiplied by \(A\). Consequently, CouplingNet returns raw physical split
+fields rather than raw unit Green sources. Segment length remains explicit in the
+geometry and coefficient context; the \(L^2\) source conversion is deferred until
+after physical projection.
 
 The coefficient branch encodes the local differential operator. Diffusion,
 convection, and reaction determine how forcing should be split and how it will
@@ -948,9 +952,8 @@ pointwise transverse trunk communicates how the orthogonal axial boundary
 structure constrains the same physical point.
 
 Together with the source, coefficient, geometry, and transverse branches, these
-trunk components produce raw split fields. These raw fields are not yet the final
-physical decomposition, because they may not satisfy the balance relation
-exactly. Projection supplies that final physical correction.
+trunk components produce raw physical split fields. These fields may not yet satisfy
+the balance relation exactly, so projection supplies the final physical correction.
 
 ### Learnable Rational Activation
 
@@ -1030,8 +1033,7 @@ The split fields must satisfy
 
 A neural prediction need not satisfy this relation exactly. Projection enforces
 the balance in physical variables. Let \(\phi_{\mathrm{raw}}\) and
-\(\psi_{\mathrm{raw}}\) be the raw split fields after they are interpreted in the
-physical source scale. Define the residual
+\(\psi_{\mathrm{raw}}\) be the model's two raw physical split fields. Define the residual
 
 \[
 r
@@ -1066,11 +1068,12 @@ difference mode between the two directions, while projection fixes the sum mode
 required by the PDE. The split is therefore constrained to be physically
 consistent before Green reconstruction is applied.
 
-The projection must be understood in the physical source variables, not merely in
-an abstract normalized output space. The equation \(\phi+\psi=f\) is a statement
-about the physical PDE on \(\Omega\). Therefore the correction is applied after
-the predicted quantities have been interpreted as physical direction-split
-source components.
+The projection is applied directly in physical source variables. The equation
+\(\phi+\psi=f\) is a statement about the physical PDE on \(\Omega\), and the
+equal-half correction preserves the network's raw difference mode. Only after this
+projection are the Green reconstruction inputs formed as
+\(\Phi_{\mathrm{unit}}=L_x^2\phi_{\mathrm{proj}}\) and
+\(\Psi_{\mathrm{unit}}=L_y^2\psi_{\mathrm{proj}}\).
 
 ## 7. Green Reconstruction and Final Solution
 
@@ -1396,8 +1399,8 @@ presentation.
    split fields that will become Green reconstruction sources.
 
 5. **Projection enforces physical balance.**
-   The relation \(\phi+\psi=f\) is imposed after the raw split prediction is
-   interpreted in physical source variables.
+   The relation \(\phi+\psi=f\) is imposed directly on the raw physical split
+   prediction, before axis-specific \(L^2\) conversion for Green reconstruction.
 
 6. **The final solution is reconstructed, not directly regressed.**
    The prediction
