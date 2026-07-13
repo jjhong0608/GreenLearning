@@ -181,6 +181,13 @@ def load_state_dict_auto(
         if not isinstance(state, dict):
             raise ValueError("Checkpoint state_dict must be a tensor dictionary.")
 
+    preparer = getattr(model, "prepare_checkpoint_state_dict", None)
+    if callable(preparer):
+        state = preparer(state)
+        if not isinstance(state, dict):
+            raise TypeError(
+                "prepare_checkpoint_state_dict must return a tensor dictionary."
+            )
     validator = getattr(model, "validate_checkpoint_state_dict", None)
     if callable(validator):
         validator(state)

@@ -33,5 +33,23 @@ def maybe_compile_model(
     if not hasattr(torch, "compile"):
         raise RuntimeError("torch.compile is unavailable in this PyTorch build.")
     if logger is not None:
-        logger.info("Compiling %s with torch.compile", model_name)
-    return cast(nn.Module, torch.compile(model))
+        logger.info(
+            "Compiling %s with torch.compile backend=%s mode=%s",
+            model_name,
+            compile_cfg.backend,
+            compile_cfg.mode,
+        )
+    if compile_cfg.backend is None and compile_cfg.mode is None:
+        return cast(nn.Module, torch.compile(model))
+    if compile_cfg.backend is None:
+        return cast(nn.Module, torch.compile(model, mode=compile_cfg.mode))
+    if compile_cfg.mode is None:
+        return cast(nn.Module, torch.compile(model, backend=compile_cfg.backend))
+    return cast(
+        nn.Module,
+        torch.compile(
+            model,
+            backend=compile_cfg.backend,
+            mode=compile_cfg.mode,
+        ),
+    )

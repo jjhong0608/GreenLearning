@@ -606,7 +606,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             ),
             "error_convention": "signed_difference",
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
-            "raw_output_space": "physical",
+            "raw_output_space": "unit",
             "output_contract_version": ComplexCouplingNet.OUTPUT_CONTRACT_VERSION,
             "balance_projection": {
                 "enabled": True,
@@ -627,9 +627,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             ),
             "source_branch": {
                 "enabled": True,
-                "space": "physical",
-                "normalization": "unit_coordinate_l2_of_physical_source",
-                "amplitude": "sqrt(integral_0^1 f_phys(s(t))^2 dt)",
+                "space": "unit",
+                "normalization": "unit_coordinate_l2_of_unit_source",
+                "profile_norm": "A=sqrt(integral_0^1 f_phys(s(t))^2 dt)",
+                "unit_source_norm": "N_unit=L_segment^2*A",
             },
             "coefficient_terms": {
                 "diffusion": configs.coupling_model.coefficient_terms.diffusion,
@@ -798,11 +799,13 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     "coords_valid": coords,
                     "rhs": rhs,
                     "sol": sol,
+                    "raw_unit_phi": (prediction.raw_unit[0, 0].detach().cpu().numpy()),
+                    "raw_unit_psi": (prediction.raw_unit[0, 1].detach().cpu().numpy()),
                     "raw_physical_phi": (
-                        prediction.raw_physical[0, 0].detach().cpu().numpy()
+                        prediction.projection.raw_physical[0, 0].detach().cpu().numpy()
                     ),
                     "raw_physical_psi": (
-                        prediction.raw_physical[0, 1].detach().cpu().numpy()
+                        prediction.projection.raw_physical[0, 1].detach().cpu().numpy()
                     ),
                     "projected_unit_phi": (
                         prediction.projection.projected_unit[0, 0]
@@ -818,6 +821,8 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     ),
                     "phi": phi,
                     "psi": psi,
+                    "projected_physical_phi": phi,
+                    "projected_physical_psi": psi,
                     "u_pred": u_pred,
                     "u_phi": u_phi,
                     "u_psi": u_psi,

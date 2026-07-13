@@ -185,17 +185,17 @@ class ComplexCouplingTrainer(LoggingMixin):
         return self._average(totals, batches)
 
     def _forward_batch(self, batch: ComplexCouplingBatch) -> ComplexForwardResult:
-        raw_physical = self.model(
+        raw_unit = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
             y_source_branch=batch.y_source_branch,
-            x_source_amplitude=batch.x_source_amplitude,
-            y_source_amplitude=batch.y_source_amplitude,
+            x_source_unit_norm=batch.x_source_unit_norm,
+            y_source_unit_norm=batch.y_source_unit_norm,
             x_coefficient_branch=batch.x_coefficient_branch,
             y_coefficient_branch=batch.y_coefficient_branch,
         )
         projection = apply_hard_symmetric_projection(
-            raw_physical=raw_physical,
+            raw_unit=raw_unit,
             rhs_phys=batch.rhs_valid,
             geometry=batch.geometry,
         )

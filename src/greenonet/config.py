@@ -391,6 +391,15 @@ class CompileConfig:
     """Optional torch.compile settings for model execution."""
 
     enabled: bool = False
+    backend: str | None = None
+    mode: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("compile.enabled must be a boolean.")
+        for field_name, value in (("backend", self.backend), ("mode", self.mode)):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise TypeError(f"compile.{field_name} must be a string or null.")
 
 
 @dataclass

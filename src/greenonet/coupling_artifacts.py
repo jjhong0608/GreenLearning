@@ -132,12 +132,7 @@ def _build_compile_config(raw: object | None, section_name: str) -> CompileConfi
     if raw is None:
         return CompileConfig()
     if isinstance(raw, dict):
-        compile_kwargs = dict(raw)
-        # Artifact export never compiles models, but archived training configs may
-        # retain torch.compile backend metadata from older CLI versions.
-        compile_kwargs.pop("backend", None)
-        compile_kwargs.pop("mode", None)
-        return CompileConfig(**compile_kwargs)
+        return CompileConfig(**dict(raw))
     raise TypeError(f"{section_name}.compile must be an object.")
 
 

@@ -46,6 +46,7 @@ from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.runner import run_complex_green_o_net, run_green_o_net
+from greenonet.runtime import apply_runtime_cpu_settings, write_runtime_cpu_summary
 
 
 class TrainCLI:
@@ -207,6 +208,32 @@ class TrainCLI:
         if not isinstance(raw_terminal, dict):
             raise TypeError("terminal must be an object.")
         return TerminalConfig(**dict(raw_terminal))
+
+    @staticmethod
+    def _active_device_types(
+        training_cfg: TrainingConfig,
+        coupling_training_cfg: CouplingTrainingConfig,
+        pipeline_cfg: PipelineConfig,
+    ) -> set[str]:
+        active_device_types: set[str] = set()
+        if pipeline_cfg.run_green:
+            active_device_types.add(torch.device(training_cfg.device).type)
+        if pipeline_cfg.run_coupling:
+            active_device_types.add(torch.device(coupling_training_cfg.device).type)
+        return active_device_types
+
+    @classmethod
+    def _should_apply_cpu_runtime(
+        cls,
+        training_cfg: TrainingConfig,
+        coupling_training_cfg: CouplingTrainingConfig,
+        pipeline_cfg: PipelineConfig,
+    ) -> bool:
+        return "cpu" in cls._active_device_types(
+            training_cfg,
+            coupling_training_cfg,
+            pipeline_cfg,
+        )
 
     @staticmethod
     def _build_compile_config(
@@ -547,11 +574,19 @@ class TrainCLI:
             pipeline_cfg,
             terminal_cfg,
         ) = self._build_configs(config_path)
-        coeffs = load_coefficient_functions(dataset_cfg.coefficient_functions_path)
 
         work_dir = Path(args.work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(config_path, work_dir / "config_used.json")
+        if self._should_apply_cpu_runtime(
+            training_cfg,
+            coupling_training_cfg,
+            pipeline_cfg,
+        ):
+            runtime_state = apply_runtime_cpu_settings()
+            write_runtime_cpu_summary(work_dir, runtime_state)
+
+        coeffs = load_coefficient_functions(dataset_cfg.coefficient_functions_path)
 
         green_model = GreenONetModel(model_cfg)
         green_kernel: torch.Tensor | None = None
