@@ -53,6 +53,17 @@ class CouplingArtifactRequest:
     selected_samples: tuple[int, ...] | None = None
     plot_workers: int = 1
     save_generated_data: bool = True
+    coefficient_vector_max_points: int = 400
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.coefficient_vector_max_points, bool)
+            or not isinstance(self.coefficient_vector_max_points, int)
+            or self.coefficient_vector_max_points < 1
+        ):
+            raise ValueError(
+                "coefficient_vector_max_points must be a positive integer."
+            )
 
 
 @dataclass(frozen=True)
@@ -121,7 +132,12 @@ def _build_compile_config(raw: object | None, section_name: str) -> CompileConfi
     if raw is None:
         return CompileConfig()
     if isinstance(raw, dict):
-        return CompileConfig(**raw)
+        compile_kwargs = dict(raw)
+        # Artifact export never compiles models, but archived training configs may
+        # retain torch.compile backend metadata from older CLI versions.
+        compile_kwargs.pop("backend", None)
+        compile_kwargs.pop("mode", None)
+        return CompileConfig(**compile_kwargs)
     raise TypeError(f"{section_name}.compile must be an object.")
 
 

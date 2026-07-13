@@ -6,10 +6,16 @@ from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
+import pytest
 import torch
 
-from greenonet.complex_coupling_artifacts import export_complex_coupling_artifacts
+from greenonet.coefficients import load_coefficient_functions
+from greenonet.complex_coupling_artifacts import (
+    ComplexCouplingArtifactExporter,
+    export_complex_coupling_artifacts,
+)
 from greenonet.complex_coupling_model import ComplexCouplingNet
+from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
@@ -43,6 +49,29 @@ def _marker_for_field(outdir: Path, field: str) -> dict:
         ).read_text()
     )
     return figure["data"][0]["marker"]
+
+
+def _coefficient_figure(outdir: Path, field: str) -> dict:
+    return json.loads(
+        (outdir / "figures" / "coefficients" / f"{field}.json").read_text()
+    )
+
+
+def _write_zero_coefficients(path: Path) -> Path:
+    path.write_text(
+        "\n".join(
+            [
+                "import torch",
+                "def a_fun(x, y): return torch.ones_like(x)",
+                "def apx_fun(x, y): return torch.zeros_like(x)",
+                "def apy_fun(x, y): return torch.zeros_like(x)",
+                "def bx_fun(x, y): return torch.zeros_like(x)",
+                "def by_fun(x, y): return torch.zeros_like(x)",
+                "def c_fun(x, y): return torch.zeros_like(x)",
+            ]
+        )
+    )
+    return path
 
 
 def test_complex_artifact_export_writes_outputs_without_cross_fields(
@@ -110,6 +139,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
             outdir=outdir,
             device="cpu",
             theme="plotly_white",
+            coefficient_vector_max_points=2,
         )
     )
 
@@ -161,6 +191,34 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "u_psi",
     ]
     assert summary["optional_flux_targets_exported"] is True
+    assert summary["coefficient_figure_fields"] == [
+        "diffusion_a",
+        "reaction_c",
+        "convection_bx",
+        "convection_by",
+        "convection_magnitude",
+        "convection_vector",
+    ]
+    assert summary["coefficient_figure_count"] == 6
+    assert summary["figure_count"] == len(expected_figure_fields) + 6
+    assert summary["coefficient_field_space"] == "physical"
+    assert summary["coefficient_evaluation"] == "direct_at_coords_valid"
+    assert summary["coefficient_raw_archive"] == "data/coefficient_fields.npz"
+    assert summary["coefficient_vector"]["max_points"] == 2
+    assert 0 < summary["coefficient_vector"]["selected_points"] <= 2
+    assert summary["coefficient_vector"]["background_points"] == 3
+    assert summary["coefficient_field_statistics"]["a"] == {
+        "min": 1.0,
+        "max": 1.0,
+        "mean": 1.0,
+        "physical_nonzero": True,
+        "constant": True,
+        "branch_enabled": True,
+        "figure_exported": True,
+    }
+    assert summary["coefficient_field_statistics"]["bx"]["min"] == 4.0
+    assert summary["coefficient_field_statistics"]["by"]["max"] == 5.0
+    assert summary["coefficient_field_statistics"]["c"]["mean"] == 6.0
     assert summary["coefficient_branch_channel_order"] == [
         "a",
         "b_primary",
@@ -184,6 +242,8 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         assert (
             outdir / "figures" / field / f"sample_0000_sample_0000_{field}.json"
         ).exists()
+    for field in summary["coefficient_figure_fields"]:
+        assert (outdir / "figures" / "coefficients" / f"{field}.json").exists()
 
     with (outdir / "metrics" / "per_sample_metrics.csv").open() as fp:
         rows = list(csv.DictReader(fp))
@@ -208,6 +268,34 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     ):
         assert any(key.endswith(suffix) for key in raw.files)
     assert all("cross" not in key for key in raw.files)
+
+    coefficient_raw = np.load(outdir / "data" / "coefficient_fields.npz")
+    assert set(coefficient_raw.files) == {
+        "coords_valid",
+        "a",
+        "bx",
+        "by",
+        "b_magnitude",
+        "c",
+        "quiver_indices",
+    }
+    np.testing.assert_allclose(coefficient_raw["a"], 1.0)
+    np.testing.assert_allclose(coefficient_raw["bx"], 4.0)
+    np.testing.assert_allclose(coefficient_raw["by"], 5.0)
+    np.testing.assert_allclose(coefficient_raw["b_magnitude"], np.sqrt(41.0))
+    np.testing.assert_allclose(coefficient_raw["c"], 6.0)
+    assert coefficient_raw["quiver_indices"].size <= 2
+
+    bx_marker = _coefficient_figure(outdir, "convection_bx")["data"][0]["marker"]
+    assert bx_marker["cmin"] == -4.0
+    assert bx_marker["cmax"] == 4.0
+    vector_figure = _coefficient_figure(outdir, "convection_vector")
+    assert vector_figure["data"][0]["type"] == "scattergl"
+    assert vector_figure["data"][0]["showlegend"] is False
+    arrow_trace = vector_figure["data"][-1]
+    arrow_dx = arrow_trace["x"][1] - arrow_trace["x"][0]
+    arrow_dy = arrow_trace["y"][1] - arrow_trace["y"][0]
+    assert arrow_dx / arrow_dy == pytest.approx(4.0 / 5.0)
 
     error_figure = json.loads(
         (
@@ -245,3 +333,86 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         _marker_for_field(outdir, "psi")["cmin"],
         _marker_for_field(outdir, "psi")["cmax"],
     )
+
+
+def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(
+    tmp_path: Path,
+) -> None:
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coefficient_path = _write_zero_coefficients(tmp_path / "coefficients.py")
+    request = CouplingArtifactRequest(
+        config=tmp_path / "config.json",
+        coupling_checkpoint=tmp_path / "coupling.safetensors",
+        green_checkpoint=tmp_path / "green.safetensors",
+        outdir=tmp_path / "artifacts",
+        coefficient_vector_max_points=2,
+    )
+    exporter = ComplexCouplingArtifactExporter(request)
+    geometry = load_complex_geometry(geometry_path)
+    coefficients = load_coefficient_functions(coefficient_path)
+    fields = exporter._evaluate_coefficient_fields(geometry, coefficients)
+    terms = CouplingCoefficientTermsConfig(
+        diffusion=False,
+        convection=False,
+        reaction=False,
+    )
+
+    figure_fields = exporter._coefficient_figure_fields(fields, terms)
+    statistics = exporter._coefficient_field_statistics(fields, terms, figure_fields)
+
+    assert figure_fields == ("diffusion_a",)
+    assert statistics["a"]["physical_nonzero"] is True
+    assert statistics["a"]["branch_enabled"] is False
+    assert statistics["a"]["figure_exported"] is True
+    assert statistics["b_magnitude"]["physical_nonzero"] is False
+    assert statistics["b_magnitude"]["figure_exported"] is False
+    assert statistics["c"]["physical_nonzero"] is False
+    assert statistics["c"]["figure_exported"] is False
+
+
+def test_complex_coefficient_artifacts_export_enabled_zero_fields(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coefficient_path = _write_zero_coefficients(tmp_path / "coefficients.py")
+    request = CouplingArtifactRequest(
+        config=tmp_path / "config.json",
+        coupling_checkpoint=tmp_path / "coupling.safetensors",
+        green_checkpoint=tmp_path / "green.safetensors",
+        outdir=tmp_path / "artifacts",
+        save_generated_data=False,
+        coefficient_vector_max_points=1,
+    )
+    exporter = ComplexCouplingArtifactExporter(request)
+    fields = exporter._evaluate_coefficient_fields(
+        load_complex_geometry(geometry_path),
+        load_coefficient_functions(coefficient_path),
+    )
+    terms = CouplingCoefficientTermsConfig(
+        diffusion=False,
+        convection=True,
+        reaction=True,
+    )
+
+    paths, figure_fields = exporter._write_coefficient_figures(
+        fields,
+        terms,
+        "plotly_white",
+    )
+    exporter._write_coefficient_npz(fields)
+
+    assert len(paths) == 6
+    assert figure_fields == (
+        "diffusion_a",
+        "reaction_c",
+        "convection_bx",
+        "convection_by",
+        "convection_magnitude",
+        "convection_vector",
+    )
+    vector_figure = _coefficient_figure(request.outdir, "convection_vector")
+    annotations = vector_figure["layout"]["annotations"]
+    assert any("Zero convection field" in item["text"] for item in annotations)
+    assert not (request.outdir / "data" / "coefficient_fields.npz").exists()

@@ -176,7 +176,11 @@ def _write_config(
                 "balance_loss": {"enabled": False, "weight": 1.0},
                 "symmetric_boundary_loss": {"enabled": False, "weight": 1.0},
             },
-            "compile": {"enabled": False},
+            "compile": {
+                "enabled": False,
+                "backend": "inductor",
+                "mode": None,
+            },
         },
     }
     path.write_text(json.dumps(payload))
@@ -290,6 +294,41 @@ def test_export_coupling_artifacts_cli_rejects_removed_max_samples_option() -> N
                 "3",
             ]
         )
+
+
+def test_coefficient_vector_max_points_validation(tmp_path: Path) -> None:
+    with pytest.raises(
+        ValueError,
+        match="coefficient_vector_max_points must be a positive integer",
+    ):
+        CouplingArtifactRequest(
+            config=tmp_path / "config.json",
+            coupling_checkpoint=tmp_path / "coupling.safetensors",
+            green_checkpoint=tmp_path / "green.safetensors",
+            outdir=tmp_path / "artifacts",
+            coefficient_vector_max_points=0,
+        )
+
+    parser = ExportCouplingArtifactsCLI().parser
+    required_args = [
+        "--config",
+        "config.json",
+        "--coupling-checkpoint",
+        "coupling.safetensors",
+        "--green-checkpoint",
+        "green.safetensors",
+        "--outdir",
+        "artifacts",
+    ]
+    assert parser.parse_args(required_args).coefficient_vector_max_points == 400
+    assert (
+        parser.parse_args(
+            [*required_args, "--coefficient-vector-max-points", "17"]
+        ).coefficient_vector_max_points
+        == 17
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args([*required_args, "--coefficient-vector-max-points", "0"])
 
 
 def test_export_coupling_artifacts_smoke(

@@ -7,24 +7,28 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import numpy as np
+import plotly.figure_factory as ff
 import plotly.graph_objects as go
 import torch
 from torch.utils.data import DataLoader
 
-from greenonet.coefficients import load_coefficient_functions
+from greenonet.coefficients import CoefficientFunctions, load_coefficient_functions
 from greenonet.complex_coupling_data import (
     ComplexCouplingDataset,
     complex_coupling_collate_fn,
 )
 from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
 from greenonet.complex_coupling_model import ComplexCouplingNet
-from greenonet.complex_geometry import load_complex_geometry
+from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geometry
 from greenonet.coupling_artifacts import (
     CouplingArtifactConfigs,
     CouplingArtifactRequest,
     load_coupling_artifact_configs,
 )
-from greenonet.config import Axis1DTrunkConfig
+from greenonet.config import (
+    Axis1DTrunkConfig,
+    CouplingCoefficientTermsConfig,
+)
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.plotly_io import save_plotly_figure
@@ -37,7 +41,407 @@ class ComplexSelectedSample:
     arrays: dict[str, np.ndarray]
 
 
-class ComplexCouplingArtifactExporter:
+@dataclass(frozen=True)
+class ComplexCoefficientFields:
+    """Physical coefficient fields and deterministic quiver metadata."""
+
+    coords_valid: np.ndarray
+    a: np.ndarray
+    bx: np.ndarray
+    by: np.ndarray
+    b_magnitude: np.ndarray
+    c: np.ndarray
+    quiver_indices: np.ndarray
+    quiver_stride: int
+    quiver_scale: float
+
+    def npz_payload(self) -> dict[str, np.ndarray]:
+        return {
+            "coords_valid": self.coords_valid,
+            "a": self.a,
+            "bx": self.bx,
+            "by": self.by,
+            "b_magnitude": self.b_magnitude,
+            "c": self.c,
+            "quiver_indices": self.quiver_indices,
+        }
+
+
+class ComplexCoefficientArtifactMixin:
+    """Create run-level physical coefficient artifacts for complex geometry."""
+
+    COEFFICIENT_ZERO_TOLERANCE: ClassVar[float] = 1e-12
+    QUIVER_ARROW_GRID_FRACTION: ClassVar[float] = 0.75
+
+    request: CouplingArtifactRequest
+    logger: logging.Logger | None
+
+    def _evaluate_coefficient_fields(
+        self,
+        geometry: ComplexGeometryMetadata,
+        coeffs: CoefficientFunctions,
+    ) -> ComplexCoefficientFields:
+        coords = geometry.coords_valid
+        x = coords[:, 0]
+        y = coords[:, 1]
+        with torch.no_grad():
+            a = self._evaluate_coefficient_function(coeffs.a_fun, x, y, "a")
+            bx = self._evaluate_coefficient_function(coeffs.bx_fun, x, y, "bx")
+            by = self._evaluate_coefficient_function(coeffs.by_fun, x, y, "by")
+            c = self._evaluate_coefficient_function(coeffs.c_fun, x, y, "c")
+
+        coords_numpy = coords.detach().cpu().numpy()
+        a_numpy = a.detach().cpu().numpy()
+        bx_numpy = bx.detach().cpu().numpy()
+        by_numpy = by.detach().cpu().numpy()
+        c_numpy = c.detach().cpu().numpy()
+        magnitude = np.sqrt(np.square(bx_numpy) + np.square(by_numpy))
+        quiver_indices, stride = self._select_quiver_indices(
+            geometry,
+            self.request.coefficient_vector_max_points,
+        )
+        if magnitude.size:
+            max_index = int(np.argmax(magnitude))
+            if max_index not in quiver_indices:
+                if quiver_indices.size < self.request.coefficient_vector_max_points:
+                    quiver_indices = np.append(quiver_indices, max_index)
+                else:
+                    quiver_indices = quiver_indices.copy()
+                    quiver_indices[-1] = max_index
+                quiver_indices = np.unique(quiver_indices).astype(np.int64)
+
+        max_magnitude = float(np.max(magnitude)) if magnitude.size else 0.0
+        grid_spacing = stride * min(float(geometry.hx), float(geometry.hy))
+        quiver_scale = (
+            self.QUIVER_ARROW_GRID_FRACTION * grid_spacing / max_magnitude
+            if max_magnitude > self.COEFFICIENT_ZERO_TOLERANCE
+            else 0.0
+        )
+        return ComplexCoefficientFields(
+            coords_valid=coords_numpy,
+            a=a_numpy,
+            bx=bx_numpy,
+            by=by_numpy,
+            b_magnitude=magnitude,
+            c=c_numpy,
+            quiver_indices=quiver_indices,
+            quiver_stride=stride,
+            quiver_scale=quiver_scale,
+        )
+
+    @staticmethod
+    def _evaluate_coefficient_function(
+        function: Any,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        field_name: str,
+    ) -> torch.Tensor:
+        raw = function(x, y)
+        values = torch.as_tensor(raw, dtype=x.dtype, device=x.device)
+        try:
+            values = torch.broadcast_to(values, x.shape)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"Physical coefficient '{field_name}' returned shape "
+                f"{tuple(values.shape)}, which cannot broadcast to {tuple(x.shape)}."
+            ) from exc
+        if not torch.all(torch.isfinite(values)):
+            raise ValueError(
+                f"Physical coefficient '{field_name}' contains non-finite values."
+            )
+        return values
+
+    @staticmethod
+    def _select_quiver_indices(
+        geometry: ComplexGeometryMetadata,
+        max_points: int,
+    ) -> tuple[np.ndarray, int]:
+        x_indices = geometry.valid_grid_x_index.detach().cpu().numpy()
+        y_indices = geometry.valid_grid_y_index.detach().cpu().numpy()
+        point_count = int(x_indices.size)
+        if point_count == 0:
+            raise ValueError("Complex coefficient visualization requires valid points.")
+        if point_count <= max_points:
+            return np.arange(point_count, dtype=np.int64), 1
+
+        x_origin = int(np.min(x_indices))
+        y_origin = int(np.min(y_indices))
+        max_span = max(
+            int(np.max(x_indices) - x_origin),
+            int(np.max(y_indices) - y_origin),
+        )
+        for stride in range(2, max_span + 2):
+            mask = ((x_indices - x_origin) % stride == 0) & (
+                (y_indices - y_origin) % stride == 0
+            )
+            selected = np.flatnonzero(mask).astype(np.int64)
+            if 0 < selected.size <= max_points:
+                return selected, stride
+
+        fallback_step = max(1, int(np.ceil(point_count / max_points)))
+        selected = np.arange(0, point_count, fallback_step, dtype=np.int64)[:max_points]
+        return selected, max(1, int(np.ceil(np.sqrt(point_count / max_points))))
+
+    def _coefficient_figure_fields(
+        self,
+        fields: ComplexCoefficientFields,
+        terms: CouplingCoefficientTermsConfig,
+    ) -> tuple[str, ...]:
+        names = ["diffusion_a"]
+        if self._is_physical_nonzero(fields.c) or terms.reaction:
+            names.append("reaction_c")
+        if self._is_physical_nonzero(fields.b_magnitude) or terms.convection:
+            names.extend(
+                (
+                    "convection_bx",
+                    "convection_by",
+                    "convection_magnitude",
+                    "convection_vector",
+                )
+            )
+        return tuple(names)
+
+    def _coefficient_field_statistics(
+        self,
+        fields: ComplexCoefficientFields,
+        terms: CouplingCoefficientTermsConfig,
+        figure_fields: tuple[str, ...],
+    ) -> dict[str, dict[str, float | bool]]:
+        figures = set(figure_fields)
+        specifications = {
+            "a": (fields.a, terms.diffusion, "diffusion_a"),
+            "bx": (fields.bx, terms.convection, "convection_bx"),
+            "by": (fields.by, terms.convection, "convection_by"),
+            "b_magnitude": (
+                fields.b_magnitude,
+                terms.convection,
+                "convection_magnitude",
+            ),
+            "c": (fields.c, terms.reaction, "reaction_c"),
+        }
+        statistics: dict[str, dict[str, float | bool]] = {}
+        for name, (values, branch_enabled, figure_name) in specifications.items():
+            minimum = float(np.min(values))
+            maximum = float(np.max(values))
+            max_abs = float(np.max(np.abs(values)))
+            constant_tolerance = self.COEFFICIENT_ZERO_TOLERANCE * max(1.0, max_abs)
+            statistics[name] = {
+                "min": minimum,
+                "max": maximum,
+                "mean": float(np.mean(values)),
+                "physical_nonzero": max_abs > self.COEFFICIENT_ZERO_TOLERANCE,
+                "constant": maximum - minimum <= constant_tolerance,
+                "branch_enabled": bool(branch_enabled),
+                "figure_exported": figure_name in figures,
+            }
+        return statistics
+
+    def _is_physical_nonzero(self, values: np.ndarray) -> bool:
+        return bool(
+            values.size
+            and float(np.max(np.abs(values))) > self.COEFFICIENT_ZERO_TOLERANCE
+        )
+
+    def _write_coefficient_npz(self, fields: ComplexCoefficientFields) -> None:
+        if not self.request.save_generated_data:
+            return
+        data_dir = self.request.outdir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        output_path = data_dir / "coefficient_fields.npz"
+        np.savez(output_path, **fields.npz_payload())  # type: ignore[arg-type]
+
+    def _write_coefficient_figures(
+        self,
+        fields: ComplexCoefficientFields,
+        terms: CouplingCoefficientTermsConfig,
+        theme: str,
+    ) -> tuple[list[str], tuple[str, ...]]:
+        figure_fields = self._coefficient_figure_fields(fields, terms)
+        paths: list[str] = []
+        scalar_specs = {
+            "diffusion_a": (fields.a, "Diffusion coefficient a(x, y)", "a", False),
+            "reaction_c": (
+                fields.c,
+                "Reaction coefficient c(x, y)",
+                "c",
+                bool(np.min(fields.c) < 0.0 < np.max(fields.c)),
+            ),
+            "convection_bx": (
+                fields.bx,
+                "Convection coefficient b_x(x, y)",
+                "b_x",
+                True,
+            ),
+            "convection_by": (
+                fields.by,
+                "Convection coefficient b_y(x, y)",
+                "b_y",
+                True,
+            ),
+            "convection_magnitude": (
+                fields.b_magnitude,
+                "Convection magnitude |b(x, y)|",
+                "|b|",
+                False,
+            ),
+        }
+        for name in figure_fields:
+            if name == "convection_vector":
+                figure = self._convection_vector_figure(fields, theme)
+            else:
+                values, title, label, signed = scalar_specs[name]
+                figure = self._coefficient_scalar_figure(
+                    title=title,
+                    label=label,
+                    coords=fields.coords_valid,
+                    values=values,
+                    theme=theme,
+                    signed=signed,
+                )
+            base_path = self.request.outdir / "figures" / "coefficients" / name
+            save_plotly_figure(figure, base_path, logger=self.logger)
+            paths.append(str(base_path.with_suffix(".json")))
+        return paths, figure_fields
+
+    def _coefficient_scalar_figure(
+        self,
+        *,
+        title: str,
+        label: str,
+        coords: np.ndarray,
+        values: np.ndarray,
+        theme: str,
+        signed: bool,
+    ) -> go.Figure:
+        max_abs = float(np.max(np.abs(values))) if values.size else 0.0
+        marker_range: dict[str, float] = {}
+        if signed and max_abs > 0.0:
+            marker_range = {"cmin": -max_abs, "cmax": max_abs}
+        figure = go.Figure(
+            data=go.Scattergl(
+                x=coords[:, 0],
+                y=coords[:, 1],
+                mode="markers",
+                customdata=values,
+                hovertemplate=(
+                    "x=%{x:.6g}<br>y=%{y:.6g}<br>"
+                    f"{label}=%{{customdata:.6g}}<extra></extra>"
+                ),
+                marker={
+                    "color": values,
+                    "colorscale": "RdBu" if signed else "Viridis",
+                    "showscale": True,
+                    "size": 6,
+                    "colorbar": {
+                        "title": label,
+                        "exponentformat": "power",
+                        "showexponent": "all",
+                    },
+                    **marker_range,
+                },
+            ),
+            layout=self._coefficient_layout(title, theme),
+        )
+        minimum = float(np.min(values))
+        maximum = float(np.max(values))
+        tolerance = self.COEFFICIENT_ZERO_TOLERANCE * max(1.0, max_abs)
+        if maximum - minimum <= tolerance:
+            figure.add_annotation(
+                x=0.5,
+                y=1.04,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                text=f"Constant field: {label}={minimum:.6g}",
+            )
+        return figure
+
+    def _convection_vector_figure(
+        self,
+        fields: ComplexCoefficientFields,
+        theme: str,
+    ) -> go.Figure:
+        customdata = np.column_stack((fields.bx, fields.by, fields.b_magnitude))
+        figure = go.Figure(
+            data=go.Scattergl(
+                x=fields.coords_valid[:, 0],
+                y=fields.coords_valid[:, 1],
+                mode="markers",
+                customdata=customdata,
+                hovertemplate=(
+                    "x=%{x:.6g}<br>y=%{y:.6g}<br>"
+                    "b_x=%{customdata[0]:.6g}<br>"
+                    "b_y=%{customdata[1]:.6g}<br>"
+                    "|b|=%{customdata[2]:.6g}<extra></extra>"
+                ),
+                marker={
+                    "color": fields.b_magnitude,
+                    "colorscale": "Viridis",
+                    "showscale": True,
+                    "size": 5,
+                    "opacity": 0.72,
+                    "colorbar": {
+                        "title": "|b|",
+                        "exponentformat": "power",
+                        "showexponent": "all",
+                    },
+                },
+                name="|b|",
+                showlegend=False,
+            ),
+            layout=self._coefficient_layout("Convection vector field b(x, y)", theme),
+        )
+        if fields.quiver_scale > 0.0:
+            indices = fields.quiver_indices
+            quiver = ff.create_quiver(
+                fields.coords_valid[indices, 0],
+                fields.coords_valid[indices, 1],
+                fields.quiver_scale * fields.bx[indices],
+                fields.quiver_scale * fields.by[indices],
+                scale=1.0,
+                arrow_scale=0.3,
+                line={"color": "rgba(20, 20, 20, 1.0)", "width": 1.3},
+                name="b direction",
+            )
+            for trace in quiver.data:
+                figure.add_trace(
+                    go.Scatter(
+                        x=trace.x,
+                        y=trace.y,
+                        mode="lines",
+                        line={"color": "rgba(255, 255, 255, 0.9)", "width": 3.2},
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+                trace.update(hoverinfo="skip", showlegend=False)
+                figure.add_trace(trace)
+        else:
+            figure.add_annotation(
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                text="Zero convection field on valid points",
+            )
+        return figure
+
+    @staticmethod
+    def _coefficient_layout(title: str, theme: str) -> go.Layout:
+        return go.Layout(
+            template=theme,
+            width=900,
+            height=800,
+            title=title,
+            xaxis_title="x",
+            yaxis_title="y",
+            yaxis={"scaleanchor": "x", "scaleratio": 1},
+            margin={"t": 100},
+        )
+
+
+class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
     """Export complex-geometry CouplingNet metrics, raw archives, and scatter plots."""
 
     COLOR_RANGE_POLICY: ClassVar[str] = "shared_reference_prediction_groups"
@@ -120,6 +524,7 @@ class ComplexCouplingArtifactExporter:
             configs.dataset.geometry_path,
             dtype=configs.dataset.dtype,
         )
+        coefficient_fields = self._evaluate_coefficient_fields(geometry, coeffs)
         dataset = ComplexCouplingDataset(
             configs.dataset.test_path,
             geometry,
@@ -142,10 +547,23 @@ class ComplexCouplingArtifactExporter:
         selected_samples = self._evaluate_selected(dataset, evaluator, selected, device)
         self._write_metric_csv(metric_rows)
         self._write_selected_npz(selected_samples)
+        self._write_coefficient_npz(coefficient_fields)
         figure_fields = self._figure_fields(selected_samples)
-        figure_paths = self._write_figures(
+        sample_figure_paths = self._write_figures(
             selected_samples,
             self.request.theme,
+        )
+        coefficient_figure_paths, coefficient_figure_fields = (
+            self._write_coefficient_figures(
+                coefficient_fields,
+                configs.coupling_model.coefficient_terms,
+                self.request.theme,
+            )
+        )
+        coefficient_statistics = self._coefficient_field_statistics(
+            coefficient_fields,
+            configs.coupling_model.coefficient_terms,
+            coefficient_figure_fields,
         )
         aggregate = self._aggregate_metrics(metric_rows)
         axis_1d_trunk = Axis1DTrunkConfig.from_raw(configs.coupling_model.axis_1d_trunk)
@@ -161,8 +579,31 @@ class ComplexCouplingArtifactExporter:
             "plot_workers": self.request.plot_workers,
             "save_generated_data": self.request.save_generated_data,
             "aggregate_metrics": aggregate,
-            "figure_count": len(figure_paths),
+            "figure_count": len(sample_figure_paths) + len(coefficient_figure_paths),
             "figure_fields": list(figure_fields),
+            "coefficient_figure_count": len(coefficient_figure_paths),
+            "coefficient_figure_fields": list(coefficient_figure_fields),
+            "coefficient_field_space": "physical",
+            "coefficient_evaluation": "direct_at_coords_valid",
+            "coefficient_zero_tolerance": self.COEFFICIENT_ZERO_TOLERANCE,
+            "coefficient_field_statistics": coefficient_statistics,
+            "coefficient_vector": {
+                "max_points": self.request.coefficient_vector_max_points,
+                "selected_points": int(coefficient_fields.quiver_indices.size),
+                "stride": coefficient_fields.quiver_stride,
+                "arrow_scale_factor": coefficient_fields.quiver_scale,
+                "max_arrow_length": (
+                    coefficient_fields.quiver_scale
+                    * float(np.max(coefficient_fields.b_magnitude))
+                ),
+                "arrow_grid_fraction": self.QUIVER_ARROW_GRID_FRACTION,
+                "background_points": int(coefficient_fields.coords_valid.shape[0]),
+            },
+            "coefficient_raw_archive": (
+                "data/coefficient_fields.npz"
+                if self.request.save_generated_data
+                else None
+            ),
             "error_convention": "signed_difference",
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
             "raw_output_space": "physical",

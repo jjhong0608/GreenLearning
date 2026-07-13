@@ -708,6 +708,17 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `dataset.test_path`의 `.npz`를 `CouplingDataset`으로 읽고, coefficient는 기본적으로
   `dataset.coefficient_functions_path`를 사용하며 `--coefficients`로 override한다.
   Device는 기본적으로 `coupling_training.device`를 따르고 `--device`가 우선한다.
+- Complex CouplingNet coefficient artifact는 selected sample과 무관한 run-level
+  context로 한 번만 생성한다. `a`, `b_x`, `b_y`, `|b|`, `c`는
+  `coords_valid`에서 coefficient 함수를 직접 평가한 physical field이며 pull-back,
+  interpolation, segment-length scaling을 적용하지 않는다. Diffusion은 항상 scalar
+  figure를 만들고, reaction/convection은 physical field가 nonzero이거나 대응
+  `coefficient_terms`가 enabled일 때 figure를 만든다. Convection은 signed component,
+  magnitude, subsampled quiver를 함께 저장하며 default arrow limit은 400이다.
+- `coefficient_terms`는 CouplingNet branch input 여부이고 physical PDE coefficient의
+  존재 여부가 아니다. Complex artifact summary는 physical nonzero/constant 상태와
+  branch enabled 상태를 분리해 기록하고, raw coefficient arrays는
+  `data/coefficient_fields.npz`에 sample-independent archive로 저장한다.
 - `plot_coupling_logs.py`는 paper-facing run-level curve 전용으로 유지한다. 출력은
   `loss`, `l2_consistency`, `energy_consistency`, `rel_flux`, `rel_sol` 5개만 생성하며,
   optional auxiliary loss curve는 debug용 `plot_logs.py`에서 다룬다.

@@ -17,6 +17,13 @@ from greenonet.complex_coupling_artifacts import export_complex_coupling_artifac
 class ExportCouplingArtifactsCLI:
     """CLI for exporting paper-facing CouplingNet artifacts."""
 
+    @staticmethod
+    def _positive_int(value: str) -> int:
+        parsed = int(value)
+        if parsed < 1:
+            raise argparse.ArgumentTypeError("value must be a positive integer")
+        return parsed
+
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(
             description="Export CouplingNet checkpoint artifacts for paper figures."
@@ -88,6 +95,15 @@ class ExportCouplingArtifactsCLI:
             default=True,
             help="Save selected samples, predictions, and diagnostics as NPZ files.",
         )
+        parser.add_argument(
+            "--coefficient-vector-max-points",
+            type=self._positive_int,
+            default=400,
+            help=(
+                "Maximum number of quiver arrows in complex-domain physical "
+                "coefficient figures."
+            ),
+        )
         self.parser = parser
 
     @staticmethod
@@ -135,6 +151,7 @@ class ExportCouplingArtifactsCLI:
             ),
             plot_workers=args.plot_workers,
             save_generated_data=bool(args.save_generated_data),
+            coefficient_vector_max_points=args.coefficient_vector_max_points,
         )
         logger = self._build_logger(request.outdir)
         with request.config.open() as fp:
