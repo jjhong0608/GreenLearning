@@ -1068,6 +1068,26 @@ difference mode between the two directions, while projection fixes the sum mode
 required by the PDE. The split is therefore constrained to be physically
 consistent before Green reconstruction is applied.
 
+For an opt-in ablation, response-preconditioned projection modifies only this
+difference mode. With \(\sigma_x=L_x^2\), \(\sigma_y=L_y^2\), define
+
+\[
+d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f,
+\qquad
+\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
+\]
+
+\[
+d_{\mathrm{RPS}}
+=d_0+\kappa(\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}}).
+\]
+
+Then \(\phi_{\mathrm{proj}}=(f+d_{\mathrm{RPS}})/2\) and
+\(\psi_{\mathrm{proj}}=(f-d_{\mathrm{RPS}})/2\). This preserves exact balance,
+reduces to symmetric projection for equal segment lengths, and uses no reference
+solution or reference split field. Symmetric remains the default; RPS must be
+evaluated through fresh paired training rather than a post-hoc checkpoint swap.
+
 The projection is applied directly in physical source variables. The equation
 \(\phi+\psi=f\) is a statement about the physical PDE on \(\Omega\), and the
 equal-half correction preserves the network's raw difference mode. Only after this
@@ -1354,7 +1374,8 @@ The following mathematical algorithm summarizes the framework.
    reconstructs the interval solution.
 7. Use CouplingNet to predict raw direction-split source components from source,
    coefficient, geometry, transverse position, and local coordinate information.
-8. Apply symmetric balance projection so that
+8. Apply the configured physical balance projection, symmetric by default or
+   response-preconditioned for a paired ablation, so that
    \[
    \phi_{\mathrm{proj}}+\psi_{\mathrm{proj}}=f.
    \]

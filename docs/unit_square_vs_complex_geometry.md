@@ -309,7 +309,7 @@ x-direction `phi_raw`, 두 번째 channel은 y-direction `psi_raw`에 대응한�
 horizontal/vertical path에서 예측되며, normalized source branch의 segment amplitude로 physical
 source scale을 복원한다.
 
-Projection은 physical variable에서 적용된다. 현재 complex mode는 hard symmetric projection만 사용한다.
+Projection은 physical variable에서 적용된다. 기본값은 hard symmetric projection이다.
 
 ```text
 residual = rhs - phi_raw - psi_raw
@@ -320,6 +320,21 @@ psi = psi_raw + 0.5 residual
 이 projection 이후 `phi + psi = rhs`가 valid point에서 강하게 맞춰지고,
 `phi-psi=phi_raw-psi_raw` difference mode는 보존된다. 그 뒤에만 projected physical fields를
 Green reconstruction source로 변환한다.
+
+Optional `response_preconditioned` mode는 같은 physical raw fields를 사용하되,
+
+```text
+sigma_x=L_x^2, sigma_y=L_y^2
+d0=(sigma_y-sigma_x)*rhs/(sigma_x+sigma_y)
+kappa=4*sigma_x*sigma_y/(sigma_x+sigma_y)^2
+d_final=d0+kappa*(phi_raw-psi_raw)
+phi=0.5*(rhs+d_final)
+psi=0.5*(rhs-d_final)
+```
+
+로 difference response를 precondition한다. 두 projection 모두 reference `sol/phi/psi`를
+사용하지 않으며 exact source balance를 만족한다. RPS는 paired fresh-training ablation용 opt-in이고
+symmetric가 계속 기본값이다.
 
 ```text
 Phi_unit=L_x^2*phi
@@ -387,7 +402,7 @@ Full-grid outside-domain value는 sample storage에서는 존재할 수 있지�
 | Coupling coefficient | coefficient function slices | coefficient function을 branch grid에서 직접 evaluate | coefficient는 function이므로 sample interpolation 불필요 |
 | Geometry 정보 | regular grid 자체에 암묵적으로 포함 | geometry branch와 transverse branch로 명시 입력 | endpoint, length, transverse 위치가 segment마다 다름 |
 | Trunk | square coordinate 또는 axis-local coordinate | segment-local `t` | physical 위치는 branch 쪽에서 처리 |
-| Projection | balance relation을 square grid에서 적용 | physical `phi`, `psi`에 hard symmetric projection 적용 | `phi + psi = rhs`를 valid point에서 보장 |
+| Projection | balance relation을 square grid에서 적용 | physical `phi`, `psi`에 symmetric 기본 또는 opt-in RPS 적용 | `phi + psi = rhs`를 valid point에서 보장 |
 | Reconstruction | regular line quadrature | segment별 nonuniform trapezoid weights | irregular valid/reconstruction node 처리 |
 | Artifact | square grid heatmap 중심 | `coords_valid` scatter 중심 | outside-domain point를 시각적 의미에서 제외 |
 

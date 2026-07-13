@@ -493,9 +493,10 @@ h_{\mathrm{func}}\odot h_{\mathrm{geom}}
 
 followed by a learned fuser.
 
-### 5.11 Hard symmetric projection
+### 5.11 Physical balance projection
 
-Use only hard symmetric projection.
+Use hard symmetric projection by default. Allow response-preconditioned projection
+only as an explicit complex-geometry ablation.
 
 Do not use balance loss.
 
@@ -511,18 +512,12 @@ At valid point \(p_q\), let
 \beta(q)=y\_segment\_id(q).
 \]
 
-Convert unit raw outputs to physical raw outputs:
+The model already returns physical raw outputs:
 
 \[
-\phi_q^{\mathrm{raw}}
-=
-\frac{\Phi_q^{\mathrm{raw}}}{(L_{\alpha(q)}^x)^2},
-\]
-
-\[
-\psi_q^{\mathrm{raw}}
-=
-\frac{\Psi_q^{\mathrm{raw}}}{(L_{\beta(q)}^y)^2}.
+\phi_q^{\mathrm{raw}},
+\qquad
+\psi_q^{\mathrm{raw}}.
 \]
 
 Compute the physical residual:
@@ -547,7 +542,29 @@ Apply symmetric projection:
 \psi_q^{\mathrm{raw}}+\frac12 r_q.
 \]
 
-Convert projected physical outputs back to unit quantities:
+For `response_preconditioned`, use
+
+\[
+\sigma_x=(L_{\alpha(q)}^x)^2,
+\quad
+\sigma_y=(L_{\beta(q)}^y)^2,
+\quad
+d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f_q,
+\quad
+\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
+\]
+
+\[
+d_{\mathrm{final}}
+=d_0+\kappa(\phi_q^{\mathrm{raw}}-\psi_q^{\mathrm{raw}}),
+\quad
+\phi_q^{\mathrm{proj}}=\frac12(f_q+d_{\mathrm{final}}),
+\quad
+\psi_q^{\mathrm{proj}}=\frac12(f_q-d_{\mathrm{final}}).
+\]
+
+Green reconstruction, not projection, converts projected physical outputs to unit
+quantities:
 
 \[
 \Phi_q^{\mathrm{proj}}
@@ -819,7 +836,7 @@ Add a complex-geometry forward path that:
 
 Do not force complex geometry into a rectangular `(B, 2, m, n)` tensor.
 
-### Step 5. Implement hard symmetric projection
+### Step 5. Implement physical balance projection
 
 Implement projection in physical variables.
 
@@ -827,10 +844,10 @@ The projection path must:
 
 1. receive physical raw \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\) directly;
 2. compute physical residual \(f-\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}}\);
-3. apply the equal-half symmetric split in physical variables;
-4. convert projected physical outputs to unit outputs with the axis-specific
-   \(L_x^2\) and \(L_y^2\) factors;
-5. use only those post-projection unit outputs for reconstruction.
+3. apply the configured symmetric or response-preconditioned split in physical variables;
+4. enforce exact \(\phi+\psi=f\) without using reference fields;
+5. let reconstruction convert projected physical outputs to unit outputs with the
+   axis-specific \(L_x^2\) and \(L_y^2\) factors.
 
 Remove or bypass smooth masked projection and balance loss in complex-geometry mode.
 
@@ -922,9 +939,12 @@ Test that:
 
 - raw model channels are physical \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\);
 - symmetric projection preserves the raw difference mode while enforcing balance;
+- response-preconditioned projection matches its \(d_0\) and \(\kappa\) formulas and
+  reduces to symmetric projection for equal lengths;
 - projected physical outputs convert to unit reconstruction outputs with the correct
   axis-specific \(L^2\) factors;
-- unversioned legacy complex CouplingNet checkpoints are rejected as raw-unit contracts.
+- unversioned and version 2/3 complex CouplingNet checkpoints are rejected by the
+  version 4 physical-raw contract.
 
 ### 7.4 Projection tests
 
@@ -1082,7 +1102,7 @@ The task is complete when all of the following are true.
 
 ### 9.3 Projection and reconstruction
 
-- Hard symmetric projection is applied in physical variables.
+- Symmetric projection is the physical-space default; response-preconditioned is opt-in.
 - Smooth masked projection is not used.
 - Balance loss is not used.
 - Segment-wise Green reconstruction is implemented.

@@ -256,7 +256,7 @@ def test_save_load_coupling_model_with_balance_projection_object_config(tmp_path
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 
-def test_deserialize_ignores_retired_geometry_metadata_for_symmetric_config():
+def test_deserialize_rejects_retired_geometry_metadata():
     from greenonet.io import _deserialize_config
 
     payload = {
@@ -270,13 +270,8 @@ def test_deserialize_ignores_retired_geometry_metadata_for_symmetric_config():
         },
     }
 
-    with pytest.warns(DeprecationWarning, match="retired"):
-        loaded_cfg = _deserialize_config(payload, CouplingModelConfig)
-
-    assert loaded_cfg.balance_projection.enabled is True
-    assert loaded_cfg.balance_projection.mode == "symmetric"
-    assert not hasattr(loaded_cfg.balance_projection, "geometry_weighted_rule")
-    assert not hasattr(loaded_cfg.balance_projection, "geometry_weighted_lambda")
+    with pytest.raises(ValueError, match="Retired balance_projection fields"):
+        _deserialize_config(payload, CouplingModelConfig)
 
 
 def test_save_load_coupling_model_with_green_response_feature_config(tmp_path):

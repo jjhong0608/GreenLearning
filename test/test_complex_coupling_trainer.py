@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from greenonet.coefficients import load_coefficient_functions
@@ -12,6 +13,7 @@ from greenonet.complex_coupling_trainer import (
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     Axis1DTrunkConfig,
+    BalanceProjectionConfig,
     CompileConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
@@ -27,7 +29,11 @@ from test.complex_fixtures import (
 )
 
 
-def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
+@pytest.mark.parametrize("projection_mode", ["symmetric", "response_preconditioned"])
+def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
+    tmp_path,
+    projection_mode,
+):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
     data_dir = tmp_path / "data"
@@ -39,6 +45,7 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             hidden_dim=4,
             depth=1,
             dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode=projection_mode),
             axis_1d_trunk=Axis1DTrunkConfig(
                 num_frequencies=1,
                 max_frequency=1.0,
@@ -61,14 +68,14 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     trainer = ComplexCouplingTrainer(
         model=model,
         config=training,
-        work_dir=tmp_path / "work",
+        work_dir=tmp_path / projection_mode,
         green_model=ConstantGreen(1.0),
         terminal_width=120,
     )
 
     trainer.train(dataset)
 
-    assert (tmp_path / "work" / "complex_coupling_model.safetensors").exists()
-    assert (tmp_path / "work" / "complex_training_metrics.csv").exists()
+    assert (tmp_path / projection_mode / "complex_coupling_model.safetensors").exists()
+    assert (tmp_path / projection_mode / "complex_training_metrics.csv").exists()
     assert complex_metric_keys_are_safe(trainer.metric_rows[0].keys())
-    assert "cross" not in (tmp_path / "work" / "training.log").read_text()
+    assert "cross" not in (tmp_path / projection_mode / "training.log").read_text()

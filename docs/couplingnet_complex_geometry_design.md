@@ -601,21 +601,24 @@ Thus,
 
 ---
 
-## 8. Hard Symmetric Projection
+## 8. Physical Balance Projection
 
 ### 8.1 Projection policy
 
-Only hard symmetric projection is used.
+Hard symmetric projection is the default. Response-preconditioned projection is
+available only as an opt-in complex-geometry ablation.
 
 \\[
 \boxed{
-\text{Hard symmetric projection only.}
+\text{Symmetric by default; response-preconditioned as opt-in.}
 }
 \\]
 
 No balance loss is used.
 
 No smooth masked projection is used.
+
+No reference solution or reference split field is used by either projection.
 
 ### 8.2 Physical raw output
 
@@ -664,7 +667,42 @@ The projected physical quantities are
 \psi_q^{\mathrm{raw}}+\frac12 r_q.
 \\]
 
-### 8.5 Physical projected output to unit projected output
+### 8.5 Response-preconditioned projection
+
+For the optional RPS ablation, define
+
+\[
+\sigma_x=(L_{alpha(q)}^x)^2,
+\qquad
+\sigma_y=(L_{eta(q)}^y)^2,
+\]
+
+\[
+d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f_q,
+\qquad
+\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
+\]
+
+and
+
+\[
+d_{\mathrm{RPS}}
+=d_0+\kappa
+(\phi_q^{\mathrm{raw}}-\psi_q^{\mathrm{raw}}).
+\]
+
+The projected physical quantities are
+
+\[
+\phi_q^{\mathrm{proj}}=\frac12(f_q+d_{\mathrm{RPS}}),
+\qquad
+\psi_q^{\mathrm{proj}}=\frac12(f_q-d_{\mathrm{RPS}}).
+\]
+
+Equal segment lengths give \(d_0=0\) and \(\kappa=1\), exactly recovering the
+symmetric projection. RPS does not use reference solution or split targets.
+
+### 8.6 Physical projected output to unit projected output
 
 For Green reconstruction, the projected physical quantities are converted back to unit quantities:
 
@@ -682,7 +720,7 @@ For Green reconstruction, the projected physical quantities are converted back t
 \psi_q^{\mathrm{proj}}.
 \\]
 
-### 8.6 Smooth masked projection is excluded
+### 8.7 Smooth masked projection is excluded
 
 Smooth masked projection is not used in the complex-geometry design.
 
@@ -1339,9 +1377,9 @@ while
 }
 \\]
 
-The raw network output is a pair of physical directional source fields. Hard
-symmetric projection enforces physical balance at valid interior points, and only
-then does segment-wise Green reconstruction use axis-scaled projected unit quantities
-on segment-local reference nodes.
+The raw network output is a pair of physical directional source fields. Physical
+symmetric projection, or the opt-in response-preconditioned alternative, enforces
+balance at valid interior points. Only then does segment-wise Green reconstruction
+create and use axis-scaled projected unit quantities on segment-local reference nodes.
 
 Cross consistency is not part of the design and must not appear in loss computation, metrics, logs, or summaries.

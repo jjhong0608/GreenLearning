@@ -19,13 +19,13 @@ from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_losses import physical_edge_energy_loss, relative_l2_valid
 from greenonet.complex_projection import (
     ComplexProjectionResult,
-    apply_hard_symmetric_projection,
+    apply_complex_balance_projection,
 )
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
-    reconstruct_from_projected_unit,
+    reconstruct_from_projected_physical,
 )
-from greenonet.config import CouplingTrainingConfig
+from greenonet.config import BalanceProjectionConfig, CouplingTrainingConfig
 from greenonet.io import save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
 
@@ -58,6 +58,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         terminal_width: int | None = None,
     ) -> None:
         self.model: torch.nn.Module = model
+        self.balance_projection = BalanceProjectionConfig.from_raw(
+            model.config.balance_projection
+        )
         self.config = config
         self.green_model = green_model
         self.work_dir = Path(work_dir)
@@ -185,24 +188,25 @@ class ComplexCouplingTrainer(LoggingMixin):
         return self._average(totals, batches)
 
     def _forward_batch(self, batch: ComplexCouplingBatch) -> ComplexForwardResult:
-        raw_unit = self.model(
+        raw_physical = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
             y_source_branch=batch.y_source_branch,
-            x_source_unit_norm=batch.x_source_unit_norm,
-            y_source_unit_norm=batch.y_source_unit_norm,
+            x_source_amplitude=batch.x_source_amplitude,
+            y_source_amplitude=batch.y_source_amplitude,
             x_coefficient_branch=batch.x_coefficient_branch,
             y_coefficient_branch=batch.y_coefficient_branch,
         )
-        projection = apply_hard_symmetric_projection(
-            raw_unit=raw_unit,
+        projection = apply_complex_balance_projection(
+            raw_physical=raw_physical,
             rhs_phys=batch.rhs_valid,
             geometry=batch.geometry,
+            config=self.balance_projection,
         )
-        reconstruction = reconstruct_from_projected_unit(
+        reconstruction = reconstruct_from_projected_physical(
             green_model=self.green_model,
             geometry=batch.geometry,
-            projected_unit=projection.projected_unit,
+            projected_physical=projection.projected_physical,
             x_green_branch=batch.x_green_branch,
             y_green_branch=batch.y_green_branch,
         )

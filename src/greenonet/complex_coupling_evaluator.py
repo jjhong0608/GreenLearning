@@ -17,19 +17,20 @@ from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_losses import physical_edge_energy_loss, relative_l2_valid
 from greenonet.complex_projection import (
     ComplexProjectionResult,
-    apply_hard_symmetric_projection,
+    apply_complex_balance_projection,
 )
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
-    reconstruct_from_projected_unit,
+    reconstruct_from_projected_physical,
 )
+from greenonet.config import BalanceProjectionConfig
 from greenonet.logging_mixin import LoggingMixin
 
 
 @dataclass(frozen=True)
 class ComplexPredictionBatch:
     batch: ComplexCouplingBatch
-    raw_unit: torch.Tensor
+    raw_physical: torch.Tensor
     projection: ComplexProjectionResult
     reconstruction: ComplexReconstructionResult
     metrics: dict[str, torch.Tensor]
@@ -49,6 +50,9 @@ class ComplexCouplingEvaluator(LoggingMixin):
     ) -> None:
         self.model = model.to(device)
         self.model.eval()
+        self.balance_projection = BalanceProjectionConfig.from_raw(
+            model.config.balance_projection
+        )
         self.green_model = green_model.to(device)
         self.green_model.eval()
         self.device = device
@@ -94,24 +98,25 @@ class ComplexCouplingEvaluator(LoggingMixin):
         return summary
 
     def predict_batch(self, batch: ComplexCouplingBatch) -> ComplexPredictionBatch:
-        raw_unit = self.model(
+        raw_physical = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
             y_source_branch=batch.y_source_branch,
-            x_source_unit_norm=batch.x_source_unit_norm,
-            y_source_unit_norm=batch.y_source_unit_norm,
+            x_source_amplitude=batch.x_source_amplitude,
+            y_source_amplitude=batch.y_source_amplitude,
             x_coefficient_branch=batch.x_coefficient_branch,
             y_coefficient_branch=batch.y_coefficient_branch,
         )
-        projection = apply_hard_symmetric_projection(
-            raw_unit=raw_unit,
+        projection = apply_complex_balance_projection(
+            raw_physical=raw_physical,
             rhs_phys=batch.rhs_valid,
             geometry=batch.geometry,
+            config=self.balance_projection,
         )
-        reconstruction = reconstruct_from_projected_unit(
+        reconstruction = reconstruct_from_projected_physical(
             green_model=self.green_model,
             geometry=batch.geometry,
-            projected_unit=projection.projected_unit,
+            projected_physical=projection.projected_physical,
             x_green_branch=batch.x_green_branch,
             y_green_branch=batch.y_green_branch,
         )
@@ -137,7 +142,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             ).detach()
         return ComplexPredictionBatch(
             batch=batch,
-            raw_unit=raw_unit,
+            raw_physical=raw_physical,
             projection=projection,
             reconstruction=reconstruction,
             metrics=metrics,

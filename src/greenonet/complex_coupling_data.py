@@ -29,8 +29,8 @@ class ComplexCouplingItem:
     a_valid: torch.Tensor
     x_source_branch: torch.Tensor
     y_source_branch: torch.Tensor
-    x_source_unit_norm: torch.Tensor
-    y_source_unit_norm: torch.Tensor
+    x_source_amplitude: torch.Tensor
+    y_source_amplitude: torch.Tensor
     x_coefficient_branch: torch.Tensor
     y_coefficient_branch: torch.Tensor
     x_green_branch: torch.Tensor
@@ -49,8 +49,8 @@ class ComplexCouplingBatch:
     a_valid: torch.Tensor
     x_source_branch: torch.Tensor
     y_source_branch: torch.Tensor
-    x_source_unit_norm: torch.Tensor
-    y_source_unit_norm: torch.Tensor
+    x_source_amplitude: torch.Tensor
+    y_source_amplitude: torch.Tensor
     x_coefficient_branch: torch.Tensor
     y_coefficient_branch: torch.Tensor
     x_green_branch: torch.Tensor
@@ -68,8 +68,8 @@ class ComplexCouplingBatch:
             a_valid=self.a_valid.to(device),
             x_source_branch=self.x_source_branch.to(device),
             y_source_branch=self.y_source_branch.to(device),
-            x_source_unit_norm=self.x_source_unit_norm.to(device),
-            y_source_unit_norm=self.y_source_unit_norm.to(device),
+            x_source_amplitude=self.x_source_amplitude.to(device),
+            y_source_amplitude=self.y_source_amplitude.to(device),
             x_coefficient_branch=self.x_coefficient_branch.to(device),
             y_coefficient_branch=self.y_coefficient_branch.to(device),
             x_green_branch=self.x_green_branch.to(device),
@@ -159,11 +159,11 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             sol_valid = self._gather_full_grid(raw["sol"], "sol", path)
             flux_valid, has_flux = self._gather_optional_flux(raw, path)
 
-        x_source_branch, x_source_unit_norm = self._build_source_branch(
+        x_source_branch, x_source_amplitude = self._build_source_branch(
             rhs_valid,
             axis="x",
         )
-        y_source_branch, y_source_unit_norm = self._build_source_branch(
+        y_source_branch, y_source_amplitude = self._build_source_branch(
             rhs_valid,
             axis="y",
         )
@@ -176,8 +176,8 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             a_valid=self.a_valid,
             x_source_branch=x_source_branch,
             y_source_branch=y_source_branch,
-            x_source_unit_norm=x_source_unit_norm,
-            y_source_unit_norm=y_source_unit_norm,
+            x_source_amplitude=x_source_amplitude,
+            y_source_amplitude=y_source_amplitude,
             x_coefficient_branch=self.x_coefficient_branch,
             y_coefficient_branch=self.y_coefficient_branch,
             x_green_branch=self.x_green_branch,
@@ -246,13 +246,11 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             ptr = self.geometry.x_recon_ptr
             t_nodes = self.geometry.x_recon_t
             valid_index = self.geometry.x_recon_valid_index
-            length = self.geometry.x_segment_length
             segment_count = self.geometry.num_x_segments
         else:
             ptr = self.geometry.y_recon_ptr
             t_nodes = self.geometry.y_recon_t
             valid_index = self.geometry.y_recon_valid_index
-            length = self.geometry.y_segment_length
             segment_count = self.geometry.num_y_segments
 
         branches = []
@@ -273,13 +271,14 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             dim=-1,
             rule=self.integration_rule,
         ).sqrt()
-        length_squared = length.to(dtype=self.dtype).pow(2)
-        source_unit = source_phys * length_squared.unsqueeze(-1)
-        source_unit_norm = torch.maximum(
-            source_profile_norm * length_squared,
-            self.source_amplitude_eps * length_squared,
+        source_amplitude = torch.maximum(
+            source_profile_norm,
+            source_profile_norm.new_full(
+                source_profile_norm.shape,
+                self.source_amplitude_eps,
+            ),
         )
-        return source_unit / source_unit_norm.unsqueeze(-1), source_unit_norm
+        return source_phys / source_amplitude.unsqueeze(-1), source_amplitude
 
     def _interpolate_unit_branch(
         self,
@@ -351,11 +350,11 @@ def complex_coupling_collate_fn(
         a_valid=torch.stack([item.a_valid for item in items], dim=0),
         x_source_branch=torch.stack([item.x_source_branch for item in items], dim=0),
         y_source_branch=torch.stack([item.y_source_branch for item in items], dim=0),
-        x_source_unit_norm=torch.stack(
-            [item.x_source_unit_norm for item in items], dim=0
+        x_source_amplitude=torch.stack(
+            [item.x_source_amplitude for item in items], dim=0
         ),
-        y_source_unit_norm=torch.stack(
-            [item.y_source_unit_norm for item in items], dim=0
+        y_source_amplitude=torch.stack(
+            [item.y_source_amplitude for item in items], dim=0
         ),
         x_coefficient_branch=torch.stack(
             [item.x_coefficient_branch for item in items],

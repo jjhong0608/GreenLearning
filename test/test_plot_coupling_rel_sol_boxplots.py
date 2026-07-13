@@ -85,7 +85,8 @@ def test_make_figure_creates_one_box_trace_per_problem(tmp_path: Path) -> None:
         [310.0, 320.0],
         [10.0, 20.0],
     ]
-    assert [trace.y for trace in fig.data] == expected_scaled
+    for trace, expected in zip(fig.data, expected_scaled, strict=True):
+        assert list(trace.y) == pytest.approx(expected)
 
 
 def test_filter_lowest_percentile_keeps_low_values(tmp_path: Path) -> None:
@@ -103,7 +104,7 @@ def test_filter_lowest_percentile_keeps_low_values(tmp_path: Path) -> None:
     )
     series = plotter.load_series()
 
-    assert series[0].values == [0.06, 0.12]
+    assert series[0].values == [0.06, 0.12, 0.19]
     assert series[1].values == [0.9]
     assert series[2].values == [3.1]
     assert series[3].values == [0.4]

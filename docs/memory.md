@@ -129,8 +129,9 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   segment-local physical source profile로 interpolation한다. Source amplitude는
   `sqrt(integral_0^1 f_phys(s(t))^2 dt)`이고, normalized physical profile을 branch에
   넣은 뒤 model의 두 directional raw output을 이 amplitude로 다시 scale한다.
-  Complex CouplingNet raw output contract version 2는 `(B,2,P)` physical
-  `[phi_raw,psi_raw]`이며, legacy unversioned raw-unit checkpoint는 load하지 않는다.
+  Complex CouplingNet raw output contract version 4는 `(B,2,P)` physical
+  `[p,q]`이며, legacy unversioned 및 version 2/3 CouplingNet checkpoint는 load하지
+  않고 재학습한다. GreenNet checkpoint contract는 바뀌지 않는다.
 - Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 active
   `[a,b_primary,b_transverse,c]` 순서로 구성한다. `convection=true`이면 x/Phi
   path는 `[L_x*b_x, L_x*b_y]`, y/Psi path는 `[L_y*b_y, L_y*b_x]`를 넣는다.
@@ -149,13 +150,23 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `product_fuser`이고, disabled이면 이전 complex behavior를 보존한다.
   `trunk_positional_encoding`은 unit-square 2D trunk coordinate encoding이므로
   complex mode에서는 사용하지 않는다.
-- Complex CouplingNet balance projection은 `enabled=true, mode="symmetric"`만
-  지원한다. Physical raw `[phi_raw,psi_raw]`에 equal-half residual correction을
-  적용해 `phi+psi=rhs`를 enforce하고 raw difference mode를 보존한다. 그 뒤에만
-  Green reconstruction source를 `Phi_unit=Lx^2*phi`, `Psi_unit=Ly^2*psi`로 만든다.
-  `smooth_mask`는 unit-square-only이다. Geometry-weighted projection은 PDE
-  derivation이 없고 topology/line-length 변화에 민감한 추가 weighting이므로
-  complex public config, runtime, artifact, diagnostic path에서 폐기했다.
+- Complex CouplingNet balance projection은 `enabled=true`에서 `symmetric` 또는
+  opt-in `response_preconditioned`를 지원한다. Symmetric mode는 physical raw
+  difference `d=p-q`를 보존한다. RPS는 `sigma_x=Lx^2`, `sigma_y=Ly^2`,
+  `d0=(sigma_y-sigma_x)rhs/(sigma_x+sigma_y)`,
+  `kappa=4*sigma_x*sigma_y/(sigma_x+sigma_y)^2`, `d_final=d0+kappa*d`를 쓴다.
+  두 mode 모두 physical space에서 `phi=(rhs+d_final)/2`,
+  `psi=(rhs-d_final)/2`로 exact balance를 맞추고 projection 안에서는 unit scaling을
+  하지 않는다. Reconstruction만 `Phi_unit=Lx^2*phi`, `Psi_unit=Ly^2*psi`를 만든다.
+  `smooth_mask`는 unit-square-only이다. Geometry-weighted public mode/rule/lambda는
+  폐기 상태를 유지하며, RPS는 retired swapped-length-squared lambda=1 식과
+  대수적으로 같더라도 response preconditioning ablation으로 해석한다.
+- Symmetric/RPS 비교는 동일 dataset, GreenNet, initialization seed, optimizer,
+  schedule, epochs를 사용해 CouplingNet을 각각 처음부터 학습한다. 최소 3 paired
+  seed의 energy loss와 evaluation-only `rel_sol/rel_flux`, cardinal-zone error,
+  `u_phi-u_psi`, `d/d0/kappa`를 비교한다. Reference `sol/phi/psi`는 metric에만
+  사용하고 training loss에는 절대 사용하지 않는다. Post-hoc projection swap은
+  공정한 ablation 결론 근거로 사용하지 않는다.
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
   `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
   key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.
@@ -775,7 +786,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   그리며 `rel_sol`은 `%` 단위(100배)로 표시한다.
   하위 분위수 필터를 위해 `--rel-sol-percentile` 옵션을 지원한다. 기본값 100은
   전체 샘플을 사용하고, 예를 들어 90을 주면 각 문제별 `rel_sol`에서 값이 낮은
-  90%만 남겨 boxplot을 그린다.
+  sample만 남겨 boxplot을 그린다. 정확한 보존 개수는
+  `max(1, floor(n * percentile / 100))`이며 percentile cutoff interpolation을
+  사용하지 않는다. Figure의 percent 변환 값은 Plotly tuple과 binary float이므로
+  test에서는 list로 변환한 뒤 approximate comparison을 사용한다.
 - Figure 후보:
   - coefficient field visualization: `a`, `bx`, `by`, `c`
   - source/solution sample visualization

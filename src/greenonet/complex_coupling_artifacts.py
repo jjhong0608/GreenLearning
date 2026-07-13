@@ -27,6 +27,7 @@ from greenonet.coupling_artifacts import (
 )
 from greenonet.config import (
     Axis1DTrunkConfig,
+    BalanceProjectionConfig,
     CouplingCoefficientTermsConfig,
 )
 from greenonet.io import load_model_with_config, load_state_dict_auto
@@ -567,6 +568,19 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         )
         aggregate = self._aggregate_metrics(metric_rows)
         axis_1d_trunk = Axis1DTrunkConfig.from_raw(configs.coupling_model.axis_1d_trunk)
+        balance_projection = BalanceProjectionConfig.from_raw(
+            configs.coupling_model.balance_projection
+        )
+        projection_formula = (
+            "d=p-q; phi=(f+d)/2; psi=(f-d)/2"
+            if balance_projection.mode == "symmetric"
+            else (
+                "d0=(Ly^2-Lx^2)f/(Lx^2+Ly^2); "
+                "kappa=4Lx^2Ly^2/(Lx^2+Ly^2)^2; "
+                "d_final=d0+kappa(p-q); "
+                "phi=(f+d_final)/2; psi=(f-d_final)/2"
+            )
+        )
         summary = {
             "geometry_mode": "complex",
             "device": str(device),
@@ -606,15 +620,21 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             ),
             "error_convention": "signed_difference",
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
-            "raw_output_space": "unit",
+            "raw_output_space": "physical",
             "output_contract_version": ComplexCouplingNet.OUTPUT_CONTRACT_VERSION,
             "balance_projection": {
-                "enabled": True,
-                "mode": "symmetric",
+                "enabled": balance_projection.enabled,
+                "mode": balance_projection.mode,
                 "space": "physical",
-                "residual_split": "equal_half",
+                "formula": projection_formula,
+                "uses_reference_targets": False,
+                "response_preconditioned_equivalence": (
+                    "retired swapped_length_squared geometry-weighted rule at lambda=1"
+                    if balance_projection.mode == "response_preconditioned"
+                    else None
+                ),
             },
-            "post_projection_unit_conversion": {
+            "reconstruction_owned_unit_conversion": {
                 "phi": "Phi_unit=Lx^2*phi_physical",
                 "psi": "Psi_unit=Ly^2*psi_physical",
             },
@@ -627,10 +647,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             ),
             "source_branch": {
                 "enabled": True,
-                "space": "unit",
-                "normalization": "unit_coordinate_l2_of_unit_source",
-                "profile_norm": "A=sqrt(integral_0^1 f_phys(s(t))^2 dt)",
-                "unit_source_norm": "N_unit=L_segment^2*A",
+                "space": "physical",
+                "normalization": "unit_coordinate_l2_of_physical_source",
+                "amplitude": "A=sqrt(integral_0^1 f_phys(s(t))^2 dt)",
+                "model_output_scaling": "physical_amplitude_only",
             },
             "coefficient_terms": {
                 "diffusion": configs.coupling_model.coefficient_terms.diffusion,
@@ -795,29 +815,55 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 u_pred = (
                     prediction.reconstruction.u_mean_valid[0].detach().cpu().numpy()
                 )
+                x_length_squared = (
+                    prediction.batch.geometry.x_lengths_for_valid_points()
+                    .square()
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+                y_length_squared = (
+                    prediction.batch.geometry.y_lengths_for_valid_points()
+                    .square()
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
                 arrays = {
                     "coords_valid": coords,
                     "rhs": rhs,
                     "sol": sol,
-                    "raw_unit_phi": (prediction.raw_unit[0, 0].detach().cpu().numpy()),
-                    "raw_unit_psi": (prediction.raw_unit[0, 1].detach().cpu().numpy()),
                     "raw_physical_phi": (
-                        prediction.projection.raw_physical[0, 0].detach().cpu().numpy()
+                        prediction.raw_physical[0, 0].detach().cpu().numpy()
                     ),
                     "raw_physical_psi": (
-                        prediction.projection.raw_physical[0, 1].detach().cpu().numpy()
+                        prediction.raw_physical[0, 1].detach().cpu().numpy()
                     ),
                     "projected_unit_phi": (
-                        prediction.projection.projected_unit[0, 0]
+                        prediction.reconstruction.projected_unit[0, 0]
                         .detach()
                         .cpu()
                         .numpy()
                     ),
                     "projected_unit_psi": (
-                        prediction.projection.projected_unit[0, 1]
+                        prediction.reconstruction.projected_unit[0, 1]
                         .detach()
                         .cpu()
                         .numpy()
+                    ),
+                    "x_length_squared": x_length_squared,
+                    "y_length_squared": y_length_squared,
+                    "raw_difference": (
+                        prediction.projection.raw_difference[0].detach().cpu().numpy()
+                    ),
+                    "projected_difference": (
+                        prediction.projection.projected_difference[0]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    ),
+                    "raw_balance_residual": (
+                        prediction.projection.balance_residual[0].detach().cpu().numpy()
                     ),
                     "phi": phi,
                     "psi": psi,
@@ -831,6 +877,16 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     "u_psi_error": u_psi - sol,
                     "u_split_mismatch": u_phi - u_psi,
                 }
+                if evaluator.balance_projection.mode == "response_preconditioned":
+                    arrays["response_d0"] = (
+                        prediction.projection.response_baseline_difference[0]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    )
+                    arrays["response_kappa"] = (
+                        prediction.projection.response_gain[0].detach().cpu().numpy()
+                    )
                 if bool(prediction.batch.has_flux[0].item()):
                     target_phi = (
                         prediction.batch.flux_valid[0, 0].detach().cpu().numpy()

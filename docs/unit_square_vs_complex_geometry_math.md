@@ -353,7 +353,7 @@ split field를 만들기 위해 반드시 필요하다. 같은 geometry와 coeff
 \(\phi\), \(\psi\)의 적절한 분해도 달라지기 때문이다.
 
 Interval length effect는 source amplitude에 \(L^2\)를 미리 곱하는 방식이 아니라 geometry branch와
-unit-scaled coefficient context를 통해 network에 제공된다. \(L^2\) source conversion은 physical symmetric
+unit-scaled coefficient context를 통해 network에 제공된다. \(L^2\) source conversion은 physical balance
 projection이 끝난 뒤 Green reconstruction source를 만들 때 적용된다.
 
 ### Coefficient branch
@@ -462,6 +462,30 @@ Complex geometry에서 CouplingNet의 두 raw channel은 처음부터 physical
 \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\)를 나타낸다. PDE balance \(\phi+\psi=f\)는 physical
 domain에서의 equation이므로 symmetric projection도 이 physical raw fields에 직접 적용한다. Equal-half
 correction은 raw difference mode를 보존한다.
+
+Complex geometry의 opt-in response-preconditioned split은
+
+\[
+\sigma_x=L_x^2,
+\qquad
+\sigma_y=L_y^2,
+\]
+
+\[
+d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f,
+\qquad
+\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
+\]
+
+\[
+d_{\mathrm{RPS}}=d_0+\kappa
+(\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}})
+\]
+
+를 사용하고 \(\phi_{\mathrm{proj}}=(f+d_{\mathrm{RPS}})/2\),
+\(\psi_{\mathrm{proj}}=(f-d_{\mathrm{RPS}})/2\)로 정의한다. 따라서 symmetric와 RPS 모두
+physical balance를 정확히 만족하지만, RPS는 unequal axial response scale에서 difference mode의 baseline과
+gain을 바꾼다. Equal length에서는 \(d_0=0\), \(\kappa=1\)이므로 symmetric와 일치한다.
 
 Projection이 끝난 뒤에만 connected interval Green reconstruction을 위한 unit source를 만든다.
 

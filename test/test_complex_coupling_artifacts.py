@@ -74,8 +74,11 @@ def _write_zero_coefficients(path: Path) -> Path:
     return path
 
 
+@pytest.mark.parametrize("projection_mode", ["symmetric", "response_preconditioned"])
 def test_complex_artifact_export_writes_outputs_without_cross_fields(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
+    projection_mode,
 ):
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
@@ -87,7 +90,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         hidden_dim=4,
         depth=1,
         dtype=torch.float64,
-        balance_projection=BalanceProjectionConfig(mode="symmetric"),
+        balance_projection=BalanceProjectionConfig(mode=projection_mode),
         coefficient_terms=CouplingCoefficientTermsConfig(
             diffusion=True,
             convection=True,
@@ -126,7 +129,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     }
     config_payload["coupling_model"]["balance_projection"] = {
         "enabled": True,
-        "mode": "symmetric",
+        "mode": projection_mode,
     }
     config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
@@ -170,14 +173,23 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert summary["error_convention"] == "signed_difference"
     assert summary["solution_prediction"] == "u_pred=0.5*(u_phi+u_psi)"
     assert summary["raw_output_space"] == "physical"
-    assert summary["output_contract_version"] == 2
-    assert summary["balance_projection"] == {
-        "enabled": True,
-        "mode": "symmetric",
-        "space": "physical",
-        "residual_split": "equal_half",
-    }
-    assert summary["post_projection_unit_conversion"] == {
+    assert summary["output_contract_version"] == 4
+    assert summary["balance_projection"]["enabled"] is True
+    assert summary["balance_projection"]["mode"] == projection_mode
+    assert summary["balance_projection"]["space"] == "physical"
+    assert summary["balance_projection"]["uses_reference_targets"] is False
+    if projection_mode == "response_preconditioned":
+        assert "d0=" in summary["balance_projection"]["formula"]
+        assert (
+            "swapped_length_squared"
+            in summary["balance_projection"]["response_preconditioned_equivalence"]
+        )
+    else:
+        assert summary["balance_projection"]["formula"].startswith("d=p-q")
+        assert (
+            summary["balance_projection"]["response_preconditioned_equivalence"] is None
+        )
+    assert summary["reconstruction_owned_unit_conversion"] == {
         "phi": "Phi_unit=Lx^2*phi_physical",
         "psi": "Psi_unit=Ly^2*psi_physical",
     }
@@ -255,6 +267,17 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_raw_physical_psi") for key in raw.files)
     assert any(key.endswith("_projected_unit_phi") for key in raw.files)
     assert any(key.endswith("_projected_unit_psi") for key in raw.files)
+    assert any(key.endswith("_x_length_squared") for key in raw.files)
+    assert any(key.endswith("_y_length_squared") for key in raw.files)
+    assert any(key.endswith("_raw_difference") for key in raw.files)
+    assert any(key.endswith("_projected_difference") for key in raw.files)
+    assert not any(key.endswith("_raw_unit_phi") for key in raw.files)
+    if projection_mode == "response_preconditioned":
+        assert any(key.endswith("_response_d0") for key in raw.files)
+        assert any(key.endswith("_response_kappa") for key in raw.files)
+    else:
+        assert not any(key.endswith("_response_d0") for key in raw.files)
+        assert not any(key.endswith("_response_kappa") for key in raw.files)
     for suffix in (
         "_u_pred",
         "_u_pred_error",

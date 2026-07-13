@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, cast
@@ -252,7 +251,11 @@ class BalanceProjectionConfig:
     """CouplingNet output balance projection settings."""
 
     enabled: bool = True
-    mode: Literal["symmetric", "smooth_mask"] = "symmetric"
+    mode: Literal[
+        "symmetric",
+        "smooth_mask",
+        "response_preconditioned",
+    ] = "symmetric"
     mask: Literal["quadratic", "sin"] = "quadratic"
 
     def __post_init__(self) -> None:
@@ -262,12 +265,13 @@ class BalanceProjectionConfig:
         if mode == "geometry_weighted":
             raise ValueError(
                 "balance_projection.mode='geometry_weighted' has been removed. "
-                "Complex CouplingNet now requires physical symmetric projection; "
-                "retrain the complex CouplingNet with mode='symmetric'."
+                "Retrain ComplexCouplingNet with mode='symmetric' or "
+                "'response_preconditioned'."
             )
-        if mode not in {"symmetric", "smooth_mask"}:
+        if mode not in {"symmetric", "smooth_mask", "response_preconditioned"}:
             raise ValueError(
-                "balance_projection.mode must be 'symmetric' or 'smooth_mask'."
+                "balance_projection.mode must be 'symmetric', 'smooth_mask', "
+                "or 'response_preconditioned'."
             )
         if self.mask not in {"quadratic", "sin"}:
             raise ValueError("balance_projection.mask must be 'quadratic' or 'sin'.")
@@ -285,7 +289,11 @@ class BalanceProjectionConfig:
             return cls(
                 enabled=True,
                 mode=cast(
-                    Literal["symmetric", "smooth_mask"],
+                    Literal[
+                        "symmetric",
+                        "smooth_mask",
+                        "response_preconditioned",
+                    ],
                     raw,
                 ),
             )
@@ -296,15 +304,10 @@ class BalanceProjectionConfig:
                 "geometry_weighted_lambda",
             }.intersection(data)
             if retired_keys:
-                warnings.warn(
-                    "Ignoring retired balance_projection metadata: "
-                    f"{', '.join(sorted(retired_keys))}. Geometry-weighted "
-                    "projection has been removed.",
-                    DeprecationWarning,
-                    stacklevel=2,
+                raise ValueError(
+                    "Retired balance_projection fields have been removed: "
+                    f"{', '.join(sorted(retired_keys))}."
                 )
-                for key in retired_keys:
-                    data.pop(key)
             unknown = sorted(
                 set(data)
                 - {
@@ -329,7 +332,11 @@ class BalanceProjectionConfig:
             return cls(
                 enabled=enabled,
                 mode=cast(
-                    Literal["symmetric", "smooth_mask"],
+                    Literal[
+                        "symmetric",
+                        "smooth_mask",
+                        "response_preconditioned",
+                    ],
                     mode,
                 ),
                 mask=cast(Literal["quadratic", "sin"], mask),
@@ -350,7 +357,9 @@ class CouplingModelConfig:
     dropout: float = 0.0
     dtype: torch.dtype = torch.float64
     balance_projection: (
-        BalanceProjectionConfig | Literal["symmetric", "smooth_mask"] | dict[str, Any]
+        BalanceProjectionConfig
+        | Literal["symmetric", "smooth_mask", "response_preconditioned"]
+        | dict[str, Any]
     ) = field(default_factory=BalanceProjectionConfig)
     smooth_mask_normalize: bool = True
     smooth_mask_eps: float = 1.0e-12

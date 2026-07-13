@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Mapping
 from typing import Literal, cast
 
@@ -21,7 +20,7 @@ from greenonet.coupling_model import ActivationFactoryMixin, MLP
 class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
     """Source-conditioned CouplingNet for precomputed complex geometries."""
 
-    OUTPUT_CONTRACT_VERSION = 3
+    OUTPUT_CONTRACT_VERSION = 4
 
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
@@ -196,9 +195,10 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             raise ValueError(
                 "ComplexCouplingNet requires balance_projection.enabled=true."
             )
-        if balance_projection.mode != "symmetric":
+        if balance_projection.mode not in {"symmetric", "response_preconditioned"}:
             raise ValueError(
-                "ComplexCouplingNet supports only symmetric balance projection."
+                "ComplexCouplingNet supports only symmetric or "
+                "response_preconditioned balance projection."
             )
         if config.source_stencil_lift.enabled:
             raise ValueError("ComplexCouplingNet does not support source_stencil_lift.")
@@ -211,21 +211,17 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         self,
         state_dict: Mapping[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """Migrate compatible legacy output-contract markers to version 3."""
+        """Reject checkpoints that do not use the physical-raw v4 contract."""
 
         prepared = dict(state_dict)
         key = "_output_contract_version"
-        current_marker = self._output_contract_version.detach().clone()
         if key not in prepared:
-            warnings.warn(
-                "Migrating an unversioned legacy complex CouplingNet checkpoint "
-                "from the raw-unit output contract to output contract version 3. "
-                "The network parameters are unchanged.",
-                UserWarning,
-                stacklevel=2,
+            raise ValueError(
+                "Legacy complex CouplingNet checkpoint has no output contract "
+                "version and cannot be loaded into physical-raw output contract "
+                "version 4. Retrain the CouplingNet; GreenNet checkpoints remain "
+                "compatible."
             )
-            prepared[key] = current_marker
-            return prepared
 
         version_tensor = prepared[key]
         if version_tensor.numel() != 1:
@@ -236,34 +232,24 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         version = int(version_tensor.detach().cpu().item())
         if version == self.OUTPUT_CONTRACT_VERSION:
             return prepared
-        if version == 2:
-            warnings.warn(
-                "Migrating complex CouplingNet output contract version 2 "
-                "(raw physical output) to version 3 (raw unit output). The "
-                "network parameters are algebraically compatible and unchanged.",
-                UserWarning,
-                stacklevel=2,
-            )
-            prepared[key] = current_marker
-            return prepared
         raise ValueError(
             "Incompatible complex CouplingNet output contract version "
-            f"{version}; expected version 2 or {self.OUTPUT_CONTRACT_VERSION}, "
-            "or an unversioned legacy raw-unit checkpoint."
+            f"{version}; expected {self.OUTPUT_CONTRACT_VERSION}. Raw-unit and "
+            "earlier physical-raw CouplingNet checkpoints require retraining; "
+            "GreenNet checkpoints remain compatible."
         )
 
     def validate_checkpoint_state_dict(
         self,
         state_dict: Mapping[str, torch.Tensor],
     ) -> None:
-        """Validate the migrated raw-unit output contract marker."""
+        """Validate the physical-raw output contract marker."""
 
         key = "_output_contract_version"
         if key not in state_dict:
             raise ValueError(
                 "Complex CouplingNet checkpoint has no output contract version. "
-                "Load it through load_state_dict_auto so compatible legacy "
-                "checkpoints can be migrated explicitly."
+                "Physical-raw output contract version 4 is required."
             )
         version_tensor = state_dict[key]
         if version_tensor.numel() != 1:
@@ -283,24 +269,24 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         geometry: ComplexGeometryMetadata,
         x_source_branch: torch.Tensor,
         y_source_branch: torch.Tensor,
-        x_source_unit_norm: torch.Tensor,
-        y_source_unit_norm: torch.Tensor,
+        x_source_amplitude: torch.Tensor,
+        y_source_amplitude: torch.Tensor,
         x_coefficient_branch: torch.Tensor,
         y_coefficient_branch: torch.Tensor,
     ) -> torch.Tensor:
-        """Return raw unit-interval outputs shaped ``(B, 2, P)``."""
+        """Return raw physical source proposals shaped ``(B, 2, P)``."""
 
         phi = self._axis_forward(
             geometry=geometry,
             source_branch=x_source_branch,
-            source_unit_norm=x_source_unit_norm,
+            source_amplitude=x_source_amplitude,
             coefficient_branch=x_coefficient_branch,
             axis="x",
         )
         psi = self._axis_forward(
             geometry=geometry,
             source_branch=y_source_branch,
-            source_unit_norm=y_source_unit_norm,
+            source_amplitude=y_source_amplitude,
             coefficient_branch=y_coefficient_branch,
             axis="y",
         )
@@ -311,7 +297,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         *,
         geometry: ComplexGeometryMetadata,
         source_branch: torch.Tensor,
-        source_unit_norm: torch.Tensor,
+        source_amplitude: torch.Tensor,
         coefficient_branch: torch.Tensor,
         axis: Literal["x", "y"],
     ) -> torch.Tensor:
@@ -331,9 +317,9 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
                 f"{axis}_source_branch segment count {segment_count} does not match "
                 f"geometry count {expected_segments}."
             )
-        if source_unit_norm.shape != (bsz, segment_count):
+        if source_amplitude.shape != (bsz, segment_count):
             raise ValueError(
-                f"{axis}_source_unit_norm must have shape {(bsz, segment_count)}."
+                f"{axis}_source_amplitude must have shape {(bsz, segment_count)}."
             )
         expected_coeff_shape = (
             bsz,
@@ -369,7 +355,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         )
         trunk_features = trunk_features.unsqueeze(0).expand(bsz, -1, -1)
         output_tilde = (gathered_segment * trunk_features).sum(dim=-1)
-        return output_tilde * source_unit_norm[:, segment_id]
+        return output_tilde * source_amplitude[:, segment_id]
 
     @staticmethod
     def _trunk_coordinates(

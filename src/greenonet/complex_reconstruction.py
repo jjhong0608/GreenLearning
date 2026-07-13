@@ -12,25 +12,28 @@ from greenonet.green_interval import evaluate_green_pairs
 class ComplexReconstructionResult:
     u_phi_valid: torch.Tensor
     u_psi_valid: torch.Tensor
+    projected_unit: torch.Tensor
 
     @property
     def u_mean_valid(self) -> torch.Tensor:
         return 0.5 * (self.u_phi_valid + self.u_psi_valid)
 
 
-def reconstruct_from_projected_unit(
+def reconstruct_from_projected_physical(
     *,
     green_model: torch.nn.Module,
     geometry: ComplexGeometryMetadata,
-    projected_unit: torch.Tensor,
+    projected_physical: torch.Tensor,
     x_green_branch: torch.Tensor,
     y_green_branch: torch.Tensor,
 ) -> ComplexReconstructionResult:
-    if projected_unit.dim() != 3 or projected_unit.shape[1] != 2:
-        raise ValueError("projected_unit must have shape (B, 2, P).")
+    """Pull physical split sources back to unit intervals and reconstruct."""
+
+    projected_unit = _pull_back_projected_source(
+        projected_physical=projected_physical,
+        geometry=geometry,
+    )
     bsz, _axis, point_count = projected_unit.shape
-    if point_count != geometry.num_points:
-        raise ValueError("projected_unit point count does not match geometry.")
     u_phi = torch.zeros(
         (bsz, point_count), dtype=projected_unit.dtype, device=projected_unit.device
     )
@@ -55,7 +58,42 @@ def reconstruct_from_projected_unit(
         green_branch=y_green_branch,
         output_valid=u_psi,
     )
-    return ComplexReconstructionResult(u_phi_valid=u_phi, u_psi_valid=u_psi)
+    return ComplexReconstructionResult(
+        u_phi_valid=u_phi,
+        u_psi_valid=u_psi,
+        projected_unit=projected_unit,
+    )
+
+
+def _pull_back_projected_source(
+    *,
+    projected_physical: torch.Tensor,
+    geometry: ComplexGeometryMetadata,
+) -> torch.Tensor:
+    if projected_physical.dim() != 3 or projected_physical.shape[1] != 2:
+        raise ValueError("projected_physical must have shape (B, 2, P).")
+    if projected_physical.shape[-1] != geometry.num_points:
+        raise ValueError("projected_physical point count does not match geometry.")
+
+    x_length_squared = (
+        geometry.x_lengths_for_valid_points()
+        .to(device=projected_physical.device, dtype=projected_physical.dtype)
+        .square()
+    )
+    y_length_squared = (
+        geometry.y_lengths_for_valid_points()
+        .to(device=projected_physical.device, dtype=projected_physical.dtype)
+        .square()
+    )
+    if torch.any(x_length_squared <= 0.0) or torch.any(y_length_squared <= 0.0):
+        raise ValueError("Complex geometry segment lengths must be positive.")
+    return torch.stack(
+        (
+            projected_physical[:, 0] * x_length_squared.unsqueeze(0),
+            projected_physical[:, 1] * y_length_squared.unsqueeze(0),
+        ),
+        dim=1,
+    )
 
 
 def _reconstruct_axis(
