@@ -28,6 +28,11 @@ from greenonet.coupling_artifacts import (
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexLengthJumpBalanceConfig,
+    ComplexRelativeSplitConsistencyConfig,
+    ComplexWeakOperatorClosureConfig,
+    CouplingBestEnergyCheckpointConfig,
+    CouplingBestPhysicsCheckpointConfig,
     CouplingCoefficientTermsConfig,
 )
 from greenonet.io import load_model_with_config, load_state_dict_auto
@@ -467,6 +472,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         "target_psi",
         "phi_error",
         "psi_error",
+        "weak_residual_x",
+        "weak_residual_y",
+        "split_mass_relative_contribution",
     )
     SIGNED_FIGURE_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -476,6 +484,8 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "u_split_mismatch",
             "phi_error",
             "psi_error",
+            "weak_residual_x",
+            "weak_residual_y",
         }
     )
     FIGURE_TITLES: ClassVar[dict[str, str]] = {
@@ -494,6 +504,11 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         "target_psi": "Target psi",
         "phi_error": "Signed error phi - target_phi",
         "psi_error": "Signed error psi - target_psi",
+        "weak_residual_x": "Directional weak residual Bx(u_pred) - phi",
+        "weak_residual_y": "Directional weak residual By(u_pred) - psi",
+        "split_mass_relative_contribution": (
+            "Normalized pointwise split value mismatch"
+        ),
     }
 
     def __init__(
@@ -540,6 +555,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         evaluator = ComplexCouplingEvaluator(
             model=coupling_model,
             green_model=green_model,
+            config=configs.coupling_training,
             device=device,
             work_dir=self.request.outdir,
         )
@@ -571,15 +587,25 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         balance_projection = BalanceProjectionConfig.from_raw(
             configs.coupling_model.balance_projection
         )
+        length_jump = ComplexLengthJumpBalanceConfig.from_raw(
+            configs.coupling_training.length_jump_balance
+        )
+        relative_split = ComplexRelativeSplitConsistencyConfig.from_raw(
+            configs.coupling_training.relative_split_consistency
+        )
+        weak_closure = ComplexWeakOperatorClosureConfig.from_raw(
+            configs.coupling_training.weak_operator_closure
+        )
+        best_energy = CouplingBestEnergyCheckpointConfig.from_raw(
+            configs.coupling_training.best_energy_checkpoint
+        )
+        best_physics = CouplingBestPhysicsCheckpointConfig.from_raw(
+            configs.coupling_training.best_physics_checkpoint
+        )
         projection_formula = (
-            "d=p-q; phi=(f+d)/2; psi=(f-d)/2"
-            if balance_projection.mode == "symmetric"
-            else (
-                "d0=(Ly^2-Lx^2)f/(Lx^2+Ly^2); "
-                "kappa=4Lx^2Ly^2/(Lx^2+Ly^2)^2; "
-                "d_final=d0+kappa(p-q); "
-                "phi=(f+d_final)/2; psi=(f-d_final)/2"
-            )
+            "s=max(Lx^2,Ly^2); a=Ly^2/s; b=Lx^2/s; "
+            "c=Lx^2*Ly^2*f/s; R=a*P+b*Q-c; "
+            "Phi=P-a*R/(a^2+b^2); Psi=Q-b*R/(a^2+b^2)"
         )
         summary = {
             "geometry_mode": "complex",
@@ -620,24 +646,53 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             ),
             "error_convention": "signed_difference",
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
-            "raw_output_space": "physical",
+            "raw_output_space": "unit_response",
             "output_contract_version": ComplexCouplingNet.OUTPUT_CONTRACT_VERSION,
             "balance_projection": {
                 "enabled": balance_projection.enabled,
                 "mode": balance_projection.mode,
-                "space": "physical",
+                "space": "unit_response",
                 "formula": projection_formula,
+                "constraint": "Phi/Lx^2 + Psi/Ly^2 = rhs",
                 "uses_reference_targets": False,
-                "response_preconditioned_equivalence": (
-                    "retired swapped_length_squared geometry-weighted rule at lambda=1"
-                    if balance_projection.mode == "response_preconditioned"
-                    else None
-                ),
             },
-            "reconstruction_owned_unit_conversion": {
-                "phi": "Phi_unit=Lx^2*phi_physical",
-                "psi": "Psi_unit=Ly^2*psi_physical",
+            "reconstruction_response_input": {
+                "phi": "projected Phi is used directly",
+                "psi": "projected Psi is used directly",
+                "additional_length_scaling": False,
             },
+            "length_jump_balance": {
+                "enabled": length_jump.enabled,
+                "log_sigma_jump_threshold": length_jump.log_sigma_jump_threshold,
+                "transition_fraction": length_jump.transition_fraction,
+                "eps": length_jump.eps,
+                "checkpoint_metric": "loss_energy_length_balanced",
+            },
+            "relative_split_consistency": {
+                "enabled": relative_split.enabled,
+                "weight": relative_split.weight,
+                "mass_weight": relative_split.mass_weight,
+                "eps": relative_split.eps,
+                "source_normalization": "physical_rhs_l2_squared",
+                "domain_length_scale": "max_global_extent",
+                "uses_reference_targets": False,
+            },
+            "weak_operator_closure": {
+                "enabled": weak_closure.enabled,
+                "weight": weak_closure.weight,
+                "eps": weak_closure.eps,
+                "trial_solution": "u_pred=0.5*(u_phi+u_psi)",
+                "test_space": "directional_segment_p1_nodal",
+                "coefficient_evaluation": "direct_at_physical_element_midpoints",
+                "reaction_split": "c/2_per_direction",
+                "uses_reference_targets": False,
+            },
+            "checkpoint_selection": {
+                "best_energy": best_energy.enabled,
+                "best_physics": best_physics.enabled,
+                "reference_metric_used": False,
+            },
+            "reference_targets_used_for_training": False,
             "non_error_color_range_policy": self.COLOR_RANGE_POLICY,
             "non_error_color_range_groups": {
                 name: list(fields) for name, fields in self.COLOR_RANGE_GROUPS.items()
@@ -650,7 +705,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 "space": "physical",
                 "normalization": "unit_coordinate_l2_of_physical_source",
                 "amplitude": "A=sqrt(integral_0^1 f_phys(s(t))^2 dt)",
-                "model_output_scaling": "physical_amplitude_only",
+                "model_output_scaling": "primary_length_squared_times_physical_amplitude",
             },
             "coefficient_terms": {
                 "diffusion": configs.coupling_model.coefficient_terms.diffusion,
@@ -676,10 +731,13 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "transverse_trunk": {
                 "enabled": axis_1d_trunk.transverse_trunk.enabled,
                 "fusion": axis_1d_trunk.transverse_trunk.fusion,
-                "coordinate": {
-                    "x_path": "y_local_t",
-                    "y_path": "x_local_t",
-                },
+                "length_context": axis_1d_trunk.transverse_trunk.length_context,
+                "features": [
+                    "t_perpendicular",
+                    "log(L_perpendicular/L_ref)",
+                    "log(L_parallel/L_perpendicular)",
+                    "kappa",
+                ],
             },
         }
         (self.request.outdir / "summary.json").write_text(
@@ -833,20 +891,20 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     "coords_valid": coords,
                     "rhs": rhs,
                     "sol": sol,
-                    "raw_physical_phi": (
-                        prediction.raw_physical[0, 0].detach().cpu().numpy()
+                    "raw_response_phi": (
+                        prediction.raw_response[0, 0].detach().cpu().numpy()
                     ),
-                    "raw_physical_psi": (
-                        prediction.raw_physical[0, 1].detach().cpu().numpy()
+                    "raw_response_psi": (
+                        prediction.raw_response[0, 1].detach().cpu().numpy()
                     ),
-                    "projected_unit_phi": (
-                        prediction.reconstruction.projected_unit[0, 0]
+                    "projected_response_phi": (
+                        prediction.projection.projected_response[0, 0]
                         .detach()
                         .cpu()
                         .numpy()
                     ),
-                    "projected_unit_psi": (
-                        prediction.reconstruction.projected_unit[0, 1]
+                    "projected_response_psi": (
+                        prediction.projection.projected_response[0, 1]
                         .detach()
                         .cpu()
                         .numpy()
@@ -862,8 +920,23 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                         .cpu()
                         .numpy()
                     ),
-                    "raw_balance_residual": (
-                        prediction.projection.balance_residual[0].detach().cpu().numpy()
+                    "raw_response_constraint_residual": (
+                        prediction.projection.raw_response_constraint_residual[0]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    ),
+                    "response_constraint_residual": (
+                        prediction.projection.response_constraint_residual[0]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    ),
+                    "physical_balance_residual": (
+                        prediction.projection.physical_balance_residual[0]
+                        .detach()
+                        .cpu()
+                        .numpy()
                     ),
                     "phi": phi,
                     "psi": psi,
@@ -877,16 +950,72 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     "u_psi_error": u_psi - sol,
                     "u_split_mismatch": u_phi - u_psi,
                 }
-                if evaluator.balance_projection.mode == "response_preconditioned":
-                    arrays["response_d0"] = (
-                        prediction.projection.response_baseline_difference[0]
-                        .detach()
+                if prediction.objective.relative_split is not None:
+                    relative = prediction.objective.relative_split
+                    split_residual = u_phi - u_psi
+                    point_area = float(
+                        (
+                            prediction.batch.geometry.hx * prediction.batch.geometry.hy
+                        ).item()
+                    )
+                    denominator = float(
+                        relative.rhs_l2_squared_per_sample[0].item()
+                        + evaluator.relative_split_config.eps
+                    )
+                    domain_scale = float(relative.domain_length_scale.item())
+                    arrays["split_mass_relative_contribution"] = (
+                        evaluator.relative_split_config.weight
+                        * evaluator.relative_split_config.mass_weight
+                        * point_area
+                        * np.square(split_residual)
+                        / (domain_scale * domain_scale)
+                        / denominator
+                    )
+                if prediction.objective.weak_closure is not None:
+                    weak = prediction.objective.weak_closure
+                    arrays["weak_residual_x"] = (
+                        weak.x_residual[0].detach().cpu().numpy()
+                    )
+                    arrays["weak_residual_y"] = (
+                        weak.y_residual[0].detach().cpu().numpy()
+                    )
+                    arrays["weak_nodal_mass_x"] = (
+                        prediction.batch.weak_context.x.nodal_mass.detach()
                         .cpu()
                         .numpy()
                     )
-                    arrays["response_kappa"] = (
-                        prediction.projection.response_gain[0].detach().cpu().numpy()
+                    arrays["weak_nodal_mass_y"] = (
+                        prediction.batch.weak_context.y.nodal_mass.detach()
+                        .cpu()
+                        .numpy()
                     )
+                partition = evaluator.energy_partition(prediction.batch.geometry)
+                arrays["x_length_jump_score"] = partition.x_score.detach().cpu().numpy()
+                arrays["y_length_jump_score"] = partition.y_score.detach().cpu().numpy()
+                arrays["x_transition_edge_mask"] = (
+                    partition.x_transition_mask.detach().cpu().numpy()
+                )
+                arrays["y_transition_edge_mask"] = (
+                    partition.y_transition_mask.detach().cpu().numpy()
+                )
+                arrays["x_transverse_length_context"] = (
+                    evaluator.model.transverse_length_context_features(
+                        prediction.batch.geometry,
+                        "x",
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+                arrays["y_transverse_length_context"] = (
+                    evaluator.model.transverse_length_context_features(
+                        prediction.batch.geometry,
+                        "y",
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
                 if bool(prediction.batch.has_flux[0].item()):
                     target_phi = (
                         prediction.batch.flux_valid[0, 0].detach().cpu().numpy()
@@ -1075,7 +1204,16 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         metric_rows: list[dict[str, float | int | str]],
     ) -> dict[str, float]:
         aggregate: dict[str, float] = {}
-        for key in ("loss", "loss_energy_consistency", "rel_sol", "rel_flux"):
+        for key in (
+            "loss",
+            "loss_energy_consistency",
+            "loss_energy_length_balanced",
+            "loss_energy_regular",
+            "loss_energy_transition",
+            "transition_edge_fraction",
+            "rel_sol",
+            "rel_flux",
+        ):
             values = [float(row[key]) for row in metric_rows if key in row]
             if values:
                 aggregate[f"{key}_mean"] = float(np.mean(values))

@@ -1044,6 +1044,28 @@ same-segment edges.  That discrete construction should be understood as a
 finite-dimensional analogue of the continuous energy principle, not as a direct
 proof that the continuous \(H_0^1(\Omega)\) assumptions automatically hold.
 
+Output contract v5 uses the same physical edge-energy density but reports two
+discrete objectives.  The unweighted objective remains the direct graph analogue
+of \(\mathcal E_{\mathrm{split}}\).  The optimized objective separates regular and
+line-length transition edges using
+
+\[
+J_{ij}
+=
+\max\left(
+|\Delta\log L_x^2|,
+|\Delta\log L_y^2|
+\right)
+\]
+
+and normalizes the two edge groups independently before mixing them with a fixed
+positive fraction.  For a fixed finite geometry with positive group weights, this
+is a positive edge-weighted equivalent discrete seminorm: it changes the relative
+sampling emphasis of the graph energy, not the PDE operator, the balance
+constraint, or the target solution.  Reporting the original unweighted energy
+separately is therefore required for interpretation and comparison.  If either
+edge group is empty, the implementation uses the unweighted objective.
+
 ## 9. Why \(L^2\)-Consistency Is Insufficient
 
 The same proof cannot be obtained from an \(L^2\)-consistency loss alone.  If

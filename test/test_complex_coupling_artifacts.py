@@ -22,6 +22,7 @@ from greenonet.config import (
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     ModelConfig,
+    TransverseTrunkConfig,
 )
 from greenonet.coupling_artifacts import CouplingArtifactRequest
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
@@ -74,11 +75,9 @@ def _write_zero_coefficients(path: Path) -> Path:
     return path
 
 
-@pytest.mark.parametrize("projection_mode", ["symmetric", "response_preconditioned"])
 def test_complex_artifact_export_writes_outputs_without_cross_fields(
     tmp_path,
     monkeypatch,
-    projection_mode,
 ):
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
@@ -90,15 +89,21 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         hidden_dim=4,
         depth=1,
         dtype=torch.float64,
-        balance_projection=BalanceProjectionConfig(mode=projection_mode),
+        balance_projection=BalanceProjectionConfig(mode="response_space"),
         coefficient_terms=CouplingCoefficientTermsConfig(
             diffusion=True,
             convection=True,
             reaction=True,
         ),
         axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
             num_frequencies=2,
             max_frequency=2.0,
+            transverse_trunk=TransverseTrunkConfig(
+                enabled=True,
+                fusion="product",
+                length_context=True,
+            ),
         ),
     )
     green_cfg = ModelConfig(
@@ -129,8 +134,20 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     }
     config_payload["coupling_model"]["balance_projection"] = {
         "enabled": True,
-        "mode": projection_mode,
+        "mode": "response_space",
     }
+    config_payload["coupling_training"]["relative_split_consistency"] = {
+        "enabled": True,
+        "weight": 2.0,
+        "mass_weight": 3.0,
+        "eps": 1e-12,
+    }
+    config_payload["coupling_training"]["weak_operator_closure"] = {
+        "enabled": True,
+        "weight": 4.0,
+        "eps": 1e-12,
+    }
+    config_payload["coupling_training"]["best_physics_checkpoint"] = {"enabled": True}
     config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
 
@@ -168,30 +185,50 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "target_psi",
         "phi_error",
         "psi_error",
+        "weak_residual_x",
+        "weak_residual_y",
+        "split_mass_relative_contribution",
     }
     assert set(summary["figure_fields"]) == expected_figure_fields
     assert summary["error_convention"] == "signed_difference"
     assert summary["solution_prediction"] == "u_pred=0.5*(u_phi+u_psi)"
-    assert summary["raw_output_space"] == "physical"
-    assert summary["output_contract_version"] == 4
+    assert summary["raw_output_space"] == "unit_response"
+    assert summary["output_contract_version"] == 5
     assert summary["balance_projection"]["enabled"] is True
-    assert summary["balance_projection"]["mode"] == projection_mode
-    assert summary["balance_projection"]["space"] == "physical"
+    assert summary["balance_projection"]["mode"] == "response_space"
+    assert summary["balance_projection"]["space"] == "unit_response"
     assert summary["balance_projection"]["uses_reference_targets"] is False
-    if projection_mode == "response_preconditioned":
-        assert "d0=" in summary["balance_projection"]["formula"]
-        assert (
-            "swapped_length_squared"
-            in summary["balance_projection"]["response_preconditioned_equivalence"]
-        )
-    else:
-        assert summary["balance_projection"]["formula"].startswith("d=p-q")
-        assert (
-            summary["balance_projection"]["response_preconditioned_equivalence"] is None
-        )
-    assert summary["reconstruction_owned_unit_conversion"] == {
-        "phi": "Phi_unit=Lx^2*phi_physical",
-        "psi": "Psi_unit=Ly^2*psi_physical",
+    assert "R=a*P+b*Q-c" in summary["balance_projection"]["formula"]
+    assert summary["reconstruction_response_input"] == {
+        "phi": "projected Phi is used directly",
+        "psi": "projected Psi is used directly",
+        "additional_length_scaling": False,
+    }
+    assert summary["reference_targets_used_for_training"] is False
+    assert summary["length_jump_balance"]["enabled"] is True
+    assert summary["relative_split_consistency"] == {
+        "enabled": True,
+        "weight": 2.0,
+        "mass_weight": 3.0,
+        "eps": 1e-12,
+        "source_normalization": "physical_rhs_l2_squared",
+        "domain_length_scale": "max_global_extent",
+        "uses_reference_targets": False,
+    }
+    assert summary["weak_operator_closure"] == {
+        "enabled": True,
+        "weight": 4.0,
+        "eps": 1e-12,
+        "trial_solution": "u_pred=0.5*(u_phi+u_psi)",
+        "test_space": "directional_segment_p1_nodal",
+        "coefficient_evaluation": "direct_at_physical_element_midpoints",
+        "reaction_split": "c/2_per_direction",
+        "uses_reference_targets": False,
+    }
+    assert summary["checkpoint_selection"] == {
+        "best_energy": True,
+        "best_physics": True,
+        "reference_metric_used": False,
     }
     assert (
         summary["non_error_color_range_policy"] == "shared_reference_prediction_groups"
@@ -243,12 +280,15 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         == "primary_segment_length"
     )
     assert summary["transverse_trunk"] == {
-        "enabled": False,
+        "enabled": True,
         "fusion": "product",
-        "coordinate": {
-            "x_path": "y_local_t",
-            "y_path": "x_local_t",
-        },
+        "length_context": True,
+        "features": [
+            "t_perpendicular",
+            "log(L_perpendicular/L_ref)",
+            "log(L_parallel/L_perpendicular)",
+            "kappa",
+        ],
     }
     for field in expected_figure_fields:
         assert (
@@ -263,21 +303,27 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert all("cross" not in key for key in rows[0])
 
     raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
-    assert any(key.endswith("_raw_physical_phi") for key in raw.files)
-    assert any(key.endswith("_raw_physical_psi") for key in raw.files)
-    assert any(key.endswith("_projected_unit_phi") for key in raw.files)
-    assert any(key.endswith("_projected_unit_psi") for key in raw.files)
+    assert any(key.endswith("_raw_response_phi") for key in raw.files)
+    assert any(key.endswith("_raw_response_psi") for key in raw.files)
+    assert any(key.endswith("_projected_response_phi") for key in raw.files)
+    assert any(key.endswith("_projected_response_psi") for key in raw.files)
     assert any(key.endswith("_x_length_squared") for key in raw.files)
     assert any(key.endswith("_y_length_squared") for key in raw.files)
     assert any(key.endswith("_raw_difference") for key in raw.files)
     assert any(key.endswith("_projected_difference") for key in raw.files)
-    assert not any(key.endswith("_raw_unit_phi") for key in raw.files)
-    if projection_mode == "response_preconditioned":
-        assert any(key.endswith("_response_d0") for key in raw.files)
-        assert any(key.endswith("_response_kappa") for key in raw.files)
-    else:
-        assert not any(key.endswith("_response_d0") for key in raw.files)
-        assert not any(key.endswith("_response_kappa") for key in raw.files)
+    assert any(key.endswith("_raw_response_constraint_residual") for key in raw.files)
+    assert any(key.endswith("_response_constraint_residual") for key in raw.files)
+    assert any(key.endswith("_x_length_jump_score") for key in raw.files)
+    assert any(key.endswith("_y_length_jump_score") for key in raw.files)
+    assert any(key.endswith("_x_transition_edge_mask") for key in raw.files)
+    assert any(key.endswith("_y_transition_edge_mask") for key in raw.files)
+    assert any(key.endswith("_x_transverse_length_context") for key in raw.files)
+    assert any(key.endswith("_y_transverse_length_context") for key in raw.files)
+    assert any(key.endswith("_weak_residual_x") for key in raw.files)
+    assert any(key.endswith("_weak_residual_y") for key in raw.files)
+    assert any(key.endswith("_weak_nodal_mass_x") for key in raw.files)
+    assert any(key.endswith("_weak_nodal_mass_y") for key in raw.files)
+    assert any(key.endswith("_split_mass_relative_contribution") for key in raw.files)
     for suffix in (
         "_u_pred",
         "_u_pred_error",

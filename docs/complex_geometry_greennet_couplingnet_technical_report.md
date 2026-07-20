@@ -799,11 +799,12 @@ A
 \right)^{1/2}.
 \]
 
-The source branch receives \(f_{\mathrm{phys}}/A\), and each directional model
-output is multiplied by \(A\). Consequently, CouplingNet returns raw physical split
-fields rather than raw unit Green sources. Segment length remains explicit in the
-geometry and coefficient context; the \(L^2\) source conversion is deferred until
-after physical projection.
+The source branch receives \(f_{\mathrm{phys}}/A\). Under output contract v5, the
+directional model outputs are multiplied by \(L_x^2A_x\) and \(L_y^2A_y\), so
+CouplingNet returns raw response fields \(P,Q\) in the same unit-interval source
+space consumed by the Green reconstruction. The deterministic response scaling
+removes the need for the network to infer the full inverse-response magnitude from
+the geometry branch alone.
 
 The coefficient branch encodes the local differential operator. Diffusion,
 convection, and reaction determine how forcing should be split and how it will
@@ -933,9 +934,23 @@ because the transverse interval for the horizontal split is vertical, while
 \psi\text{-path}: \qquad t_{\perp}=t_x,
 \]
 
-because the transverse interval for the vertical split is horizontal. The
-pointwise transverse trunk injects pointwise transverse boundary context that
-cannot be represented by the interval-level transverse branch.
+because the transverse interval for the vertical split is horizontal. The v5
+trunk does not use \(t_\perp\) alone. One shared MLP receives
+
+\[
+\left[
+t_\perp,
+\log\frac{L_\perp}{L_{\mathrm{ref}}},
+\log\frac{L_\parallel}{L_\perp},
+\frac{4L_\parallel^2L_\perp^2}
+{(L_\parallel^2+L_\perp^2)^2}
+\right].
+\]
+
+For the \(\phi\)-path,
+\((L_\parallel,L_\perp)=(L_x,L_y)\); for the \(\psi\)-path, the roles are
+swapped. Thus the pointwise trunk communicates both cross-axis boundary location
+and the relative response scales that can change sharply across a complex domain.
 
 Conceptually, CouplingNet uses
 
@@ -952,8 +967,9 @@ pointwise transverse trunk communicates how the orthogonal axial boundary
 structure constrains the same physical point.
 
 Together with the source, coefficient, geometry, and transverse branches, these
-trunk components produce raw physical split fields. These fields may not yet satisfy
-the balance relation exactly, so projection supplies the final physical correction.
+trunk components produce raw directional responses. These responses may not yet
+satisfy the balance relation exactly, so response-space projection supplies the
+constraint-preserving correction.
 
 ### Learnable Rational Activation
 
@@ -1019,91 +1035,65 @@ model the source-conditioned mapping from forcing and operator context to
 directional-split source fields.
 
 The rational activation therefore does not replace the analytic Green wrapping,
-the physical balance projection, or the Green reconstruction. It is a learnable
+the response-space balance projection, or the Green reconstruction. It is a learnable
 representation nonlinearity used inside the branch/trunk networks that feed
 those larger mathematical structures.
 
-## 6. Projection: Enforcing PDE Balance
+## 6. Response-Space Projection: Enforcing PDE Balance
 
-The split fields must satisfy
+Let \(\sigma_x=L_x^2\) and \(\sigma_y=L_y^2\). The model returns raw
+directional responses \(P,Q\), and the projected responses must satisfy
 
 \[
-\phi+\psi=f.
+\frac{\Phi}{\sigma_x}+\frac{\Psi}{\sigma_y}=f.
 \]
 
-A neural prediction need not satisfy this relation exactly. Projection enforces
-the balance in physical variables. Let \(\phi_{\mathrm{raw}}\) and
-\(\psi_{\mathrm{raw}}\) be the model's two raw physical split fields. Define the residual
+For stable evaluation, define
 
 \[
-r
-=
-f-\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}}.
-\]
-
-The symmetric balance projection assigns half of this residual to each component:
-
-\[
-\phi_{\mathrm{proj}}
-=
-\phi_{\mathrm{raw}}+\frac12 r,
-\]
-
-\[
-\psi_{\mathrm{proj}}
-=
-\psi_{\mathrm{raw}}+\frac12 r.
-\]
-
-Then
-
-\[
-\phi_{\mathrm{proj}}+\psi_{\mathrm{proj}}
-=
-f.
-\]
-
-This projection has a simple interpretation. CouplingNet is allowed to learn the
-difference mode between the two directions, while projection fixes the sum mode
-required by the PDE. The split is therefore constrained to be physically
-consistent before Green reconstruction is applied.
-
-For an opt-in ablation, response-preconditioned projection modifies only this
-difference mode. With \(\sigma_x=L_x^2\), \(\sigma_y=L_y^2\), define
-
-\[
-d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f,
+s=\max(\sigma_x,\sigma_y),
 \qquad
-\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
+a=\frac{\sigma_y}{s},
+\qquad
+b=\frac{\sigma_x}{s},
+\qquad
+c=\frac{\sigma_x\sigma_y}{s}f.
+\]
+
+The response-plane residual and orthogonal projection are
+
+\[
+R=aP+bQ-c,
 \]
 
 \[
-d_{\mathrm{RPS}}
-=d_0+\kappa(\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}}).
+\Phi=P-\frac{aR}{a^2+b^2},
+\qquad
+\Psi=Q-\frac{bR}{a^2+b^2}.
 \]
 
-Then \(\phi_{\mathrm{proj}}=(f+d_{\mathrm{RPS}})/2\) and
-\(\psi_{\mathrm{proj}}=(f-d_{\mathrm{RPS}})/2\). This preserves exact balance,
-reduces to symmetric projection for equal segment lengths, and uses no reference
-solution or reference split field. Symmetric remains the default; RPS must be
-evaluated through fresh paired training rather than a post-hoc checkpoint swap.
+Physical directional source fields are derived as
 
-The projection is applied directly in physical source variables. The equation
-\(\phi+\psi=f\) is a statement about the physical PDE on \(\Omega\), and the
-equal-half correction preserves the network's raw difference mode. Only after this
-projection are the Green reconstruction inputs formed as
-\(\Phi_{\mathrm{unit}}=L_x^2\phi_{\mathrm{proj}}\) and
-\(\Psi_{\mathrm{unit}}=L_y^2\psi_{\mathrm{proj}}\).
+\[
+\phi=\frac{\Phi}{\sigma_x},
+\qquad
+\psi=\frac{\Psi}{\sigma_y},
+\]
+
+which gives \(\phi+\psi=f\). Projection uses only the source, geometry, and raw
+network responses. It does not use reference solutions or reference split fields.
+The projected responses are already the normalized Green source quantities, so no
+additional \(L_x^2\) or \(L_y^2\) conversion follows projection.
 
 ## 7. Green Reconstruction and Final Solution
 
-After projection, each split field is passed through its axial Green
+After projection, each response field is passed through its axial Green
 reconstruction operator. The x-direction component gives
 
 \[
 u_\phi
 =
-\mathcal{G}_x[\phi_{\mathrm{proj}}],
+\mathcal{G}_x[\Phi],
 \]
 
 and the y-direction component gives
@@ -1111,7 +1101,7 @@ and the y-direction component gives
 \[
 u_\psi
 =
-\mathcal{G}_y[\psi_{\mathrm{proj}}].
+\mathcal{G}_y[\Psi].
 \]
 
 The final solution prediction is
@@ -1135,7 +1125,7 @@ u_\phi \approx u_\psi \approx u.
 \]
 
 Thus the framework does not ask CouplingNet to output \(u\) directly. Instead,
-CouplingNet outputs a physically balanced source decomposition, and GreenNet maps
+CouplingNet outputs a response-space balanced decomposition, and GreenNet maps
 that decomposition into solution space.
 
 ## 8. Training Objective and Evaluation Interpretation
@@ -1158,9 +1148,9 @@ one-dimensional solution \(v\). This objective encourages the learned kernel to
 behave as an operator, not merely as a table of values.
 
 CouplingNet training is interpreted through the solution consistency induced by
-the projected split fields. Once \(\phi_{\mathrm{proj}}\) and
-\(\psi_{\mathrm{proj}}\) are obtained, the two represented solutions
-\(u_\phi\) and \(u_\psi\) should agree. A natural energy interpretation is
+the projected response fields. Once \(\Phi\) and \(\Psi\) are obtained, the two
+represented solutions \(u_\phi\) and \(u_\psi\) should agree. A natural energy
+interpretation is
 
 \[
 \mathcal{E}_{\mathrm{split}}
@@ -1173,6 +1163,25 @@ a\,\left|\nabla(u_\phi-u_\psi)\right|^2
 This expression penalizes disagreement between the two axial reconstructions in
 the diffusion-weighted energy geometry of the PDE. It is stronger than comparing
 only pointwise values because it also measures gradient-level inconsistency.
+
+In v5, the same physical edge-energy density is grouped by the geometry score
+
+\[
+J_{ij}
+=
+\max\left(
+|\Delta\log L_x^2|,
+|\Delta\log L_y^2|
+\right).
+\]
+
+Regular and transition edge sums are normalized independently and mixed with a
+configured transition fraction. The unweighted energy remains an audit metric.
+This positive reweighting changes how the discrete seminorm samples the geometry;
+it does not alter the PDE balance or add a reference target. Reference
+\(u,\phi,\psi\) fields are detached evaluation metrics only, and the best complex
+checkpoint is selected by validation balanced energy rather than relative solution
+error.
 
 The final solution error is interpreted by comparing
 
@@ -1372,25 +1381,25 @@ The following mathematical algorithm summarizes the framework.
    f_{\mathrm{unit}}(\eta)\,d\eta
    \]
    reconstructs the interval solution.
-7. Use CouplingNet to predict raw direction-split source components from source,
-   coefficient, geometry, transverse position, and local coordinate information.
-8. Apply the configured physical balance projection, symmetric by default or
-   response-preconditioned for a paired ablation, so that
+7. Use CouplingNet to predict raw directional responses from the normalized
+   physical source, coefficients, geometry, fixed-line position, primary local
+   coordinate, and pointwise cross-axis length context.
+8. Orthogonally project the response pair so that
    \[
-   \phi_{\mathrm{proj}}+\psi_{\mathrm{proj}}=f.
+   \frac{\Phi}{L_x^2}+\frac{\Psi}{L_y^2}=f.
    \]
 9. Reconstruct represented solutions:
    \[
-   u_\phi=\mathcal{G}_x[\phi_{\mathrm{proj}}],
+   u_\phi=\mathcal{G}_x[\Phi],
    \qquad
-   u_\psi=\mathcal{G}_y[\psi_{\mathrm{proj}}].
+   u_\psi=\mathcal{G}_y[\Psi].
    \]
 10. Form the final solution prediction:
     \[
     u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi).
     \]
-11. Evaluate solution accuracy, split-field accuracy when available, and
-    energy consistency between \(u_\phi\) and \(u_\psi\).
+11. Optimize length-jump-balanced energy consistency and evaluate the unweighted
+    energy plus detached solution/split accuracy when references are available.
 
 This algorithm emphasizes that GreenNet and CouplingNet do not solve the same
 subproblem. GreenNet learns axial solution operators. CouplingNet learns how the
@@ -1415,13 +1424,13 @@ presentation.
    The kernel is evaluated on \((t,\eta)\in[0,1]^2\), while physical length
    effects enter through coefficient and source scaling.
 
-4. **CouplingNet learns a source-conditioned split of the forcing.**
-   The model does not output the solution directly. It predicts the direction
-   split fields that will become Green reconstruction sources.
+4. **CouplingNet learns source-conditioned directional responses.**
+   The model does not output the solution directly. It predicts two axis-scaled
+   response fields that become Green reconstruction sources after projection.
 
-5. **Projection enforces physical balance.**
-   The relation \(\phi+\psi=f\) is imposed directly on the raw physical split
-   prediction, before axis-specific \(L^2\) conversion for Green reconstruction.
+5. **Projection enforces balance in response space.**
+   The relation \(\Phi/L_x^2+\Psi/L_y^2=f\) is imposed directly, and Green
+   reconstruction consumes \(\Phi,\Psi\) without another length conversion.
 
 6. **The final solution is reconstructed, not directly regressed.**
    The prediction
@@ -1430,9 +1439,9 @@ presentation.
    \]
    is obtained after applying Green reconstruction to the projected split fields.
 
-7. **Energy consistency links the two axial reconstructions.**
+7. **Length-jump-balanced energy links the two axial reconstructions.**
    The disagreement \(u_\phi-u_\psi\) is measured in a diffusion-weighted energy
-   sense, reflecting the elliptic structure of the PDE.
+   sense, while transition and regular edge groups are normalized separately.
 
 8. **Disconnected intervals are separate Green domains.**
    This is essential for annular or multiply connected geometries, where a
@@ -1440,5 +1449,5 @@ presentation.
 
 These messages form a coherent presentation narrative: complex geometry produces
 connected axial intervals; GreenNet learns the interval-wise solution operators;
-CouplingNet learns the balanced source decomposition; projection enforces the PDE
+CouplingNet learns the balanced response decomposition; projection enforces the PDE
 constraint; Green reconstruction produces the final solution.

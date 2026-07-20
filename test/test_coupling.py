@@ -12,7 +12,10 @@ from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexRelativeSplitConsistencyConfig,
+    ComplexWeakOperatorClosureConfig,
     CouplingBranchFusionConfig,
+    CouplingBestPhysicsCheckpointConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
     CouplingLossTermConfig,
@@ -1899,6 +1902,7 @@ def test_axis_1d_trunk_config_defaults():
     assert cfg.axis_1d_trunk.max_frequency == 8.0
     assert cfg.axis_1d_trunk.transverse_trunk.enabled is False
     assert cfg.axis_1d_trunk.transverse_trunk.fusion == "product"
+    assert cfg.axis_1d_trunk.transverse_trunk.length_context is False
 
 
 def test_axis_1d_trunk_extends_model_with_shared_1d_trunk():
@@ -2259,17 +2263,22 @@ def test_balance_projection_config_rejects_retired_geometry_weighted_mode():
         )
 
 
-def test_response_preconditioned_config_is_complex_only():
+def test_response_space_config_is_complex_only():
     config = CouplingModelConfig(
         balance_projection={
             "enabled": True,
-            "mode": "response_preconditioned",
+            "mode": "response_space",
         }
     )
 
-    assert config.balance_projection.mode == "response_preconditioned"
+    assert config.balance_projection.mode == "response_space"
     with pytest.raises(ValueError, match="only for ComplexCouplingNet"):
         CouplingNet(config)
+
+
+def test_retired_response_preconditioned_config_is_rejected():
+    with pytest.raises(ValueError, match="removed.*response_space"):
+        BalanceProjectionConfig.from_raw("response_preconditioned")
 
 
 def test_balance_projection_config_rejects_invalid_mask():
@@ -3011,6 +3020,34 @@ def test_coupling_trainer_compile_enabled_calls_torch_compile(tmp_path, monkeypa
     )
 
     assert compiled["count"] == 1
+
+
+@pytest.mark.parametrize(
+    "config",
+    (
+        CouplingTrainingConfig(
+            relative_split_consistency=ComplexRelativeSplitConsistencyConfig(
+                enabled=True
+            )
+        ),
+        CouplingTrainingConfig(
+            weak_operator_closure=ComplexWeakOperatorClosureConfig(enabled=True)
+        ),
+        CouplingTrainingConfig(
+            best_physics_checkpoint=CouplingBestPhysicsCheckpointConfig(enabled=True)
+        ),
+    ),
+)
+def test_unit_square_trainer_rejects_complex_physics_options(tmp_path, config):
+    model_cfg = CouplingModelConfig(branch_input_dim=3, hidden_dim=8, depth=2)
+    with pytest.raises(ValueError, match="only for ComplexCouplingTrainer"):
+        CouplingTrainer(
+            model=CouplingNet(model_cfg),
+            config=config,
+            work_dir=tmp_path,
+            green_kernel=torch.zeros((2, 1, 3, 3), dtype=torch.float64),
+            model_cfg=model_cfg,
+        )
 
 
 def test_coupling_trainer_saves_periodic_adam_checkpoints(tmp_path):

@@ -16,16 +16,33 @@ from greenonet.complex_coupling_data import (
     complex_coupling_collate_fn,
 )
 from greenonet.complex_coupling_model import ComplexCouplingNet
-from greenonet.complex_losses import physical_edge_energy_loss, relative_l2_valid
+from greenonet.complex_coupling_objective import (
+    ComplexCouplingObjectiveResult,
+    compute_complex_coupling_objective,
+)
+from greenonet.complex_losses import (
+    ComplexLengthJumpPartition,
+    build_length_jump_partition,
+    relative_l2_valid,
+)
 from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
 )
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
-    reconstruct_from_projected_physical,
+    reconstruct_from_projected_response,
 )
-from greenonet.config import BalanceProjectionConfig, CouplingTrainingConfig
+from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
+from greenonet.config import (
+    BalanceProjectionConfig,
+    ComplexLengthJumpBalanceConfig,
+    ComplexRelativeSplitConsistencyConfig,
+    ComplexWeakOperatorClosureConfig,
+    CouplingBestEnergyCheckpointConfig,
+    CouplingBestPhysicsCheckpointConfig,
+    CouplingTrainingConfig,
+)
 from greenonet.io import save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
 
@@ -36,6 +53,7 @@ class ComplexForwardResult:
     metrics: dict[str, torch.Tensor]
     projection: ComplexProjectionResult
     reconstruction: ComplexReconstructionResult
+    objective: ComplexCouplingObjectiveResult
 
 
 class ComplexCouplingTrainer(LoggingMixin):
@@ -44,8 +62,19 @@ class ComplexCouplingTrainer(LoggingMixin):
     _METRIC_KEYS: tuple[str, ...] = (
         "loss",
         "loss_energy_consistency",
+        "loss_energy_length_balanced",
+        "loss_energy_regular",
+        "loss_energy_transition",
+        "transition_edge_fraction",
+        "loss_split_relative",
+        "loss_split_energy_relative",
+        "loss_split_mass_relative",
+        "loss_weak_operator_closure",
+        "loss_weak_operator_x",
+        "loss_weak_operator_y",
         "rel_sol",
         "rel_flux",
+        "learning_rate",
     )
 
     def __init__(
@@ -62,6 +91,32 @@ class ComplexCouplingTrainer(LoggingMixin):
             model.config.balance_projection
         )
         self.config = config
+        self.length_jump_config = ComplexLengthJumpBalanceConfig.from_raw(
+            config.length_jump_balance
+        )
+        self.relative_split_config = ComplexRelativeSplitConsistencyConfig.from_raw(
+            config.relative_split_consistency
+        )
+        self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
+            config.weak_operator_closure
+        )
+        self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
+            config.best_energy_checkpoint
+        )
+        self.best_physics_checkpoint = CouplingBestPhysicsCheckpointConfig.from_raw(
+            config.best_physics_checkpoint
+        )
+        if not self.length_jump_config.enabled:
+            raise ValueError(
+                "ComplexCouplingTrainer output-contract version 5 requires "
+                "coupling_training.length_jump_balance.enabled=true."
+            )
+        if config.best_rel_sol_checkpoint.enabled:
+            raise ValueError(
+                "Complex mode does not allow best_rel_sol_checkpoint because "
+                "reference sol must not select a training checkpoint. Use "
+                "best_energy_checkpoint instead."
+            )
         self.green_model = green_model
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +139,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             parameter.requires_grad_(False)
         self.loss_history: list[float] = []
         self.metric_rows: list[dict[str, float | int | str]] = []
+        self._length_jump_partition: ComplexLengthJumpPartition | None = None
 
     def train(
         self,
@@ -106,32 +162,51 @@ class ComplexCouplingTrainer(LoggingMixin):
                 collate_fn=complex_coupling_collate_fn,
             )
         )
+        schedule_config = CouplingLearningRateSchedule.from_config(
+            self.config,
+            total_epochs=self.config.epochs,
+        )
         optimizer = optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
         )
-        best_val_rel_sol: float | None = None
+        scheduler = schedule_config.build(optimizer)
+        self._log_learning_rate_schedule(schedule_config)
+        best_val_energy: float | None = None
+        best_val_physics: float | None = None
         for epoch in range(1, self.config.epochs + 1):
+            learning_rate = float(optimizer.param_groups[0]["lr"])
             train_metrics = self._run_epoch(train_loader, optimizer=optimizer)
+            train_metrics["learning_rate"] = learning_rate
             self.loss_history.append(float(train_metrics["loss"]))
             self._record_metrics(epoch, "train", train_metrics)
             if epoch % self.config.log_interval == 0:
                 self._log_epoch(epoch, "train", train_metrics)
             if validation_loader is not None:
                 val_metrics = self._evaluate_loader(validation_loader)
+                val_metrics["learning_rate"] = learning_rate
                 self._record_metrics(epoch, "val", val_metrics)
                 if epoch % self.config.log_interval == 0:
                     self._log_epoch(epoch, "val", val_metrics)
-                if (
-                    self.config.best_rel_sol_checkpoint.enabled
-                    and "rel_sol" in val_metrics
-                ):
-                    rel_sol = float(val_metrics["rel_sol"])
-                    if best_val_rel_sol is None or rel_sol < best_val_rel_sol:
-                        best_val_rel_sol = rel_sol
+                if self.best_energy_checkpoint.enabled:
+                    validation_energy = float(
+                        val_metrics["loss_energy_length_balanced"]
+                    )
+                    if best_val_energy is None or validation_energy < best_val_energy:
+                        best_val_energy = validation_energy
                         self._save_checkpoint(
-                            "complex_coupling_model_best_rel_sol.safetensors"
+                            "complex_coupling_model_best_energy.safetensors"
+                        )
+                if self.best_physics_checkpoint.enabled:
+                    validation_physics = float(val_metrics["loss"])
+                    if (
+                        best_val_physics is None
+                        or validation_physics < best_val_physics
+                    ):
+                        best_val_physics = validation_physics
+                        self._save_checkpoint(
+                            "complex_coupling_model_best_physics.safetensors"
                         )
             if (
                 self.config.periodic_checkpoint.enabled
@@ -141,6 +216,8 @@ class ComplexCouplingTrainer(LoggingMixin):
                 self._save_checkpoint(
                     f"complex_coupling_model_epoch_{epoch:04d}.safetensors"
                 )
+            if scheduler is not None:
+                scheduler.step()
 
         self._save_checkpoint("complex_coupling_model.safetensors")
         self._save_checkpoint("coupling_model.safetensors")
@@ -154,7 +231,7 @@ class ComplexCouplingTrainer(LoggingMixin):
     ) -> dict[str, float]:
         self.model.train()
         totals: dict[str, float] = {}
-        batches = 0
+        samples = 0
         for batch in loader:
             batch = batch.to(self.device)
             optimizer.zero_grad(set_to_none=True)
@@ -166,9 +243,10 @@ class ComplexCouplingTrainer(LoggingMixin):
                     max_norm=self.config.gradient_clip_max_norm,
                 )
             optimizer.step()
-            self._accumulate(totals, result.metrics)
-            batches += 1
-        return self._average(totals, batches)
+            batch_size = int(batch.rhs_valid.shape[0])
+            self._accumulate(totals, result.metrics, batch_size=batch_size)
+            samples += batch_size
+        return self._average(totals, samples)
 
     def _evaluate_loader(
         self,
@@ -177,18 +255,20 @@ class ComplexCouplingTrainer(LoggingMixin):
         was_training = self.model.training
         self.model.eval()
         totals: dict[str, float] = {}
-        batches = 0
+        samples = 0
         with torch.no_grad():
             for batch in loader:
-                result = self._forward_batch(batch.to(self.device))
-                self._accumulate(totals, result.metrics)
-                batches += 1
+                batch = batch.to(self.device)
+                result = self._forward_batch(batch)
+                batch_size = int(batch.rhs_valid.shape[0])
+                self._accumulate(totals, result.metrics, batch_size=batch_size)
+                samples += batch_size
         if was_training:
             self.model.train()
-        return self._average(totals, batches)
+        return self._average(totals, samples)
 
     def _forward_batch(self, batch: ComplexCouplingBatch) -> ComplexForwardResult:
-        raw_physical = self.model(
+        raw_response = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
             y_source_branch=batch.y_source_branch,
@@ -198,33 +278,39 @@ class ComplexCouplingTrainer(LoggingMixin):
             y_coefficient_branch=batch.y_coefficient_branch,
         )
         projection = apply_complex_balance_projection(
-            raw_physical=raw_physical,
+            raw_response=raw_response,
             rhs_phys=batch.rhs_valid,
             geometry=batch.geometry,
             config=self.balance_projection,
         )
-        reconstruction = reconstruct_from_projected_physical(
+        reconstruction = reconstruct_from_projected_response(
             green_model=self.green_model,
             geometry=batch.geometry,
-            projected_physical=projection.projected_physical,
+            projected_response=projection.projected_response,
             x_green_branch=batch.x_green_branch,
             y_green_branch=batch.y_green_branch,
         )
-        loss_energy = physical_edge_energy_loss(
+        objective = compute_complex_coupling_objective(
             u_phi_valid=reconstruction.u_phi_valid,
             u_psi_valid=reconstruction.u_psi_valid,
+            rhs_valid=batch.rhs_valid,
+            projected_physical=projection.projected_physical,
             a_valid=batch.a_valid,
             geometry=batch.geometry,
+            weak_context=batch.weak_context,
+            length_jump_config=self.length_jump_config,
+            relative_split_config=self.relative_split_config,
+            weak_closure_config=self.weak_closure_config,
+            partition=self._energy_partition(batch),
         )
-        loss = loss_energy
+        loss = objective.loss
         metrics = {
-            "loss": loss.detach(),
-            "loss_energy_consistency": loss_energy.detach(),
-            "rel_sol": relative_l2_valid(
-                reconstruction.u_mean_valid,
-                batch.sol_valid,
-            ).detach(),
+            key: value.detach() for key, value in objective.metric_tensors().items()
         }
+        metrics["rel_sol"] = relative_l2_valid(
+            reconstruction.u_mean_valid,
+            batch.sol_valid,
+        ).detach()
         if torch.any(batch.has_flux):
             selected = batch.has_flux
             metrics["rel_flux"] = relative_l2_valid(
@@ -236,21 +322,35 @@ class ComplexCouplingTrainer(LoggingMixin):
             metrics=metrics,
             projection=projection,
             reconstruction=reconstruction,
+            objective=objective,
         )
+
+    def _energy_partition(
+        self,
+        batch: ComplexCouplingBatch,
+    ) -> ComplexLengthJumpPartition:
+        if self._length_jump_partition is None:
+            self._length_jump_partition = build_length_jump_partition(
+                batch.geometry,
+                self.length_jump_config,
+            )
+        return self._length_jump_partition
 
     @staticmethod
     def _accumulate(
         totals: dict[str, float],
         metrics: dict[str, torch.Tensor],
+        *,
+        batch_size: int,
     ) -> None:
         for key, value in metrics.items():
-            totals[key] = totals.get(key, 0.0) + float(value.item())
+            totals[key] = totals.get(key, 0.0) + batch_size * float(value.item())
 
     @staticmethod
-    def _average(totals: dict[str, float], batches: int) -> dict[str, float]:
-        if batches == 0:
-            raise ValueError("Cannot average zero complex coupling batches.")
-        return {key: value / batches for key, value in totals.items()}
+    def _average(totals: dict[str, float], samples: int) -> dict[str, float]:
+        if samples == 0:
+            raise ValueError("Cannot average zero complex coupling samples.")
+        return {key: value / samples for key, value in totals.items()}
 
     def _record_metrics(
         self,
@@ -274,6 +374,23 @@ class ComplexCouplingTrainer(LoggingMixin):
             f"{key}={metrics[key]:.6e}" for key in self._METRIC_KEYS if key in metrics
         ]
         self.logger.info("epoch %04d %s %s", epoch, split, " ".join(parts))
+
+    def _log_learning_rate_schedule(
+        self,
+        schedule: CouplingLearningRateSchedule,
+    ) -> None:
+        self.logger.info(
+            "learning-rate schedule enabled=%s kind=%s base_lr=%.6e "
+            "min_lr=%.6e configured_warmup_epochs=%d "
+            "effective_warmup_epochs=%d total_epochs=%d",
+            schedule.enabled,
+            schedule.kind,
+            schedule.base_learning_rate,
+            schedule.min_learning_rate,
+            schedule.configured_warmup_epochs,
+            schedule.effective_warmup_epochs,
+            schedule.total_epochs,
+        )
 
     def _save_checkpoint(self, filename: str) -> None:
         save_state_dict_safetensors(

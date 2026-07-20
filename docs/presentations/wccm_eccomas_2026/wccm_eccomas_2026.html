@@ -31,7 +31,7 @@
       vertical-align: middle;
     }
   </style>
-  <link rel="stylesheet" href="wccm_eccomas_2026_files/libs/revealjs/dist/theme/quarto-e63f5e3f9221d407e87fdaf942c37aea.css">
+  <link rel="stylesheet" href="wccm_eccomas_2026_files/libs/revealjs/dist/theme/quarto-8f1862240ac4eea414f1973404e556c9.css">
   <script>window.backupDefine = window.define; window.define = undefined;</script><script src="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"></script>
   <script>document.addEventListener("DOMContentLoaded", function () {
  var mathElements = document.getElementsByClassName("math");
@@ -161,7 +161,7 @@ A two-dimensional elliptic solver built from axial Green operators and a learned
 Junhong Jo
 </p>
 <p class="affiliation">
-National Institute for Mathematical Sciences
+<strong class="nims-initial">N</strong>ational <strong class="nims-initial">I</strong>nstitute for <strong class="nims-initial">M</strong>athematical <strong class="nims-initial">S</strong>ciences
 </p>
 <p>
 Joint work with Taeyoung Ha (NIMS) and Chang-Ock Lee (KAIST)
@@ -191,7 +191,11 @@ Recover
 </div>
 </div>
 <aside class="notes">
-<p>Open with the full thesis in one sentence after introducing Junhong Jo from the National Institute for Mathematical Sciences and the joint work with Taeyoung Ha from NIMS and Chang-Ock Lee from KAIST.</p>
+<p><strong>Target: 0:40 | Static slide</strong></p>
+<p>Good afternoon. I am Junhong Jo from the National Institute for Mathematical Sciences. This is joint work with Taeyoung Ha at NIMS and Chang-Ock Lee at KAIST.</p>
+<p>We solve multi-dimensional elliptic problems with two complementary components: GreenNet supplies line-wise Green inverses, and CouplingNet learns the directional source split that turns them into a two-dimensional solver. I will explain the construction and its numerical evidence.</p>
+<p><strong>If timing is tight:</strong> GreenNet provides line-wise inverses, while CouplingNet learns how to couple them.</p>
+<p><strong>Transition:</strong> Let me begin with the axial operator viewpoint.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -274,7 +278,14 @@ L_xu+L_yu=f.
 </div>
 </div>
 <aside class="notes">
-<p>This slide answers two questions: why is axial reduction useful, and what exactly is being reduced? Keep coefficient variation out of the sample narrative; source variation is the sample variation.</p>
+<p><strong>Target: 1:05 | Reveal the direct map, the directional split, and then the anchor sentence</strong></p>
+<p>In our setting, the coefficient functions <span class="math inline">a</span>, <span class="math inline">\mathbf b</span>, and <span class="math inline">c</span> are prescribed, while the source <span class="math inline">f</span> varies across samples. Our learning target is therefore the source-to-solution map <span class="math inline">f\mapsto u</span>.</p>
+<p><strong>Click:</strong> Representing this map directly over the full two-dimensional domain is high-dimensional and sensitive to geometry.</p>
+<p><strong>Click:</strong> We split the operator into <span class="math inline">L_x</span> and <span class="math inline">L_y</span>, with half of the reaction term in each direction, so that <span class="math inline">L_xu+L_yu=f</span>.</p>
+<p><strong>Click:</strong> GreenNet learns the directional line-wise inverses. CouplingNet learns how the source is divided between them. This is an operator and source decomposition, not merely a geometric slicing.</p>
+<p>The homogeneous boundary condition is enforced within each directional line problem.</p>
+<p><strong>If timing is tight:</strong> We replace one global source-to-solution map with directional inverses and learned coupling.</p>
+<p><strong>Transition:</strong> This diagram summarizes the resulting solver.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -363,7 +374,14 @@ f \xrightarrow{\mathrm{CouplingNet}}(\phi,\psi)
 </div>
 </div>
 <aside class="notes">
-<p>Use this as a visual roadmap only. Do not explain GreenNet analytic wrapping, CouplingNet branches, or energy bounds here. The slide should orient the audience: fixed 2D operator and varying source, axial line decomposition, line-wise Green kernels, learned directional source coupling, and 2D reconstruction.</p>
+<p><strong>Target: 0:50 | Reveal the roadmap from left to right</strong></p>
+<p>Here is the complete pipeline. A two-dimensional source is restricted to valid horizontal and vertical intersections.</p>
+<p><strong>Click:</strong> Each connected interval in both directions becomes an independent one-dimensional line problem.</p>
+<p><strong>Click: </strong>GreenNet maps its line source to a line solution through a Green kernel integral.</p>
+<p><strong>Click:</strong> Those independent inverses still need a directional source allocation.</p>
+<p><strong>Click:</strong> CouplingNet predicts <span class="math inline">\phi</span> and <span class="math inline">\psi</span>, routes them through the <span class="math inline">x</span>- and <span class="math inline">y</span>-direction Green reconstructions, and recovers a consistent two-dimensional solution.</p>
+<p><strong>If timing is tight:</strong> GreenNet solves along lines, and CouplingNet supplies the directional source allocation.</p>
+<p><strong>Transition:</strong> We first normalize every physical interval.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -470,7 +488,14 @@ t\in[0,1].
 </div>
 </div>
 <aside class="notes">
-<p>Do not re-derive the chain rule. The slide is the bridge: a physical 1D operator on a finite axial interval becomes a normalized unit-interval operator, with length re-entering through coefficient and source scaling.</p>
+<p><strong>Target: 0:55 | Reveal the physical operator, pull-back, scaling rules, and normalized equation</strong></p>
+<p>Axial intervals have different endpoints and physical lengths.</p>
+<p><strong>Click:</strong> We pull each coordinate <span class="math inline">s</span> back to <span class="math inline">t\in[0,1]</span> by <span class="math inline">s=s_0+Lt</span>, and write the normalized solution as <span class="math inline">v(t)=u(s_0+Lt)</span>.</p>
+<p><strong>Click:</strong> Normalization does not discard the length.</p>
+<p><strong>Click</strong>: Diffusion and convection scale with <span class="math inline">L</span>, while reaction and source scale with <span class="math inline">L^2</span>.</p>
+<p><strong>Click:</strong> The bottom equation is the same physical line problem on <span class="math inline">[0,1]</span>, with its operator and boundary locations retained.</p>
+<p><strong>If timing is tight:</strong> Every interval becomes <span class="math inline">[0,1]</span>, with its length retained through operator scaling.</p>
+<p><strong>Transition:</strong> On this normalized interval, GreenNet learns the inverse.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -541,7 +566,13 @@ v=\mathcal G_{\mathrm{unit}}[f_{\mathrm{unit}}].
 </div>
 </div>
 <aside class="notes">
-<p>Define Green operator explicitly. The audience should hear that the word Green operator means the integral source-to-solution action, not just a learned matrix.</p>
+<p><strong>Target: 0:45 | Reveal the contrast strip and then the Green integral action</strong></p>
+<p><strong>Click:</strong> A Green operator maps a line source to a line solution by integrating against a kernel. GreenNet learns this action on the unit interval.</p>
+<p><strong>Click:</strong> It is not a global two-dimensional Green function.</p>
+<p><strong>Click:</strong> The axial coefficient profiles specify the local one-dimensional operator, while <span class="math inline">t</span> and <span class="math inline">\eta</span> are the evaluation and source coordinates.</p>
+<p>GreenNet therefore learns a family of normalized axial kernels. The same model can be reused across the different axial intervals.</p>
+<p><strong>If timing is tight:</strong> GreenNet learns the unit-interval kernel integral for each axial operator.</p>
+<p><strong>Transition:</strong> We now build its singular structure into the model.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -606,7 +637,9 @@ Learn the smooth residual.
 <p>Analytic structure handles the singular terms before learning.</p>
 </div>
 <aside class="notes">
-<p>Start with the submitted-abstract motivation: for variable-coefficient operators, Green kernels are rarely available in closed form, and the source-point singularity plus homogeneous boundary constraints are hard for a plain neural network to learn from scratch. The audience should first see the three roles before seeing the full formula.</p>
+<p><strong>Slide 6, state 1 of 3 | About 0:25</strong></p>
+<p>For variable coefficients, the exact kernel is rarely available, but its singularity, derivative jump, and homogeneous boundary behavior are known. We therefore build these features in analytically.</p>
+<p><strong>Advance to the analytic identities.</strong></p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -667,7 +700,9 @@ S=J_0-\frac12E,
 <p>Analytic structure handles the singular terms before learning.</p>
 </div>
 <aside class="notes">
-<p>Explain only the two built-in analytic mechanisms. A(t)G0 supplies the Dirac delta jump and the corresponding flux-jump behavior. J0 is an antiderivative of G0, so S produces the derivative structure needed for Heaviside cancellation. Keep A and B definitions for Backup A if asked.</p>
+<p><strong>Slide 6, state 2 of 3 | About 0:30</strong></p>
+<p>The <span class="math inline">A(t)G_0</span> term supplies the Dirac-delta jump. The variable-coefficient operator also produces a Heaviside-type contribution, cancelled by <span class="math inline">B(t)(J_0-\frac12E)</span>, where <span class="math inline">J_0</span> is an antiderivative of <span class="math inline">G_0</span>.</p>
+<p><strong>Advance to the learned correction.</strong></p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -717,7 +752,11 @@ M(t)=1-t.
 <p>The neural network learns the smooth residual with boundary-compatible envelope factors.</p>
 </div>
 <aside class="notes">
-<p>End this slide by saying that the analytic component supplies the delta-induced jump, flux-jump behavior, and boundary structure before learning. The neural network is not responsible for inventing the Green function singularity; it only learns the smoother residual after the Dirac delta and Heaviside terms are built in.</p>
+<p><strong>Slide 6, state 3 of 3 | About 0:15</strong></p>
+<p>The network learns only the remaining smooth correction <span class="math inline">R_\theta</span>. Its envelope <span class="math inline">E(t,\eta)M(t)</span> makes that correction compatible with the endpoint conditions. Reaction effects also enter through this learned residual.</p>
+<p>The nonsmooth Green behavior is supplied analytically, while learning is reserved for the smoother residual.</p>
+<p><strong>If timing is tight:</strong> Analytic terms handle the jump and cancellation; the network learns the boundary-compatible smooth residual.</p>
+<p><strong>Transition:</strong> The kernel is trained through its source-to-solution action.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -787,7 +826,13 @@ G_\theta(t,\eta)f_{\mathrm{unit}}(\eta)\,d\eta.
 </div>
 </div>
 <aside class="notes">
-<p>The important distinction is that the label is not the exact kernel value. GreenNet is supervised by one-dimensional source-to-solution reconstruction pairs: reconstruct a generated target solution from the source generated by applying the unit operator to that target. CouplingNet is different: it is trained without reference-solution or split labels, using balance, Green reconstruction, and split-energy consistency.</p>
+<p><strong>Target: 0:50 | Reveal target generation, boundary enforcement, source generation, and reconstruction loss</strong></p>
+<p>GreenNet is supervised through reconstruction, not exact-kernel labels. We sample a smooth Gaussian-process profile and remove its endpoint interpolant to obtain a Dirichlet target <span class="math inline">v</span>. Applying the unit operator to <span class="math inline">v</span> generates a consistent source. Source and target are normalized by the same factor.</p>
+<p><strong>Click:</strong> GreenNet integrates that source against <span class="math inline">G_\theta</span>,</p>
+<p><strong>Click: </strong> and the loss compares the reconstruction <span class="math inline">v_\theta</span> with <span class="math inline">v</span>.</p>
+<p><strong>Click</strong>: Every generated pair satisfies the same one-dimensional boundary-value problem, even though no exact kernel values are used as labels.</p>
+<p><strong>If timing is tight:</strong> Consistent source-solution pairs supervise the learned Green operator action.</p>
+<p><strong>Transition:</strong> We can now test whether the kernel structure was learned.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -849,7 +894,10 @@ a(x,y)=1+\frac12\sin(2\pi x)\sin(2\pi y),\quad
   </div>
 </div>
 <aside class="notes">
-<p>This GreenNet-only evidence appears before CouplingNet is introduced. First show the reference and learned Green kernels, then use the signed error and diagnostics to argue that the learned kernel captures the singular Green structure for a reaction-free convection-diffusion line problem.</p>
+<p><strong>Slide 8, state 1 of 3 | About 0:25</strong></p>
+<p>This reaction-free convection-diffusion problem is used because its reference axial kernels are available. The displayed example is one representative vertical interval in the disk.</p>
+<p>First, the reference and learned heatmaps show that GreenNet captures the singular diagonal structure.</p>
+<p><strong>Advance to the fixed-<span class="math inline">\eta</span> slice.</strong></p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -907,7 +955,9 @@ a(x,y)=1+\frac12\sin(2\pi x)\sin(2\pi y),\quad
   </div>
 </div>
 <aside class="notes">
-<p>The second state enlarges the fixed-η slice. Keep the signed-error heatmap visible so the audience can connect the one-dimensional slice accuracy with the two-dimensional kernel error pattern.</p>
+<p><strong>Slide 8, state 2 of 3 | About 0:15</strong></p>
+<p>Next, the fixed-<span class="math inline">\eta</span> slice shows that the two curves nearly overlap, including near the singular point.</p>
+<p><strong>Advance to the takeaway.</strong></p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -968,7 +1018,10 @@ a(x,y)=1+\frac12\sin(2\pi x)\sin(2\pi y),\quad
 <p>The learned kernel captures the singular Green structure, and the signed error is not concentrated near the singular diagonal.</p>
 </div>
 <aside class="notes">
-<p>End the GreenNet block with the takeaway, then transition to CouplingNet: after validating the line-wise Green inverse, the remaining question is how to split the 2D source so that the line-wise inverses form a consistent two-dimensional solution.</p>
+<p><strong>Slide 8, state 3 of 3 | About 0:15</strong></p>
+<p>Finally, the signed-error heatmap and diagnostics show that error is not concentrated only near the diagonal. This indicates that the analytic wrapping has handled the singular structure as intended.</p>
+<p><strong>If timing is tight:</strong> The learned kernel captures the singular structure without diagonal-dominated error.</p>
+<p><strong>Transition:</strong> We now need to couple these line-wise inverses.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1050,7 +1103,15 @@ CouplingNet learns line-wise flux-divergence/source components that couple the a
 </p>
 </div>
 <aside class="notes">
-<p>This is the transition from GreenNet to CouplingNet. The exact split would use the reference solution, but the slide writes (u) to keep notation light. Connect the terminology to the submitted abstract: CouplingNet predicts horizontal and vertical line-wise flux-divergence, or source, components rather than predicting the solution directly. Do not discuss branch internals yet; those belong on Slide 8.</p>
+<p><strong>Target: 0:50 | Reveal the need for coupling, the directional components, and then balance</strong></p>
+<p>GreenNet provides the directional inverses, but it does not determine how the two-dimensional source is split into the <span class="math inline">x</span>- and <span class="math inline">y</span>-directional source components.</p>
+<p><strong>Click:</strong> CouplingNet predicts <span class="math inline">\phi</span> and <span class="math inline">\psi</span>, the horizontal and vertical flux-divergence or source components.</p>
+<p><strong>Click:</strong> With the reaction term divided equally,</p>
+<p><strong>Click:</strong> their physical balance is <span class="math inline">\phi+\psi=f</span>.</p>
+<p><strong>Click:</strong> CouplingNet predicts this split rather than the solution itself.</p>
+<p>Training uses neither reference-solution nor split labels. It is driven by balance, Green reconstruction, and split consistency; reference solutions are used only for evaluation.</p>
+<p><strong>If timing is tight:</strong> CouplingNet learns the balanced directional source components, not the solution.</p>
+<p><strong>Transition:</strong> Its inputs combine line profiles with pointwise coordinates.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1138,7 +1199,13 @@ Pointwise transverse trunk
 </div>
 </div>
 <aside class="notes">
-<p>Keep the slide conceptual: multiple branch nets process source, coefficient profiles, and line-geometry structure, while trunk nets process pointwise coordinates. Avoid the phrase “fixed operator context” on the visible slide. The coefficient field is fixed for the problem, but its axial profiles vary from line to line; the same operator-learning model is reused across lines. Emphasize why pointwise transverse information belongs in a trunk: it is coordinate-dependent.</p>
+<p><strong>Target: 0:50 | Reveal the predictor, branch nets, trunk nets, and combined map</strong></p>
+<p>CouplingNet separates profile-level and pointwise information.</p>
+<p><strong>Click:</strong> The branch nets encode the source, axial coefficient profiles, and line geometry. Although the coefficients are fixed for the problem, their profiles differ across lines.</p>
+<p><strong>Click:</strong> The trunk nets encode the pointwise positions within the primary and transverse axial intervals.</p>
+<p><strong>Click:</strong> Combining both representations at each point produces the directional split.</p>
+<p><strong>If timing is tight:</strong> Branches encode line profiles; trunks encode axial and transverse coordinates.</p>
+<p><strong>Transition:</strong> The predicted split is then balanced and reconstructed.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1248,7 +1315,19 @@ u_{\mathrm{pred}}.
 </div>
 </div>
 <aside class="notes">
-<p>Say explicitly that projection is applied to physical split variables, not unit-interval quantities. The raw split is not guaranteed balanced; the projection enforces (+=f) by distributing the residual symmetrically before the two Green reconstructions are averaged.</p>
+<p><strong>Target: 0:50 | Reveal the raw split, projection, balanced split, Green reconstructions, and average</strong></p>
+<p>GreenNet evaluates each axial inverse on the normalized unit interval. CouplingNet, however, must enforce the directional source balance in the original physical coordinates. The raw source components are therefore restored to the physical source scale before projection.</p>
+<p><strong>Click:</strong> The raw split need not satisfy <span class="math inline">\phi+\psi=f</span>.</p>
+<p><strong>Click:</strong> We form <span class="math display">
+r=f-(\phi_{\mathrm{raw}}+\psi_{\mathrm{raw}})
+</span> and add half of <span class="math inline">r</span> to each component.</p>
+<p><strong>Click:</strong> This gives a balanced split satisfying <span class="math inline">\phi+\psi=f</span>.</p>
+<p><strong>Click:</strong> The balanced components are then pulled back along their respective axial intervals and passed through <span class="math inline">G_x</span> and <span class="math inline">G_y</span>, producing <span class="math inline">u_\phi</span> and <span class="math inline">u_\psi</span>. Their average, <span class="math display">
+\frac12(u_\phi+u_\psi),
+</span> is the final prediction.</p>
+<p><strong>Click:</strong> The projection preserves the original source exactly while changing only its directional decomposition.</p>
+<p><strong>If timing is tight:</strong> GreenNet solves on normalized intervals, while projection enforces the source balance in physical coordinates before reconstruction.</p>
+<p><strong>Transition:</strong> Their agreement yields an energy-error interpretation.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1335,7 +1414,19 @@ u_*|_{\partial\Omega}=0.
 <p>Conditional on exact/controlled Green reconstruction and <span class="math inline">H_0^1(\Omega)</span>-admissible represented solutions.</p>
 </div>
 <aside class="notes">
-<p>Reveal the definitions before the bound: (a(x)) is the diffusion coefficient, (u_*) is the reference PDE solution, and (C_E) is a stability constant of the fixed elliptic operator. State the claim clearly but conditionally. Do not put proof variables on the main slide. Mention learned Green errors as perturbation terms if there is time.</p>
+<p><strong>Target: 1:05 | Introduce the unsupervised loss, then reveal the norm, split energy, reference solution, bound, and assumptions</strong></p>
+<p>CouplingNet is trained without reference-solution or directional-split labels. We therefore need a loss that can be computed from the two directional reconstructions alone.</p>
+<p><strong>Click:</strong> Since <span class="math inline">u_\phi</span> and <span class="math inline">u_\psi</span> are intended to represent the same physical solution, we measure their disagreement in the diffusion-weighted energy norm. Here, <span class="math inline">a</span> is the diffusion coefficient, and this norm captures gradient-level differences in the PDE scale.</p>
+<p><strong>Click:</strong> This gives the unsupervised split-energy loss, <span class="math display">
+\mathcal E_{\mathrm{split}}
+=
+\|u_\phi-u_\psi\|_a^2.
+</span></p>
+<p><strong>Click:</strong> For the theoretical analysis, let <span class="math inline">u_*</span> denote the exact reference solution. It does not enter the CouplingNet training loss.</p>
+<p><strong>Click:</strong> Why is this loss relevant to solution accuracy? Under the stated assumptions, it bounds the final energy error through the inequality shown here. The constant <span class="math inline">C_E</span> is a stability constant of the elliptic operator.</p>
+<p><strong>Click:</strong> This result is conditional on <span class="math inline">H_0^1(\Omega)</span> admissibility and exact or controlled Green reconstruction. It provides a structural justification for the unsupervised loss, rather than an unconditional guarantee.</p>
+<p><strong>If timing is tight:</strong> CouplingNet minimizes the energy disagreement between its two reconstructions. Under controlled Green reconstruction, this unsupervised loss bounds the final energy error.</p>
+<p><strong>Transition:</strong> We now evaluate the complete coupled solver.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1421,7 +1512,16 @@ c=\frac12\left(1+\frac12\cos(2\pi x)\cos(2\pi y)\right).
 <p>Quantile-selected samples show that the learned directional source split supports 2D solution reconstruction across the observed relative-error range, not only on a single favorable case.</p>
 </div>
 <aside class="notes">
-<p>Columns are selected by relative solution error quantiles from the convection-diffusion-reaction disk run: min, q25, q50, q75, and max. The source row is visible first; reference, prediction, and signed-error rows reveal one row at a time. The panels are intentionally title-free and axis-free; row and column labels live in the slide so the fields stay readable. Source fields use per-sample scales. Within each column, reference and prediction share one solution scale, while different columns use independent solution scales. The signed-error row uses one zero-centered diverging scale across the selected samples, preserving error-magnitude comparison. The metric card is visible from the start and labels the column quantity as relative solution error. GreenNet evidence remains a reaction-free convection-diffusion kernel validation because the reference axial Green kernel is available there; this slide is solver-level CDR evidence for CouplingNet.</p>
+<p><strong>Target: 1:15 | Reveal source, reference, prediction, signed error, and takeaway</strong></p>
+<p>This is the complete solver on a convection-diffusion-reaction disk problem. The five columns represent relative-error quantiles, from the minimum to the maximum, rather than one favorable sample.</p>
+<p><strong>Click:</strong> As the reference,</p>
+<p><strong>Click:</strong> prediction,</p>
+<p><strong>Click:</strong> and signed-error rows appear, the predictions follow the reference solutions across this range.</p>
+<p>Reference and prediction share a solution scale within each sample, while signed errors use one common zero-centered scale across all five columns.</p>
+<p>The metric card reports both relative solution error and split-energy loss. Relative errors range from about 2.3 to 7 percent.</p>
+<p><strong>Click:</strong> These examples show that the learned source split supports reconstruction across the observed test-error distribution.</p>
+<p><strong>If timing is tight:</strong> Quantile-selected cases show reconstruction across the observed error range.</p>
+<p><strong>Transition:</strong> I will close with the four main contributions.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1474,7 +1574,16 @@ GreenNet supplies line-wise Green inverses;<br>CouplingNet learns the source spl
 </p>
 </div>
 <aside class="notes">
-<p>End with the solver decomposition, not implementation. The reference solution is not used to train CouplingNet; reference solutions are used only for evaluation. CouplingNet is trained through balance, Green reconstruction, and split consistency. More precisely, the CouplingNet optimization loss is split-energy consistency after projection and Green reconstruction.</p>
+<p><strong>Target: 0:40 | Reveal the thesis, four contribution blocks, and closing banner</strong></p>
+<p>The method has four pieces.</p>
+<p><strong>Click:</strong> Axial Green kernels provide normalized line-wise inverses.</p>
+<p><strong>Click:</strong> Analytic wrapping builds in the singular Green structure.</p>
+<p><strong>Click:</strong> CouplingNet learns a directional source split without solution or split labels, rather than through direct supervision.</p>
+<p><strong>Click:</strong> Split-energy consistency connects that decomposition to final error under explicit assumptions.</p>
+<p><strong>Click:</strong> GreenNet supplies the line-wise inverses, and CouplingNet learns the balance-preserving source split that turns them into a two-dimensional elliptic solver.</p>
+<p>Thank you.</p>
+<p><strong>If timing is tight:</strong> GreenNet learns the inverses; CouplingNet learns their balance-preserving coupling.</p>
+<p><strong>Stop here for the timed talk. Use the backup menu only if a question calls for it.</strong></p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1514,7 +1623,7 @@ Deferred until figures are selected
 </div>
 </div>
 <aside class="notes">
-<p>Do not present this during the timed talk unless asked. It is a menu for Q&amp;A.</p>
+<p>This menu is not part of the timed talk. Use it only when a question calls for one of the three supporting explanations.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1586,7 +1695,8 @@ B(t)=
 <p>The neural term (E(t,)M(t)R_(t,)) learns the remaining smooth residual.</p>
 </div>
 <aside class="notes">
-<p>Use this only if someone asks why the analytic wrapping is built this way.</p>
+<p><strong>Use when asked:</strong> Why is the analytic GreenNet wrapping necessary?</p>
+<p>The analytic part separates the distributional behavior from the smooth residual. (G_0) supplies the Dirac-delta jump. Applying the variable-coefficient operator to that jump also creates a Heaviside-type contribution, and the (J_0-12E) term is designed to cancel that contribution. The neural network then learns the remaining smooth correction.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1644,7 +1754,8 @@ Common bias
 </div>
 </div>
 <aside class="notes">
-<p>This is the honest limitation slide. Energy consistency is meaningful, but GreenNet accuracy remains part of the error story.</p>
+<p><strong>Use when asked:</strong> What happens if GreenNet is not exact?</p>
+<p>The energy bound becomes a perturbation statement. Directional mismatch, represented by (_x-_y), affects the split-consistency term. A common Green bias, represented by (_x+_y), can remain invisible to energy consistency. So the bound is meaningful under exact or controlled Green reconstruction, and GreenNet accuracy remains important.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1702,7 +1813,8 @@ f_{\mathrm{unit}}=L^2f_{\mathrm{phys}}.
 <p>Connected intervals are not merged across outside-domain gaps, because that would create artificial information flow outside the domain.</p>
 </div>
 <aside class="notes">
-<p>Use this only for geometry questions. Do not discuss geometry generation or file formats.</p>
+<p><strong>Use when asked:</strong> How are non-square or complex domains handled?</p>
+<p>Each axial line intersects the domain in one or more connected intervals. Each connected interval is treated as an independent one-dimensional Dirichlet problem and pulled back to the unit interval. Disconnected intervals are not merged, because merging would create artificial information flow through regions outside the domain.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;

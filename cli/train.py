@@ -552,6 +552,7 @@ class TrainCLI:
             evaluator = ComplexCouplingEvaluator(
                 model=coupling_model,
                 green_model=green_model,
+                config=coupling_training_cfg,
                 device=torch.device(coupling_training_cfg.device),
                 work_dir=work_dir,
                 terminal_width=terminal_cfg.width,

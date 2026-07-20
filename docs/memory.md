@@ -128,10 +128,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Full-grid `rhs`를 valid point로 gather한 뒤 endpoint hard-zero를 포함한
   segment-local physical source profile로 interpolation한다. Source amplitude는
   `sqrt(integral_0^1 f_phys(s(t))^2 dt)`이고, normalized physical profile을 branch에
-  넣은 뒤 model의 두 directional raw output을 이 amplitude로 다시 scale한다.
-  Complex CouplingNet raw output contract version 4는 `(B,2,P)` physical
-  `[p,q]`이며, legacy unversioned 및 version 2/3 CouplingNet checkpoint는 load하지
-  않고 재학습한다. GreenNet checkpoint contract는 바뀌지 않는다.
+  넣는다. Complex CouplingNet output contract version 5는 `(B,2,P)` directional
+  response `[P,Q]`이며, normalized model output을 각각 `L_x^2*A_x`, `L_y^2*A_y`로
+  scale한다. Unversioned 및 version 4 이하 complex CouplingNet checkpoint는 tensor
+  shape가 같아도 load하지 않고 재학습한다. GreenNet checkpoint contract는 바뀌지 않는다.
 - Complex CouplingNet coefficient branch는 `coefficient_terms`에 따라 active
   `[a,b_primary,b_transverse,c]` 순서로 구성한다. `convection=true`이면 x/Phi
   path는 `[L_x*b_x, L_x*b_y]`, y/Psi path는 `[L_y*b_y, L_y*b_x]`를 넣는다.
@@ -143,30 +143,80 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Complex CouplingNet primary trunk는 항상 segment-local 1D `t`를 사용한다.
   Fixed-line transverse branch는 global geometry extent 기준으로 normalized
   `r_hat`을 만들고, `axis_1d_trunk.num_frequencies`와 `max_frequency`로
-  Fourier encoding한다. Optional `axis_1d_trunk.transverse_trunk.enabled=true`
-  path는 pointwise cross-axis local coordinate를 별도 trunk에 넣는다. x/Phi
-  path는 primary `x_local_t`와 transverse `y_local_t`를 쓰고, y/Psi path는
-  primary `y_local_t`와 transverse `x_local_t`를 쓴다. `fusion`은 `product` 또는
-  `product_fuser`이고, disabled이면 이전 complex behavior를 보존한다.
+  Fourier encoding한다. v5는 `axis_1d_trunk.transverse_trunk.enabled=true`와
+  `length_context=true`를 필수로 둔다. 하나의 shared transverse MLP는
+  `[t_perp,log(L_perp/L_ref),log(L_parallel/L_perp),kappa]` 네 feature를 함께 받으며,
+  `kappa=4*L_parallel^2*L_perp^2/(L_parallel^2+L_perp^2)^2`이다. x/Phi path는
+  `(L_parallel,L_perp,t_perp)=(L_x,L_y,y_local_t)`, y/Psi path는 축을 바꾼다.
+  `fusion`은 `product` 또는 `product_fuser`이다.
   `trunk_positional_encoding`은 unit-square 2D trunk coordinate encoding이므로
   complex mode에서는 사용하지 않는다.
-- Complex CouplingNet balance projection은 `enabled=true`에서 `symmetric` 또는
-  opt-in `response_preconditioned`를 지원한다. Symmetric mode는 physical raw
-  difference `d=p-q`를 보존한다. RPS는 `sigma_x=Lx^2`, `sigma_y=Ly^2`,
-  `d0=(sigma_y-sigma_x)rhs/(sigma_x+sigma_y)`,
-  `kappa=4*sigma_x*sigma_y/(sigma_x+sigma_y)^2`, `d_final=d0+kappa*d`를 쓴다.
-  두 mode 모두 physical space에서 `phi=(rhs+d_final)/2`,
-  `psi=(rhs-d_final)/2`로 exact balance를 맞추고 projection 안에서는 unit scaling을
-  하지 않는다. Reconstruction만 `Phi_unit=Lx^2*phi`, `Psi_unit=Ly^2*psi`를 만든다.
-  `smooth_mask`는 unit-square-only이다. Geometry-weighted public mode/rule/lambda는
-  폐기 상태를 유지하며, RPS는 retired swapped-length-squared lambda=1 식과
-  대수적으로 같더라도 response preconditioning ablation으로 해석한다.
-- Symmetric/RPS 비교는 동일 dataset, GreenNet, initialization seed, optimizer,
-  schedule, epochs를 사용해 CouplingNet을 각각 처음부터 학습한다. 최소 3 paired
-  seed의 energy loss와 evaluation-only `rel_sol/rel_flux`, cardinal-zone error,
-  `u_phi-u_psi`, `d/d0/kappa`를 비교한다. Reference `sol/phi/psi`는 metric에만
-  사용하고 training loss에는 절대 사용하지 않는다. Post-hoc projection swap은
-  공정한 ablation 결론 근거로 사용하지 않는다.
+- Complex CouplingNet v5 balance projection은 `enabled=true, mode="response_space"`만
+  허용한다. `sigma_x=Lx^2`, `sigma_y=Ly^2`, `s=max(sigma_x,sigma_y)`,
+  `a=sigma_y/s`, `b=sigma_x/s`, `c=sigma_x*sigma_y*rhs/s`,
+  `R=a*P+b*Q-c`를 두고 `Phi=P-a*R/(a^2+b^2)`,
+  `Psi=Q-b*R/(a^2+b^2)`로 response constraint plane에 직교 투영한다.
+  따라서 `Phi/sigma_x+Psi/sigma_y=rhs`이고 physical field는
+  `phi=Phi/sigma_x`, `psi=Psi/sigma_y`이다. Green reconstruction은 projected
+  response `Phi/Psi`를 직접 사용하며 추가 `L^2` scaling을 하지 않는다.
+  Complex `symmetric`, `response_preconditioned`, `smooth_mask`, geometry-weighted
+  mode는 폐기되었고 v5에서 fail fast한다.
+- Complex v5 training의 base split seminorm은 length-jump-balanced physical edge
+  energy이다.
+  Edge score는 `max(|Delta log Lx^2|,|Delta log Ly^2|)`이고 기본 threshold는
+  `log(2)`이다. Regular/transition group을 각각 normalize한 뒤 기본
+  `transition_fraction=0.5`로 혼합한다. Group이 비면 unweighted energy로
+  fallback한다. `loss_energy_consistency`는 기존 unweighted energy를 audit metric으로
+  계속 보고하며, weighted loss는 PDE나 source target을 바꾸지 않는 positive
+  edge-weighted equivalent seminorm이다.
+- Complex v5의 `relative_split_consistency`는 opt-in이고 dataclass 기본값은
+  disabled이다. Enabled이면 raw balanced energy 대신 sample별
+  `(E_balanced + mass_weight*D_ref^-2*h_x*h_y*sum((u_phi-u_psi)^2)) /
+  (h_x*h_y*sum(rhs^2)+eps)`를 split objective로 사용한다. `D_ref`는 global x/y
+  extent 중 큰 값이다. 이 mass term은 derivative energy가 보지 못하는 constant 및
+  low-frequency split mismatch를 억제한다. Reference `sol/phi/psi`는 사용하지 않는다.
+- Complex v5의 `weak_operator_closure`도 opt-in이고 dataclass 기본값은 disabled이다.
+  공통 trial solution `u_pred=0.5*(u_phi+u_psi)`를 사용하고, 각 connected axial
+  segment의 true endpoint를 포함한 P1 nodal weak residual을 계산한다. X form은
+  `(a,bx,c/2,phi)`, y form은 `(a,by,c/2,psi)`를 사용한다. Coefficient는 physical
+  element midpoint에서 직접 평가하고, endpoint trial/test/source 값은 hard zero이다.
+  Nodal residual은 lumped directional mass와 physical source energy로 normalize한다.
+  이는 reference-free variational closure이며 sparse matrix dependency 없이
+  element gather/scatter로 구현한다.
+- 두 opt-in 항이 모두 켜지면 total objective는
+  `loss_split_relative + loss_weak_operator_closure`이다. Reported split
+  energy/mass와 weak x/y/total metric은 config weight가 반영된 실제 objective
+  contribution이다. Relative split이 꺼져 있으면 raw balanced energy가 split
+  objective이고, weak closure가 꺼져 있으면 weak loss key 자체를 만들지 않는다.
+  Raw-balance gauge penalty는 이번 contract에서 구현하지 않으며 후속 현상이 남을
+  때만 재검토한다.
+- Complex v5는 reference-free checkpoint selection을 강제한다.
+  `best_rel_sol_checkpoint.enabled=true`는 fail fast한다.
+  `best_energy_checkpoint`는 validation raw balanced energy가 가장 작은
+  `complex_coupling_model_best_energy.safetensors`를 저장하고,
+  `best_physics_checkpoint`는 validation total reference-free loss가 가장 작은
+  `complex_coupling_model_best_physics.safetensors`를 독립 저장한다. Reference
+  `sol/phi/psi`는 detached evaluation metric/artifact에만 사용하며 gradient, loss,
+  scheduler, early stopping, 두 checkpoint selection에 사용하지 않는다.
+- Unit-square와 complex CouplingNet trainer는 같은 linear-warmup + cosine-decay
+  learning-rate schedule을 사용한다. `coupling_training.use_lr_schedule=true`이면
+  `warmup_epochs` 동안 `learning_rate`까지 선형 증가한 뒤 마지막 epoch의
+  `min_lr`까지 cosine decay한다. Scheduler는 epoch의 optimizer update, validation,
+  checkpoint 저장이 끝난 뒤 한 번 step한다. Complex trainer의
+  `complex_training_metrics.csv`와 `training.log`에는 해당 epoch optimizer update에
+  실제 사용한 `learning_rate`를 기록한다. `use_lr_schedule=false`이면 고정
+  learning rate를 유지한다.
+- `cli/diagnose_complex_length_response.py`는 complex CouplingNet checkpoint를 다시
+  추론해 line-length amplification을 단계별로 분리하는 evaluation-only 도구이다.
+  v5에서는 physical directional-source error, projected response error, exact Green
+  source response, learned-minus-exact Green contribution, target-source exact closure를
+  따로 기록한다. Production reconstruction은 projected response를 직접 사용한다.
+  핵심 항등식은 `learned total error = exact source response +
+  target exact closure + learned-minus-exact`이다. Exact path는 production과 같은
+  segment node, endpoint hard-zero, nonuniform unit weight를 사용하며,
+  `G_unit*(L^2 source)*w_unit`과 `(L G_unit)*source*(L w_unit)`의 등가성을 audit한다.
+  Reference `sol/phi/psi`는 이 진단과 metric에만 사용하고 training loss에는 쓰지
+  않는다.
 - Complex geometry mode에서는 `cross_consistency`, `smooth_mask`, `balance_loss`,
   `source_stencil_lift`, `green_response_feature`를 사용하지 않는다. Cross 관련
   key는 metric, log, artifact에 남기지 않는 것을 contract로 둔다.
@@ -202,14 +252,14 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   구조 이후에 남는 smooth residual을 담당한다고 기록한다.
 - 같은 report의 CouplingNet 설명에서는 "local trunk" 대신 "axial local trunk" 용어를
   사용한다. Axial local trunk는 primary axial coordinate \(t_{\parallel}\)를 담당하고,
-  pointwise transverse trunk는 transverse axial interval의 normalized coordinate
-  \(t_{\perp}\)를 통해 pointwise boundary context를 전달한다. Transverse branch는
+  pointwise transverse trunk는 \(t_{\perp}\)와 parallel/perpendicular segment-length
+  context 네 feature를 통해 pointwise boundary/response context를 전달한다. Transverse branch는
   global transverse placement만 담당하며 pointwise transverse boundary 정보를 대체하지
   않는다.
 - 같은 report의 activation 설명에서는 rational activation을 fixed activation이 아니라
   learnable activation으로 설명한다. \(P_\alpha\)와 \(Q_\beta\)의 coefficient는
   현재 초기값에서 시작하지만 학습 중 업데이트되는 parameter이며, activation은 analytic
-  Green wrapping이나 physical balance projection을 대체하지 않고 branch/trunk 내부의
+  Green wrapping이나 response-space balance projection을 대체하지 않고 branch/trunk 내부의
   representation nonlinearity 역할을 한다.
 - 같은 report는 energy analysis 문서를 단순 reference로 넘기지 않고, energy loss가
   final solution energy error를 bound한다는 핵심 의미를 독립적인 proposition 형식으로
@@ -409,9 +459,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   heatmaps plus diagnostics, (2) enlarged fixed-η=0.75 slice while signed error and
   diagnostics stay visible, and (3) the takeaway. The takeaway is
   "The learned kernel captures the singular Green structure, and the signed error is not
-  concentrated near the singular diagonal." In the fixed-η slice plot, the learned
-  curve is drawn underneath and the reference curve is drawn last as a thicker dashed
-  curve, so near-perfect overlap still leaves the reference visible.
+  concentrated near the singular diagonal." The fixed-η curve draw order is an
+  asset-level readability detail and is not narrated in the speaker script; the spoken
+  point is only that the reference and learned curves nearly overlap, including near
+  the singular point.
   Generated Plotly HTML은 interactive Q&A aid로 사용할 수 있지만,
   timed Quarto/Reveal.js main deck에서는 reliable projection, navigation, handout
   export를 위해 static PNG/PDF-ready separated assets를 사용한다. Slide-facing GreenNet
@@ -495,6 +546,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   \(\varepsilon_x-\varepsilon_y\)와 common bias \(\varepsilon_x+\varepsilon_y\)를 two-channel
   visual로 구분하며, Backup C는 non-square slice SVG와 "connected intervals are not merged
   across outside-domain gaps" 메시지를 우선 보여준다.
+- WCCM GreenNet Evidence state alignment uses a shared outer-height contract rather than
+  unrelated child-card heights. The second fixed-η state remains the visual sizing reference;
+  the first state stretches both kernel cards to the full left/right row height, and the third
+  state constrains the signed-error/diagnostics stack to the fixed-slice row while leaving the
+  takeaway in a separate row. Preserve the existing Auto-Animate `data-id` values when adjusting
+  these dimensions.
 - WCCM-ECCOMAS 2026 submitted-abstract alignment: Slide 6 GreenNet II는
   "Do not learn the Green singularity from scratch."를 compact visible motivation으로
   두고, variable-coefficient Green kernels are rarely available in closed form,
@@ -524,6 +581,7 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `docs/presentations/wccm_eccomas_2026/checks/screenshots/`에 둔다.
   Title slide metadata는 presenter `Junhong Jo` with affiliation
   `National Institute for Mathematical Sciences`,
+  affiliation의 `N`, `I`, `M`, `S` initials를 bold로 강조해 acronym을 드러내고,
   `Joint work with Taeyoung Ha (NIMS) and Chang-Ock Lee (KAIST)`, presentation date
   `Tuesday, July 21, 2026`로 둔다. Title slide subtitle은 reduced solver가 아니라
   two-dimensional elliptic solver, axial Green operators, learned directional source split을
@@ -550,12 +608,42 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   깨질 때만 고해상도 PNG panel fallback을 고려한다. Main content는 그림 위주로
   유지하고, 3-4 click reveal plus takeaway reveal 정도의 가벼운 animation만 사용한다.
 - WCCM-ECCOMAS 2026 speaker script는 `docs/wccm_eccomas_2026_speaker_script.md`를
-  Quarto speaker notes 삽입 전 canonical editable English draft로 둔다. 이 문서는
-  14개 main slide에 대해 14-15분 spoken script를 목표로 하며, 각 slide section은
+  canonical editable English source로 두고, 사용자 승인 후 active Quarto deck의
+  `::: {.notes}` block과 동기화한다. 이 문서는
+  14개 main slide에 대해 약 13분 spoken script를 목표로 하며, 각 slide section은
   target time, reveal/click cues, speaker script, compression option, transition sentence
   구조를 사용한다. Backup A/B/C는 timed talk가 아니라 Q&A-only prompt snippet으로
-  유지한다. 사용자가 script-level revision을 마치기 전에는 QMD의 `::: {.notes}` block에
-  최종 대본을 복사하지 않는다.
+  유지한다. 현재 압축본은 main `Speaker script` 기준 1,246 words와
+  12분 40초 발화 예산을 사용하며, 클릭과 짧은 호흡을 포함해 약 13분을 목표로 한다.
+  이 압축본은 QMD notes에 삽입되었으며, 이후 wording 수정은 Markdown canonical source와
+  QMD notes에 함께 반영한다. Auto-Animate로 나뉜 GreenNet analytic 및
+  GreenNet evidence slide는 같은 대본을 반복하지 않고 각 state에서 실제로 말할 문장을
+  분배한다. 발표가 오후 3시 이후에 시작하므로 Slide 1의 canonical greeting은
+  `Good afternoon.`으로 고정한다. Slide 2에서는 \(a\), \(\mathbf b\), \(c\)가
+  prescribed이고 \(f\)가 sample마다 변한다고 설명하며, `one coefficient problem`과
+  `heterogeneous operator` 표현은 사용하지 않는다. Slide 9은 GreenNet이 directional
+  inverses를 제공하지만 2D source를 \(x\)- 및 \(y\)-directional source components로
+  split하는 방법은 결정하지 않는다고 설명하며, 모호한 `allocated` 표현은 사용하지 않는다.
+  Slide 10은 trunk nets가 primary 및 transverse axial intervals 안의 pointwise
+  positions를 encode한다고 한 문장으로 설명하고, profile-level branch의 한계를 별도로
+  주장하지 않는다. Slide 11은 GreenNet이 normalized unit interval에서 axial inverse를
+  계산하는 설명과 physical-coordinate balance projection 사이를 명시적으로 연결한다.
+  Raw directional source components는 projection 전에 physical source scale로 복원하고,
+  balanced components는 각 axial interval로 pull back한 뒤 \(G_x,G_y\)에 전달한다고
+  설명한다. Slide 12는 CouplingNet이 reference-solution 또는 directional-split label
+  없이 학습되므로 두 directional reconstructions만으로 계산 가능한 loss가 필요하다는
+  동기에서 시작한다. \(\mathcal E_{\mathrm{split}}=\|u_\phi-u_\psi\|_a^2\)를
+  unsupervised split-energy loss로 정의하고, \(u_*\)는 theoretical bound에만 사용되며
+  CouplingNet training loss에는 들어가지 않는다고 명시한다. Error-bound proposition은
+  이 unsupervised loss의 conditional structural justification으로 설명한다. 이 대본에서
+  `field`는
+  \(\mathbf b\)와 같은 vector-valued
+  quantity에만 사용한다. Scalar quantities는 각각 source 또는 forcing \(f\), solution \(u\),
+  coefficients \(a,c\), directional source components \(\phi,\psi\)로 직접 지칭한다.
+  Active QMD의 speaker-note `Click` cue는 실제 Reveal fragment 순서에 맞추며,
+  canonical Markdown 대본보다 세분화될 수 있다. 2026-07-20 Quarto 검증에서는
+  사용자가 두 번째로 조정한 22개 notes block과 41개 click cue가 모두 rendered
+  HTML notes에 반영되었다.
 - DTE 2027 abstract source는 `docs/dte2027_abstract/DTE2027_abstracts.tex`이고,
   official `DTE2027_abstracts.cls` template를 같은 폴더에 보관한다. 초록은
   `MS018 - Scientific Machine Learning for PDEs in Complex Geometries` minisymposium용이며,

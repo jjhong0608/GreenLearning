@@ -387,6 +387,7 @@ def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
             transverse_trunk=TransverseTrunkConfig(
                 enabled=True,
                 fusion="product_fuser",
+                length_context=True,
             ),
         ),
     )
@@ -406,6 +407,7 @@ def test_save_load_coupling_model_with_axis_1d_trunk_config(tmp_path):
     assert loaded_cfg.axis_1d_trunk.max_frequency == 16.0
     assert loaded_cfg.axis_1d_trunk.transverse_trunk.enabled is True
     assert loaded_cfg.axis_1d_trunk.transverse_trunk.fusion == "product_fuser"
+    assert loaded_cfg.axis_1d_trunk.transverse_trunk.length_context is True
     _assert_state_dict_equal(model.state_dict(), loaded_model.state_dict())
 
 

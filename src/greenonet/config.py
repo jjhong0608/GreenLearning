@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, cast
@@ -144,6 +145,7 @@ class TransverseTrunkConfig:
 
     enabled: bool = False
     fusion: Literal["product", "product_fuser"] = "product"
+    length_context: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -152,6 +154,10 @@ class TransverseTrunkConfig:
             raise ValueError(
                 "axis_1d_trunk.transverse_trunk.fusion must be "
                 "'product' or 'product_fuser'."
+            )
+        if not isinstance(self.length_context, bool):
+            raise TypeError(
+                "axis_1d_trunk.transverse_trunk.length_context must be a boolean."
             )
 
     @classmethod
@@ -165,7 +171,7 @@ class TransverseTrunkConfig:
             return raw
         if isinstance(raw, dict):
             data = dict(raw)
-            unknown = sorted(set(data) - {"enabled", "fusion"})
+            unknown = sorted(set(data) - {"enabled", "fusion", "length_context"})
             if unknown:
                 raise TypeError(
                     "axis_1d_trunk.transverse_trunk has unknown keys: "
@@ -254,7 +260,7 @@ class BalanceProjectionConfig:
     mode: Literal[
         "symmetric",
         "smooth_mask",
-        "response_preconditioned",
+        "response_space",
     ] = "symmetric"
     mask: Literal["quadratic", "sin"] = "quadratic"
 
@@ -262,16 +268,16 @@ class BalanceProjectionConfig:
         if not isinstance(self.enabled, bool):
             raise TypeError("balance_projection.enabled must be a boolean.")
         mode = str(self.mode)
-        if mode == "geometry_weighted":
+        if mode in {"geometry_weighted", "response_preconditioned"}:
             raise ValueError(
-                "balance_projection.mode='geometry_weighted' has been removed. "
-                "Retrain ComplexCouplingNet with mode='symmetric' or "
-                "'response_preconditioned'."
+                f"balance_projection.mode='{mode}' has been removed from the "
+                "complex output-contract-v5 path. Retrain ComplexCouplingNet "
+                "with mode='response_space'."
             )
-        if mode not in {"symmetric", "smooth_mask", "response_preconditioned"}:
+        if mode not in {"symmetric", "smooth_mask", "response_space"}:
             raise ValueError(
                 "balance_projection.mode must be 'symmetric', 'smooth_mask', "
-                "or 'response_preconditioned'."
+                "or 'response_space'."
             )
         if self.mask not in {"quadratic", "sin"}:
             raise ValueError("balance_projection.mask must be 'quadratic' or 'sin'.")
@@ -292,7 +298,7 @@ class BalanceProjectionConfig:
                     Literal[
                         "symmetric",
                         "smooth_mask",
-                        "response_preconditioned",
+                        "response_space",
                     ],
                     raw,
                 ),
@@ -335,7 +341,7 @@ class BalanceProjectionConfig:
                     Literal[
                         "symmetric",
                         "smooth_mask",
-                        "response_preconditioned",
+                        "response_space",
                     ],
                     mode,
                 ),
@@ -358,7 +364,7 @@ class CouplingModelConfig:
     dtype: torch.dtype = torch.float64
     balance_projection: (
         BalanceProjectionConfig
-        | Literal["symmetric", "smooth_mask", "response_preconditioned"]
+        | Literal["symmetric", "smooth_mask", "response_space"]
         | dict[str, Any]
     ) = field(default_factory=BalanceProjectionConfig)
     smooth_mask_normalize: bool = True
@@ -460,6 +466,223 @@ class CouplingBestRelSolCheckpointConfig:
 
 
 @dataclass
+class CouplingBestEnergyCheckpointConfig:
+    """Best validation reference-free energy checkpoint settings."""
+
+    enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("best_energy_checkpoint.enabled must be a boolean.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: CouplingBestEnergyCheckpointConfig | dict[str, Any] | None,
+    ) -> CouplingBestEnergyCheckpointConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled"})
+            if unknown:
+                raise TypeError(
+                    f"best_energy_checkpoint has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("best_energy_checkpoint must be an object.")
+
+
+@dataclass
+class CouplingBestPhysicsCheckpointConfig:
+    """Best validation reference-free total physics checkpoint settings."""
+
+    enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("best_physics_checkpoint.enabled must be a boolean.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: CouplingBestPhysicsCheckpointConfig | dict[str, Any] | None,
+    ) -> CouplingBestPhysicsCheckpointConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled"})
+            if unknown:
+                raise TypeError(
+                    f"best_physics_checkpoint has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("best_physics_checkpoint must be an object.")
+
+
+@dataclass
+class ComplexRelativeSplitConsistencyConfig:
+    """Source-normalized complex split energy and value consistency."""
+
+    enabled: bool = False
+    weight: float = 1.0
+    mass_weight: float = 1.0
+    eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("relative_split_consistency.enabled must be a boolean.")
+        for field_name, value in (
+            ("weight", self.weight),
+            ("mass_weight", self.mass_weight),
+            ("eps", self.eps),
+        ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(
+                    f"relative_split_consistency.{field_name} must be numeric."
+                )
+            if not math.isfinite(float(value)):
+                raise ValueError(
+                    f"relative_split_consistency.{field_name} must be finite."
+                )
+        if self.weight < 0.0:
+            raise ValueError("relative_split_consistency.weight must be non-negative.")
+        if self.mass_weight < 0.0:
+            raise ValueError(
+                "relative_split_consistency.mass_weight must be non-negative."
+            )
+        if self.eps <= 0.0:
+            raise ValueError("relative_split_consistency.eps must be positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexRelativeSplitConsistencyConfig | dict[str, Any] | None,
+    ) -> ComplexRelativeSplitConsistencyConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "weight", "mass_weight", "eps"})
+            if unknown:
+                raise TypeError(
+                    "relative_split_consistency has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("relative_split_consistency must be an object.")
+
+
+@dataclass
+class ComplexWeakOperatorClosureConfig:
+    """Reference-free directional weak operator closure settings."""
+
+    enabled: bool = False
+    weight: float = 1.0
+    eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("weak_operator_closure.enabled must be a boolean.")
+        for field_name, value in (("weight", self.weight), ("eps", self.eps)):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(f"weak_operator_closure.{field_name} must be numeric.")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"weak_operator_closure.{field_name} must be finite.")
+        if self.weight < 0.0:
+            raise ValueError("weak_operator_closure.weight must be non-negative.")
+        if self.eps <= 0.0:
+            raise ValueError("weak_operator_closure.eps must be positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexWeakOperatorClosureConfig | dict[str, Any] | None,
+    ) -> ComplexWeakOperatorClosureConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "weight", "eps"})
+            if unknown:
+                raise TypeError(
+                    f"weak_operator_closure has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("weak_operator_closure must be an object.")
+
+
+@dataclass
+class ComplexLengthJumpBalanceConfig:
+    """Geometry-shared edge grouping for complex energy optimization."""
+
+    enabled: bool = False
+    log_sigma_jump_threshold: float = math.log(2.0)
+    transition_fraction: float = 0.5
+    eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("length_jump_balance.enabled must be a boolean.")
+        for field_name, value in (
+            ("log_sigma_jump_threshold", self.log_sigma_jump_threshold),
+            ("transition_fraction", self.transition_fraction),
+            ("eps", self.eps),
+        ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(f"length_jump_balance.{field_name} must be numeric.")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"length_jump_balance.{field_name} must be finite.")
+        if self.log_sigma_jump_threshold < 0.0:
+            raise ValueError(
+                "length_jump_balance.log_sigma_jump_threshold must be non-negative."
+            )
+        if not 0.0 < self.transition_fraction < 1.0:
+            raise ValueError(
+                "length_jump_balance.transition_fraction must be strictly between "
+                "0 and 1."
+            )
+        if self.eps <= 0.0:
+            raise ValueError("length_jump_balance.eps must be positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexLengthJumpBalanceConfig | dict[str, Any] | None,
+    ) -> ComplexLengthJumpBalanceConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "log_sigma_jump_threshold",
+                    "transition_fraction",
+                    "eps",
+                }
+            )
+            if unknown:
+                raise TypeError(
+                    f"length_jump_balance has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("length_jump_balance must be an object.")
+
+
+@dataclass
 class CouplingTrainingConfig:
     """Training settings for CouplingNet."""
 
@@ -484,6 +707,71 @@ class CouplingTrainingConfig:
     best_rel_sol_checkpoint: CouplingBestRelSolCheckpointConfig = field(
         default_factory=CouplingBestRelSolCheckpointConfig
     )
+    best_energy_checkpoint: CouplingBestEnergyCheckpointConfig | dict[str, Any] = field(
+        default_factory=CouplingBestEnergyCheckpointConfig
+    )
+    best_physics_checkpoint: CouplingBestPhysicsCheckpointConfig | dict[str, Any] = (
+        field(default_factory=CouplingBestPhysicsCheckpointConfig)
+    )
+    length_jump_balance: ComplexLengthJumpBalanceConfig | dict[str, Any] = field(
+        default_factory=ComplexLengthJumpBalanceConfig
+    )
+    relative_split_consistency: (
+        ComplexRelativeSplitConsistencyConfig | dict[str, Any]
+    ) = field(default_factory=ComplexRelativeSplitConsistencyConfig)
+    weak_operator_closure: ComplexWeakOperatorClosureConfig | dict[str, Any] = field(
+        default_factory=ComplexWeakOperatorClosureConfig
+    )
+
+    def __post_init__(self) -> None:
+        self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
+            self.best_energy_checkpoint
+        )
+        self.best_physics_checkpoint = CouplingBestPhysicsCheckpointConfig.from_raw(
+            self.best_physics_checkpoint
+        )
+        self.length_jump_balance = ComplexLengthJumpBalanceConfig.from_raw(
+            self.length_jump_balance
+        )
+        self.relative_split_consistency = (
+            ComplexRelativeSplitConsistencyConfig.from_raw(
+                self.relative_split_consistency
+            )
+        )
+        self.weak_operator_closure = ComplexWeakOperatorClosureConfig.from_raw(
+            self.weak_operator_closure
+        )
+
+
+def validate_unit_square_coupling_training_config(
+    config: CouplingTrainingConfig,
+) -> None:
+    """Reject complex-only training options on the unit-square path."""
+
+    if ComplexLengthJumpBalanceConfig.from_raw(config.length_jump_balance).enabled:
+        raise ValueError(
+            "coupling_training.length_jump_balance is available only for "
+            "ComplexCouplingTrainer."
+        )
+    if ComplexRelativeSplitConsistencyConfig.from_raw(
+        config.relative_split_consistency
+    ).enabled:
+        raise ValueError(
+            "coupling_training.relative_split_consistency is available only for "
+            "ComplexCouplingTrainer."
+        )
+    if ComplexWeakOperatorClosureConfig.from_raw(config.weak_operator_closure).enabled:
+        raise ValueError(
+            "coupling_training.weak_operator_closure is available only for "
+            "ComplexCouplingTrainer."
+        )
+    if CouplingBestPhysicsCheckpointConfig.from_raw(
+        config.best_physics_checkpoint
+    ).enabled:
+        raise ValueError(
+            "coupling_training.best_physics_checkpoint is available only for "
+            "ComplexCouplingTrainer."
+        )
 
 
 @dataclass

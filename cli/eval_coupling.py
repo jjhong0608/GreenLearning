@@ -33,6 +33,7 @@ from greenonet.config import (
     SourceStencilLiftConfig,
     TerminalConfig,
     TrainingConfig,
+    validate_unit_square_coupling_training_config,
 )
 from greenonet.compile_utils import maybe_compile_model
 from greenonet.coupling_data import CouplingDataset
@@ -413,6 +414,7 @@ class EvalCouplingCLI:
         evaluator = ComplexCouplingEvaluator(
             model=coupling_model,
             green_model=green_model,
+            config=coupling_training_cfg,
             device=device,
             work_dir=Path(args.work_dir),
             terminal_width=terminal_cfg.width,
@@ -502,6 +504,7 @@ class EvalCouplingCLI:
                 terminal_cfg=terminal_cfg,
             )
             return
+        validate_unit_square_coupling_training_config(coupling_training_cfg)
 
         def a_fun(x: Tensor, y: Tensor) -> Tensor:
             # h = 0.0625

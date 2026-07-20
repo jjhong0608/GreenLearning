@@ -11,118 +11,118 @@ from greenonet.config import BalanceProjectionConfig
 
 @dataclass(frozen=True)
 class ComplexProjectionResult:
-    """Physical source split and diagnostics before Green reconstruction."""
+    """Response-space split and physical-source diagnostics."""
 
-    raw_physical: torch.Tensor
+    raw_response: torch.Tensor
+    projected_response: torch.Tensor
     projected_physical: torch.Tensor
-    balance_residual: torch.Tensor
+    raw_response_constraint_residual: torch.Tensor
+    response_constraint_residual: torch.Tensor
+    physical_balance_residual: torch.Tensor
     raw_difference: torch.Tensor
     projected_difference: torch.Tensor
-    response_baseline_difference: torch.Tensor
-    response_gain: torch.Tensor
+    normal_x: torch.Tensor
+    normal_y: torch.Tensor
 
 
 def apply_complex_balance_projection(
-    raw_physical: torch.Tensor,
+    raw_response: torch.Tensor,
     rhs_phys: torch.Tensor,
     geometry: ComplexGeometryMetadata,
     config: BalanceProjectionConfig | str | dict[str, Any],
 ) -> ComplexProjectionResult:
-    """Project physical directional proposals onto ``phi + psi = rhs``.
+    """Orthogonally project unit responses onto the physical balance constraint.
 
-    Projection stays entirely in physical source space. Axis-length pull-back is
-    owned by complex reconstruction and is intentionally absent here.
+    The projected responses satisfy ``Phi / Lx^2 + Psi / Ly^2 = rhs``.
+    No source pull-back is performed before or after this projection.
     """
 
     projection = BalanceProjectionConfig.from_raw(config)
     if not projection.enabled:
         raise ValueError("Complex balance projection must be enabled.")
-    if projection.mode not in {"symmetric", "response_preconditioned"}:
+    if projection.mode != "response_space":
         raise ValueError(
-            "Complex balance projection supports only 'symmetric' or "
-            "'response_preconditioned'."
+            "Complex output-contract version 5 requires "
+            "balance_projection.mode='response_space'."
         )
 
-    x_length_squared, y_length_squared = _validate_inputs(
-        raw_physical=raw_physical,
+    sigma_x, sigma_y = _validate_inputs(
+        raw_response=raw_response,
         rhs_phys=rhs_phys,
         geometry=geometry,
     )
-    raw_difference = raw_physical[:, 0] - raw_physical[:, 1]
-    balance_residual = rhs_phys - raw_physical[:, 0] - raw_physical[:, 1]
-
-    if projection.mode == "symmetric":
-        response_baseline = torch.zeros_like(raw_difference)
-        response_gain = torch.ones_like(raw_difference)
-        projected_difference = raw_difference
-    else:
-        denominator = x_length_squared + y_length_squared
-        response_baseline = (
-            (y_length_squared - x_length_squared) / denominator * rhs_phys
-        )
-        response_gain = (
-            4.0 * x_length_squared * y_length_squared / denominator.square()
-        ).expand_as(raw_difference)
-        projected_difference = response_baseline + response_gain * raw_difference
-
-    projected_physical = torch.stack(
+    scale = torch.maximum(sigma_x, sigma_y)
+    normal_x = sigma_y / scale
+    normal_y = sigma_x / scale
+    constraint = sigma_x * sigma_y / scale * rhs_phys
+    normal_norm_squared = normal_x.square() + normal_y.square()
+    projection_residual = (
+        normal_x * raw_response[:, 0] + normal_y * raw_response[:, 1] - constraint
+    )
+    projected_response = torch.stack(
         (
-            0.5 * (rhs_phys + projected_difference),
-            0.5 * (rhs_phys - projected_difference),
+            raw_response[:, 0] - normal_x * projection_residual / normal_norm_squared,
+            raw_response[:, 1] - normal_y * projection_residual / normal_norm_squared,
         ),
         dim=1,
     )
-    return ComplexProjectionResult(
-        raw_physical=raw_physical,
-        projected_physical=projected_physical,
-        balance_residual=balance_residual,
-        raw_difference=raw_difference,
-        projected_difference=projected_difference,
-        response_baseline_difference=response_baseline,
-        response_gain=response_gain,
+    projected_physical = torch.stack(
+        (
+            projected_response[:, 0] / sigma_x,
+            projected_response[:, 1] / sigma_y,
+        ),
+        dim=1,
     )
-
-
-def apply_hard_symmetric_projection(
-    raw_physical: torch.Tensor,
-    rhs_phys: torch.Tensor,
-    geometry: ComplexGeometryMetadata,
-) -> ComplexProjectionResult:
-    """Apply the default physical symmetric projection."""
-
-    return apply_complex_balance_projection(
-        raw_physical=raw_physical,
-        rhs_phys=rhs_phys,
-        geometry=geometry,
-        config=BalanceProjectionConfig(enabled=True, mode="symmetric"),
+    raw_constraint_residual = (
+        rhs_phys - raw_response[:, 0] / sigma_x - raw_response[:, 1] / sigma_y
+    )
+    response_constraint_residual = (
+        rhs_phys
+        - projected_response[:, 0] / sigma_x
+        - projected_response[:, 1] / sigma_y
+    )
+    physical_balance_residual = (
+        rhs_phys - projected_physical[:, 0] - projected_physical[:, 1]
+    )
+    return ComplexProjectionResult(
+        raw_response=raw_response,
+        projected_response=projected_response,
+        projected_physical=projected_physical,
+        raw_response_constraint_residual=raw_constraint_residual,
+        response_constraint_residual=response_constraint_residual,
+        physical_balance_residual=physical_balance_residual,
+        raw_difference=raw_response[:, 0] - raw_response[:, 1],
+        projected_difference=projected_response[:, 0] - projected_response[:, 1],
+        normal_x=normal_x.expand_as(rhs_phys),
+        normal_y=normal_y.expand_as(rhs_phys),
     )
 
 
 def _validate_inputs(
     *,
-    raw_physical: torch.Tensor,
+    raw_response: torch.Tensor,
     rhs_phys: torch.Tensor,
     geometry: ComplexGeometryMetadata,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if raw_physical.dim() != 3 or raw_physical.shape[1] != 2:
-        raise ValueError("raw_physical must have shape (B, 2, P).")
-    if rhs_phys.shape != raw_physical[:, 0].shape:
+    if raw_response.dim() != 3 or raw_response.shape[1] != 2:
+        raise ValueError("raw_response must have shape (B, 2, P).")
+    if rhs_phys.shape != raw_response[:, 0].shape:
         raise ValueError("rhs_phys must have shape (B, P).")
 
-    x_length_squared = (
+    sigma_x = (
         geometry.x_lengths_for_valid_points()
-        .to(device=raw_physical.device, dtype=raw_physical.dtype)
+        .to(device=raw_response.device, dtype=raw_response.dtype)
         .square()
         .unsqueeze(0)
     )
-    y_length_squared = (
+    sigma_y = (
         geometry.y_lengths_for_valid_points()
-        .to(device=raw_physical.device, dtype=raw_physical.dtype)
+        .to(device=raw_response.device, dtype=raw_response.dtype)
         .square()
         .unsqueeze(0)
     )
-    if raw_physical.shape[-1] != x_length_squared.shape[-1]:
-        raise ValueError("raw_physical point count does not match geometry.")
-    if torch.any(x_length_squared <= 0.0) or torch.any(y_length_squared <= 0.0):
+    if raw_response.shape[-1] != sigma_x.shape[-1]:
+        raise ValueError("raw_response point count does not match geometry.")
+    if torch.any(sigma_x <= 0.0) or torch.any(sigma_y <= 0.0):
         raise ValueError("Complex geometry segment lengths must be positive.")
-    return x_length_squared, y_length_squared
+    return sigma_x, sigma_y

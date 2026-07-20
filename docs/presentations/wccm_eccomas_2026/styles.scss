@@ -149,9 +149,13 @@ $presentation-heading-font: "Aptos Display", "Segoe UI", Helvetica, Arial, sans-
 .title-meta .affiliation {
   color: var(--teal);
   font-size: 15pt;
-  font-weight: 800;
+  font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
+}
+
+.title-meta .affiliation .nims-initial {
+  font-weight: 900;
 }
 
 .title-grid,
@@ -1516,6 +1520,7 @@ $presentation-heading-font: "Aptos Display", "Segoe UI", Helvetica, Arial, sans-
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid var(--line);
   border-radius: 9pt;
+  box-sizing: border-box;
   box-shadow: var(--shadow);
   min-width: 0;
   padding: 5pt;
@@ -1526,17 +1531,21 @@ $presentation-heading-font: "Aptos Display", "Segoe UI", Helvetica, Arial, sans-
   display: grid;
   gap: 9pt;
   grid-template-columns: minmax(0, 1fr) 264pt;
+  grid-template-rows: minmax(0, 1fr);
   margin: 5pt 0 0;
+  min-height: 0;
 }
 
 .greennet-kernel-main {
   display: grid;
   gap: 9pt;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 0;
   min-width: 0;
 }
 
 .greennet-slice-main {
+  min-height: 0;
   min-width: 0;
 }
 
@@ -1544,6 +1553,7 @@ $presentation-heading-font: "Aptos Display", "Segoe UI", Helvetica, Arial, sans-
   display: grid;
   gap: 8pt;
   grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -1553,32 +1563,48 @@ $presentation-heading-font: "Aptos Display", "Segoe UI", Helvetica, Arial, sans-
   min-height: 0;
 }
 
-.greennet-evidence-card.kernel-card {
-  height: 274pt;
+.greennet-evidence-stage.kernel-stage {
+  height: 340pt;
 }
 
-.greennet-evidence-card.error-card {
-  height: 186pt;
+.greennet-evidence-stage.kernel-stage .greennet-kernel-main,
+.greennet-evidence-stage.kernel-stage .greennet-evidence-side,
+.greennet-evidence-stage.kernel-stage .greennet-evidence-card.kernel-card {
+  height: 100%;
 }
 
-.greennet-evidence-card.slice-card-large {
-  height: 334pt;
+.greennet-evidence-stage .greennet-evidence-card.error-card {
+  height: auto;
 }
 
 .greennet-evidence-stage.slice-stage {
   grid-template-columns: minmax(0, 1fr) 266pt;
+  height: 346pt;
+}
+
+.greennet-evidence-stage.slice-stage .greennet-slice-main,
+.greennet-evidence-stage.slice-stage .greennet-evidence-side,
+.greennet-evidence-stage.slice-stage .greennet-evidence-card.slice-card-large {
+  height: 100%;
 }
 
 .greennet-evidence-stage.slice-stage .greennet-evidence-side {
   grid-template-rows: 188pt auto;
 }
 
-.greennet-evidence-stage.takeaway-state .greennet-evidence-card.slice-card-large {
-  height: 292pt;
+.greennet-evidence-stage.takeaway-state {
+  height: 304pt;
 }
 
-.greennet-evidence-stage.takeaway-state .greennet-evidence-card.error-card {
-  height: 158pt;
+.greennet-evidence-stage.takeaway-state .greennet-evidence-side {
+  grid-template-rows: 158pt minmax(0, 1fr);
+}
+
+.greennet-evidence-stage.takeaway-state .greennet-evidence-card.error-card,
+.greennet-evidence-stage.takeaway-state .greennet-diagnostic-card {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .greennet-evidence-card img {

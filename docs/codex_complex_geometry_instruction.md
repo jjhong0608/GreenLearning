@@ -309,29 +309,34 @@ Horizontal and vertical segment counts may differ.
 
 ### 5.7 CouplingNet raw-output convention
 
-CouplingNet raw output is **not** physical \(\phi,\psi\).
+CouplingNet output contract v5 returns two directional response fields.
+The mandatory source branch uses the normalized physical profile
 
-It is a segment-local unit-domain source-like quantity.
+\[
+\widetilde f=\frac{f_{\mathrm{phys}}}{A},
+\qquad
+A=\left(\int_0^1|f_{\mathrm{phys}}(s(t))|^2dt\right)^{1/2}.
+\]
 
 For a horizontal segment,
 
 \[
-\Phi_k^{\mathrm{raw}}(t)
-\approx
-(L_k^x)^2
-\phi_{\mathrm{phys}}(x_k^-+L_k^x t,y_k).
+P_k(t)=(L_k^x)^2A_k^x\widetilde P_k(t).
 \]
 
 For a vertical segment,
 
 \[
-\Psi_l^{\mathrm{raw}}(t)
-\approx
-(L_l^y)^2
-\psi_{\mathrm{phys}}(x_l,y_l^-+L_l^y t).
+Q_l(t)=(L_l^y)^2A_l^y\widetilde Q_l(t).
 \]
 
-Thus,
+The output shape remains `(B,2,P)`. The first channel is the x response \(P\),
+and the second is the y response \(Q\). These are not physical source fields;
+physical \(\phi,\psi\) are derived after response-space projection. This convention
+is mandatory, and complex CouplingNet checkpoints older than contract v5 must be
+retrained.
+
+The corresponding projected response and physical variables satisfy
 
 \[
 \Phi=L_x^2\phi_{\mathrm{phys}},
@@ -339,17 +344,18 @@ Thus,
 \Psi=L_y^2\psi_{\mathrm{phys}}.
 \]
 
-This convention is mandatory.
-
 ### 5.8 Function branch input
 
-The CouplingNet function branch uses only transformed
+The source branch is mandatory. The optional coefficient branch uses enabled
+transformed channels in active order
 
 \[
-a,\quad b,\quad c.
+a,\quad b_{\mathrm{primary}},\quad b_{\mathrm{transverse}},\quad c.
 \]
 
-Do not add a source branch, Green response feature, source stencil lift, or \(a'\) feature to the CouplingNet function branch by default.
+Do not add Green response features, source stencil lift, or an \(a'\) channel to
+the complex CouplingNet branches. Green reconstruction keeps its separate
+primary-operator coefficient contract.
 
 For a horizontal segment,
 
@@ -360,9 +366,15 @@ a(x_k^-+L_k^x t,y_k),
 \]
 
 \[
-b_{\mathrm{unit}}^x(t)
+b_{\mathrm{primary}}^x(t)
 =
 L_k^x b_x(x_k^-+L_k^x t,y_k),
+\]
+
+\[
+b_{\mathrm{transverse}}^x(t)
+=
+L_k^x b_y(x_k^-+L_k^x t,y_k),
 \]
 
 \[
@@ -380,9 +392,15 @@ a(x_l,y_l^-+L_l^y t),
 \]
 
 \[
-b_{\mathrm{unit}}^y(t)
+b_{\mathrm{primary}}^y(t)
 =
 L_l^y b_y(x_l,y_l^-+L_l^y t),
+\]
+
+\[
+b_{\mathrm{transverse}}^y(t)
+=
+L_l^y b_x(x_l,y_l^-+L_l^y t),
 \]
 
 \[
@@ -441,7 +459,6 @@ The geometry branch feature must be
 g_\ell
 =
 [
-\operatorname{PE}(r_\ell),
 s_\ell^-,
 s_\ell^+,
 s_{\ell,\mathrm{mid}},
@@ -459,14 +476,15 @@ s_{\ell,\mathrm{mid}}
 \frac{s_\ell^-+s_\ell^+}{2}.
 \]
 
-Only \(r_\ell\) is Fourier encoded:
+The separate fixed-line transverse branch Fourier-encodes the globally normalized
+coordinate \(\widehat r_\ell\):
 
 \[
-\operatorname{PE}(r_\ell)
+\operatorname{PE}(\widehat r_\ell)
 =
 [
-\sin(\pi f_k r_\ell),
-\cos(\pi f_k r_\ell)
+\sin(\pi f_k \widehat r_\ell),
+\cos(\pi f_k \widehat r_\ell)
 ]_{k=1}^{K}.
 \]
 
@@ -481,6 +499,23 @@ Do not include:
 - axis one-hot;
 - raw \(r_\ell\) scalar.
 
+Output contract v5 also requires one shared pointwise transverse trunk with input
+
+\[
+\left[
+t_\perp,
+\log\frac{L_\perp}{L_{\mathrm{ref}}},
+\log\frac{L_\parallel}{L_\perp},
+\frac{4L_\parallel^2L_\perp^2}
+{(L_\parallel^2+L_\perp^2)^2}
+\right].
+\]
+
+For x/\(\Phi\), use \((L_\parallel,L_\perp,t_\perp)=(L_x,L_y,t_y)\).
+For y/\(\Psi\), swap the axes. Require all lengths and the global reference
+extent to be positive. Fuse the primary and transverse trunk embeddings using the
+configured `product` or `product_fuser` mode.
+
 Use `product_fuser` as the default branch fusion mode:
 
 \[
@@ -493,92 +528,58 @@ h_{\mathrm{func}}\odot h_{\mathrm{geom}}
 
 followed by a learned fuser.
 
-### 5.11 Physical balance projection
+### 5.11 Response-space balance projection
 
-Use hard symmetric projection by default. Allow response-preconditioned projection
-only as an explicit complex-geometry ablation.
+Complex output contract v5 requires `balance_projection.enabled=true` and
+`mode="response_space"`. Do not use balance loss, smooth masked projection,
+complex symmetric projection, or response-preconditioned projection.
 
-Do not use balance loss.
-
-Do not use smooth masked projection.
-
-Projection must be applied in physical variables.
-
-At valid point \(p_q\), let
-
-\[
-\alpha(q)=x\_segment\_id(q),
-\qquad
-\beta(q)=y\_segment\_id(q).
-\]
-
-The model already returns physical raw outputs:
-
-\[
-\phi_q^{\mathrm{raw}},
-\qquad
-\psi_q^{\mathrm{raw}}.
-\]
-
-Compute the physical residual:
-
-\[
-r_q
-=
-f_q-\phi_q^{\mathrm{raw}}-\psi_q^{\mathrm{raw}}.
-\]
-
-Apply symmetric projection:
-
-\[
-\phi_q^{\mathrm{proj}}
-=
-\phi_q^{\mathrm{raw}}+\frac12 r_q,
-\]
-
-\[
-\psi_q^{\mathrm{proj}}
-=
-\psi_q^{\mathrm{raw}}+\frac12 r_q.
-\]
-
-For `response_preconditioned`, use
+At valid point \(p_q\), define
 
 \[
 \sigma_x=(L_{\alpha(q)}^x)^2,
-\quad
+\qquad
 \sigma_y=(L_{\beta(q)}^y)^2,
-\quad
-d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f_q,
-\quad
-\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
+\qquad
+s=\max(\sigma_x,\sigma_y),
 \]
 
 \[
-d_{\mathrm{final}}
-=d_0+\kappa(\phi_q^{\mathrm{raw}}-\psi_q^{\mathrm{raw}}),
-\quad
-\phi_q^{\mathrm{proj}}=\frac12(f_q+d_{\mathrm{final}}),
-\quad
-\psi_q^{\mathrm{proj}}=\frac12(f_q-d_{\mathrm{final}}).
+a=\frac{\sigma_y}{s},
+\qquad
+b=\frac{\sigma_x}{s},
+\qquad
+c=\frac{\sigma_x\sigma_y}{s}f_q.
 \]
 
-Green reconstruction, not projection, converts projected physical outputs to unit
-quantities:
+Given raw responses \(P_q,Q_q\), compute
 
 \[
-\Phi_q^{\mathrm{proj}}
-=
-(L_{\alpha(q)}^x)^2
-\phi_q^{\mathrm{proj}},
+R_q=aP_q+bQ_q-c,
 \]
 
 \[
-\Psi_q^{\mathrm{proj}}
-=
-(L_{\beta(q)}^y)^2
-\psi_q^{\mathrm{proj}}.
+\Phi_q=P_q-\frac{aR_q}{a^2+b^2},
+\qquad
+\Psi_q=Q_q-\frac{bR_q}{a^2+b^2}.
 \]
+
+This must enforce
+
+\[
+\frac{\Phi_q}{\sigma_x}+\frac{\Psi_q}{\sigma_y}=f_q.
+\]
+
+Derive physical outputs only by
+
+\[
+\phi_q=\frac{\Phi_q}{\sigma_x},
+\qquad
+\psi_q=\frac{\Psi_q}{\sigma_y}.
+\]
+
+Green reconstruction consumes \(\Phi,\Psi\) directly. Do not multiply the
+projected responses by another axis-specific \(L^2\) factor.
 
 ### 5.12 Segment-wise Green reconstruction
 
@@ -640,11 +641,12 @@ G_\ell(t_i,t_j)
 \mathrm{GreenNet}(\mathrm{branch}_\ell,(t_i,t_j)).
 \]
 
-Use projected unit output only for reconstruction.
+Use projected response output only for reconstruction, with no additional
+post-projection \(L^2\) scaling.
 
 Do not use raw-output reconstruction loss.
 
-### 5.13 Default energy consistency loss
+### 5.13 Length-jump-balanced energy consistency loss
 
 The default consistency loss is physical valid-point face-energy consistency.
 
@@ -704,7 +706,152 @@ Use arithmetic face averaging:
 a_{pp'}=\frac12(a(p)+a(p')).
 \]
 
-### 5.14 Energy edge criterion
+For every valid edge \((i,j)\), compute
+
+\[
+J_{ij}
+=
+\max\left(
+|\Delta\log L_x^2|,
+|\Delta\log L_y^2|
+\right).
+\]
+
+Use \(J_{ij}>\tau\) for the transition group, with default
+\(\tau=\log 2\). Normalize regular and transition edge sums separately:
+
+\[
+E_{\mathrm{balanced}}
+=
+(1-\alpha)\frac{N}{N_r}\sum_{e\in r}e
++
+\alpha\frac{N}{N_t}\sum_{e\in t}e,
+\]
+
+with default \(\alpha=0.5\). If either group is empty, fall back to the
+unweighted physical energy. Report both balanced and unweighted objectives plus
+the two group means and transition edge fraction. These positive edge weights do
+not alter the PDE or introduce reference targets.
+
+In complex mode, `sol` and optional `phi/psi` targets are evaluation-only. They
+must not affect gradients, loss, scheduler, early stopping, or checkpoint
+selection. Reject `best_rel_sol_checkpoint.enabled=true`.
+`best_energy_checkpoint` selects `complex_coupling_model_best_energy.safetensors`
+using validation raw balanced energy.
+
+### 5.14 Optional relative split consistency
+
+The derivative energy cannot detect a constant split mismatch. Complex v5 may
+therefore replace the raw balanced-energy split objective with a source-normalized
+energy-plus-value objective. For every sample \(b\), define
+
+\[
+r_b=u_{\phi,b}-u_{\psi,b},
+\qquad
+M_b=h_xh_y\sum_{p\in\Omega_h}r_b(p)^2,
+\qquad
+F_b=h_xh_y\sum_{p\in\Omega_h}f_b(p)^2,
+\]
+
+and
+
+\[
+D_{\mathrm{ref}}
+=
+\max(x_{\max}-x_{\min},y_{\max}-y_{\min}).
+\]
+
+Then
+
+\[
+\mathcal L_{\mathrm{split},b}
+=
+\frac{
+E_{\mathrm{balanced},b}
++
+\mu D_{\mathrm{ref}}^{-2}M_b
+}{
+F_b+\varepsilon
+}.
+\]
+
+This option is controlled by
+`coupling_training.relative_split_consistency`. It is disabled by the dataclass
+default. If enabled, its `weight` scales the complete sample-mean relative split
+objective. It uses only `rhs`, geometry, coefficients, and predictions; it must
+not read `sol` or target directional fields.
+
+### 5.15 Optional directional weak operator closure
+
+Complex v5 may additionally require the common prediction
+
+\[
+u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi)
+\]
+
+to satisfy both directional weak equations. On every connected x-segment and
+y-segment, use the geometry reconstruction CSR nodes, including both true
+boundary endpoints. Use P1 trial/test values with homogeneous endpoint values.
+For physical nodal test functions \(v_i\), assemble
+
+\[
+R_{x,i}
+=
+B_x(u_{\mathrm{pred}},v_i)-\langle\phi,v_i\rangle,
+\qquad
+B_x(u,v)
+=
+\int
+\left(
+a u_xv_x+b_xu_xv+\frac12cuv
+\right)\,dx,
+\]
+
+\[
+R_{y,i}
+=
+B_y(u_{\mathrm{pred}},v_i)-\langle\psi,v_i\rangle,
+\qquad
+B_y(u,v)
+=
+\int
+\left(
+a u_yv_y+b_yu_yv+\frac12cuv
+\right)\,dy.
+\]
+
+Use physical element lengths \(L(t_{j+1}-t_j)\), transverse measure \(h_y\) on
+x-segments and \(h_x\) on y-segments, P1 diffusion stiffness, nonsymmetric
+convection, and consistent reaction mass matrices. Evaluate `a`, directional
+`b`, and `c` directly at physical element midpoints instead of interpolating
+branch samples.
+
+With lumped directional nodal masses \(m_x,m_y\), define
+
+\[
+\mathcal L_{\mathrm{weak},b}
+=
+\frac{
+\frac12
+\left[
+\sum_i\frac{R_{x,b,i}^2}{m_{x,i}+\varepsilon}
++
+\sum_i\frac{R_{y,b,i}^2}{m_{y,i}+\varepsilon}
+\right]
+}{
+F_b+\varepsilon
+}.
+\]
+
+This option is controlled by `coupling_training.weak_operator_closure` and is
+disabled by the dataclass default. Assemble the residual with differentiable
+element gather/scatter operations; do not introduce a sparse-matrix dependency.
+When enabled, add `weight * mean(L_weak,b)` to the selected split objective.
+`best_physics_checkpoint` selects
+`complex_coupling_model_best_physics.safetensors` using the total validation
+reference-free objective. The energy and physics checkpoints are independent.
+
+### 5.16 Energy edge criterion
 
 Do not use endpoint-validity alone to create energy edges.
 
@@ -830,24 +977,24 @@ Add a complex-geometry forward path that:
 - processes x/y segments separately if necessary;
 - shares function/geometry/trunk networks across x/y segments;
 - uses segment-local \(t\) as trunk input;
-- interprets the two raw outputs as physical quantities
-  \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\);
+- uses one shared four-input pointwise transverse length-context trunk;
+- interprets the two raw outputs as directional responses \(P,Q\);
 - returns enough intermediate outputs for projection and reconstruction.
 
 Do not force complex geometry into a rectangular `(B, 2, m, n)` tensor.
 
-### Step 5. Implement physical balance projection
+### Step 5. Implement response-space balance projection
 
-Implement projection in physical variables.
+Implement orthogonal projection onto the response constraint plane.
 
 The projection path must:
 
-1. receive physical raw \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\) directly;
-2. compute physical residual \(f-\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}}\);
-3. apply the configured symmetric or response-preconditioned split in physical variables;
-4. enforce exact \(\phi+\psi=f\) without using reference fields;
-5. let reconstruction convert projected physical outputs to unit outputs with the
-   axis-specific \(L_x^2\) and \(L_y^2\) factors.
+1. receive raw responses \(P,Q\) directly;
+2. use positive \(L_x^2,L_y^2\) response scales;
+3. apply the stable orthogonal response projection;
+4. enforce exact \(\Phi/L_x^2+\Psi/L_y^2=f\) without reference fields;
+5. derive physical \(\phi,\psi\) for evaluation only;
+6. pass projected responses directly to reconstruction.
 
 Remove or bypass smooth masked projection and balance loss in complex-geometry mode.
 
@@ -860,11 +1007,11 @@ Implement segment-wise reconstruction using:
 - no network evaluation at endpoints;
 - nonuniform trapezoid weights;
 - arbitrary GreenNet pair queries;
-- projected unit output only.
+- projected response output only, with no extra \(L^2\) multiplication.
 
 Do not add a raw-output reconstruction loss.
 
-### Step 7. Implement physical valid-point energy loss
+### Step 7. Implement length-jump-balanced physical valid-point energy loss
 
 Implement valid-point graph energy loss.
 
@@ -874,11 +1021,25 @@ Use:
 - x/y valid edge lists;
 - same-segment edge criterion;
 - area weight \(h_xh_y\);
-- arithmetic face coefficient average.
+- arithmetic face coefficient average;
+- cached regular/transition masks from length-square log jumps;
+- independently normalized regular and transition edge sums;
+- unweighted energy as a separate audit metric.
 
 The energy loss should operate on physical valid points, not on reference coordinates.
+Use validation balanced energy for the optional best-energy checkpoint.
 
-### Step 8. Remove cross consistency from complex-geometry mode
+### Step 8. Add optional value and weak consistency objectives
+
+Implement `relative_split_consistency` as the per-sample source-normalized sum
+of balanced edge energy and domain-scaled split mass. Implement
+`weak_operator_closure` using shared `u_pred`, connected-segment P1 nodal test
+functions, direct midpoint coefficient evaluation, hard-zero endpoints, and
+differentiable element gather/scatter. Save the optional best-physics checkpoint
+from the total validation reference-free objective. Reference `sol/phi/psi`
+values must remain detached evaluation metrics.
+
+### Step 9. Remove cross consistency from complex-geometry mode
 
 In complex-geometry mode:
 
@@ -937,21 +1098,18 @@ Test that:
 
 Test that:
 
-- raw model channels are physical \(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\);
-- symmetric projection preserves the raw difference mode while enforcing balance;
-- response-preconditioned projection matches its \(d_0\) and \(\kappa\) formulas and
-  reduces to symmetric projection for equal lengths;
-- projected physical outputs convert to unit reconstruction outputs with the correct
-  axis-specific \(L^2\) factors;
-- unversioned and version 2/3 complex CouplingNet checkpoints are rejected by the
-  version 4 physical-raw contract.
+- raw model channels are responses \(P,Q\);
+- output scaling is \(L_x^2A_x\) and \(L_y^2A_y\);
+- the shared transverse trunk receives the four length-context features with x/y role swap;
+- unversioned and version 4-or-older complex CouplingNet checkpoints are rejected by
+  output contract v5.
 
 ### 7.4 Projection tests
 
-Test that hard symmetric projection enforces
+Test that response-space projection enforces
 
 \[
-\phi_{\mathrm{proj}}+\psi_{\mathrm{proj}}=f
+\frac{\Phi}{L_x^2}+\frac{\Psi}{L_y^2}=f
 \]
 
 up to numerical tolerance.
@@ -960,7 +1118,8 @@ Test that:
 
 - balance loss is not used;
 - smooth masked projection is not used;
-- projection is applied in physical variables.
+- derived physical fields satisfy \(\phi+\psi=f\);
+- very short positive segment lengths remain finite in float64.
 
 ### 7.5 Reconstruction tests
 
@@ -970,7 +1129,7 @@ Test that:
 - no network call is made at endpoints;
 - trapezoid weights are correct for nonuniform nodes;
 - trapezoid weights sum to \(1\) on \([0,1]\);
-- reconstruction uses projected unit output;
+- reconstruction uses projected response output without another \(L^2\) factor;
 - no raw-output reconstruction loss exists.
 
 ### 7.6 Energy edge tests
@@ -983,6 +1142,9 @@ Test that:
 - points in different horizontal segments do not produce an x-edge;
 - points in the same vertical segment produce a y-edge;
 - points in different vertical segments do not produce a y-edge;
+- length-square log jumps classify transition edges correctly;
+- regular and transition groups are independently normalized;
+- an empty group falls back to the unweighted energy;
 - endpoint-validity alone is insufficient to create an edge.
 
 ### 7.7 Energy loss tests
@@ -1037,20 +1199,24 @@ Do not:
 - assume \(S_x=S_y\);
 - force complex geometry into `(B,2,m,n)`;
 - include boundary endpoints in \(P\);
-- interpret raw output as physical \(\phi,\psi\);
+- interpret raw response output as physical \(\phi,\psi\);
 - use axis one-hot in the geometry branch;
 - include raw \(r_\ell\) in the geometry branch;
 - use different horizontal and vertical branch networks by default;
-- add source branch or Green response feature to the CouplingNet function branch by default.
+- omit the mandatory normalized physical source branch;
+- omit the four-feature pointwise cross-axis length context;
+- add a Green response feature or source stencil lift to the complex branch path.
 
 ### 8.3 Projection/loss failures
 
 Do not:
 
-- apply projection in unit variables without converting to physical variables;
+- apply complex symmetric, response-preconditioned, or geometry-weighted projection;
+- multiply projected responses by another axis-specific \(L^2\) factor;
 - use balance loss in complex-geometry mode;
 - use smooth masked projection in complex-geometry mode;
 - use endpoint-validity alone for energy edges;
+- select complex checkpoints with reference `rel_sol`;
 - use rectangular transpose-based cross consistency.
 
 ### 8.4 Logging/metric failures
@@ -1096,26 +1262,32 @@ The task is complete when all of the following are true.
 - \(S_x\neq S_y\) is supported.
 - Horizontal and vertical branches share networks.
 - Function branch uses transformed \(a,b,c\).
-- Geometry branch uses \([\operatorname{PE}(r),s^-,s^+,s_{\mathrm{mid}},L,L^2,1/L]\).
+- Geometry branch uses \([s^-,s^+,s_{\mathrm{mid}},L,L^2,1/L]\) and a separate fixed-line transverse PE branch.
+- Shared pointwise transverse trunk receives cross-axis coordinate and length context.
 - Axis one-hot and raw \(r\) are not included.
 - `product_fuser` is the default fusion mode.
 
 ### 9.3 Projection and reconstruction
 
-- Symmetric projection is the physical-space default; response-preconditioned is opt-in.
+- Response-space orthogonal projection is the only complex v5 mode.
 - Smooth masked projection is not used.
 - Balance loss is not used.
 - Segment-wise Green reconstruction is implemented.
 - Endpoint outputs are hard-zero.
 - No endpoint network evaluation occurs.
-- Reconstruction uses projected unit output only.
+- Reconstruction uses projected responses directly without another \(L^2\) factor.
 
 ### 9.4 Loss and metrics
 
-- Default complex-geometry loss is valid physical point energy consistency.
+- The base complex-geometry split loss is length-jump-balanced valid-point energy consistency.
+- Optional relative split consistency adds source-normalized value consistency.
+- Optional directional weak closure uses common `u_pred` and full `a,bx/by,c/2`.
 - Energy area weight is \(h_xh_y\).
 - Face coefficient uses arithmetic average.
 - Energy edges follow same axial connected-segment criterion.
+- Unweighted energy and regular/transition group metrics are reported separately.
+- Best-energy and best-physics checkpoints use independent reference-free criteria.
+- Reference `sol/phi/psi` never enters a loss or checkpoint criterion.
 - Cross consistency is completely absent from computation, metrics, logs, and summaries.
 
 ### 9.5 Tests
@@ -1126,6 +1298,9 @@ The task is complete when all of the following are true.
 - Reconstruction tests pass.
 - Energy edge tests pass.
 - Energy loss tests pass.
+- Relative split consistency tests pass.
+- Directional weak closure matrix, endpoint, and manufactured-residual tests pass.
+- Independent best-energy and best-physics checkpoint tests pass.
 - Cross consistency absence tests pass.
 - Unit-square regression or smoke tests pass.
 

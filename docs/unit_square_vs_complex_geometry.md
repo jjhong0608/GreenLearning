@@ -290,7 +290,8 @@ Complex CouplingNet은 point prediction을 위해 네 종류의 branch/trunk 정
 - `coefficient branch`: 선택된 `[a,b_primary,b_transverse,c]` coefficient samples.
 - `geometry branch`: `[s_left, s_right, s_mid, L, L^2, 1/L]`.
 - `transverse branch`: globally normalized transverse coordinate `r_hat`의 Fourier features.
-- `trunk`: valid point의 segment-local coordinate `t`.
+- `primary trunk`: valid point의 segment-local coordinate `t_parallel`.
+- `pointwise transverse trunk`: `[t_perp,log(L_perp/L_ref),log(L_parallel/L_perp),kappa]`.
 
 x-segment에서 transverse coordinate는 fixed `y`이고, y-segment에서 transverse coordinate는 fixed `x`이다.
 `r_hat`은 geometry global extent로 normalize한다. x-segment의 fixed `y`는 `grid_y` extent를 우선 사용하고,
@@ -298,52 +299,33 @@ y-segment의 fixed `x`는 `grid_x` extent를 우선 사용한다. Grid metadata�
 fallback으로 사용한다. 이 normalization은 circular domain처럼 transverse coordinate가 `[0, 1]`에 있지
 않은 경우에도 stable feature scale을 제공하기 위한 것이다.
 
-Trunk는 항상 local 1D coordinate `t`만 본다. Physical coordinate 자체를 trunk에 넣지 않는 이유는
-GreenNet과 CouplingNet의 segment-local unit interval contract를 일관되게 유지하기 위해서다. Physical
-위치와 length 정보는 geometry/transverse branch가 담당한다.
+Primary trunk는 항상 local 1D coordinate `t`만 본다. Physical coordinate 자체를 trunk에 넣지 않는
+이유는 GreenNet과 CouplingNet의 segment-local unit interval contract를 일관되게 유지하기 위해서다.
+v5 pointwise transverse trunk는 한 개의 shared MLP로 양쪽 segment length와 cross-axis local coordinate를
+함께 받는다. x/Phi path는 `(L_parallel,L_perp,t_perp)=(L_x,L_y,y_local_t)`이고 y/Psi path는 축을 바꾼다.
 
-### Physical raw output, physical projection, unit reconstruction
+### Response output, response projection, direct reconstruction
 
-Complex CouplingNet model output은 raw physical quantity `(B, 2, P)`이다. 첫 번째 channel은
-x-direction `phi_raw`, 두 번째 channel은 y-direction `psi_raw`에 대응한다. 두 channel은 각각
-horizontal/vertical path에서 예측되며, normalized source branch의 segment amplitude로 physical
-source scale을 복원한다.
+Complex CouplingNet output contract v5는 raw response `(B,2,P)`를 반환한다. 첫 번째 channel은
+x-direction `P`, 두 번째 channel은 y-direction `Q`이다. Normalized output에는 각각
+`L_x^2*A_x`, `L_y^2*A_y`가 곱해진다.
 
-Projection은 physical variable에서 적용된다. 기본값은 hard symmetric projection이다.
-
-```text
-residual = rhs - phi_raw - psi_raw
-phi = phi_raw + 0.5 residual
-psi = psi_raw + 0.5 residual
-```
-
-이 projection 이후 `phi + psi = rhs`가 valid point에서 강하게 맞춰지고,
-`phi-psi=phi_raw-psi_raw` difference mode는 보존된다. 그 뒤에만 projected physical fields를
-Green reconstruction source로 변환한다.
-
-Optional `response_preconditioned` mode는 같은 physical raw fields를 사용하되,
+Projection은 response constraint plane에서 적용된다.
 
 ```text
-sigma_x=L_x^2, sigma_y=L_y^2
-d0=(sigma_y-sigma_x)*rhs/(sigma_x+sigma_y)
-kappa=4*sigma_x*sigma_y/(sigma_x+sigma_y)^2
-d_final=d0+kappa*(phi_raw-psi_raw)
-phi=0.5*(rhs+d_final)
-psi=0.5*(rhs-d_final)
+sigma_x=L_x^2, sigma_y=L_y^2, s=max(sigma_x,sigma_y)
+a=sigma_y/s, b=sigma_x/s, c=sigma_x*sigma_y*rhs/s
+R=a*P+b*Q-c
+Phi=P-a*R/(a^2+b^2)
+Psi=Q-b*R/(a^2+b^2)
 ```
 
-로 difference response를 precondition한다. 두 projection 모두 reference `sol/phi/psi`를
-사용하지 않으며 exact source balance를 만족한다. RPS는 paired fresh-training ablation용 opt-in이고
-symmetric가 계속 기본값이다.
+이 projection은 `Phi/L_x^2 + Psi/L_y^2 = rhs`를 강하게 맞춘다. Physical fields는
+`phi=Phi/L_x^2`, `psi=Psi/L_y^2`로 파생되므로 `phi+psi=rhs`이다.
 
-```text
-Phi_unit=L_x^2*phi
-Psi_unit=L_y^2*psi
-```
-
-Reconstruction은 segment별
-precomputed nonuniform trapezoid weight를 사용한다. Endpoint는 hard-zero node로 포함되지만 CouplingNet을
-endpoint에서 평가하지 않는다.
+Reconstruction은 projected response `Phi/Psi`를 직접 사용하며 추가 `L^2` multiplication을 하지 않는다.
+Segment별 precomputed nonuniform trapezoid weight를 사용하고, endpoint는 hard-zero node로 포함되지만
+CouplingNet을 endpoint에서 평가하지 않는다.
 
 결과적으로 complex path에서 저장/평가되는 represented solutions는 다음과 같다.
 
@@ -364,14 +346,18 @@ grid heatmap 중심으로 구성할 수 있다.
 ### Complex path
 
 Complex path는 valid-point geometry만 신뢰한다. 따라서 metrics, logs, artifacts는 complex-safe field만
-남긴다. Training loss의 중심은 same-segment valid edge를 사용하는 physical energy consistency이다.
-이 loss는 `x_edges`, `y_edges`, `hx`, `hy`, valid point coefficient `a_valid`를 사용한다. Face coefficient는
-edge 양끝의 arithmetic average로 계산한다.
+남긴다. Training loss의 중심은 same-segment valid edge를 사용하는 length-jump-balanced physical energy
+consistency이다. 이 loss는 `x_edges`, `y_edges`, `hx`, `hy`, valid point coefficient `a_valid`를 사용한다.
+Face coefficient는 edge 양끝의 arithmetic average로 계산한다. Edge를
+`max(|Delta log L_x^2|,|Delta log L_y^2|)`로 regular과 transition group으로 나누고 두 group을 독립
+normalize한다. 기존 unweighted energy도 audit metric으로 남긴다.
 
 Evaluation metric은 다음처럼 valid point order를 기준으로 한다.
 
 - `loss`: training objective aggregate.
-- `loss_energy_consistency`: physical edge energy consistency.
+- `loss_energy_consistency`: unweighted physical edge energy consistency.
+- `loss_energy_length_balanced`: optimized balanced edge energy.
+- `loss_energy_regular`, `loss_energy_transition`, `transition_edge_fraction`: group diagnostics.
 - `rel_sol`: `u_pred=0.5*(u_phi+u_psi)`와 `sol`의 valid-point relative error.
 - `rel_flux`: optional target `phi`, `psi`가 sample에 있을 때만 계산되는 projected physical flux-divergence error.
 
@@ -400,9 +386,9 @@ Full-grid outside-domain value는 sample storage에서는 존재할 수 있지�
 | Scaling | interval length가 항상 1 | `a_unit=a_phys`, `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, `c_unit=L^2*c_phys`, `f_unit=L^2*f_phys` | physical interval operator를 unit operator로 변환 |
 | Coupling source | regular axial source branch | full-grid `rhs` gather 후 segment-local source branch | sample source는 valid point에서 주어지므로 branch grid interpolation 필요 |
 | Coupling coefficient | coefficient function slices | coefficient function을 branch grid에서 직접 evaluate | coefficient는 function이므로 sample interpolation 불필요 |
-| Geometry 정보 | regular grid 자체에 암묵적으로 포함 | geometry branch와 transverse branch로 명시 입력 | endpoint, length, transverse 위치가 segment마다 다름 |
-| Trunk | square coordinate 또는 axis-local coordinate | segment-local `t` | physical 위치는 branch 쪽에서 처리 |
-| Projection | balance relation을 square grid에서 적용 | physical `phi`, `psi`에 symmetric 기본 또는 opt-in RPS 적용 | `phi + psi = rhs`를 valid point에서 보장 |
+| Geometry 정보 | regular grid 자체에 암묵적으로 포함 | geometry/fixed-line branch와 pointwise cross-axis length trunk | endpoint, 양쪽 length, transverse 위치가 segment마다 다름 |
+| Trunk | square coordinate 또는 axis-local coordinate | primary local `t`와 shared four-feature transverse trunk | pointwise cross-axis response scale을 제공 |
+| Projection | balance relation을 square grid에서 적용 | `Phi/L_x^2 + Psi/L_y^2 = rhs` response projection | physical balance를 response variables에서 보장 |
 | Reconstruction | regular line quadrature | segment별 nonuniform trapezoid weights | irregular valid/reconstruction node 처리 |
 | Artifact | square grid heatmap 중심 | `coords_valid` scatter 중심 | outside-domain point를 시각적 의미에서 제외 |
 

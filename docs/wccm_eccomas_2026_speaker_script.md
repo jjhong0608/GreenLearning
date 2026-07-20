@@ -6,15 +6,17 @@
 - **Minisymposium:** MS165 - Methods and Applications of Model Order Reduction
 - **Talk title:** Hybrid Green's Function Learning With Axial Reduction for Multi-Dimensional Elliptic Problems
 - **Presenter:** Junhong Jo, National Institute for Mathematical Sciences
-- **Target duration:** 14-15 minutes for the spoken script
+- **Target duration:** Approximately 13 minutes for the spoken script
 - **Language:** English
-- **Status:** Editable draft before inserting the final version into Quarto speaker notes
+- **Status:** Compressed 13-minute canonical script synchronized with the Quarto speaker notes
 
 ## How to Use This Script
 
-This document is the editable speaker-script draft for the current Quarto/Reveal.js deck.  It is not yet copied into the slide notes.  After revision, the final version can be inserted into the `::: {.notes}` blocks in the Quarto source.
+This document is the canonical editable speaker script for the current Quarto/Reveal.js deck.  Its compressed main-talk script and Q&A prompts are synchronized with the `::: {.notes}` blocks in the Quarto source.  The timing plan reserves a short delivery buffer so that clicks and pauses fit within approximately 13 minutes.  Future wording changes should be applied to both locations.
 
 Each slide section contains the target time, reveal cues, a full spoken script, a compression option, and a transition sentence.  The compression option is the sentence to use when the live timing becomes tight.
+
+Terminology convention: reserve **field** for vector-valued quantities, such as the convection vector field \(\mathbf b\).  Refer to \(f\) as the source or forcing, \(u\) as the solution, \(a\) and \(c\) as coefficients, and \(\phi,\psi\) as directional source components.
 
 Canonical thesis sentence:
 
@@ -24,169 +26,145 @@ Canonical thesis sentence:
 
 | Slide | Title | Target time |
 |---:|---|---:|
-| 1 | Hybrid Green's Function Learning With Axial Reduction | 0:35 |
-| 2 | Axial Reduction of Elliptic Operators | 1:15 |
-| 3 | From a 2D Elliptic Problem to Coupled Axial Green Solves | 0:55 |
-| 4 | Unit-Interval Pull-Back and Operator Scaling | 1:05 |
-| 5 | GreenNet I: Normalized Axial Green Operator | 0:55 |
-| 6 | GreenNet II: Analytic Green Structure and Learned Correction | 1:20 |
-| 7 | GreenNet III: Source-to-Solution Supervision | 1:00 |
-| 8 | Numerical Evidence I: GreenNet Kernel Approximation | 1:05 |
-| 9 | CouplingNet I: Directional Source Split | 0:55 |
-| 10 | CouplingNet II: Branches and Local Context for Split Prediction | 1:00 |
-| 11 | CouplingNet III: Projection and Green Reconstruction | 1:00 |
-| 12 | Energy-Norm Error Bound Proposition | 1:15 |
-| 13 | Numerical Evidence II: CouplingNet Solution Reconstruction | 1:20 |
-| 14 | Takeaway: Coupled Axial Green Solvers | 0:50 |
-| **Total** | **Main talk only** | **14:30** |
+| 1 | Hybrid Green's Function Learning With Axial Reduction | 0:40 |
+| 2 | Axial Reduction of Elliptic Operators | 1:05 |
+| 3 | From a 2D Elliptic Problem to Coupled Axial Green Solves | 0:50 |
+| 4 | Unit-Interval Pull-Back and Operator Scaling | 0:55 |
+| 5 | GreenNet I: Normalized Axial Green Operator | 0:45 |
+| 6 | GreenNet II: Analytic Green Structure and Learned Correction | 1:10 |
+| 7 | GreenNet III: Source-to-Solution Supervision | 0:50 |
+| 8 | Numerical Evidence I: GreenNet Kernel Approximation | 0:55 |
+| 9 | CouplingNet I: Directional Source Split | 0:50 |
+| 10 | CouplingNet II: Branches and Local Context for Split Prediction | 0:50 |
+| 11 | CouplingNet III: Projection and Green Reconstruction | 0:50 |
+| 12 | Energy-Norm Error Bound Proposition | 1:05 |
+| 13 | Numerical Evidence II: CouplingNet Solution Reconstruction | 1:15 |
+| 14 | Takeaway: Coupled Axial Green Solvers | 0:40 |
+| **Total** | **Main talk, before delivery buffer** | **12:40** |
 
 Backup slides are not included in the timed talk.  They are Q&A support material only.
 
 ## Slide 1 - Hybrid Green's Function Learning With Axial Reduction
 
-**Target time:** 0:35
+**Target time:** 0:40
 
 **Reveal / click cues:** Static slide.  No animation.
 
 **Speaker script:**
 
-Good morning.  My name is Junhong Jo from the National Institute for Mathematical Sciences.  This is joint work with Taeyoung Ha at NIMS and Chang-Ock Lee at KAIST.
+Good afternoon.  I am Junhong Jo from the National Institute for Mathematical Sciences.  This is joint work with Taeyoung Ha at NIMS and Chang-Ock Lee at KAIST.
 
-In this talk, I will describe a hybrid Green's-function learning framework for multi-dimensional elliptic problems.  The main idea is simple: instead of learning a full two-dimensional solver as one black-box map, we use line-wise Green inverses and learn how the source should be split and coupled across directions.
+We solve multi-dimensional elliptic problems with two complementary components: GreenNet supplies line-wise Green inverses, and CouplingNet learns the directional source split that turns them into a two-dimensional solver.  I will explain the construction and its numerical evidence.
 
-The short version is this: GreenNet supplies line-wise Green inverses, and CouplingNet learns the directional source split that turns them into a two-dimensional elliptic solver.
+**Compression option:** GreenNet provides line-wise inverses, while CouplingNet learns how to couple them.
 
-**Compression option:** GreenNet gives line-wise Green inverses, and CouplingNet learns the source split needed to assemble a two-dimensional solution.
-
-**Transition to next slide:** I will first explain what is reduced in this axial viewpoint.
+**Transition to next slide:** Let me begin with the axial operator viewpoint.
 
 ## Slide 2 - Axial Reduction of Elliptic Operators
 
-**Target time:** 1:15
+**Target time:** 0:55
 
 **Reveal / click cues:** Reveal the direct source-to-solution map first, then the directional split, then the GreenNet/CouplingNet anchor sentence.
 
 **Speaker script:**
 
-We start from a fixed heterogeneous elliptic operator.  The coefficient fields define the problem, and the sample variation comes from the source field.  So the basic learning target is the source-to-solution map, written here as \( \mathcal S_{a,\mathbf b,c}: f \mapsto u \).
+In our setting, the coefficient functions \(a\), \(\mathbf b\), and \(c\) are prescribed, while the source \(f\) varies across samples.  Our learning target is therefore the source-to-solution map \(f\mapsto u\).
 
-Learning this map directly in two dimensions is expensive because it is high-dimensional and sensitive to the geometry.  The axial viewpoint replaces this single global representation by directional one-dimensional operators.  The operator is split into an \(x\)-direction part and a \(y\)-direction part, each with half of the reaction term, so that \(L_x u + L_y u = f\).
+Representing this map directly over the full two-dimensional domain is high-dimensional and sensitive to geometry.  Instead, we split the operator into \(L_x\) and \(L_y\), with half of the reaction term in each direction, so that \(L_xu+L_yu=f\).
 
-This is the point where the two networks enter.  GreenNet learns the line-wise Green inverses associated with these directional operators.  CouplingNet learns the directional source split, so that those line-wise inverses can be combined into a two-dimensional solution.
+GreenNet learns the directional line-wise inverses.  CouplingNet learns how the source is divided between them.  This is an operator and source decomposition, not merely a geometric slicing.
 
-This is not meant as a purely geometric decomposition.  It is a structured decomposition of the elliptic operator and its source-to-solution map.
+The homogeneous boundary condition is enforced within each directional line problem.
 
-**Compression option:** The fixed operator maps \(f\) to \(u\); we replace one global representation by directional one-dimensional operators plus learned coupling.
+**Compression option:** We replace one global source-to-solution map with directional inverses and learned coupling.
 
-**Transition to next slide:** The next slide shows the whole computation as a visual roadmap.
+**Transition to next slide:** This diagram summarizes the resulting solver.
 
 ## Slide 3 - From a 2D Elliptic Problem to Coupled Axial Green Solves
 
-**Target time:** 0:55
+**Target time:** 0:50
 
 **Reveal / click cues:** Reveal the graphic abstract from left to right: 2D problem, axial intervals, GreenNet line-wise inverse, CouplingNet coupling, solution.
 
 **Speaker script:**
 
-This slide is the graphic abstract of the method.
+Here is the complete pipeline.  A two-dimensional source is restricted to valid horizontal and vertical intersections.  Each connected interval in both directions becomes an independent one-dimensional line problem.  GreenNet maps its line source to a line solution through a Green kernel integral.
 
-On the left, we have a two-dimensional source field on a domain.  We then look at axial intersections of the domain.  Along each valid interval, the problem is represented as a one-dimensional line problem.
+Those independent inverses still need a directional source allocation.  CouplingNet predicts \(\phi\) and \(\psi\), routes them through the \(x\)- and \(y\)-direction Green reconstructions, and recovers a consistent two-dimensional solution.
 
-The GreenNet block learns the line-wise inverse.  Given a line-source profile, it reconstructs a line-wise solution profile through a Green kernel integral.  However, these line-wise solves do not by themselves determine how the original two-dimensional source should be distributed between directions.
+**Compression option:** GreenNet solves along lines, and CouplingNet supplies the directional source allocation.
 
-That missing coupling is the role of CouplingNet.  It predicts the directional source components, which are then passed through the \(x\)- and \(y\)-direction Green reconstructions.  The final output is a two-dimensional solution field.
-
-So the full pipeline is: slice, solve line-wise, learn the coupling, and reconstruct the field.
-
-**Compression option:** The picture summarizes the solver: axial intervals go to line-wise Green inverses, and CouplingNet supplies the source coupling needed for a 2D field.
-
-**Transition to next slide:** To make line-wise Green learning reusable, each physical interval is normalized to a unit interval.
+**Transition to next slide:** We first normalize every physical interval.
 
 ## Slide 4 - Unit-Interval Pull-Back and Operator Scaling
 
-**Target time:** 1:05
+**Target time:** 0:55
 
 **Reveal / click cues:** Show the physical 1D operator, then the interval pull-back, then the scaling rules and normalized equation.
 
 **Speaker script:**
 
-Once we restrict the problem to an axial interval, that interval is generally not the unit interval.  It may have different length depending on where the line intersects the domain.
+Axial intervals have different endpoints and physical lengths.  We pull each coordinate \(s\) back to \(t\in[0,1]\) by \(s=s_0+Lt\), and write the normalized solution as \(v(t)=u(s_0+Lt)\).
 
-So we pull back the physical coordinate \(s\) to a normalized coordinate \(t\) in \([0,1]\), using \(s=s_0+Lt\), where \(L=s_1-s_0\).  The normalized solution is \(v(t)=u(s_0+Lt)\).
+Normalization does not discard the length.  It re-enters through the transformed operator: diffusion and convection scale with \(L\), while reaction and source scale with \(L^2\).  The bottom equation is the same physical line problem on \([0,1]\), with its operator and boundary locations retained.
 
-The important point is that the interval is normalized, but the physical length is not discarded.  It enters the unit-interval operator through the scaling of the coefficients and the source.  The diffusion coefficient itself is evaluated along the interval, the derivative of diffusion scales by \(L\), convection scales by \(L\), and reaction and source scale by \(L^2\).
+**Compression option:** Every interval becomes \([0,1]\), with its length retained through operator scaling.
 
-This gives a shared unit-interval representation while still retaining the physical length and operator information of each line segment.
-
-**Compression option:** The pull-back maps every physical interval to \([0,1]\), but the length \(L\) remains inside the scaled operator.
-
-**Transition to next slide:** Now that each line problem is normalized, we can define the Green operator that GreenNet learns.
+**Transition to next slide:** On this normalized interval, GreenNet learns the inverse.
 
 ## Slide 5 - GreenNet I: Normalized Axial Green Operator
 
-**Target time:** 0:55
+**Target time:** 0:45
 
 **Reveal / click cues:** Reveal the contrast strip, then the source profile, kernel integral operator, and output profile.
 
 **Speaker script:**
 
-The previous step normalized the operator.  This step learns its Green inverse.
+A Green operator maps a line source to a line solution by integrating against a kernel.  GreenNet learns this action on the unit interval.
 
-By Green operator, I mean the source-to-solution map induced by a Green kernel integral.  On the unit interval, the operator maps a source profile \(f_{\mathrm{unit}}\) to a solution profile \(v\) by integrating the source against \(G_{\mathrm{unit}}(t,\eta)\).
+It is not a global two-dimensional Green function.  The axial coefficient profiles specify the local one-dimensional operator, while \(t\) and \(\eta\) are the evaluation and source coordinates.  GreenNet therefore learns a family of normalized axial kernels.
 
-This is not a global two-dimensional Green function.  It is a local one-dimensional Green kernel associated with a normalized axial line problem.  The coefficient profiles along that line define the local one-dimensional operator, and the kernel coordinates \((t,\eta)\) define where the Green kernel is evaluated.
+The same GreenNet model can then be reused across the different axial intervals.
 
-So GreenNet learns a family of normalized axial Green kernels, conditioned by the local operator profiles.
+**Compression option:** GreenNet learns the unit-interval kernel integral for each axial operator.
 
-**Compression option:** A Green operator is the integral map from a line source to a line solution; GreenNet learns this normalized one-dimensional kernel.
-
-**Transition to next slide:** The next question is how to learn this kernel without forcing the neural network to learn the Green singularity from scratch.
+**Transition to next slide:** We now build its singular structure into the model.
 
 ## Slide 6 - GreenNet II: Analytic Green Structure and Learned Correction
 
-**Target time:** 1:20
+**Target time:** 1:10
 
 **Reveal / click cues:** Use the three GreenNet analytic states: role thesis, analytic identities, learned correction envelope.
 
 **Speaker script:**
 
-This is the hybrid part of GreenNet.  For variable-coefficient operators, the exact Green kernel is usually not available in closed form.  But the Green kernel still has structural features: a source-point singularity, a jump condition, and homogeneous boundary behavior.
+For variable coefficients, the exact kernel is rarely available, but its singularity, derivative jump, and homogeneous boundary behavior are known.  We therefore build these features in analytically.
 
-The idea is not to ask the neural network to learn all of that from scratch.  Instead, the final learned kernel is built from three components.
+The \(A(t)G_0\) term supplies the Dirac-delta jump.  The variable-coefficient operator also produces a Heaviside-type contribution, cancelled by \(B(t)(J_0-\frac12E)\), where \(J_0\) is an antiderivative of \(G_0\).
 
-The \(A(t)G_0(t,\eta)\) term provides the Dirac-delta jump structure.  This is the singular Green-function behavior that creates the source response.
+The network learns only the remaining smooth correction \(R_\theta\).  Its envelope \(E(t,\eta)M(t)\) makes that correction compatible with the endpoint conditions.  Reaction effects also enter through this learned residual.  The nonsmooth Green behavior is therefore supplied analytically, while learning is reserved for the smoother residual.
 
-The \(B(t)(J_0-\frac12E)\) term compensates the Heaviside-type contribution generated by that jump construction.  Here \(J_0\) is an antiderivative of \(G_0\), so it creates the derivative structure needed for cancellation.
+**Compression option:** Analytic terms handle the jump and cancellation; the network learns the boundary-compatible smooth residual.
 
-Finally, \(E(t,\eta)M(t)R_\theta(t,\eta)\) is the learned smooth correction.  The envelope factors make this learned correction compatible with the boundary structure.
-
-So the neural network is not responsible for the singular part of the Green function.  It learns the remaining smooth residual after the analytic structure has been built in.
-
-**Compression option:** The analytic terms encode the singular jump and cancellation structure; the neural network learns only the smooth residual.
-
-**Transition to next slide:** With this kernel form fixed, we still need a supervised signal for GreenNet.
+**Transition to next slide:** The kernel is trained through its source-to-solution action.
 
 ## Slide 7 - GreenNet III: Source-to-Solution Supervision
 
-**Target time:** 1:00
+**Target time:** 0:50
 
 **Reveal / click cues:** Reveal GP target generation, boundary-compatible target, source generation, reconstruction loss.
 
 **Speaker script:**
 
-GreenNet is supervised, but not by direct pointwise labels for the exact Green kernel.  Instead, it is trained through source-to-solution reconstruction.
+GreenNet is supervised through reconstruction, not exact-kernel labels.  We sample a smooth Gaussian-process profile and remove its endpoint interpolant to obtain a Dirichlet target \(v\).
 
-We first sample a smooth target profile from a Gaussian process.  Then we subtract the endpoint interpolant so that the resulting target solution satisfies homogeneous Dirichlet boundary conditions on the unit interval.
+Applying the unit operator to \(v\) generates a consistent source.  Source and target are normalized by the same factor.  GreenNet integrates that source against \(G_\theta\), and the loss compares the reconstruction \(v_\theta\) with \(v\).  The kernel is therefore learned through its operator action.
 
-The source is not sampled independently.  It is generated by applying the unit operator to this target solution.  Therefore, by construction, this source and target solution form a consistent one-dimensional boundary value problem.
+By construction, every generated pair satisfies the same one-dimensional boundary-value problem, even though no exact kernel values are used as labels.
 
-GreenNet then produces \(v_\theta\) by integrating the learned kernel against the generated source.  The training loss checks whether \(v_\theta\) reconstructs the target solution \(v\).
+**Compression option:** Consistent source-solution pairs supervise the learned Green operator action.
 
-So GreenNet learns the kernel through its action as a source-to-solution operator, not through direct exact-kernel supervision.
-
-**Compression option:** GreenNet is trained by asking whether the learned kernel maps sources generated from target solutions back to those target solutions.
-
-**Transition to next slide:** Before introducing CouplingNet, I will show that this line-wise Green kernel is actually being captured.
+**Transition to next slide:** We can now test whether the kernel structure was learned.
 
 ## Slide 8 - Numerical Evidence I: GreenNet Kernel Approximation
 
@@ -196,174 +174,148 @@ So GreenNet learns the kernel through its action as a source-to-solution operato
 
 **Speaker script:**
 
-This is kernel-level evidence for GreenNet, before introducing the coupling model.
+This reaction-free convection-diffusion problem is used because its reference axial kernels are available.  The displayed example is one representative vertical interval in the disk.
 
-The example is a reaction-free convection-diffusion problem on a disk.  We use this case because reference axial Green kernels are available for validation.
+First, the reference and learned heatmaps show that GreenNet captures the singular diagonal structure.  Next, the fixed-\(\eta\) slice shows that the two curves nearly overlap, including near the singular point.
 
-The first two heatmaps compare the reference kernel and the learned kernel on a representative axial interval.  The third heatmap is the signed error.  What I want to highlight is that the learned kernel captures the singular Green structure around the diagonal.
+Finally, the signed-error heatmap and diagnostics show that error is not concentrated only near the diagonal.  This indicates that the analytic wrapping has handled the singular structure as intended.
 
-Now, the fixed-\(\eta\) slice gives a more direct view.  The reference and learned curves are almost overlapping, including near the singular point.  The reference curve is drawn on top so that it remains visible even when the learned curve is very close.
+**Compression option:** The learned kernel captures the singular structure without diagonal-dominated error.
 
-The signed error is also informative.  It is not concentrated only near the singular diagonal.  This supports the purpose of the analytic wrapping: the singular structure is handled well, and the remaining error is not dominated by the singular line.
-
-**Compression option:** The learned kernel follows the singular Green structure, and the signed error is not concentrated near the singular diagonal.
-
-**Transition to next slide:** Once the line-wise inverse is validated, the remaining question is how to split the two-dimensional source across directions.
+**Transition to next slide:** We now need to couple these line-wise inverses.
 
 ## Slide 9 - CouplingNet I: Directional Source Split
 
-**Target time:** 0:55
+**Target time:** 0:50
 
 **Reveal / click cues:** Reveal why GreenNet alone is insufficient, then \(\phi,\psi\), then the balance relation.
 
 **Speaker script:**
 
-GreenNet gives line-wise inverses, but the original problem is still two-dimensional.  We need to decide what source should be sent to the horizontal line problems and what source should be sent to the vertical line problems.
+GreenNet provides the directional inverses, but it does not determine how the two-dimensional source is split into the \(x\)- and \(y\)-directional source components.
 
-This is the role of CouplingNet.  It predicts a directional source split.  Conceptually, \(\phi\) is the \(x\)-direction flux-divergence or source component, and \(\psi\) is the \(y\)-direction component.  With the reaction term split evenly, the exact components would satisfy \(\phi+\psi=f\).
+CouplingNet predicts \(\phi\) and \(\psi\), the horizontal and vertical flux-divergence or source components.  With the reaction term divided equally, their physical balance is \(\phi+\psi=f\).  CouplingNet predicts this split rather than the solution itself.
 
-The important point is that CouplingNet is not predicting the solution directly.  It predicts the source components that make the Green reconstructions possible.
+Training uses neither reference-solution nor split labels.  It is driven by balance, Green reconstruction, and split consistency; reference solutions are used only for evaluation.
 
-Also, CouplingNet is trained without reference-solution labels or split labels.  The reference solution is used for evaluation, not for training this split model.
+**Compression option:** CouplingNet learns the balanced directional source components, not the solution.
 
-**Compression option:** CouplingNet learns \(\phi\) and \(\psi\), the directional source components that couple the line-wise Green inverses.
-
-**Transition to next slide:** To predict this split, the model needs both line-level profiles and pointwise coordinate context.
+**Transition to next slide:** Its inputs combine line profiles with pointwise coordinates.
 
 ## Slide 10 - CouplingNet II: Branches and Local Context for Split Prediction
 
-**Target time:** 1:00
+**Target time:** 0:50
 
 **Reveal / click cues:** Reveal the central predictor, branch nets, trunk nets, then the combined map.
 
 **Speaker script:**
 
-This slide shows the information used by CouplingNet.
+CouplingNet separates profile-level and pointwise information.
 
-The branch nets process profile-level information: the source profile, coefficient profiles, and line-geometry structure.  The coefficient field is fixed for a given problem, but its axial profiles vary from line to line, so the model still needs to see those local profiles.
+The branch nets encode the source, axial coefficient profiles, and line geometry.  Although the coefficients are fixed for the problem, their profiles differ across lines.
 
-The trunk nets process pointwise coordinate information.  The primary axial coordinate \(t_{\parallel}\) tells the model where the point lies along the line being predicted.  The transverse coordinate \(t_{\perp}\) gives local information about the orthogonal line passing through the same physical point.
+The trunk nets encode the pointwise positions within the primary and transverse axial intervals.  Combining both representations at each point produces the directional split.
 
-This separation is useful because the split value depends both on profile-level operator information and on pointwise location, including transverse boundary context.
+**Compression option:** Branches encode line profiles; trunks encode axial and transverse coordinates.
 
-Together, these branch and trunk features produce the directional source split.
-
-**Compression option:** Branch nets encode profiles and line geometry; trunk nets encode pointwise axial and transverse coordinates.
-
-**Transition to next slide:** After CouplingNet predicts a raw split, we impose physical balance and reconstruct the solution.
+**Transition to next slide:** The predicted split is then balanced and reconstructed.
 
 ## Slide 11 - CouplingNet III: Projection and Green Reconstruction
 
-**Target time:** 1:00
+**Target time:** 0:50
 
 **Reveal / click cues:** Reveal raw split, residual projection, balanced split, Green reconstructions, and final average.
 
 **Speaker script:**
 
-CouplingNet first proposes a raw directional split.  But this raw split is not guaranteed to satisfy the physical balance \(\phi+\psi=f\).
+GreenNet evaluates each axial inverse on the normalized unit interval.  CouplingNet, however, must enforce the directional source balance in the original physical coordinates.  The raw source components are therefore restored to the physical source scale before projection.
 
-So we project the raw split in physical split variables.  We compute the residual between the true source and the sum of the raw components, and then distribute that residual symmetrically to \(\phi\) and \(\psi\).  After this projection, the balance condition \(\phi+\psi=f\) is enforced.
-
-Then the two balanced components are passed through the axial Green reconstructions.  The \(x\)-direction source gives \(u_\phi\), and the \(y\)-direction source gives \(u_\psi\).
-
-The final prediction is the average of these two represented solutions:
+The raw split need not satisfy \(\phi+\psi=f\).  We form
 \[
-u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi).
+r=f-(\phi_{\mathrm{raw}}+\psi_{\mathrm{raw}})
 \]
+and add half of \(r\) to each component.  This gives a balanced split satisfying \(\phi+\psi=f\).
 
-So the full solver is: predict a split, impose physical balance, reconstruct with Green operators, and average.
+The balanced components are then pulled back along their respective axial intervals and passed through \(G_x\) and \(G_y\), producing \(u_\phi\) and \(u_\psi\).  Their average,
+\[
+\frac12(u_\phi+u_\psi),
+\]
+is the final prediction.
 
-**Compression option:** Projection enforces \(\phi+\psi=f\), then \(G_x\) and \(G_y\) reconstruct two represented solutions whose average is the prediction.
+The projection preserves the original source exactly while changing only its directional decomposition.
 
-**Transition to next slide:** This split consistency also has a useful energy-norm interpretation.
+**Compression option:** GreenNet solves on normalized intervals, while projection enforces the source balance in physical coordinates before reconstruction.
+
+**Transition to next slide:** Their agreement yields an energy-error interpretation.
 
 ## Slide 12 - Energy-Norm Error Bound Proposition
 
-**Target time:** 1:15
+**Target time:** 1:05
 
-**Reveal / click cues:** Reveal energy norm, split energy, reference solution, error bound, assumptions footer.
+**Reveal / click cues:** Introduce the unsupervised loss, then reveal the energy norm, split energy, reference solution, error bound, and assumptions footer.
 
 **Speaker script:**
 
-The energy-norm result explains why the agreement between \(u_\phi\) and \(u_\psi\) is meaningful.
+CouplingNet is trained without reference-solution or directional-split labels.  We therefore need a loss that can be computed from the two directional reconstructions alone.
 
-The norm here is diffusion-weighted.  The coefficient \(a(x)\) is the diffusion coefficient, and the norm measures the gradient of the error in the PDE energy scale.
+Since \(u_\phi\) and \(u_\psi\) are intended to represent the same physical solution, we measure their disagreement in the diffusion-weighted energy norm.  Here, \(a\) is the diffusion coefficient, and this norm captures gradient-level differences in the PDE scale.
 
-The split-energy loss is defined as the energy norm of the difference between the two represented solutions:
+This gives the unsupervised split-energy loss,
 \[
-\mathcal E_{\mathrm{split}}=\|u_\phi-u_\psi\|_a^2.
+\mathcal E_{\mathrm{split}}
+=
+\|u_\phi-u_\psi\|_a^2.
 \]
 
-Under structural assumptions, this quantity is not only a diagnostic.  It bounds the final prediction error:
-\[
-\|u_{\mathrm{pred}}-u_*\|_a
-\le
-\frac{C_E}{2}\sqrt{\mathcal E_{\mathrm{split}}}.
-\]
+For the theoretical analysis, let \(u_*\) denote the exact reference solution.  It does not enter the CouplingNet training loss.
 
-Here \(u_*\) is the reference solution of the full elliptic problem, and \(C_E\) is a stability constant of the fixed elliptic operator.
+Why is this loss relevant to solution accuracy?  Under the stated assumptions, it bounds the final energy error through the inequality shown here.  The constant \(C_E\) is a stability constant of the elliptic operator.
 
-This is a conditional statement.  It assumes exact or controlled Green reconstruction and admissible represented solutions.  So I am not claiming an unconditional theorem for every learned model.  But it gives a structural reason why split consistency is connected to final solution error.
+This result is conditional on \(H_0^1(\Omega)\) admissibility and exact or controlled Green reconstruction.  It provides a structural justification for the unsupervised loss, rather than an unconditional guarantee.
 
-**Compression option:** Under controlled Green reconstruction, small split energy bounds the final energy error.
+**Compression option:** CouplingNet minimizes the energy disagreement between its two reconstructions.  Under controlled Green reconstruction, this unsupervised loss bounds the final energy error.
 
-**Transition to next slide:** Now I will show solver-level evidence for the coupled model.
+**Transition to next slide:** We now evaluate the complete coupled solver.
 
 ## Slide 13 - Numerical Evidence II: CouplingNet Solution Reconstruction
 
-**Target time:** 1:20
+**Target time:** 1:15
 
 **Reveal / click cues:** Source row and metric card first, then reference row, prediction row, signed-error row, and takeaway.
 
 **Speaker script:**
 
-This slide shows the full CouplingNet solver evidence on a convection-diffusion-reaction disk problem.
+This is the complete solver on a convection-diffusion-reaction disk problem.  The five columns represent relative-error quantiles, from the minimum to the maximum, rather than one favorable sample.
 
-The columns are selected by relative solution error: minimum, first quartile, median, third quartile, and maximum among the selected test cases.  The goal is to avoid showing only one favorable example.
+As the reference, prediction, and signed-error rows appear, the predictions follow the reference solutions across this range.  Reference and prediction share a solution scale within each sample, while signed errors use one common zero-centered scale across all five columns.
 
-The first row is the source.  The second row is the reference solution.  The third row is the predicted solution.  The fourth row is the signed error.
+The metric card reports both relative solution error and split-energy loss.  Relative errors range from about 2.3 to 7 percent.  These examples show that the learned source split supports reconstruction across the observed test-error distribution.
 
-The source and solution scales are per sample, so each column remains visually readable.  The signed-error row uses a shared zero-centered scale, so the error magnitudes can still be compared across the selected samples.
+**Compression option:** Quantile-selected cases show reconstruction across the observed error range.
 
-On the right, the metric card shows the relative solution error and the split-energy loss for each column.  In this set, the relative solution error ranges from about 2.3 percent to about 7.0 percent.
-
-The main message is that the learned directional source split supports two-dimensional reconstruction across the observed error range, not only for a single best-case sample.
-
-**Compression option:** Across relative-error quantiles, the predicted solutions track the references, and the signed-error row shows where the coupled solver still deviates.
-
-**Transition to next slide:** I will close by summarizing the four contributions.
+**Transition to next slide:** I will close with the four main contributions.
 
 ## Slide 14 - Takeaway: Coupled Axial Green Solvers
 
-**Target time:** 0:50
+**Target time:** 0:40
 
 **Reveal / click cues:** Reveal thesis, then the four contribution blocks, then the closing banner.
 
 **Speaker script:**
 
-The takeaway is that a two-dimensional elliptic problem can be solved through axial Green inversions and a learned, balance-preserving source decomposition.
+The method has four pieces.  Axial Green kernels provide normalized line-wise inverses.  Analytic wrapping builds in the singular Green structure.  CouplingNet learns a directional source split without solution or split labels, rather than through direct supervision.  Split-energy consistency connects that decomposition to final error under explicit assumptions.
 
-There are four main pieces.
-
-First, axial Green kernels provide line-wise inverse operators on normalized intervals.
-
-Second, GreenNet uses analytic structure so that the singular behavior of the Green function is built in before the neural correction.
-
-Third, CouplingNet learns the directional source split without reference-solution or split labels.  Reference solutions are used for evaluation, not for training CouplingNet.
-
-Fourth, split-energy consistency can be connected to final solution error under explicit structural assumptions.
-
-So the final message is: GreenNet supplies line-wise Green inverses, and CouplingNet learns the source split that turns them into a two-dimensional elliptic solver.
+GreenNet supplies the line-wise inverses, and CouplingNet learns the balance-preserving source split that turns them into a two-dimensional elliptic solver.
 
 Thank you.
 
-**Compression option:** GreenNet learns line-wise Green inverses; CouplingNet learns the balance-preserving source split; together they form a two-dimensional elliptic solver.
+**Compression option:** GreenNet learns the inverses; CouplingNet learns their balance-preserving coupling.
 
 **Transition to next slide:** Stop here for the timed talk.  Use the backup menu only if a question calls for it.
 
 ## Backup / Q&A Prompt Snippets
 
-These prompts are not part of the 14-15 minute timed script.
+These prompts are not part of the approximately 13-minute timed script.
 
 ### Backup A - Dirac/Heaviside Derivation Sketch
 

@@ -18,9 +18,9 @@ from greenonet.coupling_model import ActivationFactoryMixin, MLP
 
 
 class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
-    """Source-conditioned CouplingNet for precomputed complex geometries."""
+    """Source-conditioned response predictor for complex geometries."""
 
-    OUTPUT_CONTRACT_VERSION = 4
+    OUTPUT_CONTRACT_VERSION = 5
 
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
@@ -124,6 +124,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         )
         transverse_trunk = axis_cfg.transverse_trunk
         self.transverse_trunk_enabled = bool(transverse_trunk.enabled)
+        self.transverse_length_context_enabled = bool(transverse_trunk.length_context)
         self.transverse_trunk_fusion_mode = transverse_trunk.fusion
         self.trunk_transverse: MLP | None
         self.trunk_fuser: nn.Linear | None
@@ -131,7 +132,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         self.trunk_fuser_dropout: nn.Module
         if self.transverse_trunk_enabled:
             self.trunk_transverse = MLP(
-                input_dim=1,
+                input_dim=4,
                 hidden_dim=config.hidden_dim,
                 depth=config.depth,
                 activation=config.activation,
@@ -195,10 +196,27 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             raise ValueError(
                 "ComplexCouplingNet requires balance_projection.enabled=true."
             )
-        if balance_projection.mode not in {"symmetric", "response_preconditioned"}:
+        if balance_projection.mode != "response_space":
             raise ValueError(
-                "ComplexCouplingNet supports only symmetric or "
-                "response_preconditioned balance projection."
+                "ComplexCouplingNet output-contract version 5 requires "
+                "balance_projection.mode='response_space'. Earlier symmetric/RPS "
+                "complex checkpoints require retraining."
+            )
+        axis_cfg = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
+        if not axis_cfg.enabled:
+            raise ValueError(
+                "ComplexCouplingNet output-contract version 5 requires "
+                "axis_1d_trunk.enabled=true."
+            )
+        if not axis_cfg.transverse_trunk.enabled:
+            raise ValueError(
+                "ComplexCouplingNet output-contract version 5 requires "
+                "axis_1d_trunk.transverse_trunk.enabled=true."
+            )
+        if not axis_cfg.transverse_trunk.length_context:
+            raise ValueError(
+                "ComplexCouplingNet output-contract version 5 requires "
+                "axis_1d_trunk.transverse_trunk.length_context=true."
             )
         if config.source_stencil_lift.enabled:
             raise ValueError("ComplexCouplingNet does not support source_stencil_lift.")
@@ -211,15 +229,15 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         self,
         state_dict: Mapping[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """Reject checkpoints that do not use the physical-raw v4 contract."""
+        """Reject checkpoints that do not use the response-space v5 contract."""
 
         prepared = dict(state_dict)
         key = "_output_contract_version"
         if key not in prepared:
             raise ValueError(
                 "Legacy complex CouplingNet checkpoint has no output contract "
-                "version and cannot be loaded into physical-raw output contract "
-                "version 4. Retrain the CouplingNet; GreenNet checkpoints remain "
+                "version and cannot be loaded into response-space output contract "
+                "version 5. Retrain the CouplingNet; GreenNet checkpoints remain "
                 "compatible."
             )
 
@@ -234,8 +252,9 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             return prepared
         raise ValueError(
             "Incompatible complex CouplingNet output contract version "
-            f"{version}; expected {self.OUTPUT_CONTRACT_VERSION}. Raw-unit and "
-            "earlier physical-raw CouplingNet checkpoints require retraining; "
+            f"{version}; expected {self.OUTPUT_CONTRACT_VERSION}. Raw-unit, "
+            "physical-raw, and earlier response CouplingNet checkpoints require "
+            "retraining; "
             "GreenNet checkpoints remain compatible."
         )
 
@@ -243,13 +262,13 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         self,
         state_dict: Mapping[str, torch.Tensor],
     ) -> None:
-        """Validate the physical-raw output contract marker."""
+        """Validate the response-space output contract marker."""
 
         key = "_output_contract_version"
         if key not in state_dict:
             raise ValueError(
                 "Complex CouplingNet checkpoint has no output contract version. "
-                "Physical-raw output contract version 4 is required."
+                "Response-space output contract version 5 is required."
             )
         version_tensor = state_dict[key]
         if version_tensor.numel() != 1:
@@ -274,23 +293,23 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         x_coefficient_branch: torch.Tensor,
         y_coefficient_branch: torch.Tensor,
     ) -> torch.Tensor:
-        """Return raw physical source proposals shaped ``(B, 2, P)``."""
+        """Return raw unit-response proposals shaped ``(B, 2, P)``."""
 
-        phi = self._axis_forward(
+        phi_response = self._axis_forward(
             geometry=geometry,
             source_branch=x_source_branch,
             source_amplitude=x_source_amplitude,
             coefficient_branch=x_coefficient_branch,
             axis="x",
         )
-        psi = self._axis_forward(
+        psi_response = self._axis_forward(
             geometry=geometry,
             source_branch=y_source_branch,
             source_amplitude=y_source_amplitude,
             coefficient_branch=y_coefficient_branch,
             axis="y",
         )
-        return torch.stack((phi, psi), dim=1)
+        return torch.stack((phi_response, psi_response), dim=1)
 
     def _axis_forward(
         self,
@@ -347,15 +366,22 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         segment_features = self._fuse_branch_components(branch_components)
 
         gathered_segment = segment_features[:, segment_id]
-        primary_t, transverse_t = self._trunk_coordinates(geometry, axis)
+        primary_t, _transverse_t = self._trunk_coordinates(geometry, axis)
         trunk_features = self._pointwise_trunk_features(
+            geometry=geometry,
+            axis=axis,
             primary_t=primary_t,
-            transverse_t=transverse_t,
             device=source_branch.device,
         )
         trunk_features = trunk_features.unsqueeze(0).expand(bsz, -1, -1)
         output_tilde = (gathered_segment * trunk_features).sum(dim=-1)
-        return output_tilde * source_amplitude[:, segment_id]
+        response_scale = self._primary_length_squared(geometry, axis).to(
+            device=source_branch.device,
+            dtype=source_branch.dtype,
+        )
+        return (
+            output_tilde * source_amplitude[:, segment_id] * response_scale.unsqueeze(0)
+        )
 
     @staticmethod
     def _trunk_coordinates(
@@ -369,8 +395,9 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
     def _pointwise_trunk_features(
         self,
         *,
+        geometry: ComplexGeometryMetadata,
+        axis: Literal["x", "y"],
         primary_t: torch.Tensor,
-        transverse_t: torch.Tensor,
         device: torch.device,
     ) -> torch.Tensor:
         primary_features = cast(
@@ -386,7 +413,9 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             )
         transverse_features = cast(
             torch.Tensor,
-            self.trunk_transverse(transverse_t.to(device).unsqueeze(-1)),
+            self.trunk_transverse(
+                self.transverse_length_context_features(geometry, axis).to(device)
+            ),
         )
         product_features = primary_features * transverse_features
         if self.transverse_trunk_fusion_mode == "product":
@@ -408,6 +437,62 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         raise ValueError(
             "Unsupported axis_1d_trunk.transverse_trunk.fusion: "
             f"{self.transverse_trunk_fusion_mode}"
+        )
+
+    @staticmethod
+    def _primary_length_squared(
+        geometry: ComplexGeometryMetadata,
+        axis: Literal["x", "y"],
+    ) -> torch.Tensor:
+        lengths = (
+            geometry.x_lengths_for_valid_points()
+            if axis == "x"
+            else geometry.y_lengths_for_valid_points()
+        )
+        if torch.any(lengths <= 0.0):
+            raise ValueError("Complex geometry segment lengths must be positive.")
+        return lengths.square()
+
+    def transverse_length_context_features(
+        self,
+        geometry: ComplexGeometryMetadata,
+        axis: Literal["x", "y"],
+    ) -> torch.Tensor:
+        """Return pointwise cross-axis response geometry features."""
+
+        if not self.transverse_length_context_enabled:
+            raise RuntimeError(
+                "transverse length context is disabled for this ComplexCouplingNet."
+            )
+        if axis == "x":
+            transverse_t = geometry.y_local_t
+            parallel_length = geometry.x_lengths_for_valid_points()
+            perpendicular_length = geometry.y_lengths_for_valid_points()
+        else:
+            transverse_t = geometry.x_local_t
+            parallel_length = geometry.y_lengths_for_valid_points()
+            perpendicular_length = geometry.x_lengths_for_valid_points()
+
+        x_extent = geometry.y_transverse_max - geometry.y_transverse_min
+        y_extent = geometry.x_transverse_max - geometry.x_transverse_min
+        reference_length = torch.maximum(x_extent, y_extent)
+        if reference_length <= 0.0:
+            raise ValueError("Complex geometry reference extent must be positive.")
+        if torch.any(parallel_length <= 0.0) or torch.any(perpendicular_length <= 0.0):
+            raise ValueError("Complex geometry segment lengths must be positive.")
+
+        sigma_parallel = parallel_length.square()
+        sigma_perpendicular = perpendicular_length.square()
+        response_sum = sigma_parallel + sigma_perpendicular
+        kappa = 4.0 * sigma_parallel * sigma_perpendicular / response_sum.square()
+        return torch.stack(
+            (
+                transverse_t,
+                torch.log(perpendicular_length / reference_length),
+                torch.log(parallel_length / perpendicular_length),
+                kappa,
+            ),
+            dim=-1,
         )
 
     def _source_features(self, source_branch: torch.Tensor) -> torch.Tensor:

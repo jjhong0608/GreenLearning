@@ -36,7 +36,7 @@ def _build_item(tmp_path):
 def _model(
     *,
     fusion_mode: str = "product",
-    transverse_trunk_enabled: bool = False,
+    transverse_trunk_enabled: bool = True,
     transverse_trunk_fusion: str = "product",
     coefficient_terms: CouplingCoefficientTermsConfig | None = None,
 ) -> ComplexCouplingNet:
@@ -47,14 +47,17 @@ def _model(
             hidden_dim=8,
             depth=1,
             dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="response_space"),
             coefficient_terms=coefficient_terms or CouplingCoefficientTermsConfig(),
             branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
             axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
                 num_frequencies=2,
                 max_frequency=2.0,
                 transverse_trunk=TransverseTrunkConfig(
                     enabled=transverse_trunk_enabled,
                     fusion=transverse_trunk_fusion,
+                    length_context=True,
                 ),
             ),
         )
@@ -84,12 +87,12 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
     assert model.branch_transverse is model.branch_transverse
     assert model.branch_geometry is model.branch_geometry
     assert model.trunk is model.trunk
-    assert model.trunk_transverse is None
-    assert not any(key.startswith("trunk_transverse.") for key in model.state_dict())
+    assert model.trunk_transverse is not None
+    assert any(key.startswith("trunk_transverse.") for key in model.state_dict())
     assert model.geometry_feature_dim == 6
     assert model.transverse_feature_dim == 4
     assert not hasattr(model, "axis_one_hot")
-    assert int(model._output_contract_version.item()) == 4
+    assert int(model._output_contract_version.item()) == 5
 
 
 def test_complex_pointwise_transverse_trunk_product_fusion_outputs_shape(tmp_path):
@@ -131,6 +134,25 @@ def test_complex_pointwise_transverse_trunk_uses_cross_axis_local_coordinates(tm
     torch.testing.assert_close(y_transverse, geometry.x_local_t)
 
 
+def test_complex_pointwise_transverse_trunk_uses_cross_axis_length_context(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    model = _model()
+
+    x_features = model.transverse_length_context_features(geometry, "x")
+    y_features = model.transverse_length_context_features(geometry, "y")
+    x_length = geometry.x_lengths_for_valid_points()
+    y_length = geometry.y_lengths_for_valid_points()
+    reference = torch.tensor(1.0, dtype=torch.float64)
+
+    torch.testing.assert_close(x_features[:, 0], geometry.y_local_t)
+    torch.testing.assert_close(y_features[:, 0], geometry.x_local_t)
+    torch.testing.assert_close(x_features[:, 1], torch.log(y_length / reference))
+    torch.testing.assert_close(y_features[:, 1], torch.log(x_length / reference))
+    torch.testing.assert_close(x_features[:, 2], torch.log(x_length / y_length))
+    torch.testing.assert_close(y_features[:, 2], torch.log(y_length / x_length))
+    torch.testing.assert_close(x_features[:, 3], y_features[:, 3])
+
+
 def test_complex_coupling_model_is_source_conditioned(tmp_path):
     geometry, item = _build_item(tmp_path)
     model = _model()
@@ -149,7 +171,7 @@ def test_complex_coupling_model_is_source_conditioned(tmp_path):
     assert not torch.allclose(original, changed)
 
 
-def test_complex_model_scales_physical_output_by_source_amplitude(tmp_path):
+def test_complex_model_scales_response_output_by_source_amplitude(tmp_path):
     geometry, item = _build_item(tmp_path)
     model = _model()
 
@@ -165,6 +187,35 @@ def test_complex_model_scales_physical_output_by_source_amplitude(tmp_path):
     )
 
     torch.testing.assert_close(doubled, 2.0 * original)
+
+
+def test_complex_model_scales_raw_response_by_primary_length_squared(
+    tmp_path,
+    monkeypatch,
+):
+    geometry, item = _build_item(tmp_path)
+    model = _model()
+
+    response = _forward(model, geometry, item)
+    monkeypatch.setattr(
+        model,
+        "_primary_length_squared",
+        lambda geometry, axis: torch.ones(  # noqa: ARG005
+            geometry.num_points,
+            dtype=geometry.coords_valid.dtype,
+            device=geometry.coords_valid.device,
+        ),
+    )
+    response_without_scale = _forward(model, geometry, item)
+    expected_scale = torch.stack(
+        (
+            geometry.x_lengths_for_valid_points().square(),
+            geometry.y_lengths_for_valid_points().square(),
+        ),
+        dim=0,
+    ).unsqueeze(0)
+
+    torch.testing.assert_close(response, response_without_scale * expected_scale)
 
 
 def test_complex_convection_term_adds_primary_and_transverse_channels(tmp_path):
@@ -224,8 +275,17 @@ def test_complex_model_supports_product_fuser_and_source_only_branch(tmp_path):
             depth=1,
             dtype=torch.float64,
             branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
+            balance_projection=BalanceProjectionConfig(mode="response_space"),
             coefficient_terms=dataset.coefficient_terms,
-            axis_1d_trunk=Axis1DTrunkConfig(num_frequencies=1, max_frequency=1.0),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                num_frequencies=1,
+                max_frequency=1.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
         )
     )
 
@@ -243,7 +303,16 @@ def test_complex_transverse_features_use_global_normalized_coordinate(tmp_path):
             hidden_dim=4,
             depth=1,
             dtype=torch.float64,
-            axis_1d_trunk=Axis1DTrunkConfig(num_frequencies=1, max_frequency=1.0),
+            balance_projection=BalanceProjectionConfig(mode="response_space"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                num_frequencies=1,
+                max_frequency=1.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
         )
     )
 
@@ -282,7 +351,7 @@ def test_complex_model_rejects_trunk_positional_encoding_enabled():
 
 
 def test_complex_model_rejects_smooth_mask_balance_projection():
-    with pytest.raises(ValueError, match="symmetric or response_preconditioned"):
+    with pytest.raises(ValueError, match="requires.*response_space"):
         ComplexCouplingNet(
             CouplingModelConfig(
                 branch_input_dim=4,
@@ -294,18 +363,25 @@ def test_complex_model_rejects_smooth_mask_balance_projection():
         )
 
 
-def test_complex_model_accepts_response_preconditioned_projection():
+def test_complex_model_accepts_response_space_projection():
     model = ComplexCouplingNet(
         CouplingModelConfig(
             branch_input_dim=4,
             hidden_dim=4,
             depth=1,
             dtype=torch.float64,
-            balance_projection=BalanceProjectionConfig(mode="response_preconditioned"),
+            balance_projection=BalanceProjectionConfig(mode="response_space"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
         )
     )
 
-    assert model.config.balance_projection.mode == "response_preconditioned"
+    assert model.config.balance_projection.mode == "response_space"
 
 
 def test_complex_model_rejects_legacy_raw_unit_checkpoint(tmp_path):
@@ -321,16 +397,16 @@ def test_complex_model_rejects_legacy_raw_unit_checkpoint(tmp_path):
 
 def test_complex_model_loads_matching_output_contract_checkpoint(tmp_path):
     model = _model()
-    checkpoint = tmp_path / "complex_coupling_v4.safetensors"
+    checkpoint = tmp_path / "complex_coupling_v5.safetensors"
     save_state_dict_safetensors(model.state_dict(), checkpoint)
 
     loaded = _model()
     load_state_dict_auto(loaded, checkpoint)
 
-    assert int(loaded._output_contract_version.item()) == 4
+    assert int(loaded._output_contract_version.item()) == 5
 
 
-@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("version", [2, 3, 4])
 def test_complex_model_rejects_old_versioned_checkpoint(tmp_path, version):
     state = dict(_model().state_dict())
     state["_output_contract_version"] = torch.tensor(version, dtype=torch.int64)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from math import cos, pi
 from pathlib import Path
 from typing import Callable, List, cast
 
@@ -11,10 +10,12 @@ from torch.nn.functional import pad
 
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
 from greenonet.coupling_data import CouplingBoundaryItem, split_coupling_batch
+from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.coupling_model import CouplingNet
 from greenonet.config import (
     CouplingModelConfig,
     CouplingTrainingConfig,
+    validate_unit_square_coupling_training_config,
 )
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.numerics import integrate, line_operator_fd, uniform_spacing
@@ -57,6 +58,7 @@ class CouplingTrainer(LoggingMixin):
     ) -> None:
         self.model = model
         self.config = config
+        validate_unit_square_coupling_training_config(config)
         self.model_cfg = model_cfg
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -914,26 +916,11 @@ class CouplingTrainer(LoggingMixin):
         optimizer: optim.Optimizer,
         total_epochs: int,
     ) -> optim.lr_scheduler.LambdaLR | None:
-        if not optimization_cfg.use_lr_schedule:
-            return None
-        warmup_epochs = max(optimization_cfg.warmup_epochs, 0)
-        if warmup_epochs >= total_epochs:
-            warmup_epochs = total_epochs - 1
-
-        def lr_lambda(epoch_idx: int) -> float:
-            base_lr = optimization_cfg.learning_rate
-            min_lr = optimization_cfg.min_lr
-            if warmup_epochs > 0 and epoch_idx < warmup_epochs:
-                return float(epoch_idx + 1) / float(warmup_epochs)
-            if total_epochs <= warmup_epochs + 1:
-                return float(min_lr / base_lr)
-            progress = float(epoch_idx - warmup_epochs) / float(
-                total_epochs - warmup_epochs - 1
-            )
-            cosine = 0.5 * (1.0 + cos(pi * progress))
-            return float((min_lr / base_lr) + (1.0 - min_lr / base_lr) * cosine)
-
-        return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        schedule = CouplingLearningRateSchedule.from_config(
+            optimization_cfg,
+            total_epochs=total_epochs,
+        )
+        return schedule.build(optimizer)
 
     def _clip_gradients_if_enabled(
         self,
@@ -1013,7 +1000,7 @@ class CouplingTrainer(LoggingMixin):
         )
         optimization_cfg = self._optimization_config()
         optimizer = self._build_optimizer(optimization_cfg)
-        scheduler = self._build_scheduler(optimization_cfg, optimizer, max(epochs, 1))
+        scheduler = self._build_scheduler(optimization_cfg, optimizer, epochs)
         phase_history: List[float] = []
         best_rel_sol = float("inf")
 

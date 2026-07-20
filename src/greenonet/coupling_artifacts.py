@@ -32,6 +32,7 @@ from greenonet.config import (
     ModelConfig,
     SourceStencilLiftConfig,
     TrainingConfig,
+    validate_unit_square_coupling_training_config,
 )
 from greenonet.coupling_data import CouplingDataset, split_coupling_batch
 from greenonet.coupling_model import CouplingNet
@@ -318,6 +319,7 @@ class CouplingArtifactExporter:
         self.request.outdir.mkdir(parents=True, exist_ok=True)
         self._ensure_output_tree()
         configs = load_coupling_artifact_configs(self.request.config)
+        validate_unit_square_coupling_training_config(configs.coupling_training)
         if configs.dataset.test_path is None:
             raise ValueError(
                 "dataset.test_path must be set for Coupling artifact export."

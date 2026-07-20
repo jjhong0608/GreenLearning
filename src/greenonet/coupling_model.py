@@ -313,10 +313,10 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
         super().__init__()
         torch.set_default_dtype(config.dtype)
         balance_projection = BalanceProjectionConfig.from_raw(config.balance_projection)
-        if balance_projection.mode == "response_preconditioned":
+        if balance_projection.mode == "response_space":
             raise ValueError(
-                "balance_projection.mode='response_preconditioned' is available "
-                "only for ComplexCouplingNet."
+                "balance_projection.mode='response_space' is available only for "
+                "ComplexCouplingNet."
             )
         if config.smooth_mask_eps <= 0.0:
             raise ValueError("smooth_mask_eps must be positive.")

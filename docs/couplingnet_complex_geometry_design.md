@@ -1,6 +1,6 @@
 # CouplingNet Design for Complex Geometry
 
-## Segment-Local Reference Output, Hard Symmetric Projection, and Physical Energy Consistency
+## Response-Space Output, Cross-Axis Length Context, and Balanced Physical Energy
 
 ---
 
@@ -17,9 +17,9 @@ The purpose of this document is to fix the following design decisions:
 3. how `CouplingNet` raw outputs are interpreted;
 4. how function-branch inputs are constructed;
 5. how the geometry/transverse branch is constructed;
-6. how hard symmetric projection is applied;
+6. how response-space balance projection is applied;
 7. how segment-wise Green reconstruction is performed;
-8. how the default physical energy consistency loss is computed;
+8. how length-jump-balanced physical energy consistency is computed;
 9. how energy edges are selected;
 10. how validation and visualization should be interpreted;
 11. how cross consistency is treated.
@@ -254,29 +254,30 @@ t_q^y
 
 ## 5. CouplingNet Raw-Output Convention
 
-### 5.1 Raw outputs are physical directional fields
+### 5.1 Raw outputs are directional response fields
 
-`CouplingNet` keeps two axis-conditioned outputs, but both are interpreted directly
-in physical source space:
-
-\\[
-\phi_k^{\mathrm{raw}}(t),
-\qquad
-\psi_l^{\mathrm{raw}}(t).
-\\]
-
-The horizontal path predicts \\(\phi_{\mathrm{raw}}\\), and the vertical path predicts
-\\(\psi_{\mathrm{raw}}\\). No \\(L^2\\) conversion is applied before physical balance
-projection. The axis-specific unit quantities are created only after projection for
-Green reconstruction:
+`CouplingNet` keeps two axis-conditioned outputs, interpreted as unit-interval
+directional responses:
 
 \\[
-\Phi^{\mathrm{proj}}=L_x^2\phi^{\mathrm{proj}},
+P_k(t)=L_k^{x,2}A_k^x\widetilde P_k(t),
 \qquad
-\Psi^{\mathrm{proj}}=L_y^2\psi^{\mathrm{proj}}.
+Q_l(t)=L_l^{y,2}A_l^y\widetilde Q_l(t).
 \\]
 
-### 5.2 `axis_1d_trunk=true`
+Here \\(\widetilde P,\widetilde Q\\) are normalized network outputs and
+
+\\[
+A=\left(\int_0^1|f_{\mathrm{phys}}(s(t))|^2\,dt\right)^{1/2}
+\\]
+
+is the length-independent physical source amplitude. The deterministic
+\\(L_x^2\\) and \\(L_y^2\\) response scales are applied at the model output, not
+learned implicitly by a geometry branch. Projection operates directly on
+\\(P,Q\\), and Green reconstruction consumes the projected responses without an
+additional post-projection length conversion.
+
+### 5.2 Primary and transverse trunks
 
 The default architecture uses
 
@@ -298,7 +299,24 @@ Thus,
 }
 \\]
 
-The trunk does not receive the physical axial coordinate directly in this design.
+The primary trunk does not receive the physical axial coordinate directly. Output
+contract v5 additionally requires a shared pointwise transverse trunk. At each
+valid point it receives
+
+\\[
+\left[
+t_\perp,
+\log\frac{L_\perp}{L_{\mathrm{ref}}},
+\log\frac{L_\parallel}{L_\perp},
+\frac{4L_\parallel^2L_\perp^2}
+{(L_\parallel^2+L_\perp^2)^2}
+\right].
+\\]
+
+For the x/\\(\Phi\\) path,
+\\((L_\parallel,L_\perp,t_\perp)=(L_x,L_y,t_y)\\). For the y/\\(\Psi\\)
+path, the axes are swapped. \\(L_{\mathrm{ref}}\\) is the larger global x/y
+geometry extent. One shared four-input MLP handles both paths.
 
 ---
 
@@ -313,7 +331,8 @@ profile normalized by
 A=\left(\int_0^1 |f_{\mathrm{phys}}(s(t))|^2\,dt\right)^{1/2},
 \\]
 
-and the model output is multiplied by \\(A\\) to restore physical source amplitude.
+and the model output is multiplied by \\(L_\parallel^2A\\) to restore the
+directional response scale.
 The optional coefficient branch uses enabled channels from
 \\(a,b_{\mathrm{primary}},b_{\mathrm{transverse}},c\\). The Green response feature,
 source stencil lift, and \\(a'\\) coefficient channel remain excluded from the complex
@@ -488,16 +507,15 @@ s=y,
 r=x.
 \\]
 
-### 7.2 Geometry feature vector
+### 7.2 Geometry and fixed-line transverse features
 
-The geometry/transverse branch feature is
+The geometry branch feature is
 
 \\[
 \boxed{
 g_\ell
 =
 [
-\operatorname{PE}(r_\ell),
 s_\ell^-,
 s_\ell^+,
 s_{\ell,\mathrm{mid}},
@@ -507,6 +525,16 @@ L_\ell^2,
 ].
 }
 \\]
+
+The separate fixed-line transverse branch receives
+
+\\[
+\operatorname{PE}(\widehat r_\ell),
+\\]
+
+where \\(\widehat r_\ell\\) is normalized by the global transverse geometry
+extent. This interval-level branch remains distinct from the pointwise transverse
+trunk.
 
 where
 
@@ -518,17 +546,18 @@ s_{\ell,\mathrm{mid}}
 
 ### 7.3 Positional encoding of \\(r_\ell\\)
 
-Only the transverse coordinate \\(r_\ell\\) is Fourier-encoded.
+Only the globally normalized transverse coordinate \\(\widehat r_\ell\\) is
+Fourier-encoded.
 
 \\[
-\operatorname{PE}(r_\ell)
+\operatorname{PE}(\widehat r_\ell)
 =
 [
-\sin(\pi f_1 r_\ell),
-\cos(\pi f_1 r_\ell),
+\sin(\pi f_1 \widehat r_\ell),
+\cos(\pi f_1 \widehat r_\ell),
 \dots,
-\sin(\pi f_K r_\ell),
-\cos(\pi f_K r_\ell)
+\sin(\pi f_K \widehat r_\ell),
+\cos(\pi f_K \widehat r_\ell)
 ].
 \\]
 
@@ -558,7 +587,16 @@ The following are not included in the default geometry branch:
 
 Raw \\(r_\ell\\) may be added later as an ablation, but it is not part of the default design.
 
-### 7.5 Geometry/function branch fusion
+### 7.5 Pointwise cross-axis length context
+
+The fixed-line transverse branch cannot describe how the orthogonal connected
+interval changes from point to point. The shared pointwise transverse trunk
+therefore receives the four features defined in Section 5.2. This exposes both
+the parallel and cross-axis response scales while preserving axis sharing. The
+primary and transverse trunk embeddings are fused with `product` or
+`product_fuser` according to `axis_1d_trunk.transverse_trunk.fusion`.
+
+### 7.6 Geometry/function branch fusion
 
 The function branch embedding and geometry branch embedding are fused using `product_fuser` by default.
 
@@ -601,142 +639,93 @@ Thus,
 
 ---
 
-## 8. Physical Balance Projection
+## 8. Response-Space Balance Projection
 
 ### 8.1 Projection policy
 
-Hard symmetric projection is the default. Response-preconditioned projection is
-available only as an opt-in complex-geometry ablation.
+Output contract v5 uses a single complex-geometry projection mode:
 
 \\[
 \boxed{
-\text{Symmetric by default; response-preconditioned as opt-in.}
+\texttt{balance\_projection.mode=response\_space}.
 }
 \\]
 
-No balance loss is used.
+No balance loss, reference solution, or reference split target is used. The
+unit-square symmetric and smooth-mask projections do not apply to this contract;
+the retired complex symmetric/RPS modes require a new training run.
 
-No smooth masked projection is used.
+### 8.2 Response constraint
 
-No reference solution or reference split field is used by either projection.
-
-### 8.2 Physical raw output
-
-At a valid point \\(p_q=(x_q,y_q)\\), let
+At a valid point \\(p_q=(x_q,y_q)\\), define
 
 \\[
-\alpha(q)=x\_segment\_id(q),
+\sigma_x=(L_{\alpha(q)}^x)^2,
 \qquad
-\beta(q)=y\_segment\_id(q).
+\sigma_y=(L_{\beta(q)}^y)^2.
 \\]
 
-The model directly returns the physical raw outputs
+The projected responses must satisfy
 
 \\[
-\phi_q^{\mathrm{raw}},
-\qquad
-\psi_q^{\mathrm{raw}}.
+\frac{\Phi_q}{\sigma_x}+\frac{\Psi_q}{\sigma_y}=f_q.
 \\]
 
-Segment lengths remain available to the geometry branch, but they do not rescale
-these raw fields before projection.
+This is exactly the physical source balance expressed in the response variables
+consumed by the normalized Green operators.
 
-### 8.3 Physical residual
+### 8.3 Stable orthogonal projection
 
-The physical residual is
+For numerical stability, set
 
 \\[
-r_q
-=
-f_q-\phi_q^{\mathrm{raw}}-\psi_q^{\mathrm{raw}}.
+s=\max(\sigma_x,\sigma_y),
+\quad
+a=\frac{\sigma_y}{s},
+\quad
+b=\frac{\sigma_x}{s},
+\quad
+c=\frac{\sigma_x\sigma_y}{s}f_q.
 \\]
 
-### 8.4 Symmetric projection in physical variables
-
-The projected physical quantities are
+Given the raw responses \\(P_q,Q_q\\), define
 
 \\[
-\phi_q^{\mathrm{proj}}
-=
-\phi_q^{\mathrm{raw}}+\frac12 r_q,
+R_q=aP_q+bQ_q-c,
 \\]
 
 \\[
-\psi_q^{\mathrm{proj}}
-=
-\psi_q^{\mathrm{raw}}+\frac12 r_q.
+\Phi_q=P_q-\frac{aR_q}{a^2+b^2},
+\qquad
+\Psi_q=Q_q-\frac{bR_q}{a^2+b^2}.
 \\]
 
-### 8.5 Response-preconditioned projection
+This is the Euclidean orthogonal projection of \\((P_q,Q_q)\\) onto the response
+constraint plane. All segment lengths must be strictly positive.
 
-For the optional RPS ablation, define
+### 8.4 Derived physical fields
 
-\[
-\sigma_x=(L_{alpha(q)}^x)^2,
-\qquad
-\sigma_y=(L_{eta(q)}^y)^2,
-\]
-
-\[
-d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f_q,
-\qquad
-\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
-\]
-
-and
-
-\[
-d_{\mathrm{RPS}}
-=d_0+\kappa
-(\phi_q^{\mathrm{raw}}-\psi_q^{\mathrm{raw}}).
-\]
-
-The projected physical quantities are
-
-\[
-\phi_q^{\mathrm{proj}}=\frac12(f_q+d_{\mathrm{RPS}}),
-\qquad
-\psi_q^{\mathrm{proj}}=\frac12(f_q-d_{\mathrm{RPS}}).
-\]
-
-Equal segment lengths give \(d_0=0\) and \(\kappa=1\), exactly recovering the
-symmetric projection. RPS does not use reference solution or split targets.
-
-### 8.6 Physical projected output to unit projected output
-
-For Green reconstruction, the projected physical quantities are converted back to unit quantities:
+Physical directional source fields are derived only for evaluation, flux
+artifacts, and the balance audit:
 
 \\[
-\Phi_q^{\mathrm{proj}}
-=
-(L_{\alpha(q)}^x)^2
-\phi_q^{\mathrm{proj}},
+\phi_q=\frac{\Phi_q}{\sigma_x},
+\qquad
+\psi_q=\frac{\Psi_q}{\sigma_y}.
 \\]
+
+Consequently, \\(\phi_q+\psi_q=f_q\\) up to floating-point tolerance.
+
+### 8.5 No post-projection length conversion
+
+The projected responses \\(\Phi,\Psi\\) are already the unit-interval Green
+source quantities. Reconstruction consumes them directly:
 
 \\[
-\Psi_q^{\mathrm{proj}}
-=
-(L_{\beta(q)}^y)^2
-\psi_q^{\mathrm{proj}}.
+\boxed{
+\text{No additional }L_x^2\text{ or }L_y^2\text{ multiplication after projection.}
+}
 \\]
-
-### 8.7 Smooth masked projection is excluded
-
-Smooth masked projection is not used in the complex-geometry design.
-
-The current smooth masked projection is tied to unit-square boundary expressions such as
-
-\\[
-x(1-x),
-\qquad
-y(1-y),
-\qquad
-\sin(\pi x),
-\qquad
-\sin(\pi y),
-\\]
-
-which are not appropriate for general complex geometry.
 
 ---
 
@@ -842,7 +831,7 @@ Uniform-grid Green kernel interpolation is not the default strategy.
 
 ### 9.6 Reconstruction formula
 
-For a segment-local unit source-like quantity \\(F_\ell(t_j)\\), the reconstruction is
+For a segment-local projected response \\(F_\ell(t_j)\\), the reconstruction is
 
 \\[
 u_\ell(t_i)
@@ -855,15 +844,15 @@ F_\ell(t_j).
 
 The source-like values at endpoints are zero, so endpoint contributions vanish.
 
-### 9.7 Projected unit output only
+### 9.7 Projected response only
 
-Green reconstruction uses only the projected unit output.
+Green reconstruction uses only the projected response output.
 
-Raw physical output reconstruction loss is not used.
+Raw network responses and derived physical source fields are not reconstructed.
 
 \\[
 \boxed{
-\text{Reconstruction uses projected unit output only.}
+\text{Reconstruction uses projected response output with no extra }L^2\text{ factor.}
 }
 \\]
 
@@ -966,6 +955,100 @@ a_{pp'}
 =
 \frac12(a(p)+a(p')).
 \\]
+
+### 10.6 Length-jump-balanced objective
+
+Output contract v5 keeps the same edge energy density but prevents the relatively
+small set of line-length transition edges from being diluted by the global mean.
+For every valid edge \\(e=(i,j)\\), define
+
+\\[
+J_e=
+\max\left(
+|\Delta\log L_x^2|,
+|\Delta\log L_y^2|
+\right).
+\\]
+
+Edges with \\(J_e>\tau\\) are transition edges; the default threshold is
+\\(\tau=\log 2\\). Let \\(N_r,N_t\\) be the regular and transition counts,
+\\(N=N_r+N_t\\), and let \\(e_k\\) denote the unchanged physical edge-energy
+density. The optimized objective is
+
+\\[
+E_{\mathrm{balanced}}
+=
+(1-\alpha)\frac{N}{N_r}\sum_{k\in r}e_k
++
+\alpha\frac{N}{N_t}\sum_{k\in t}e_k,
+\\]
+
+with default \\(\alpha=0.5\\). If either group is empty, training falls back to
+the original unweighted energy. The original energy remains a separately reported
+metric. These positive geometry-dependent edge weights define an equivalent
+discrete seminorm; they do not change the PDE residual or introduce supervised
+targets.
+
+### 10.7 Optional relative split consistency
+
+The edge seminorm does not penalize a spatially constant
+\(r=u_\phi-u_\psi\). When
+`coupling_training.relative_split_consistency.enabled=true`, replace the raw
+balanced-energy split objective by the sample mean of
+
+\\[
+\mathcal L_{\mathrm{split},b}
+=
+\frac{
+E_{\mathrm{balanced},b}
++
+\mu D_{\mathrm{ref}}^{-2}h_xh_y\sum_p r_b(p)^2
+}{
+h_xh_y\sum_p f_b(p)^2+\varepsilon
+},
+\\]
+
+where \(D_{\mathrm{ref}}\) is the larger global x/y extent. This preserves the
+derivative consistency term while adding source-normalized value consistency.
+No reference solution or directional target is used.
+
+### 10.8 Optional directional weak operator closure
+
+When `coupling_training.weak_operator_closure.enabled=true`, use
+
+\\[
+u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi)
+\\]
+
+as the shared trial solution on both directional segment families. Assemble P1
+nodal residuals
+
+\\[
+R_x=B_x(u_{\mathrm{pred}},v)-\langle\phi,v\rangle,
+\qquad
+R_y=B_y(u_{\mathrm{pred}},v)-\langle\psi,v\rangle,
+\\]
+
+using
+
+\\[
+B_x(u,v)=\int(a u_xv_x+b_xu_xv+\tfrac12cuv)\,dx,
+\qquad
+B_y(u,v)=\int(a u_yv_y+b_yu_yv+\tfrac12cuv)\,dy.
+\\]
+
+Each connected segment includes its true hard-zero endpoints. Element lengths
+are physical, transverse measures are \(h_y\) for x-segments and \(h_x\) for
+y-segments, and coefficients are evaluated directly at physical element
+midpoints. Normalize squared nodal residuals by the lumped directional nodal
+mass and by the sample physical source energy. This is a reference-free
+variational closure, implemented with differentiable element gather/scatter
+rather than a sparse matrix.
+
+The total objective is the selected split objective plus the configured weak
+closure weight. `best_energy_checkpoint` continues to track validation raw
+balanced energy; `best_physics_checkpoint` independently tracks the total
+validation reference-free objective.
 
 ---
 
@@ -1100,7 +1183,9 @@ Validation metrics should follow the current `CouplingTrainer` metric philosophy
 The main validation quantities should include:
 
 - total loss;
-- energy consistency loss;
+- unweighted and length-balanced energy consistency;
+- relative split energy and mass components, when enabled;
+- x/y directional weak closure components, when enabled;
 - relative solution metric, if available;
 - relative flux metric, if target flux is available.
 
@@ -1108,11 +1193,11 @@ No cross-consistency metric or logging entry is produced.
 
 ### 13.2 Visualization output
 
-Raw physical output is not the default visualization output.
+Raw response output is not the default visualization output.
 
 \\[
 \boxed{
-\text{Raw physical output is archived for audit, not used as the default figure.}
+\text{Raw response output is archived for audit, not used as the default figure.}
 }
 \\]
 
@@ -1155,7 +1240,7 @@ p_q\in\Omega.
 ### Function branches
 
 - [ ] Mandatory source branch uses normalized physical source profiles.
-- [ ] Source amplitude is restored on the two physical raw outputs.
+- [ ] Source amplitude and primary \(L^2\) scale are restored on the two raw response outputs.
 - [ ] Coefficient branch follows active \([a,b_{\mathrm{primary}},b_{\mathrm{transverse}},c]\) channels.
 - [ ] x/y source and coefficient paths use shared networks.
 - [ ] Axis-wise processing is preserved internally.
@@ -1164,6 +1249,7 @@ p_q\in\Omega.
 
 - [ ] Geometry feature is \([s^-,s^+,s_{\mathrm{mid}},L,L^2,1/L]\).
 - [ ] Fixed-line transverse Fourier features use a separate shared branch.
+- [ ] Shared pointwise transverse trunk receives the four cross-axis length-context features.
 - [ ] Raw \(r\) is not included.
 - [ ] Axis one-hot is not included.
 - [ ] Fourier frequencies follow config.
@@ -1171,9 +1257,9 @@ p_q\in\Omega.
 
 ### Projection
 
-- [ ] Model output is physical \((\phi_{\mathrm{raw}},\psi_{\mathrm{raw}})\).
-- [ ] Hard symmetric projection is applied in physical variables.
-- [ ] Projected physical output is converted to unit output only after projection.
+- [ ] Model output is response-valued \((P,Q)\).
+- [ ] Orthogonal response-space projection enforces \(\Phi/L_x^2+\Psi/L_y^2=f\).
+- [ ] Physical \(\phi,\psi\) are derived by dividing projected responses by length squares.
 - [ ] Balance loss is not used.
 - [ ] Smooth masked projection is not used.
 
@@ -1185,7 +1271,7 @@ p_q\in\Omega.
 - [ ] No network evaluation is performed at endpoints.
 - [ ] Trapezoid weights are precomputed.
 - [ ] GreenNet is queried at required \((t_i,t_j)\) pairs.
-- [ ] Reconstruction uses projected unit output only.
+- [ ] Reconstruction uses projected response output without another \(L^2\) factor.
 
 ### Energy loss
 
@@ -1195,6 +1281,8 @@ p_q\in\Omega.
 - [ ] Face coefficient uses arithmetic average.
 - [ ] x-edges require same `x_segment_id`.
 - [ ] y-edges require same `y_segment_id`.
+- [ ] Regular and length-transition edge groups are normalized separately.
+- [ ] Original unweighted physical energy remains an audit metric.
 
 ### Cross consistency
 
@@ -1207,7 +1295,7 @@ p_q\in\Omega.
 ### Visualization
 
 - [ ] Default visualization uses projected physical \(\phi,\psi\).
-- [ ] Raw physical output is archived but is not the default visualization target.
+- [ ] Raw/projected responses are archived but are not the default visualization target.
 - [ ] Reconstructed solutions are stored at physical valid points.
 
 ---
@@ -1234,15 +1322,19 @@ p_q\in\Omega.
 
 \\[
 \boxed{
-\text{CouplingNet raw output is a pair of physical directional fields.}
+\text{CouplingNet raw output is a pair of directional response fields.}
 }
 \\]
 
 \\[
 \boxed{
-\Phi_{\mathrm{proj}}=L_x^2\phi_{\mathrm{proj}},
+\frac{\Phi_{\mathrm{proj}}}{L_x^2}
++
+\frac{\Psi_{\mathrm{proj}}}{L_y^2}=f,
 \qquad
-\Psi_{\mathrm{proj}}=L_y^2\psi_{\mathrm{proj}}.
+\phi=\frac{\Phi_{\mathrm{proj}}}{L_x^2},
+\quad
+\psi=\frac{\Psi_{\mathrm{proj}}}{L_y^2}.
 }
 \\]
 
@@ -1293,7 +1385,7 @@ L^2,
 
 \\[
 \boxed{
-\text{Hard symmetric projection only.}
+\text{Response-space orthogonal projection only.}
 }
 \\]
 
@@ -1305,7 +1397,7 @@ L^2,
 
 \\[
 \boxed{
-\text{Segment-wise Green reconstruction uses projected unit output only.}
+\text{Segment-wise Green reconstruction uses projected response directly.}
 }
 \\]
 
@@ -1317,7 +1409,19 @@ L^2,
 
 \\[
 \boxed{
-\text{Default loss is valid-physical-point face-energy consistency.}
+\text{Base split loss is length-jump-balanced physical face-energy consistency.}
+}
+\\]
+
+\\[
+\boxed{
+\text{Relative split value consistency and directional weak closure are opt-in.}
+}
+\\]
+
+\\[
+\boxed{
+\text{Both optional losses use rhs and predictions, never reference targets.}
 }
 \\]
 
@@ -1365,7 +1469,7 @@ The complex-geometry `CouplingNet` design is based on the following principle:
 
 \\[
 \boxed{
-\text{CouplingNet predicts physical raw fields on segment-local coordinates,}
+\text{CouplingNet predicts directional responses on segment-local coordinates,}
 }
 \\]
 
@@ -1377,9 +1481,12 @@ while
 }
 \\]
 
-The raw network output is a pair of physical directional source fields. Physical
-symmetric projection, or the opt-in response-preconditioned alternative, enforces
-balance at valid interior points. Only then does segment-wise Green reconstruction
-create and use axis-scaled projected unit quantities on segment-local reference nodes.
+The raw network output is a pair of axis-scaled directional response fields. An
+orthogonal response-space projection enforces the physical source balance at valid
+interior points, and segment-wise Green reconstruction consumes the projected
+responses directly. The shared pointwise transverse trunk exposes both axial
+segment lengths, while the balanced edge objective prevents transition edges from
+being diluted by the regular-edge population. Reference solution and split targets
+remain evaluation-only.
 
 Cross consistency is not part of the design and must not appear in loss computation, metrics, logs, or summaries.

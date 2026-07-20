@@ -128,9 +128,19 @@ def write_complex_config(
             "activation": "tanh",
             "dropout": 0.0,
             "dtype": "float64",
+            "balance_projection": {
+                "enabled": True,
+                "mode": "response_space",
+            },
             "axis_1d_trunk": {
+                "enabled": True,
                 "num_frequencies": 2,
                 "max_frequency": 2.0,
+                "transverse_trunk": {
+                    "enabled": True,
+                    "fusion": "product",
+                    "length_context": True,
+                },
             },
         },
         "coupling_training": {
@@ -142,6 +152,14 @@ def write_complex_config(
             "device": "cpu",
             "integration_rule": "trapezoid",
             "compile": {"enabled": False},
+            "length_jump_balance": {
+                "enabled": True,
+                "log_sigma_jump_threshold": 0.6931471805599453,
+                "transition_fraction": 0.5,
+                "eps": 1e-12,
+            },
+            "best_energy_checkpoint": {"enabled": True},
+            "best_rel_sol_checkpoint": {"enabled": False},
             "losses": {
                 "cross_consistency": {"enabled": True, "weight": 99.0},
                 "balance_loss": {"enabled": True, "weight": 99.0},

@@ -14,25 +14,43 @@ from greenonet.complex_coupling_data import (
     complex_coupling_collate_fn,
 )
 from greenonet.complex_coupling_model import ComplexCouplingNet
-from greenonet.complex_losses import physical_edge_energy_loss, relative_l2_valid
+from greenonet.complex_coupling_objective import (
+    ComplexCouplingObjectiveResult,
+    compute_complex_coupling_objective,
+)
+from greenonet.complex_geometry import ComplexGeometryMetadata
+from greenonet.complex_losses import (
+    ComplexEnergyLossResult,
+    ComplexLengthJumpPartition,
+    build_length_jump_partition,
+    relative_l2_valid,
+)
 from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
 )
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
-    reconstruct_from_projected_physical,
+    reconstruct_from_projected_response,
 )
-from greenonet.config import BalanceProjectionConfig
+from greenonet.config import (
+    BalanceProjectionConfig,
+    ComplexLengthJumpBalanceConfig,
+    ComplexRelativeSplitConsistencyConfig,
+    ComplexWeakOperatorClosureConfig,
+    CouplingTrainingConfig,
+)
 from greenonet.logging_mixin import LoggingMixin
 
 
 @dataclass(frozen=True)
 class ComplexPredictionBatch:
     batch: ComplexCouplingBatch
-    raw_physical: torch.Tensor
+    raw_response: torch.Tensor
     projection: ComplexProjectionResult
     reconstruction: ComplexReconstructionResult
+    energy: ComplexEnergyLossResult
+    objective: ComplexCouplingObjectiveResult
     metrics: dict[str, torch.Tensor]
 
 
@@ -44,6 +62,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
         *,
         model: ComplexCouplingNet,
         green_model: torch.nn.Module,
+        config: CouplingTrainingConfig,
         device: torch.device,
         work_dir: Path | str,
         terminal_width: int | None = None,
@@ -53,6 +72,20 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self.balance_projection = BalanceProjectionConfig.from_raw(
             model.config.balance_projection
         )
+        self.length_jump_config = ComplexLengthJumpBalanceConfig.from_raw(
+            config.length_jump_balance
+        )
+        self.relative_split_config = ComplexRelativeSplitConsistencyConfig.from_raw(
+            config.relative_split_consistency
+        )
+        self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
+            config.weak_operator_closure
+        )
+        if not self.length_jump_config.enabled:
+            raise ValueError(
+                "ComplexCouplingEvaluator output-contract version 5 requires "
+                "coupling_training.length_jump_balance.enabled=true."
+            )
         self.green_model = green_model.to(device)
         self.green_model.eval()
         self.device = device
@@ -63,6 +96,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             work_dir=self.work_dir,
             terminal_width=terminal_width,
         )
+        self._length_jump_partition: ComplexLengthJumpPartition | None = None
 
     def evaluate(
         self,
@@ -79,10 +113,11 @@ class ComplexCouplingEvaluator(LoggingMixin):
         )
         rows: list[dict[str, float | int | str]] = []
         totals: dict[str, float] = {}
-        count = 0
+        sample_count = 0
         with torch.no_grad():
             for batch in loader:
                 prediction = self.predict_batch(batch.to(self.device))
+                batch_size = int(prediction.batch.rhs_valid.shape[0])
                 for sample_offset, sample_index in enumerate(
                     prediction.batch.sample_indices.cpu().tolist()
                 ):
@@ -91,14 +126,16 @@ class ComplexCouplingEvaluator(LoggingMixin):
                     row["file_stem"] = prediction.batch.file_stems[sample_offset]
                     rows.append(row)
                 for key, value in prediction.metrics.items():
-                    totals[key] = totals.get(key, 0.0) + float(value.item())
-                count += 1
-        summary = {key: value / max(count, 1) for key, value in totals.items()}
+                    totals[key] = totals.get(key, 0.0) + batch_size * float(
+                        value.item()
+                    )
+                sample_count += batch_size
+        summary = {key: value / max(sample_count, 1) for key, value in totals.items()}
         self._write_outputs(dataset_name, rows, summary)
         return summary
 
     def predict_batch(self, batch: ComplexCouplingBatch) -> ComplexPredictionBatch:
-        raw_physical = self.model(
+        raw_response = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
             y_source_branch=batch.y_source_branch,
@@ -108,32 +145,38 @@ class ComplexCouplingEvaluator(LoggingMixin):
             y_coefficient_branch=batch.y_coefficient_branch,
         )
         projection = apply_complex_balance_projection(
-            raw_physical=raw_physical,
+            raw_response=raw_response,
             rhs_phys=batch.rhs_valid,
             geometry=batch.geometry,
             config=self.balance_projection,
         )
-        reconstruction = reconstruct_from_projected_physical(
+        reconstruction = reconstruct_from_projected_response(
             green_model=self.green_model,
             geometry=batch.geometry,
-            projected_physical=projection.projected_physical,
+            projected_response=projection.projected_response,
             x_green_branch=batch.x_green_branch,
             y_green_branch=batch.y_green_branch,
         )
-        loss_energy = physical_edge_energy_loss(
+        objective = compute_complex_coupling_objective(
             u_phi_valid=reconstruction.u_phi_valid,
             u_psi_valid=reconstruction.u_psi_valid,
+            rhs_valid=batch.rhs_valid,
+            projected_physical=projection.projected_physical,
             a_valid=batch.a_valid,
             geometry=batch.geometry,
+            weak_context=batch.weak_context,
+            length_jump_config=self.length_jump_config,
+            relative_split_config=self.relative_split_config,
+            weak_closure_config=self.weak_closure_config,
+            partition=self.energy_partition(batch.geometry),
         )
         metrics = {
-            "loss": loss_energy.detach(),
-            "loss_energy_consistency": loss_energy.detach(),
-            "rel_sol": relative_l2_valid(
-                reconstruction.u_mean_valid,
-                batch.sol_valid,
-            ).detach(),
+            key: value.detach() for key, value in objective.metric_tensors().items()
         }
+        metrics["rel_sol"] = relative_l2_valid(
+            reconstruction.u_mean_valid,
+            batch.sol_valid,
+        ).detach()
         if torch.any(batch.has_flux):
             selected = batch.has_flux
             metrics["rel_flux"] = relative_l2_valid(
@@ -142,51 +185,33 @@ class ComplexCouplingEvaluator(LoggingMixin):
             ).detach()
         return ComplexPredictionBatch(
             batch=batch,
-            raw_physical=raw_physical,
+            raw_response=raw_response,
             projection=projection,
             reconstruction=reconstruction,
+            energy=objective.energy,
+            objective=objective,
             metrics=metrics,
         )
 
-    @staticmethod
     def _sample_metric_row(
+        self,
         prediction: ComplexPredictionBatch,
         sample_offset: int,
     ) -> dict[str, float | int | str]:
         row: dict[str, float | int | str] = {
-            "loss": float(
-                physical_edge_energy_loss(
-                    u_phi_valid=prediction.reconstruction.u_phi_valid[
-                        sample_offset : sample_offset + 1
-                    ],
-                    u_psi_valid=prediction.reconstruction.u_psi_valid[
-                        sample_offset : sample_offset + 1
-                    ],
-                    a_valid=prediction.batch.a_valid[sample_offset : sample_offset + 1],
-                    geometry=prediction.batch.geometry,
-                ).item()
-            ),
-            "loss_energy_consistency": float(
-                physical_edge_energy_loss(
-                    u_phi_valid=prediction.reconstruction.u_phi_valid[
-                        sample_offset : sample_offset + 1
-                    ],
-                    u_psi_valid=prediction.reconstruction.u_psi_valid[
-                        sample_offset : sample_offset + 1
-                    ],
-                    a_valid=prediction.batch.a_valid[sample_offset : sample_offset + 1],
-                    geometry=prediction.batch.geometry,
-                ).item()
-            ),
-            "rel_sol": float(
-                relative_l2_valid(
-                    prediction.reconstruction.u_mean_valid[
-                        sample_offset : sample_offset + 1
-                    ],
-                    prediction.batch.sol_valid[sample_offset : sample_offset + 1],
-                ).item()
-            ),
+            key: float(value.item())
+            for key, value in prediction.objective.sample_metric_tensors(
+                sample_offset
+            ).items()
         }
+        row["rel_sol"] = float(
+            relative_l2_valid(
+                prediction.reconstruction.u_mean_valid[
+                    sample_offset : sample_offset + 1
+                ],
+                prediction.batch.sol_valid[sample_offset : sample_offset + 1],
+            ).item()
+        )
         if bool(prediction.batch.has_flux[sample_offset].item()):
             row["rel_flux"] = float(
                 relative_l2_valid(
@@ -197,6 +222,17 @@ class ComplexCouplingEvaluator(LoggingMixin):
                 ).item()
             )
         return row
+
+    def energy_partition(
+        self,
+        geometry: ComplexGeometryMetadata,
+    ) -> ComplexLengthJumpPartition:
+        if self._length_jump_partition is None:
+            self._length_jump_partition = build_length_jump_partition(
+                geometry,
+                self.length_jump_config,
+            )
+        return self._length_jump_partition
 
     def _write_outputs(
         self,

@@ -603,6 +603,7 @@ class TestTrainCLIDatasetConfig:
                     "transverse_trunk": {
                         "enabled": True,
                         "fusion": "product_fuser",
+                        "length_context": True,
                     },
                 },
             },
@@ -628,6 +629,7 @@ class TestTrainCLIDatasetConfig:
         assert axis_1d_trunk.max_frequency == 12.0
         assert axis_1d_trunk.transverse_trunk.enabled is True
         assert axis_1d_trunk.transverse_trunk.fusion == "product_fuser"
+        assert axis_1d_trunk.transverse_trunk.length_context is True
 
     def test_rejects_non_object_axis_1d_trunk_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -849,6 +851,7 @@ class TestTrainCLIDatasetConfig:
                 "transverse_trunk": {
                     "enabled": True,
                     "fusion": "product",
+                    "length_context": True,
                 },
             },
             "coupling_model",
@@ -860,12 +863,57 @@ class TestTrainCLIDatasetConfig:
         assert cfg.max_frequency == 14.0
         assert cfg.transverse_trunk.enabled is True
         assert cfg.transverse_trunk.fusion == "product"
+        assert cfg.transverse_trunk.length_context is True
 
     def test_eval_cli_rejects_non_object_axis_1d_trunk_config(self):
         with pytest.raises(TypeError, match="coupling_model.axis_1d_trunk"):
             EvalCouplingCLI._build_axis_1d_trunk_config(
                 "enabled",
                 "coupling_model",
+            )
+
+
+class TestComplexLengthJumpTrainingConfig:
+    def test_parses_length_jump_and_best_energy_checkpoint(self):
+        cfg = TrainCLI._build_coupling_training_config(
+            {
+                "length_jump_balance": {
+                    "enabled": True,
+                    "log_sigma_jump_threshold": 0.7,
+                    "transition_fraction": 0.4,
+                    "eps": 1e-10,
+                },
+                "best_energy_checkpoint": {"enabled": True},
+                "best_rel_sol_checkpoint": {"enabled": False},
+            }
+        )
+
+        assert cfg.length_jump_balance.enabled is True
+        assert cfg.length_jump_balance.log_sigma_jump_threshold == 0.7
+        assert cfg.length_jump_balance.transition_fraction == 0.4
+        assert cfg.length_jump_balance.eps == 1e-10
+        assert cfg.best_energy_checkpoint.enabled is True
+        assert cfg.best_rel_sol_checkpoint.enabled is False
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        (
+            ("log_sigma_jump_threshold", -1.0),
+            ("transition_fraction", 0.0),
+            ("transition_fraction", 1.0),
+            ("eps", 0.0),
+        ),
+    )
+    def test_rejects_invalid_length_jump_values(self, field, value):
+        with pytest.raises(ValueError, match=f"length_jump_balance.{field}"):
+            TrainCLI._build_coupling_training_config(
+                {"length_jump_balance": {"enabled": True, field: value}}
+            )
+
+    def test_rejects_unknown_length_jump_key(self):
+        with pytest.raises(TypeError, match="length_jump_balance has unknown keys"):
+            EvalCouplingCLI._build_coupling_training_config(
+                {"length_jump_balance": {"enabled": True, "unknown": 1}}
             )
 
     def test_eval_cli_parses_trunk_positional_encoding_config(self):
@@ -891,6 +939,73 @@ class TestTrainCLIDatasetConfig:
             EvalCouplingCLI._build_trunk_positional_encoding_config(
                 "enabled",
                 "coupling_model",
+            )
+
+
+class TestComplexPhysicsLossTrainingConfig:
+    def test_train_and_eval_parse_complex_physics_loss_configs(self):
+        raw = {
+            "relative_split_consistency": {
+                "enabled": True,
+                "weight": 2.0,
+                "mass_weight": 3.0,
+                "eps": 1e-10,
+            },
+            "weak_operator_closure": {
+                "enabled": True,
+                "weight": 4.0,
+                "eps": 1e-9,
+            },
+            "best_physics_checkpoint": {"enabled": True},
+        }
+
+        for builder in (
+            TrainCLI._build_coupling_training_config,
+            EvalCouplingCLI._build_coupling_training_config,
+        ):
+            config = builder(raw)
+            assert config.relative_split_consistency.enabled is True
+            assert config.relative_split_consistency.weight == 2.0
+            assert config.relative_split_consistency.mass_weight == 3.0
+            assert config.relative_split_consistency.eps == 1e-10
+            assert config.weak_operator_closure.enabled is True
+            assert config.weak_operator_closure.weight == 4.0
+            assert config.weak_operator_closure.eps == 1e-9
+            assert config.best_physics_checkpoint.enabled is True
+
+    @pytest.mark.parametrize(
+        ("section", "field", "value"),
+        (
+            ("relative_split_consistency", "weight", -1.0),
+            ("relative_split_consistency", "mass_weight", -1.0),
+            ("relative_split_consistency", "eps", 0.0),
+            ("weak_operator_closure", "weight", -1.0),
+            ("weak_operator_closure", "eps", 0.0),
+        ),
+    )
+    def test_rejects_invalid_complex_physics_loss_values(
+        self,
+        section,
+        field,
+        value,
+    ):
+        with pytest.raises(ValueError, match=rf"{section}\.{field}"):
+            TrainCLI._build_coupling_training_config(
+                {section: {"enabled": True, field: value}}
+            )
+
+    @pytest.mark.parametrize(
+        "section",
+        (
+            "relative_split_consistency",
+            "weak_operator_closure",
+            "best_physics_checkpoint",
+        ),
+    )
+    def test_rejects_unknown_complex_physics_config_keys(self, section):
+        with pytest.raises(TypeError, match=rf"{section} has unknown keys"):
+            EvalCouplingCLI._build_coupling_training_config(
+                {section: {"enabled": True, "unknown": 1}}
             )
 
     def test_eval_cli_parses_balance_projection_object_config(self):

@@ -347,14 +347,9 @@ A
 \right)^{1/2}
 \]
 
-로 정의하고, source branch에는 \(f_{\mathrm{phys}}/A\)를 넣는다. Model의 directional output은 다시
-\(A\)로 scale되어 physical raw split field가 된다. 이는 CouplingNet이 source-dependent
-split field를 만들기 위해 반드시 필요하다. 같은 geometry와 coefficient라도 source profile이 바뀌면
-\(\phi\), \(\psi\)의 적절한 분해도 달라지기 때문이다.
-
-Interval length effect는 source amplitude에 \(L^2\)를 미리 곱하는 방식이 아니라 geometry branch와
-unit-scaled coefficient context를 통해 network에 제공된다. \(L^2\) source conversion은 physical balance
-projection이 끝난 뒤 Green reconstruction source를 만들 때 적용된다.
+로 정의하고, source branch에는 \(f_{\mathrm{phys}}/A\)를 넣는다. Model의 normalized directional output은
+각각 \(L_x^2A_x\), \(L_y^2A_y\)로 scale되어 raw response \(P,Q\)가 된다. 이는 source-dependent
+decomposition과 line-length response scale을 output parameterization에 함께 반영한다.
 
 ### Coefficient branch
 
@@ -433,16 +428,14 @@ normalization과 CouplingNet의 segment-local output 해석이 섞인다. 반대
 
 ## 8. Projection과 reconstruction 비교
 
-Unit-square와 complex geometry 모두 projection의 목적은 같다. CouplingNet이 만든 raw split field가 원래 PDE의
-source balance를 만족하도록 조정하는 것이다.
+Unit-square와 complex geometry 모두 projection의 목적은 같다. CouplingNet output이 원래 PDE의 source
+balance를 만족하도록 조정하는 것이다.
 
 \[
 \phi+\psi=f.
 \]
 
-Projection은 neural model이 PDE constraint를 완전히 외워야 하는 부담을 줄이고, model output을 물리적으로
-해석 가능한 split field로 바꾼다. 기본 symmetric projection은 raw prediction의 residual을 두 방향에 같은
-비율로 분배한다.
+Unit-square에서는 symmetric projection이 raw physical split residual을 두 방향에 같은 비율로 분배할 수 있다.
 
 \[
 r=f-\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}},
@@ -458,12 +451,8 @@ r=f-\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}},
 \psi_{\mathrm{raw}}+\frac12 r.
 \]
 
-Complex geometry에서 CouplingNet의 두 raw channel은 처음부터 physical
-\(\phi_{\mathrm{raw}},\psi_{\mathrm{raw}}\)를 나타낸다. PDE balance \(\phi+\psi=f\)는 physical
-domain에서의 equation이므로 symmetric projection도 이 physical raw fields에 직접 적용한다. Equal-half
-correction은 raw difference mode를 보존한다.
-
-Complex geometry의 opt-in response-preconditioned split은
+Complex geometry output contract v5에서는 두 raw channel이 physical source가 아니라 directional response
+\(P,Q\)를 나타낸다. 다음 response scale을 둔다.
 
 \[
 \sigma_x=L_x^2,
@@ -472,43 +461,48 @@ Complex geometry의 opt-in response-preconditioned split은
 \]
 
 \[
-d_0=\frac{\sigma_y-\sigma_x}{\sigma_x+\sigma_y}f,
+s=\max(\sigma_x,\sigma_y),
 \qquad
-\kappa=\frac{4\sigma_x\sigma_y}{(\sigma_x+\sigma_y)^2},
+a=\frac{\sigma_y}{s},
+\qquad
+b=\frac{\sigma_x}{s},
+\qquad
+c=\frac{\sigma_x\sigma_y}{s}f,
 \]
 
 \[
-d_{\mathrm{RPS}}=d_0+\kappa
-(\phi_{\mathrm{raw}}-\psi_{\mathrm{raw}})
+R=aP+bQ-c,
 \]
-
-를 사용하고 \(\phi_{\mathrm{proj}}=(f+d_{\mathrm{RPS}})/2\),
-\(\psi_{\mathrm{proj}}=(f-d_{\mathrm{RPS}})/2\)로 정의한다. 따라서 symmetric와 RPS 모두
-physical balance를 정확히 만족하지만, RPS는 unequal axial response scale에서 difference mode의 baseline과
-gain을 바꾼다. Equal length에서는 \(d_0=0\), \(\kappa=1\)이므로 symmetric와 일치한다.
-
-Projection이 끝난 뒤에만 connected interval Green reconstruction을 위한 unit source를 만든다.
 
 \[
-\Phi_{\mathrm{unit}}=L_x^2\phi_{\mathrm{proj}},
+\Phi=P-\frac{aR}{a^2+b^2},
 \qquad
-\Psi_{\mathrm{unit}}=L_y^2\psi_{\mathrm{proj}}.
+\Psi=Q-\frac{bR}{a^2+b^2}.
 \]
 
-Projection 이후에는 두 split field를 각각 Green reconstruction source로 본다.
+이 orthogonal projection은 response constraint를 만족한다.
+
+\[
+\frac{\Phi}{L_x^2}+\frac{\Psi}{L_y^2}=f.
+\]
+
+따라서 physical source는 \(\phi=\Phi/L_x^2\), \(\psi=\Psi/L_y^2\)이고
+\(\phi+\psi=f\)이다. Projection 이후에는 \(\Phi,\Psi\)를 추가 \(L^2\) conversion 없이 각각 Green
+reconstruction source로 사용한다.
 
 \[
 u_\phi
 =
-\mathcal{G}_x[\phi_{\mathrm{proj}}],
+\mathcal{G}_x[\Phi],
 \qquad
 u_\psi
 =
-\mathcal{G}_y[\psi_{\mathrm{proj}}].
+\mathcal{G}_y[\Psi].
 \]
 
-두 represented solution이 완전히 같다면 이상적인 axial decomposition이 달성된 것이다. 실제 학습에서는
-두 solution의 차이를 줄이고, 그 평균이 target solution에 가까워지도록 model을 학습한다.
+두 represented solution이 완전히 같다면 이상적인 axial decomposition이 달성된 것이다. 실제 complex v5
+학습에서는 regular/length-transition edge group을 별도 normalize한 physical energy로 두 solution의 차이를
+줄인다. Reference solution과 split target은 학습이나 checkpoint 선택이 아니라 evaluation에만 사용한다.
 
 \[
 u_{\mathrm{final}}
@@ -534,9 +528,9 @@ Green reconstruction을 통해 연결된다.
 | Source branch | Source profile이 split field를 결정하므로 source-conditioned decomposition을 가능하게 한다. | Physical source를 interval-local normalized forcing profile로 해석한다. |
 | Coefficient branch | Operator family와 spatial coefficient variation을 알려준다. | Primary 1차원 operator와 transverse convection context를 함께 알려준다. |
 | Geometry information | Domain geometry가 regular structure에 거의 암묵적으로 들어 있다. | Endpoint, length, scale, transverse position이 explicit mathematical context가 된다. |
-| Trunk role | Spatial coordinate에 따른 output variation을 표현한다. | Local coordinate \(t\)에 따른 interval-internal variation을 표현한다. |
-| Projection | Split field가 \(\phi+\psi=f\)를 만족하도록 조정한다. | Physical split field 위에서 \(\phi+\psi=f\)를 만족하도록 조정한다. |
-| Reconstruction | Projected split source를 axial Green operator로 solution에 되돌린다. | 각 connected interval의 unit Green reconstruction을 통해 represented solution을 만든다. |
+| Trunk role | Spatial coordinate에 따른 output variation을 표현한다. | Primary local coordinate와 pointwise cross-axis length context를 표현한다. |
+| Projection | Split field가 \(\phi+\psi=f\)를 만족하도록 조정한다. | Response pair가 \(\Phi/L_x^2+\Psi/L_y^2=f\)를 만족하도록 조정한다. |
+| Reconstruction | Projected split source를 axial Green operator로 solution에 되돌린다. | Projected response를 추가 length scaling 없이 connected-interval Green operator에 넣는다. |
 
 ## 10. 설계 해석
 
@@ -552,10 +546,10 @@ connected interval로 바뀌기 때문이다. Connected interval은 각자 endpo
 
 - GreenNet은 모든 connected interval을 unit interval로 정규화해 같은 coordinate domain에서 Green kernel을 학습한다.
 - Length와 physical scale은 coefficient와 source scaling에 반영한다.
-- CouplingNet은 source branch와 coefficient branch만으로는 부족하므로 geometry branch와 transverse branch를 추가로 사용한다.
-- Trunk는 physical coordinate 전체가 아니라 local coordinate variation을 담당한다.
-- Projection은 항상 PDE balance를 보장하기 위한 구조이며, complex geometry에서는 physical split field에 대해 적용된다.
-- Final solution은 projected split source를 Green reconstruction으로 되돌린 뒤 얻는 두 represented solution의 평균이다.
+- CouplingNet은 source/coefficient branch와 함께 geometry, fixed-line transverse branch, pointwise cross-axis length trunk를 사용한다.
+- Primary trunk는 local coordinate variation을, transverse trunk는 orthogonal interval 위치와 양쪽 response scale을 담당한다.
+- Projection은 response variables에서 PDE balance를 보장한다.
+- Final solution은 projected responses를 Green reconstruction에 직접 넣어 얻는 두 represented solution의 평균이다.
 
 이 관점에서 complex geometry 확장은 unit-square 구조를 단순히 더 복잡한 domain에 적용한 것이 아니다.
 같은 axial Green decomposition 철학을 유지하되, domain representation이 바뀌면서 branch, trunk, projection,

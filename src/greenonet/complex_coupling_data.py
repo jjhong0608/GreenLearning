@@ -11,6 +11,10 @@ from torch.utils.data import Dataset
 from greenonet.coefficients import CoefficientFunctions
 from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.config import CouplingCoefficientTermsConfig
+from greenonet.complex_weak_closure import (
+    ComplexDirectionalWeakContext,
+    build_directional_weak_context,
+)
 from greenonet.green_interval import (
     build_segment_branch_samples,
     physical_interval_coordinates,
@@ -22,6 +26,7 @@ from greenonet.numerics import IntegrationRule, integrate
 @dataclass(frozen=True)
 class ComplexCouplingItem:
     geometry: ComplexGeometryMetadata
+    weak_context: ComplexDirectionalWeakContext
     rhs_valid: torch.Tensor
     sol_valid: torch.Tensor
     flux_valid: torch.Tensor
@@ -42,6 +47,7 @@ class ComplexCouplingItem:
 @dataclass(frozen=True)
 class ComplexCouplingBatch:
     geometry: ComplexGeometryMetadata
+    weak_context: ComplexDirectionalWeakContext
     rhs_valid: torch.Tensor
     sol_valid: torch.Tensor
     flux_valid: torch.Tensor
@@ -61,6 +67,7 @@ class ComplexCouplingBatch:
     def to(self, device: torch.device | str) -> ComplexCouplingBatch:
         return ComplexCouplingBatch(
             geometry=self.geometry.to(device),
+            weak_context=self.weak_context.to(device),
             rhs_valid=self.rhs_valid.to(device),
             sol_valid=self.sol_valid.to(device),
             flux_valid=self.flux_valid.to(device),
@@ -123,6 +130,7 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             branch_input_dim=self.branch_input_dim,
             dtype=dtype,
         )
+        self.weak_context = build_directional_weak_context(geometry, coeffs)
         self.x_coefficient_branch = self._build_coefficient_branch(axis="x")
         self.y_coefficient_branch = self._build_coefficient_branch(axis="y")
         self.x_green_branch = torch.stack(
@@ -169,6 +177,7 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
         )
         return ComplexCouplingItem(
             geometry=self.geometry,
+            weak_context=self.weak_context,
             rhs_valid=rhs_valid,
             sol_valid=sol_valid,
             flux_valid=flux_valid,
@@ -343,6 +352,7 @@ def complex_coupling_collate_fn(
     geometry = items[0].geometry
     return ComplexCouplingBatch(
         geometry=geometry,
+        weak_context=items[0].weak_context,
         rhs_valid=torch.stack([item.rhs_valid for item in items], dim=0),
         sol_valid=torch.stack([item.sol_valid for item in items], dim=0),
         flux_valid=torch.stack([item.flux_valid for item in items], dim=0),
