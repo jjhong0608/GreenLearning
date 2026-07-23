@@ -10,6 +10,7 @@ from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
@@ -39,6 +40,7 @@ def _model(
     transverse_trunk_enabled: bool = True,
     transverse_trunk_fusion: str = "product",
     coefficient_terms: CouplingCoefficientTermsConfig | None = None,
+    pre_projection_fusion_enabled: bool = False,
 ) -> ComplexCouplingNet:
     torch.manual_seed(0)
     return ComplexCouplingNet(
@@ -48,6 +50,12 @@ def _model(
             depth=1,
             dtype=torch.float64,
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            pre_projection_fusion=ComplexPreProjectionFusionConfig(
+                enabled=pre_projection_fusion_enabled,
+                nonlinear_hidden_dim=8,
+                nonlinear_depth=1,
+                gate_initial_value=0.05,
+            ),
             coefficient_terms=coefficient_terms or CouplingCoefficientTermsConfig(),
             branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
             axis_1d_trunk=Axis1DTrunkConfig(
@@ -73,6 +81,7 @@ def _forward(model: ComplexCouplingNet, geometry, item) -> torch.Tensor:
         y_source_amplitude=item.y_source_amplitude.unsqueeze(0),
         x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
         y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+        rhs_phys=item.rhs_valid.unsqueeze(0),
     )
 
 
@@ -93,6 +102,82 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
     assert model.transverse_feature_dim == 4
     assert not hasattr(model, "axis_one_hot")
     assert int(model._output_contract_version.item()) == 6
+
+
+def test_complex_pre_projection_fusion_disabled_preserves_state_surface(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(pre_projection_fusion_enabled=False)
+
+    output = _forward(model, geometry, item)
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.pre_projection_fusion is None
+    assert not any(
+        key.startswith("pre_projection_fusion.") for key in model.state_dict()
+    )
+
+
+def test_complex_pre_projection_fusion_enabled_is_identity_initialized(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    disabled = _model(pre_projection_fusion_enabled=False)
+    enabled = _model(pre_projection_fusion_enabled=True)
+
+    disabled_output = _forward(disabled, geometry, item)
+    enabled_output, diagnostics = enabled.forward_with_fusion_diagnostics(
+        geometry=geometry,
+        x_source_branch=item.x_source_branch.unsqueeze(0),
+        y_source_branch=item.y_source_branch.unsqueeze(0),
+        x_source_amplitude=item.x_source_amplitude.unsqueeze(0),
+        y_source_amplitude=item.y_source_amplitude.unsqueeze(0),
+        x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
+        y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+        rhs_phys=item.rhs_valid.unsqueeze(0),
+    )
+
+    torch.testing.assert_close(enabled_output, disabled_output)
+    assert diagnostics is not None
+    torch.testing.assert_close(diagnostics.fused_response, disabled_output)
+    assert enabled.pre_projection_fusion is not None
+    assert any(key.startswith("pre_projection_fusion.") for key in enabled.state_dict())
+    assert int(enabled._output_contract_version.item()) == 6
+
+
+def test_complex_pre_projection_fusion_requires_rhs(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(pre_projection_fusion_enabled=True)
+
+    with pytest.raises(ValueError, match="rhs_phys is required"):
+        model(
+            geometry=geometry,
+            x_source_branch=item.x_source_branch.unsqueeze(0),
+            y_source_branch=item.y_source_branch.unsqueeze(0),
+            x_source_amplitude=item.x_source_amplitude.unsqueeze(0),
+            y_source_amplitude=item.y_source_amplitude.unsqueeze(0),
+            x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
+            y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+        )
+
+
+def test_complex_pre_projection_fusion_supports_torch_compile(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(pre_projection_fusion_enabled=True)
+    compiled = torch.compile(model, backend="eager")
+
+    output = compiled(
+        geometry=geometry,
+        x_source_branch=item.x_source_branch.unsqueeze(0),
+        y_source_branch=item.y_source_branch.unsqueeze(0),
+        x_source_amplitude=item.x_source_amplitude.unsqueeze(0),
+        y_source_amplitude=item.y_source_amplitude.unsqueeze(0),
+        x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
+        y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+        rhs_phys=item.rhs_valid.unsqueeze(0),
+    )
+    output.square().mean().backward()
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.pre_projection_fusion is not None
+    assert model.pre_projection_fusion.linear_correction.weight.grad is not None
 
 
 def test_complex_pointwise_transverse_trunk_product_fusion_outputs_shape(tmp_path):

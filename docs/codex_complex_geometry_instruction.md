@@ -543,16 +543,35 @@ At valid point \(p_q\), define
 \sigma_y=(L_{\beta(q)}^y)^2.
 \]
 
-Given raw reference responses \(P_q,Q_q\), first map them to physical
-directional-source proposals:
+Given base raw reference responses \(P_{0,q},Q_{0,q}\), first map them to
+physical directional-source proposals:
 
 \[
-p_q=\frac{P_q}{\sigma_x},
+p_{0,q}=\frac{P_{0,q}}{\sigma_x},
 \qquad
-q_q=\frac{Q_q}{\sigma_y}.
+q_{0,q}=\frac{Q_{0,q}}{\sigma_y}.
 \]
 
-Preserve their physical difference \(d_q=p_q-q_q\) while imposing exact source
+The optional `coupling_model.pre_projection_fusion` block may modify only the
+physical difference before projection. It must use
+
+\[
+p_q=p_{0,q}+\frac{\Delta d_q}{2},
+\qquad
+q_q=q_{0,q}-\frac{\Delta d_q}{2},
+\]
+
+so that \(p_q+q_q=p_{0,q}+q_{0,q}\) exactly. Its linear path uses normalized
+physical difference/source values, and its small nonlinear path additionally uses
+the two local coordinates, both pointwise line lengths relative to the global
+reference extent, their log ratio, and
+\(\kappa=4L_x^2L_y^2/(L_x^2+L_y^2)^2\). A sigmoid gate blends the linear and
+nonlinear corrections. Both correction heads must be initialized to zero, the
+unclamped source scale must multiply the correction, and the option must default
+to disabled. It is complex-only, uses no reference target, and does not change
+output contract v6.
+
+Preserve the resulting physical difference \(d_q=p_q-q_q\) while imposing exact source
 balance by the symmetric physical projection
 
 \[
@@ -855,40 +874,24 @@ When enabled, add `weight * mean(L_weak,b)` to the selected split objective.
 `complex_coupling_model_best_physics.safetensors` using the total validation
 reference-free objective. The energy and physics checkpoints are independent.
 
-### 5.16 Axial admissibility gluing
+### 5.16 General connected-segment boundary energy
 
-Complex v6 may add `coupling_training.admissibility_gluing` to address the gap
-between segment-wise endpoint conditions and full-domain \(H_0^1\) admissibility.
-This loss must use only existing axial lines and must not introduce a 2D mesh or a
-matrix solve.
-
-For every eligible internal horizontal interface, evaluate first-order one-sided
-traces of \(u_\phi\) from the neighboring horizontal lines and penalize their
-difference. Apply the analogous construction to \(u_\psi\) at every eligible
-vertical interface. Because both traces extrapolate to the same interface, this
-self-trace term enforces gluing without penalizing a nonzero transverse derivative.
-
-Classify an interface as a transition if its connected-segment overlap graph
-contains a split/merge or if a matched segment exceeds the configured
-`log_length_jump_threshold`. The only supported carrier policy is
-`carrier_scope="transition_only"`. At those interfaces, strengthen the trace
-constraint by using the reconstruction that crosses the interface as a common
-carrier:
+Complex v6 must complete the valid-point bulk edge energy with the physical P1
+edge from both hard-zero endpoints of every connected segment to the nearest
+represented interior node. For residual \(r=u_\phi-u_\psi\), add
 
 \[
-T^-u_\phi\approx u_\psi\approx T^+u_\phi
-\quad\text{at horizontal transitions},
+a_i r_i^2\frac{h_\perp}{d_i},
 \]
 
-\[
-T^-u_\psi\approx u_\phi\approx T^+u_\psi
-\quad\text{at vertical transitions}.
-\]
+where \(d_i\) is the physical endpoint distance, \(h_\perp=h_y\) for x-segments,
+and \(h_\perp=h_x\) for y-segments. Use the nearest valid point's one-sided
+diffusion coefficient. Segments with no represented interior node add no anchor.
 
-When a valid trace appears or disappears at a transition, use the corresponding
-opposite-axis segment endpoint as a hard-zero physical-boundary carrier. This is
-still derived from the existing axial geometry metadata. `sol` and target
-directional fields remain evaluation-only.
+The former `coupling_training.admissibility_gluing`, global self-trace loss, and
+transition-only cross-axis carrier are retired. Old configs containing that key
+must fail fast. The canonical energy uses no 2D mesh, matrix solve, `sol`, or
+target directional source.
 
 ### 5.17 Energy edge criterion
 
@@ -1140,6 +1143,10 @@ Test that:
 - raw model channels are responses \(P,Q\);
 - output scaling is \(L_x^2A_x\) and \(L_y^2A_y\);
 - the shared transverse trunk receives the four length-context features with x/y role swap;
+- disabled pre-projection fusion leaves the v6 state/output path unchanged;
+- enabled pre-projection fusion is identity-initialized, preserves the physical
+  common mode, and changes only the difference mode;
+- zero source amplitude gives an exact zero fusion correction;
 - unversioned and version 5-or-older complex CouplingNet checkpoints are rejected by
   output contract v6.
 
@@ -1157,8 +1164,10 @@ Test that:
 
 - balance loss is not used;
 - smooth masked projection is not used;
-- pre-projection scaling produces \(p=P/L_x^2\) and \(q=Q/L_y^2\);
-- physical raw difference is preserved;
+- pre-projection scaling produces \(p_0=P_0/L_x^2\) and \(q_0=Q_0/L_y^2\);
+- optional fusion preserves the base common mode and produces the difference
+  presented to projection;
+- the fused physical difference is preserved by projection;
 - post-projection pull-back produces \(\Phi=L_x^2\phi\), \(\Psi=L_y^2\psi\);
 - very short positive segment lengths remain finite in float64.
 

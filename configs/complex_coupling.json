@@ -11,12 +11,6 @@
   "terminal": {
     "width": 350
   },
-  "training": {
-    "device": "cpu",
-    "compile": {
-      "enabled": false
-    }
-  },
   "coupling_model": {
     "branch_input_dim": 129,
     "hidden_dim": 256,
@@ -33,6 +27,13 @@
     "balance_projection": {
       "enabled": true,
       "mode": "physical_symmetric"
+    },
+    "pre_projection_fusion": {
+      "enabled": false,
+      "nonlinear_hidden_dim": 16,
+      "nonlinear_depth": 1,
+      "gate_initial_value": 0.05,
+      "eps": 1e-12
     },
     "branch_fusion": {
       "mode": "product_fuser"
@@ -72,41 +73,13 @@
       "transition_fraction": 0.5,
       "eps": 1e-12
     },
-    "relative_split_consistency": {
-      "enabled": false,
-      "weight": 1.0,
-      "mass_weight": 50.0,
-      "eps": 1e-12
-    },
-    "weak_operator_closure": {
-      "enabled": false,
-      "weight": 0.0075,
-      "eps": 1e-12
-    },
-    "admissibility_gluing": {
-      "enabled": true,
-      "self_trace_weight": 1.0,
-      "trace_order": 1,
-      "carrier_scope": "transition_only",
-      "transition_carrier_weight": 1.0,
-      "transition_fraction": 0.5,
-      "log_length_jump_threshold": 0.6931471805599453,
-      "eps": 1e-12
-    },
     "best_energy_checkpoint": {
       "enabled": true
-    },
-    "best_physics_checkpoint": {
-      "enabled": true
-    },
-    "best_rel_sol_checkpoint": {
-      "enabled": false
     }
   },
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Annulus_poisson/green/model.safetensors",
-    "coupling_pretrained_path": null
+    "green_pretrained_path": "checkpoints/Annulus_poisson/green/model.safetensors"
   }
 }

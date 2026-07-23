@@ -968,8 +968,11 @@ structure constrains the same physical point.
 
 Together with the source, coefficient, geometry, and transverse branches, these
 trunk components produce raw directional reference responses. These are first
-scaled to physical directional-source proposals, projected in physical source
-space, and then pulled back to the unit-interval responses consumed by GreenNet.
+scaled to physical directional-source proposals. An optional small
+linear/nonlinear pre-projection fusion block can then correct only their physical
+difference mode while preserving their common mode. The resulting proposals are
+projected in physical source space and pulled back to the unit-interval responses
+consumed by GreenNet.
 
 ### Learnable Rational Activation
 
@@ -1041,17 +1044,48 @@ those larger mathematical structures.
 
 ## 6. Physical Symmetric Projection: Enforcing PDE Balance
 
-Let \(\sigma_x=L_x^2\) and \(\sigma_y=L_y^2\). The model returns raw
-directional reference responses \(P,Q\). Before projection, map them to physical
-directional-source proposals:
+Let \(\sigma_x=L_x^2\) and \(\sigma_y=L_y^2\). The model returns base raw
+directional reference responses \(P_0,Q_0\). Before projection, map them to
+physical directional-source proposals:
 
 \[
-p=\frac{P}{\sigma_x},
+p_0=\frac{P_0}{\sigma_x},
 \qquad
-q=\frac{Q}{\sigma_y}.
+q_0=\frac{Q_0}{\sigma_y}.
 \]
 
-The symmetric projection preserves their physical difference \(d=p-q\) and
+If optional pre-projection fusion is disabled, set \(p=p_0\) and \(q=q_0\).
+When enabled, a bias-free linear path acts on the source-normalized physical
+difference and source, while a small nonlinear path additionally receives the two
+local coordinates and the pointwise line-length features
+
+\[
+\log(L_x/L_{\mathrm{ref}}),\quad
+\log(L_y/L_{\mathrm{ref}}),\quad
+\log(L_x/L_y),\quad
+\kappa=\frac{4L_x^2L_y^2}{(L_x^2+L_y^2)^2}.
+\]
+
+With source scale \(S=\sqrt{(A_x^2+A_y^2)/2}\), trainable gate
+\(\alpha=\operatorname{sigmoid}(g)\), and normalized head outputs
+\(\ell,n\), define
+
+\[
+\Delta d=S[(1-\alpha)\ell+\alpha n],
+\]
+
+\[
+p=p_0+\frac{\Delta d}{2},
+\qquad
+q=q_0-\frac{\Delta d}{2}.
+\]
+
+This preserves \(p+q=p_0+q_0\) exactly and changes only the difference passed to
+projection. Both correction heads are zero-initialized, so the enabled model
+starts from the unfused prediction. The block uses no reference
+\(u,\phi,\psi\) target.
+
+The symmetric projection preserves the fused physical difference \(d=p-q\) and
 enforces the physical source balance:
 
 \[
@@ -1183,21 +1217,13 @@ it does not alter the PDE balance or add a reference target. Reference
 checkpoint is selected by validation balanced energy rather than relative solution
 error.
 
-Energy agreement alone does not prove that independently reconstructed slices
-assemble into functions in \(H_0^1(\Omega)\). Output contract v6 therefore supports
-an axial-only admissibility gluing term. At every eligible internal horizontal
-interface it matches first-order one-sided traces of \(u_\phi\); at every eligible
-vertical interface it matches one-sided traces of \(u_\psi\). Because both traces
-are evaluated at the same interface, this constrains continuity without requiring
-the transverse derivative to be small.
-
-The stronger cross-axis trace carrier is deliberately limited to topology or
-line-length transition interfaces. There, the reconstruction that crosses the
-interface supplies a common value: \(u_\psi\) carries horizontal \(u_\phi\) traces,
-and \(u_\phi\) carries vertical \(u_\psi\) traces. Appearing or disappearing traces
-are compared with the hard-zero endpoint of the corresponding opposite-axis
-segment. This construction uses only axial geometry and predicted solutions; it
-does not use a two-dimensional mesh, a matrix solve, or reference fields.
+The canonical energy completes the bulk valid-point graph with both hard-zero
+endpoint edges of every connected x/y segment. Each endpoint contributes
+\(a_i r_i^2h_\perp/d_i\), using its nearest represented interior node. This
+all-segment rule removes the component-constant null mode without an independent
+self-trace or cross-axis carrier objective. It uses only axial geometry and
+predicted solutions; it does not use a two-dimensional mesh, a matrix solve, or
+reference fields.
 
 The final solution error is interpreted by comparing
 
@@ -1368,9 +1394,9 @@ values on connected intervals provide the correct one-dimensional Dirichlet
 compatibility, but endpoint zero alone does not prove
 \(u_\phi,u_\psi\in H_0^1(\Omega)\).  Full-domain admissibility also requires
 transverse Sobolev regularity of the assembled slice-wise reconstructions. The
-global self-trace gluing and transition-only cross-axis carrier are discrete,
-reference-free mechanisms for enforcing this missing compatibility; they are not
-an unconditional proof of continuous Sobolev admissibility.
+bulk valid-point graph plus all-segment endpoint energy provides a coercive
+reference-free norm on the represented residual space; this is not an
+unconditional proof of continuous Sobolev admissibility.
 
 **Limitations.**  The exact error bound is not an unconditional statement about
 all learned models.  It assumes exact Green reconstruction, source-linearity,
@@ -1422,10 +1448,9 @@ The following mathematical algorithm summarizes the framework.
     \[
     u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi).
     \]
-11. Optimize length-jump-balanced energy consistency plus enabled axial
-    admissibility gluing, using transition-only cross-axis carriers; evaluate the
-    unweighted energy plus detached solution/split accuracy when references are
-    available.
+11. Optimize canonical length-jump-balanced bulk-plus-boundary energy, plus only
+    explicitly enabled relative-split or weak-closure terms; evaluate detached
+    solution/split accuracy when references are available.
 
 This algorithm emphasizes that GreenNet and CouplingNet do not solve the same
 subproblem. GreenNet learns axial solution operators. CouplingNet learns how the

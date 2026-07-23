@@ -10,6 +10,7 @@ from greenonet.activations import RationalActivation
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
@@ -312,6 +313,14 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
         torch.set_default_dtype(config.dtype)
+        pre_projection_fusion = ComplexPreProjectionFusionConfig.from_raw(
+            config.pre_projection_fusion
+        )
+        if pre_projection_fusion.enabled:
+            raise ValueError(
+                "pre_projection_fusion.enabled=true is available only for "
+                "ComplexCouplingNet."
+            )
         balance_projection = BalanceProjectionConfig.from_raw(config.balance_projection)
         if balance_projection.mode in {"response_space", "physical_symmetric"}:
             raise ValueError(

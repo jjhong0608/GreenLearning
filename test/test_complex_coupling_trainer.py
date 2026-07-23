@@ -21,8 +21,8 @@ from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CompileConfig,
-    ComplexAdmissibilityGluingConfig,
     ComplexLengthJumpBalanceConfig,
+    ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingBestEnergyCheckpointConfig,
@@ -55,6 +55,11 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             depth=1,
             dtype=torch.float64,
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            pre_projection_fusion=ComplexPreProjectionFusionConfig(
+                enabled=True,
+                nonlinear_hidden_dim=8,
+                nonlinear_depth=1,
+            ),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
                 num_frequencies=1,
@@ -76,7 +81,6 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
         length_jump_balance=ComplexLengthJumpBalanceConfig(enabled=True),
         relative_split_consistency=ComplexRelativeSplitConsistencyConfig(enabled=True),
         weak_operator_closure=ComplexWeakOperatorClosureConfig(enabled=True),
-        admissibility_gluing=ComplexAdmissibilityGluingConfig(enabled=True),
         losses=CouplingLossesConfig(
             cross_consistency=CouplingLossTermConfig(enabled=True, weight=99.0),
             balance_loss=CouplingLossTermConfig(enabled=True, weight=99.0),
@@ -99,6 +103,10 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     assert complex_metric_keys_are_safe(trainer.metric_rows[0].keys())
     assert "cross" not in (tmp_path / "physical_symmetric" / "training.log").read_text()
     assert "loss_energy_length_balanced" in trainer.metric_rows[0]
+    assert "loss_energy_bulk" in trainer.metric_rows[0]
+    assert "loss_energy_boundary" in trainer.metric_rows[0]
+    assert "loss_energy_boundary_x" in trainer.metric_rows[0]
+    assert "loss_energy_boundary_y" in trainer.metric_rows[0]
     assert "loss_energy_regular" in trainer.metric_rows[0]
     assert "loss_energy_transition" in trainer.metric_rows[0]
     assert "loss_split_relative" in trainer.metric_rows[0]
@@ -106,8 +114,9 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     assert "loss_weak_operator_closure" in trainer.metric_rows[0]
     assert "loss_weak_operator_x" in trainer.metric_rows[0]
     assert "loss_weak_operator_y" in trainer.metric_rows[0]
-    assert "loss_trace_gluing" in trainer.metric_rows[0]
-    assert "loss_trace_carrier_transition" in trainer.metric_rows[0]
+    assert "pre_projection_fusion_gate" in trainer.metric_rows[0]
+    assert "loss_trace_gluing" not in trainer.metric_rows[0]
+    assert "loss_trace_carrier_transition" not in trainer.metric_rows[0]
     row = trainer.metric_rows[0]
     assert float(row["learning_rate"]) == pytest.approx(1.0e-3)
     assert float(row["loss_split_relative"]) == pytest.approx(
@@ -118,13 +127,13 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
         0.5 * (float(row["loss_weak_operator_x"]) + float(row["loss_weak_operator_y"]))
     )
     assert float(row["loss"]) == pytest.approx(
-        float(row["loss_split_relative"])
-        + float(row["loss_weak_operator_closure"])
-        + float(row["loss_trace_gluing"])
+        float(row["loss_split_relative"]) + float(row["loss_weak_operator_closure"])
     )
     training_log = (tmp_path / "physical_symmetric" / "training.log").read_text()
     assert "kind=fixed" in training_log
     assert "learning_rate=1.000000e-03" in training_log
+    assert "pre-projection fusion enabled=True" in training_log
+    assert "pre_projection_fusion_gate=" in training_log
 
 
 def test_complex_trainer_applies_and_records_warmup_cosine_schedule(tmp_path):

@@ -359,6 +359,74 @@ class BalanceProjectionConfig:
 
 
 @dataclass
+class ComplexPreProjectionFusionConfig:
+    """Optional physical difference correction before complex projection."""
+
+    enabled: bool = False
+    nonlinear_hidden_dim: int = 16
+    nonlinear_depth: int = 1
+    gate_initial_value: float = 0.05
+    eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("pre_projection_fusion.enabled must be a boolean.")
+        if (
+            isinstance(self.nonlinear_hidden_dim, bool)
+            or not isinstance(self.nonlinear_hidden_dim, int)
+            or self.nonlinear_hidden_dim < 1
+        ):
+            raise ValueError(
+                "pre_projection_fusion.nonlinear_hidden_dim must be a positive integer."
+            )
+        if (
+            isinstance(self.nonlinear_depth, bool)
+            or not isinstance(self.nonlinear_depth, int)
+            or self.nonlinear_depth < 1
+        ):
+            raise ValueError(
+                "pre_projection_fusion.nonlinear_depth must be a positive integer."
+            )
+        gate = float(self.gate_initial_value)
+        if not math.isfinite(gate) or not 0.0 < gate < 1.0:
+            raise ValueError(
+                "pre_projection_fusion.gate_initial_value must be finite and "
+                "strictly between 0 and 1."
+            )
+        eps = float(self.eps)
+        if not math.isfinite(eps) or eps <= 0.0:
+            raise ValueError("pre_projection_fusion.eps must be finite and positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexPreProjectionFusionConfig | dict[str, Any] | None,
+    ) -> ComplexPreProjectionFusionConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "nonlinear_hidden_dim",
+                    "nonlinear_depth",
+                    "gate_initial_value",
+                    "eps",
+                }
+            )
+            if unknown:
+                raise TypeError(
+                    f"pre_projection_fusion has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("pre_projection_fusion must be an object.")
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -405,6 +473,9 @@ class CouplingModelConfig:
     axis_1d_trunk: Axis1DTrunkConfig | dict[str, Any] = field(
         default_factory=Axis1DTrunkConfig
     )
+    pre_projection_fusion: ComplexPreProjectionFusionConfig | dict[str, Any] = field(
+        default_factory=ComplexPreProjectionFusionConfig
+    )
 
     def __post_init__(self) -> None:
         self.balance_projection = BalanceProjectionConfig.from_raw(
@@ -412,6 +483,9 @@ class CouplingModelConfig:
         )
         self.branch_fusion = CouplingBranchFusionConfig.from_raw(self.branch_fusion)
         self.axis_1d_trunk = Axis1DTrunkConfig.from_raw(self.axis_1d_trunk)
+        self.pre_projection_fusion = ComplexPreProjectionFusionConfig.from_raw(
+            self.pre_projection_fusion
+        )
 
 
 @dataclass
@@ -696,95 +770,6 @@ class ComplexLengthJumpBalanceConfig:
 
 
 @dataclass
-class ComplexAdmissibilityGluingConfig:
-    """Axial-only trace compatibility settings for complex reconstructions."""
-
-    enabled: bool = False
-    self_trace_weight: float = 1.0
-    trace_order: int = 1
-    carrier_scope: Literal["transition_only"] = "transition_only"
-    transition_carrier_weight: float = 1.0
-    transition_fraction: float = 0.5
-    log_length_jump_threshold: float = math.log(2.0)
-    eps: float = 1.0e-12
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.enabled, bool):
-            raise TypeError("admissibility_gluing.enabled must be a boolean.")
-        if not isinstance(self.trace_order, int) or isinstance(self.trace_order, bool):
-            raise TypeError("admissibility_gluing.trace_order must be an integer.")
-        if self.trace_order != 1:
-            raise ValueError(
-                "admissibility_gluing.trace_order currently supports only 1."
-            )
-        if self.carrier_scope != "transition_only":
-            raise ValueError(
-                "admissibility_gluing.carrier_scope must be 'transition_only'."
-            )
-        for field_name, value in (
-            ("self_trace_weight", self.self_trace_weight),
-            ("transition_carrier_weight", self.transition_carrier_weight),
-            ("transition_fraction", self.transition_fraction),
-            ("log_length_jump_threshold", self.log_length_jump_threshold),
-            ("eps", self.eps),
-        ):
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                raise TypeError(f"admissibility_gluing.{field_name} must be numeric.")
-            if not math.isfinite(float(value)):
-                raise ValueError(f"admissibility_gluing.{field_name} must be finite.")
-        if self.self_trace_weight < 0.0:
-            raise ValueError(
-                "admissibility_gluing.self_trace_weight must be non-negative."
-            )
-        if self.transition_carrier_weight < 0.0:
-            raise ValueError(
-                "admissibility_gluing.transition_carrier_weight must be non-negative."
-            )
-        if not 0.0 < self.transition_fraction < 1.0:
-            raise ValueError(
-                "admissibility_gluing.transition_fraction must be strictly between "
-                "0 and 1."
-            )
-        if self.log_length_jump_threshold < 0.0:
-            raise ValueError(
-                "admissibility_gluing.log_length_jump_threshold must be non-negative."
-            )
-        if self.eps <= 0.0:
-            raise ValueError("admissibility_gluing.eps must be positive.")
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: ComplexAdmissibilityGluingConfig | dict[str, Any] | None,
-    ) -> ComplexAdmissibilityGluingConfig:
-        if raw is None:
-            return cls()
-        if isinstance(raw, cls):
-            return raw
-        if isinstance(raw, dict):
-            data = dict(raw)
-            unknown = sorted(
-                set(data)
-                - {
-                    "enabled",
-                    "self_trace_weight",
-                    "trace_order",
-                    "carrier_scope",
-                    "transition_carrier_weight",
-                    "transition_fraction",
-                    "log_length_jump_threshold",
-                    "eps",
-                }
-            )
-            if unknown:
-                raise TypeError(
-                    f"admissibility_gluing has unknown keys: {', '.join(unknown)}."
-                )
-            return cls(**data)
-        raise TypeError("admissibility_gluing must be an object.")
-
-
-@dataclass
 class CouplingTrainingConfig:
     """Training settings for CouplingNet."""
 
@@ -824,9 +809,6 @@ class CouplingTrainingConfig:
     weak_operator_closure: ComplexWeakOperatorClosureConfig | dict[str, Any] = field(
         default_factory=ComplexWeakOperatorClosureConfig
     )
-    admissibility_gluing: ComplexAdmissibilityGluingConfig | dict[str, Any] = field(
-        default_factory=ComplexAdmissibilityGluingConfig
-    )
 
     def __post_init__(self) -> None:
         self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
@@ -845,9 +827,6 @@ class CouplingTrainingConfig:
         )
         self.weak_operator_closure = ComplexWeakOperatorClosureConfig.from_raw(
             self.weak_operator_closure
-        )
-        self.admissibility_gluing = ComplexAdmissibilityGluingConfig.from_raw(
-            self.admissibility_gluing
         )
 
 
@@ -871,11 +850,6 @@ def validate_unit_square_coupling_training_config(
     if ComplexWeakOperatorClosureConfig.from_raw(config.weak_operator_closure).enabled:
         raise ValueError(
             "coupling_training.weak_operator_closure is available only for "
-            "ComplexCouplingTrainer."
-        )
-    if ComplexAdmissibilityGluingConfig.from_raw(config.admissibility_gluing).enabled:
-        raise ValueError(
-            "coupling_training.admissibility_gluing is available only for "
             "ComplexCouplingTrainer."
         )
     if CouplingBestPhysicsCheckpointConfig.from_raw(

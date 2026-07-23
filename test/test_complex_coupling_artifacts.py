@@ -19,6 +19,7 @@ from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexPreProjectionFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
     ModelConfig,
@@ -90,6 +91,12 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         depth=1,
         dtype=torch.float64,
         balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+        pre_projection_fusion=ComplexPreProjectionFusionConfig(
+            enabled=True,
+            nonlinear_hidden_dim=8,
+            nonlinear_depth=1,
+            gate_initial_value=0.05,
+        ),
         coefficient_terms=CouplingCoefficientTermsConfig(
             diffusion=True,
             convection=True,
@@ -136,6 +143,13 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "enabled": True,
         "mode": "physical_symmetric",
     }
+    config_payload["coupling_model"]["pre_projection_fusion"] = {
+        "enabled": True,
+        "nonlinear_hidden_dim": 8,
+        "nonlinear_depth": 1,
+        "gate_initial_value": 0.05,
+        "eps": 1e-12,
+    }
     config_payload["coupling_training"]["relative_split_consistency"] = {
         "enabled": True,
         "weight": 2.0,
@@ -145,16 +159,6 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     config_payload["coupling_training"]["weak_operator_closure"] = {
         "enabled": True,
         "weight": 4.0,
-        "eps": 1e-12,
-    }
-    config_payload["coupling_training"]["admissibility_gluing"] = {
-        "enabled": True,
-        "self_trace_weight": 1.0,
-        "trace_order": 1,
-        "carrier_scope": "transition_only",
-        "transition_carrier_weight": 1.0,
-        "transition_fraction": 0.5,
-        "log_length_jump_threshold": 0.6931471805599453,
         "eps": 1e-12,
     }
     config_payload["coupling_training"]["best_physics_checkpoint"] = {"enabled": True}
@@ -198,6 +202,11 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "weak_residual_x",
         "weak_residual_y",
         "split_mass_relative_contribution",
+        "base_physical_difference",
+        "fused_physical_difference",
+        "linear_difference_correction",
+        "nonlinear_difference_correction",
+        "blended_difference_correction",
     }
     assert set(summary["figure_fields"]) == expected_figure_fields
     assert summary["error_convention"] == "signed_difference"
@@ -209,14 +218,32 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert summary["balance_projection"]["space"] == "physical_source"
     assert summary["balance_projection"]["uses_reference_targets"] is False
     assert "p=P_raw/Lx^2" in summary["balance_projection"]["formula"]
+    assert summary["pre_projection_fusion"]["enabled"] is True
+    assert summary["pre_projection_fusion"]["space"] == ("physical_directional_source")
+    assert summary["pre_projection_fusion"]["correction_mode"] == (
+        "antisymmetric_difference"
+    )
+    assert summary["pre_projection_fusion"]["common_mode_preserved"] is True
+    assert summary["pre_projection_fusion"]["gate_value"] == pytest.approx(0.05)
+    assert summary["pre_projection_fusion"]["uses_reference_targets"] is False
     assert summary["reconstruction_response_input"] == {
         "phi": "projected Phi is used directly",
         "psi": "projected Psi is used directly",
         "additional_length_scaling": False,
     }
     assert summary["reference_targets_used_for_training"] is False
-    assert summary["admissibility_gluing"]["enabled"] is True
-    assert summary["admissibility_gluing"]["carrier_scope"] == "transition_only"
+    assert summary["canonical_boundary_energy"] == {
+        "enabled": True,
+        "definition": "endpoint_p1_edge",
+        "formula": "a_i * r_i^2 * h_perp / d_endpoint",
+        "coefficient_evaluation": "one_sided_nearest_valid_point",
+        "endpoint_value": 0.0,
+        "anchor_count": 8,
+        "x_anchor_count": 4,
+        "y_anchor_count": 4,
+        "covers_all_connected_segment_endpoints": True,
+        "uses_reference_targets": False,
+    }
     assert summary["length_jump_balance"]["enabled"] is True
     assert summary["relative_split_consistency"] == {
         "enabled": True,
@@ -327,6 +354,19 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_projected_difference") for key in raw.files)
     assert any(key.endswith("_raw_response_constraint_residual") for key in raw.files)
     assert any(key.endswith("_response_constraint_residual") for key in raw.files)
+    assert any(key.endswith("_base_raw_response_phi") for key in raw.files)
+    assert any(key.endswith("_base_raw_response_psi") for key in raw.files)
+    assert any(key.endswith("_base_physical_p") for key in raw.files)
+    assert any(key.endswith("_base_physical_q") for key in raw.files)
+    assert any(key.endswith("_base_physical_difference") for key in raw.files)
+    assert any(key.endswith("_fused_physical_p") for key in raw.files)
+    assert any(key.endswith("_fused_physical_q") for key in raw.files)
+    assert any(key.endswith("_fused_physical_difference") for key in raw.files)
+    assert any(key.endswith("_linear_difference_correction") for key in raw.files)
+    assert any(key.endswith("_nonlinear_difference_correction") for key in raw.files)
+    assert any(key.endswith("_blended_difference_correction") for key in raw.files)
+    assert any(key.endswith("_fusion_source_scale") for key in raw.files)
+    assert any(key.endswith("_fusion_gate") for key in raw.files)
     assert any(key.endswith("_x_length_jump_score") for key in raw.files)
     assert any(key.endswith("_y_length_jump_score") for key in raw.files)
     assert any(key.endswith("_x_transition_edge_mask") for key in raw.files)
@@ -338,8 +378,9 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_weak_nodal_mass_x") for key in raw.files)
     assert any(key.endswith("_weak_nodal_mass_y") for key in raw.files)
     assert any(key.endswith("_split_mass_relative_contribution") for key in raw.files)
-    assert any(key.endswith("_x_self_trace_residual") for key in raw.files)
-    assert any(key.endswith("_y_self_trace_residual") for key in raw.files)
+    assert any(key.endswith("_boundary_endpoint_coords") for key in raw.files)
+    assert any(key.endswith("_boundary_split_residual") for key in raw.files)
+    assert any(key.endswith("_boundary_physical_distance") for key in raw.files)
     for suffix in (
         "_u_pred",
         "_u_pred_error",

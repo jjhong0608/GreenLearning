@@ -273,9 +273,9 @@ A=\left(\int_0^1|f_{\mathrm{phys}}(s(t))|^2\,dt\right)^{1/2}
 
 is the length-independent physical source amplitude. The deterministic
 \\(L_x^2\\) and \\(L_y^2\\) response scales are applied at the model output, not
-learned implicitly by a geometry branch. Projection operates directly on
-\\(P,Q\\), and Green reconstruction consumes the projected responses without an
-additional post-projection length conversion.
+learned implicitly by a geometry branch. The responses are mapped to physical
+directional-source proposals before projection, and Green reconstruction consumes
+the pulled-back projected responses without another length conversion.
 
 ### 5.2 Primary and transverse trunks
 
@@ -665,18 +665,75 @@ At a valid point \\(p_q=(x_q,y_q)\\), define
 \sigma_y=(L_{\beta(q)}^y)^2.
 \\]
 
-Map raw reference responses to physical directional-source proposals:
+Map the two base raw reference responses to physical directional-source proposals:
 
 \\[
-p_q=\frac{P_q}{\sigma_x},
+p_{0,q}=\frac{P_{0,q}}{\sigma_x},
 \qquad
-q_q=\frac{Q_q}{\sigma_y}.
+q_{0,q}=\frac{Q_{0,q}}{\sigma_y}.
 \\]
 
 All segment lengths must be strictly positive. This is the explicit
 reference-to-physical coordinate scaling performed before projection.
 
-### 8.3 Symmetric projection in physical source space
+### 8.3 Optional linear/nonlinear pre-projection fusion
+
+The optional `coupling_model.pre_projection_fusion` block operates only in
+physical directional-source space. Define the source scale
+
+\\[
+S_q=
+\sqrt{\frac{(A^x_{\alpha(q)})^2+(A^y_{\beta(q)})^2}{2}},
+\\]
+
+and normalized inputs
+
+\\[
+\widehat d_q=\frac{p_{0,q}-q_{0,q}}{\max(S_q,\varepsilon)},
+\qquad
+\widehat f_q=\frac{f_q}{\max(S_q,\varepsilon)}.
+\\]
+
+A bias-free linear head receives
+\\([\widehat d_q,\widehat f_q]\\). A small nonlinear head receives those two
+values together with
+
+\\[
+\left[
+t_q^x,t_q^y,
+\log\frac{L_x}{L_{\mathrm{ref}}},
+\log\frac{L_y}{L_{\mathrm{ref}}},
+\log\frac{L_x}{L_y},
+\frac{4L_x^2L_y^2}{(L_x^2+L_y^2)^2}
+\right].
+\\]
+
+If \\(\ell_q\\) and \\(n_q\\) are the normalized linear and nonlinear
+corrections and \\(\alpha=\operatorname{sigmoid}(g)\\), the physical correction
+is
+
+\\[
+\Delta d_q
+=
+S_q\left[(1-\alpha)\ell_q+\alpha n_q\right].
+\\]
+
+The fused proposals are
+
+\\[
+p_q=p_{0,q}+\frac{\Delta d_q}{2},
+\qquad
+q_q=q_{0,q}-\frac{\Delta d_q}{2}.
+\\]
+
+Consequently \\(p_q+q_q=p_{0,q}+q_{0,q}\\): the block changes only the
+difference mode. Both correction heads are initialized to zero, so enabling the
+block starts from the exact unfused v6 prediction. The unclamped \\(S_q\\)
+multiplies the correction, so a zero source scale produces exactly zero
+correction. When the option is disabled, \\(p_q=p_{0,q}\\) and
+\\(q_q=q_{0,q}\\).
+
+### 8.4 Symmetric projection in physical source space
 
 Define the physical raw difference
 
@@ -701,7 +758,7 @@ difference:
 \phi_q-\psi_q=p_q-q_q.
 \\]
 
-### 8.4 Post-projection pull-back
+### 8.5 Post-projection pull-back
 
 Only after physical projection are the fields pulled back to the unit-interval
 responses consumed by the normalized Green operators:
@@ -712,7 +769,7 @@ responses consumed by the normalized Green operators:
 \Psi_q=\sigma_y\psi_q.
 \\]
 
-### 8.5 No additional reconstruction scaling
+### 8.6 No additional reconstruction scaling
 
 The pull-back above is the required post-projection length conversion. Projected
 responses \\(\Phi,\Psi\\) are then already the unit-interval Green source quantities,
@@ -1047,30 +1104,28 @@ closure weight. `best_energy_checkpoint` continues to track validation raw
 balanced energy; `best_physics_checkpoint` independently tracks the total
 validation reference-free objective.
 
-### 10.9 Axial admissibility gluing
+### 10.9 General connected-segment boundary energy
 
-When `coupling_training.admissibility_gluing.enabled=true`, add a reference-free
-trace compatibility term constructed only from the existing axial lines. For
-every eligible internal horizontal interface, compare first-order one-sided
-traces of \(u_\phi\) extrapolated from the lower and upper horizontal line
-families. Apply the analogous construction to \(u_\psi\) at vertical interfaces.
-Matching two traces at the same interface does not force the transverse
-derivative to vanish; it enforces that neighboring line reconstructions define
-one compatible full-domain trace.
+The canonical split energy includes both valid-point bulk edges and the missing
+edge between each connected segment endpoint and its nearest represented
+interior node. For \(r=u_\phi-u_\psi\), an endpoint contribution is
 
-Classify transitions from connected-segment split/merge topology and the
-configured log-\(L^2\) jump threshold. The only supported carrier scope is
-`transition_only`. At horizontal transitions, use the crossing vertical
-reconstruction \(u_\psi\) as the common carrier for both \(u_\phi\) traces. At
-vertical transitions, use \(u_\phi\) as the common carrier for both \(u_\psi\)
-traces. When a trace appears or disappears because a physical boundary crosses
-the interface, evaluate its first-order trace at the corresponding opposite-axis
-segment endpoint and compare it with the known hard-zero boundary value.
+\[
+E_{\partial,s}
+=
+a_i r_i^2\frac{h_\perp}{d_i},
+\]
 
-The self-trace and transition-carrier terms have independent weights. Regular and
-transition self traces are group-normalized with `transition_fraction`. The loss
-uses no mesh, global matrix solve, reference solution, or target directional
-source.
+where \(d_i\) is the physical endpoint-to-node distance. Use \(h_y\) for an
+x-segment endpoint and \(h_x\) for a y-segment endpoint. The endpoint residual is
+hard-zero and \(a_i\) is the one-sided coefficient at the nearest valid node.
+Apply this rule to both ends of every connected segment, including disconnected
+segments created by holes.
+
+This term removes the bulk graph's component-constant null modes without a trace
+carrier. The former `admissibility_gluing` config, global self-trace objective,
+and transition-only cross-axis carrier are retired rather than retained as
+additional losses.
 
 ---
 
@@ -1307,14 +1362,13 @@ p_q\in\Omega.
 - [ ] Regular and length-transition edge groups are normalized separately.
 - [ ] Original unweighted physical energy remains an audit metric.
 
-### Admissibility gluing
+### Canonical boundary energy
 
-- [ ] Self-trace gluing covers every eligible internal x/y interface.
-- [ ] First-order two-sided trace matching does not penalize a nonzero transverse derivative.
-- [ ] Segment split/merge and log-length jumps classify transition interfaces.
-- [ ] Cross-axis trace carriers are used only on transition interfaces.
-- [ ] Appearing/disappearing traces use opposite-axis hard-zero boundary endpoints.
-- [ ] No mesh, matrix solve, or reference target enters the gluing loss.
+- [ ] Both endpoints of every represented connected x/y segment are included.
+- [ ] Endpoint values are hard-zero and nearest-node distances are physical.
+- [ ] X endpoints use transverse measure \(h_y\); y endpoints use \(h_x\).
+- [ ] Boundary and bulk terms use the same residual \(u_\phi-u_\psi\).
+- [ ] No self-trace, carrier, mesh, matrix solve, or reference target enters the energy.
 
 ### Cross consistency
 
@@ -1447,7 +1501,7 @@ L^2,
 
 \\[
 \boxed{
-\text{Global self-trace gluing with transition-only cross-axis carriers.}
+\text{All-segment endpoint P1 boundary energy with no carrier objective.}
 }
 \\]
 
@@ -1525,10 +1579,9 @@ physical source space, symmetric projection enforces physical balance while
 preserving the raw physical difference, and post-projection multiplication pulls
 the fields back to the unit-interval responses consumed directly by Green
 reconstruction. The shared pointwise transverse trunk exposes both axial segment
-lengths, the balanced edge objective prevents transition edges from being diluted,
-and axial trace gluing supplies the full-domain compatibility that isolated
-segment endpoint conditions do not guarantee. Cross-axis carriers are deliberately
-restricted to transition interfaces. Reference solution and split targets remain
-evaluation-only.
+lengths, the balanced bulk objective prevents transition edges from being diluted,
+and the all-segment endpoint energy removes the constant null mode left by the
+bulk graph. The retired self-trace and carrier objectives are not part of the
+production loss. Reference solution and split targets remain evaluation-only.
 
 Cross consistency is not part of the design and must not appear in loss computation, metrics, logs, or summaries.

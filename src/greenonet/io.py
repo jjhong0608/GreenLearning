@@ -12,6 +12,7 @@ from greenonet.compile_utils import model_state_dict_for_save
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
@@ -111,6 +112,11 @@ def _deserialize_config(
         axis_1d_trunk_raw = data.get("axis_1d_trunk")
         if isinstance(axis_1d_trunk_raw, dict):
             data["axis_1d_trunk"] = Axis1DTrunkConfig.from_raw(axis_1d_trunk_raw)
+        pre_projection_fusion_raw = data.get("pre_projection_fusion")
+        if isinstance(pre_projection_fusion_raw, dict):
+            data["pre_projection_fusion"] = ComplexPreProjectionFusionConfig.from_raw(
+                pre_projection_fusion_raw
+            )
     allowed_keys = {field.name for field in fields(config_cls)}
     filtered = {key: value for key, value in data.items() if key in allowed_keys}
     return config_cls(**filtered)

@@ -163,6 +163,20 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `response_preconditioned`, `symmetric`, `smooth_mask`, geometry-weighted mode는
   폐기되었고 v6에서 fail fast한다. Unversioned 및 v5 이하 complex CouplingNet
   checkpoint는 재학습 오류로 거부하며 GreenNet checkpoint는 그대로 재사용한다.
+- Complex CouplingNet의 `coupling_model.pre_projection_fusion`은 optional
+  architecture ablation이며 기본값은 disabled이다. Enabled이면 axis network의
+  base response \(P_0,Q_0\)를 \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\)로 옮긴 뒤,
+  small linear/nonlinear block이 physical difference correction \(\Delta d\)를
+  예측한다. 최종 proposal은 \(p=p_0+\Delta d/2\),
+  \(q=q_0-\Delta d/2\)이므로 physical common mode \(p+q\)는 정확히 보존된다.
+  Linear path는 normalized difference/source를, nonlinear path는 여기에
+  `x_local_t`, `y_local_t`, 양 축 line-length log feature와 \(\kappa\)를 함께
+  사용한다. Trainable sigmoid gate가 두 correction을 혼합하고 두 output head는
+  zero initialization되어 enabled run의 초기 prediction이 disabled baseline과
+  정확히 같다. 이 block은 projection 이전에만 작동하고 새 loss나 reference
+  `sol/phi/psi`를 사용하지 않으며 output contract는 v6를 유지한다. 기존 v6
+  checkpoint는 disabled config로 계속 load할 수 있지만 enabled config는 fusion
+  parameter가 추가되는 새 architecture이므로 CouplingNet을 새로 학습한다.
 - Complex v6 training의 base split seminorm은 length-jump-balanced physical edge
   energy이다.
   Edge score는 `max(|Delta log Lx^2|,|Delta log Ly^2|)`이고 기본 threshold는
@@ -185,27 +199,41 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Nodal residual은 lumped directional mass와 physical source energy로 normalize한다.
   이는 reference-free variational closure이며 sparse matrix dependency 없이
   element gather/scatter로 구현한다.
-- Complex total objective는 selected split objective에 enabled weak closure와
-  admissibility gluing을 더한다. 즉 모두 enabled이면
-  `loss_split_relative + loss_weak_operator_closure + loss_trace_gluing`이다.
-  Reported split energy/mass, weak x/y/total, trace self/carrier metric은 config
-  weight가 반영된 실제 objective contribution을 구분해 기록한다. Relative split이
-  꺼져 있으면 raw balanced energy가 split objective이고, weak/gluing은 서로 독립적으로
-  enable/disable한다.
+- Complex total objective는 selected split objective에 enabled weak closure를
+  더한다. Relative split이 꺼져 있으면 canonical length-balanced
+  bulk-plus-boundary energy가 split objective다. Reported canonical, bulk,
+  boundary x/y, regular/transition bulk, relative split, weak x/y/total metric은
+  실제 objective와 audit contribution을 구분해 기록한다.
   Raw-balance gauge penalty는 이번 contract에서 구현하지 않으며 후속 현상이 남을
   때만 재검토한다.
-- Complex v6의 `admissibility_gluing`은 axial line metadata만 사용하는
-  reference-free full-domain trace compatibility loss다. Self-trace gluing은 모든
-  eligible internal x/y line interface에서 양쪽 first-order one-sided trace를
-  비교하며 transverse derivative 자체를 0으로 만들지 않는다. Interface transition은
-  segment overlap graph의 split/merge와 `log(L^2)` jump threshold로 검출한다.
-  `carrier_scope="transition_only"`에서는 transition interface에서만 더 강한
-  cross-axis carrier를 적용한다: horizontal interface의 `u_phi` traces는 같은 점을
-  통과하는 `u_psi`를 carrier로, vertical interface의 `u_psi` traces는 `u_phi`를
-  carrier로 사용한다. Point가 나타나거나 사라지는 physical boundary trace는 기존
-  opposite-axis segment endpoint에서 hard-zero carrier를 사용한다. Mesh, matrix solve,
-  `sol`, target `phi/psi`는 사용하지 않는다. Objective metric은
-  `loss_trace_gluing`, self regular/transition, transition carrier, x/y RMS를 분리한다.
+- Canonical `configs/complex_coupling.json`은 energy-only v6 실험만 표현한다.
+  Disabled opt-in인 `relative_split_consistency`, `weak_operator_closure`,
+  `best_physics_checkpoint`, `best_rel_sol_checkpoint`는 config에서 생략하고 dataclass
+  disabled default를 사용한다. `pipeline.run_green=false`이므로 Green `training`
+  section도 생략하며, null `coupling_pretrained_path`를 쓰지 않아 새 CouplingNet을
+  처음부터 학습한다.
+- Complex canonical split energy는 valid-point physical bulk edge energy와 general
+  boundary energy의 합이다. Boundary energy는 모든 connected x/y segment의 양쪽
+  hard-zero endpoint를 해당 segment의 nearest represented interior node에 연결하는
+  누락된 P1 edge contribution이다. Residual `r=u_phi-u_psi`에 대해 각 anchor는
+  `a_i*r_i^2*h_perp/d_endpoint`를 더한다. Coefficient는 nearest valid point의 one-sided
+  값을 사용하고, x endpoint의 transverse measure는 `h_y`, y endpoint는 `h_x`다.
+  `loss_energy_consistency`는 unweighted bulk+boundary, length-balanced metric은
+  balanced bulk+같은 boundary다.
+- `admissibility_gluing`, global self-trace loss, transition-only cross-axis carrier,
+  trace/carrier metric과 artifact는 폐기되었다. General endpoint boundary energy가
+  residual constant null mode를 제거하므로 carrier는 coercivity에 필요하지 않다.
+  이전 config의 `admissibility_gluing` key는 호환하지 않고 fail fast한다.
+- `cli/analyze_complex_energy_nullspace.py`는 canonical bulk와 all-segment boundary
+  anchor를 bulk component-constant space에서 비교한다. 현재
+  `annulus_02_05_1_128.npz`는 10,788 valid-point DOF, one connected bulk component,
+  712 boundary anchors를 가진다. Nullity는 bulk `1`, bulk+general boundary `0`이며
+  carrier objective는 필요하지 않다.
+- `cli/audit_complex_energy_refinement.py`는 physical boundary 근처에서 0인
+  grid-independent fixed-amplitude interior jump를 세 개 이상의 annulus refinement에서
+  평가한다. 현재 `inner_radius=0.2`, `outer_radius=0.5`,
+  `h={1/32,1/64,1/128}`에서 canonical energy는 `{28,60,124}`, log-log slope는
+  `-1.0734`, `h*E_h` relative spread는 `0.1011`로 inverse-h acceptance를 통과했다.
 - Complex v6는 reference-free checkpoint selection을 강제한다.
   `best_rel_sol_checkpoint.enabled=true`는 fail fast한다.
   `best_energy_checkpoint`는 validation raw balanced energy가 가장 작은

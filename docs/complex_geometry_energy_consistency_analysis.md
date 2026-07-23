@@ -1039,15 +1039,17 @@ explains what energy consistency controls once the represented fields are
 admissible full-domain energy functions; it does not claim that connected
 interval endpoint conditions automatically produce such fields.
 
-In numerical complex-mode training, the energy loss is evaluated on valid
-same-segment edges.  That discrete construction should be understood as a
-finite-dimensional analogue of the continuous energy principle, not as a direct
-proof that the continuous \(H_0^1(\Omega)\) assumptions automatically hold.
+In numerical complex-mode training, the canonical energy is evaluated on valid
+same-segment bulk edges and on the endpoint-to-nearest-interior P1 edge for both
+ends of every connected segment. For \(r=u_\phi-u_\psi\), each hard-zero endpoint
+contributes \(a_i r_i^2h_\perp/d_i\). This all-segment boundary completion removes
+the component-constant null mode of the bulk graph. It should still be understood
+as a finite-dimensional analogue of the continuous energy principle, not as a
+direct proof that the continuous \(H_0^1(\Omega)\) assumptions automatically hold.
 
-Output contract v5 uses the same physical edge-energy density but reports two
-discrete objectives.  The unweighted objective remains the direct graph analogue
-of \(\mathcal E_{\mathrm{split}}\).  The optimized objective separates regular and
-line-length transition edges using
+Output contract v6 reports two canonical discrete objectives. The unweighted
+objective is unweighted bulk plus boundary. The optimized objective separates
+regular and line-length transition bulk edges using
 
 \[
 J_{ij}
@@ -1058,13 +1060,14 @@ J_{ij}
 \right)
 \]
 
-and normalizes the two edge groups independently before mixing them with a fixed
-positive fraction.  For a fixed finite geometry with positive group weights, this
-is a positive edge-weighted equivalent discrete seminorm: it changes the relative
-sampling emphasis of the graph energy, not the PDE operator, the balance
-constraint, or the target solution.  Reporting the original unweighted energy
-separately is therefore required for interpretation and comparison.  If either
-edge group is empty, the implementation uses the unweighted objective.
+and normalizes the two bulk groups independently before mixing them with a fixed
+positive fraction. The same boundary term is then added to either bulk objective.
+For a fixed finite geometry with positive group weights, this is a positive
+edge-weighted equivalent discrete norm: it changes the relative sampling emphasis
+of the bulk graph, not the PDE operator, the balance constraint, or the target
+solution. Reporting unweighted bulk, boundary, and canonical totals separately is
+therefore required for interpretation and comparison. If either bulk group is
+empty, the implementation uses the unweighted bulk objective.
 
 ## 9. Why \(L^2\)-Consistency Is Insufficient
 

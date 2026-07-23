@@ -30,7 +30,10 @@ from greenonet.coupling_artifacts import (
     CouplingArtifactConfigs,
     load_coupling_artifact_configs,
 )
-from greenonet.config import BalanceProjectionConfig
+from greenonet.config import (
+    BalanceProjectionConfig,
+    ComplexPreProjectionFusionConfig,
+)
 from greenonet.greens import ExactGreenFunction, select_green_reference_policy
 from greenonet.plotly_io import save_plotly_figure
 
@@ -816,6 +819,11 @@ class LengthResponsePlotMixin:
         "projected_difference",
         "raw_response_constraint_residual",
         "response_constraint_residual",
+        "base_physical_difference",
+        "fused_physical_difference",
+        "linear_difference_correction",
+        "nonlinear_difference_correction",
+        "blended_difference_correction",
     }
 
     def _write_selected_figures(
@@ -848,6 +856,13 @@ class LengthResponsePlotMixin:
                 "projected_difference",
                 "raw_response_constraint_residual",
                 "response_constraint_residual",
+            ),
+            "pre_projection_fusion": (
+                "base_physical_difference",
+                "fused_physical_difference",
+                "linear_difference_correction",
+                "nonlinear_difference_correction",
+                "blended_difference_correction",
             ),
         }
         for sample_id, arrays in selected_arrays.items():
@@ -1004,6 +1019,7 @@ class ComplexLengthResponseDiagnostic(
     ) -> None:
         self.request = request
         self.logger = logger
+        self.coupling_model: ComplexCouplingNet | None = None
         self.request.outdir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> dict[str, Any]:
@@ -1153,6 +1169,7 @@ class ComplexLengthResponseDiagnostic(
             logger=self.logger,
         )
         coupling_model = model_loader._load_complex_model(configs, self.device)
+        self.coupling_model = coupling_model
         green_model = model_loader._load_green_model(configs, self.device)
         evaluator = ComplexCouplingEvaluator(
             model=coupling_model,
@@ -1403,6 +1420,45 @@ class ComplexLengthResponseDiagnostic(
                     )
                 ),
             }
+            if prediction.pre_projection_fusion is not None:
+                fusion = prediction.pre_projection_fusion
+                arrays.update(
+                    {
+                        "base_response_phi": self._numpy(
+                            fusion.base_response[offset, 0]
+                        ),
+                        "base_response_psi": self._numpy(
+                            fusion.base_response[offset, 1]
+                        ),
+                        "base_physical_p": self._numpy(fusion.base_physical[offset, 0]),
+                        "base_physical_q": self._numpy(fusion.base_physical[offset, 1]),
+                        "base_physical_difference": self._numpy(
+                            fusion.base_difference[offset]
+                        ),
+                        "fused_physical_p": self._numpy(
+                            fusion.fused_physical[offset, 0]
+                        ),
+                        "fused_physical_q": self._numpy(
+                            fusion.fused_physical[offset, 1]
+                        ),
+                        "fused_physical_difference": self._numpy(
+                            fusion.fused_difference[offset]
+                        ),
+                        "linear_difference_correction": self._numpy(
+                            fusion.linear_correction[offset]
+                        ),
+                        "nonlinear_difference_correction": self._numpy(
+                            fusion.nonlinear_correction[offset]
+                        ),
+                        "blended_difference_correction": self._numpy(
+                            fusion.blended_correction[offset]
+                        ),
+                        "fusion_source_scale": self._numpy(fusion.source_scale[offset]),
+                        "fusion_gate": np.asarray(
+                            float(fusion.gate.detach().cpu().item())
+                        ),
+                    }
+                )
             selected_arrays[sample_id] = arrays
         return selected_arrays
 
@@ -1463,6 +1519,12 @@ class ComplexLengthResponseDiagnostic(
         projection = BalanceProjectionConfig.from_raw(
             configs.coupling_model.balance_projection
         )
+        fusion_config = ComplexPreProjectionFusionConfig.from_raw(
+            configs.coupling_model.pre_projection_fusion
+        )
+        if self.coupling_model is None:
+            raise RuntimeError("Coupling model must be loaded before summary export.")
+        fusion_module = self.coupling_model.pre_projection_fusion
         return {
             "diagnostic": "complex_length_response",
             "uses_reference_targets_for_training": False,
@@ -1490,9 +1552,30 @@ class ComplexLengthResponseDiagnostic(
                 "additional_length_scaling": False,
             },
             "projection_flow": {
-                "pre_projection": "p=P_raw/Lx^2; q=Q_raw/Ly^2",
+                "pre_projection": (
+                    "p0=P0/Lx^2; q0=Q0/Ly^2; optional antisymmetric "
+                    "difference fusion produces p,q"
+                ),
                 "physical_projection": ("d=p-q; phi=(rhs+d)/2; psi=(rhs-d)/2"),
                 "post_projection": "Phi=Lx^2*phi; Psi=Ly^2*psi",
+            },
+            "pre_projection_fusion": {
+                "enabled": fusion_config.enabled,
+                "space": "physical_directional_source",
+                "correction_mode": "antisymmetric_difference",
+                "common_mode_preserved": True,
+                "nonlinear_hidden_dim": fusion_config.nonlinear_hidden_dim,
+                "nonlinear_depth": fusion_config.nonlinear_depth,
+                "gate_initial_value": fusion_config.gate_initial_value,
+                "gate_value": (
+                    None
+                    if fusion_module is None
+                    else float(
+                        torch.sigmoid(fusion_module.gate_logit.detach()).cpu().item()
+                    )
+                ),
+                "source_scale": "sqrt((A_x^2+A_y^2)/2)",
+                "uses_reference_targets": False,
             },
             "exact_green_reference_kinds": sorted(
                 set(diagnostics.predicted_exact.reference_kinds)

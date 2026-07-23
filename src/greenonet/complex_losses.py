@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from typing import cast
 
 import torch
@@ -41,16 +42,69 @@ class ComplexLengthJumpPartition:
 
 
 @dataclass(frozen=True)
+class ComplexBoundaryEnergyContext:
+    """Physical endpoint-to-interior edges for every connected segment."""
+
+    point_indices: torch.Tensor
+    physical_distance: torch.Tensor
+    transverse_measure: torch.Tensor
+    axis_id: torch.Tensor
+    endpoint_coords: torch.Tensor
+    segment_id: torch.Tensor
+    side_id: torch.Tensor
+    x_anchor_count: int
+    y_anchor_count: int
+
+    @property
+    def total_anchors(self) -> int:
+        return int(self.point_indices.numel())
+
+    def to(self, device: torch.device | str) -> ComplexBoundaryEnergyContext:
+        return replace(
+            self,
+            point_indices=self.point_indices.to(device),
+            physical_distance=self.physical_distance.to(device),
+            transverse_measure=self.transverse_measure.to(device),
+            axis_id=self.axis_id.to(device),
+            endpoint_coords=self.endpoint_coords.to(device),
+            segment_id=self.segment_id.to(device),
+            side_id=self.side_id.to(device),
+        )
+
+
+@dataclass(frozen=True)
+class ComplexBoundaryEnergyLossResult:
+    """Dirichlet endpoint contribution of the canonical split energy."""
+
+    total: torch.Tensor
+    x: torch.Tensor
+    y: torch.Tensor
+    total_per_sample: torch.Tensor
+    x_per_sample: torch.Tensor
+    y_per_sample: torch.Tensor
+
+
+@dataclass(frozen=True)
 class ComplexEnergyLossResult:
-    """Unweighted audit energy and transition-balanced optimization energy."""
+    """Canonical bulk-plus-boundary energy and its balanced optimization form."""
 
     unweighted: torch.Tensor
     balanced: torch.Tensor
+    bulk_unweighted: torch.Tensor
+    bulk_balanced: torch.Tensor
+    boundary: torch.Tensor
+    boundary_x: torch.Tensor
+    boundary_y: torch.Tensor
     regular_mean: torch.Tensor
     transition_mean: torch.Tensor
     transition_edge_fraction: torch.Tensor
     unweighted_per_sample: torch.Tensor
     balanced_per_sample: torch.Tensor
+    bulk_unweighted_per_sample: torch.Tensor
+    bulk_balanced_per_sample: torch.Tensor
+    boundary_per_sample: torch.Tensor
+    boundary_x_per_sample: torch.Tensor
+    boundary_y_per_sample: torch.Tensor
     regular_per_sample: torch.Tensor
     transition_per_sample: torch.Tensor
 
@@ -91,6 +145,118 @@ def build_length_jump_partition(
     )
 
 
+def build_boundary_energy_context(
+    geometry: ComplexGeometryMetadata,
+) -> ComplexBoundaryEnergyContext:
+    """Connect every segment endpoint to its nearest represented interior node."""
+
+    point_indices: list[int] = []
+    physical_distance: list[float] = []
+    transverse_measure: list[float] = []
+    axis_id: list[int] = []
+    endpoint_coords: list[list[float]] = []
+    segment_ids: list[int] = []
+    side_ids: list[int] = []
+
+    x_anchor_count = _append_axis_boundary_context(
+        geometry=geometry,
+        axis="x",
+        point_indices=point_indices,
+        physical_distance=physical_distance,
+        transverse_measure=transverse_measure,
+        axis_id=axis_id,
+        endpoint_coords=endpoint_coords,
+        segment_ids=segment_ids,
+        side_ids=side_ids,
+    )
+    y_anchor_count = _append_axis_boundary_context(
+        geometry=geometry,
+        axis="y",
+        point_indices=point_indices,
+        physical_distance=physical_distance,
+        transverse_measure=transverse_measure,
+        axis_id=axis_id,
+        endpoint_coords=endpoint_coords,
+        segment_ids=segment_ids,
+        side_ids=side_ids,
+    )
+    dtype = geometry.coords_valid.dtype
+    device = geometry.coords_valid.device
+    return ComplexBoundaryEnergyContext(
+        point_indices=torch.tensor(point_indices, dtype=torch.long, device=device),
+        physical_distance=torch.tensor(
+            physical_distance,
+            dtype=dtype,
+            device=device,
+        ),
+        transverse_measure=torch.tensor(
+            transverse_measure,
+            dtype=dtype,
+            device=device,
+        ),
+        axis_id=torch.tensor(axis_id, dtype=torch.long, device=device),
+        endpoint_coords=(
+            torch.tensor(endpoint_coords, dtype=dtype, device=device)
+            if endpoint_coords
+            else torch.empty((0, 2), dtype=dtype, device=device)
+        ),
+        segment_id=torch.tensor(segment_ids, dtype=torch.long, device=device),
+        side_id=torch.tensor(side_ids, dtype=torch.long, device=device),
+        x_anchor_count=x_anchor_count,
+        y_anchor_count=y_anchor_count,
+    )
+
+
+def physical_boundary_energy_loss(
+    *,
+    u_phi_valid: torch.Tensor,
+    u_psi_valid: torch.Tensor,
+    a_valid: torch.Tensor,
+    context: ComplexBoundaryEnergyContext,
+) -> ComplexBoundaryEnergyLossResult:
+    """Evaluate endpoint P1 edge energy with homogeneous boundary value zero."""
+
+    residual, a_valid = _validate_energy_inputs(
+        u_phi_valid=u_phi_valid,
+        u_psi_valid=u_psi_valid,
+        a_valid=a_valid,
+    )
+    context = context.to(residual.device)
+    if context.total_anchors == 0:
+        zero_per_sample = residual.new_zeros((residual.shape[0],))
+        zero = residual.new_zeros(())
+        return ComplexBoundaryEnergyLossResult(
+            total=zero,
+            x=zero,
+            y=zero,
+            total_per_sample=zero_per_sample,
+            x_per_sample=zero_per_sample,
+            y_per_sample=zero_per_sample,
+        )
+    if torch.any(context.physical_distance <= 0.0):
+        raise ValueError("Boundary endpoint distances must be positive.")
+    indices = context.point_indices
+    weights = (
+        a_valid[:, indices]
+        * context.transverse_measure.unsqueeze(0)
+        / context.physical_distance.unsqueeze(0)
+    )
+    values = weights * residual[:, indices].square()
+    x_mask = context.axis_id == 0
+    y_mask = context.axis_id == 1
+    x_per_sample = values[:, x_mask].sum(dim=-1)
+    y_per_sample = values[:, y_mask].sum(dim=-1)
+    total_per_sample = x_per_sample + y_per_sample
+    return ComplexBoundaryEnergyLossResult(
+        total=total_per_sample.mean(),
+        x=x_per_sample.mean(),
+        y=y_per_sample.mean(),
+        total_per_sample=total_per_sample,
+        x_per_sample=x_per_sample,
+        y_per_sample=y_per_sample,
+    )
+
+
 def physical_edge_energy_loss(
     *,
     u_phi_valid: torch.Tensor,
@@ -128,8 +294,9 @@ def length_jump_balanced_edge_energy_loss(
     geometry: ComplexGeometryMetadata,
     config: ComplexLengthJumpBalanceConfig,
     partition: ComplexLengthJumpPartition | None = None,
+    boundary_context: ComplexBoundaryEnergyContext | None = None,
 ) -> ComplexEnergyLossResult:
-    """Return the canonical energy and a geometry-group-balanced objective."""
+    """Return the canonical bulk-plus-boundary energy and balanced objective."""
 
     residual, a_valid = _validate_energy_inputs(
         u_phi_valid=u_phi_valid,
@@ -150,11 +317,21 @@ def length_jump_balanced_edge_energy_loss(
         spacing=geometry.hy.to(residual.device),
         area=geometry.hx.to(residual.device) * geometry.hy.to(residual.device),
     )
-    unweighted_per_sample = _sum_edge_energy_per_sample(
+    bulk_unweighted_per_sample = _sum_edge_energy_per_sample(
         x_values,
         y_values,
         residual,
     )
+    bulk_unweighted = bulk_unweighted_per_sample.mean()
+    if boundary_context is None:
+        boundary_context = build_boundary_energy_context(geometry)
+    boundary = physical_boundary_energy_loss(
+        u_phi_valid=u_phi_valid,
+        u_psi_valid=u_psi_valid,
+        a_valid=a_valid,
+        context=boundary_context,
+    )
+    unweighted_per_sample = bulk_unweighted_per_sample + boundary.total_per_sample
     unweighted = unweighted_per_sample.mean()
     if partition is None:
         partition = build_length_jump_partition(geometry, config)
@@ -172,11 +349,21 @@ def length_jump_balanced_edge_energy_loss(
         return ComplexEnergyLossResult(
             unweighted=unweighted,
             balanced=unweighted,
+            bulk_unweighted=bulk_unweighted,
+            bulk_balanced=bulk_unweighted,
+            boundary=boundary.total,
+            boundary_x=boundary.x,
+            boundary_y=boundary.y,
             regular_mean=zero,
             transition_mean=zero,
             transition_edge_fraction=zero,
             unweighted_per_sample=unweighted_per_sample,
             balanced_per_sample=unweighted_per_sample,
+            bulk_unweighted_per_sample=bulk_unweighted_per_sample,
+            bulk_balanced_per_sample=bulk_unweighted_per_sample,
+            boundary_per_sample=boundary.total_per_sample,
+            boundary_x_per_sample=boundary.x_per_sample,
+            boundary_y_per_sample=boundary.y_per_sample,
             regular_per_sample=zero_per_sample,
             transition_per_sample=zero_per_sample,
         )
@@ -198,24 +385,36 @@ def length_jump_balanced_edge_energy_loss(
     transition_mean = transition_per_sample.mean()
     transition_fraction = residual.new_tensor(transition_count / total_edges)
     if not config.enabled or regular_count == 0 or transition_count == 0:
-        balanced_per_sample = unweighted_per_sample
+        bulk_balanced_per_sample = bulk_unweighted_per_sample
     else:
         alpha = float(config.transition_fraction)
         regular_sum = edge_values[:, regular_mask].sum(dim=-1)
         transition_sum = edge_values[:, transition_mask].sum(dim=-1)
-        balanced_per_sample = (
+        bulk_balanced_per_sample = (
             (1.0 - alpha) * total_edges / regular_count * regular_sum
             + alpha * total_edges / transition_count * transition_sum
         )
+    bulk_balanced = bulk_balanced_per_sample.mean()
+    balanced_per_sample = bulk_balanced_per_sample + boundary.total_per_sample
     balanced = balanced_per_sample.mean()
     return ComplexEnergyLossResult(
         unweighted=unweighted,
         balanced=balanced,
+        bulk_unweighted=bulk_unweighted,
+        bulk_balanced=bulk_balanced,
+        boundary=boundary.total,
+        boundary_x=boundary.x,
+        boundary_y=boundary.y,
         regular_mean=regular_mean,
         transition_mean=transition_mean,
         transition_edge_fraction=transition_fraction,
         unweighted_per_sample=unweighted_per_sample,
         balanced_per_sample=balanced_per_sample,
+        bulk_unweighted_per_sample=bulk_unweighted_per_sample,
+        bulk_balanced_per_sample=bulk_balanced_per_sample,
+        boundary_per_sample=boundary.total_per_sample,
+        boundary_x_per_sample=boundary.x_per_sample,
+        boundary_y_per_sample=boundary.y_per_sample,
         regular_per_sample=regular_per_sample,
         transition_per_sample=transition_per_sample,
     )
@@ -354,6 +553,98 @@ def _edge_jump_score(
     x_jump = (log_sigma_x[right] - log_sigma_x[left]).abs()
     y_jump = (log_sigma_y[right] - log_sigma_y[left]).abs()
     return torch.maximum(x_jump, y_jump)
+
+
+def _append_axis_boundary_context(
+    *,
+    geometry: ComplexGeometryMetadata,
+    axis: str,
+    point_indices: list[int],
+    physical_distance: list[float],
+    transverse_measure: list[float],
+    axis_id: list[int],
+    endpoint_coords: list[list[float]],
+    segment_ids: list[int],
+    side_ids: list[int],
+) -> int:
+    if axis == "x":
+        ptr = geometry.x_recon_ptr
+        local_t = geometry.x_recon_t
+        valid_index = geometry.x_recon_valid_index
+        length = geometry.x_segment_length
+        lower = geometry.x_segment_left
+        upper = geometry.x_segment_right
+        fixed = geometry.x_segment_y
+        measure = float(geometry.hy.item())
+        numeric_axis_id = 0
+    elif axis == "y":
+        ptr = geometry.y_recon_ptr
+        local_t = geometry.y_recon_t
+        valid_index = geometry.y_recon_valid_index
+        length = geometry.y_segment_length
+        lower = geometry.y_segment_bottom
+        upper = geometry.y_segment_top
+        fixed = geometry.y_segment_x
+        measure = float(geometry.hx.item())
+        numeric_axis_id = 1
+    else:
+        raise ValueError(f"Unsupported boundary context axis: {axis}.")
+
+    initial_count = len(point_indices)
+    for segment_index in range(int(length.numel())):
+        start = int(ptr[segment_index].item())
+        stop = int(ptr[segment_index + 1].item())
+        segment_indices = valid_index[start:stop]
+        segment_t = local_t[start:stop]
+        if segment_indices.numel() < 2:
+            raise ValueError(f"{axis}-segment reconstruction requires two endpoints.")
+        if (
+            int(segment_indices[0].item()) != -1
+            or int(segment_indices[-1].item()) != -1
+        ):
+            raise ValueError(
+                f"{axis}-segment reconstruction endpoints must use valid_index=-1."
+            )
+        interior_positions = torch.nonzero(
+            segment_indices >= 0,
+            as_tuple=False,
+        ).flatten()
+        if interior_positions.numel() == 0:
+            continue
+        first_position = int(interior_positions[0].item())
+        last_position = int(interior_positions[-1].item())
+        first_t = float(segment_t[first_position].item())
+        last_t = float(segment_t[last_position].item())
+        segment_length = float(length[segment_index].item())
+        distances = (segment_length * first_t, segment_length * (1.0 - last_t))
+        if not all(math.isfinite(value) and value > 0.0 for value in distances):
+            raise ValueError(
+                f"{axis}-segment {segment_index} has non-positive boundary distance."
+            )
+        valid_points = (
+            int(segment_indices[first_position].item()),
+            int(segment_indices[last_position].item()),
+        )
+        endpoints = (
+            float(lower[segment_index].item()),
+            float(upper[segment_index].item()),
+        )
+        fixed_coordinate = float(fixed[segment_index].item())
+        for side, (point_index, distance, endpoint) in enumerate(
+            zip(valid_points, distances, endpoints, strict=True)
+        ):
+            point_indices.append(point_index)
+            physical_distance.append(distance)
+            transverse_measure.append(measure)
+            axis_id.append(numeric_axis_id)
+            endpoint_coords.append(
+                [endpoint, fixed_coordinate]
+                if axis == "x"
+                else [fixed_coordinate, endpoint]
+            )
+            segment_ids.append(segment_index)
+            side_ids.append(side)
+    return len(point_indices) - initial_count
 
 
 def relative_l2_valid(

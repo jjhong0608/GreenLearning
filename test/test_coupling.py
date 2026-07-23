@@ -2290,6 +2290,15 @@ def test_physical_symmetric_config_is_complex_only():
         CouplingNet(config)
 
 
+def test_pre_projection_fusion_is_complex_only():
+    config = CouplingModelConfig(
+        pre_projection_fusion={"enabled": True},
+    )
+
+    with pytest.raises(ValueError, match="pre_projection_fusion.*ComplexCouplingNet"):
+        CouplingNet(config)
+
+
 def test_balance_projection_config_rejects_invalid_mask():
     with pytest.raises(ValueError, match="balance_projection.mask"):
         BalanceProjectionConfig(enabled=True, mode="smooth_mask", mask="bad")  # type: ignore[arg-type]

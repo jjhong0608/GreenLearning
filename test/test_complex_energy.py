@@ -4,8 +4,10 @@ import torch
 
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.complex_losses import (
+    build_boundary_energy_context,
     build_length_jump_partition,
     length_jump_balanced_edge_energy_loss,
+    physical_boundary_energy_loss,
     physical_edge_energy_loss,
     relative_split_consistency_loss,
 )
@@ -37,6 +39,53 @@ def test_complex_energy_uses_edges_spacing_area_and_face_average(tmp_path):
     )
 
 
+def test_boundary_context_covers_every_connected_segment_endpoint(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+
+    context = build_boundary_energy_context(geometry)
+
+    assert context.x_anchor_count == 4
+    assert context.y_anchor_count == 4
+    assert context.total_anchors == 8
+    torch.testing.assert_close(
+        context.physical_distance,
+        torch.tensor(
+            [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.75],
+            dtype=torch.float64,
+        ),
+    )
+    assert torch.all(context.point_indices >= 0)
+    assert torch.all(context.physical_distance > 0.0)
+
+
+def test_boundary_energy_anchors_constant_residual(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    residual = torch.ones((1, geometry.num_points), dtype=torch.float64)
+    context = build_boundary_energy_context(geometry)
+
+    boundary = physical_boundary_energy_loss(
+        u_phi_valid=residual,
+        u_psi_valid=torch.zeros_like(residual),
+        a_valid=torch.ones_like(residual),
+        context=context,
+    )
+    energy = length_jump_balanced_edge_energy_loss(
+        u_phi_valid=residual,
+        u_psi_valid=torch.zeros_like(residual),
+        a_valid=torch.ones_like(residual),
+        geometry=geometry,
+        config=ComplexLengthJumpBalanceConfig(enabled=False),
+        boundary_context=context,
+    )
+
+    expected = torch.tensor(44.0 / 3.0, dtype=torch.float64)
+    torch.testing.assert_close(boundary.total, expected)
+    torch.testing.assert_close(energy.bulk_unweighted, torch.zeros_like(expected))
+    torch.testing.assert_close(energy.boundary, expected)
+    torch.testing.assert_close(energy.unweighted, expected)
+    torch.testing.assert_close(energy.balanced, expected)
+
+
 def test_length_jump_balanced_energy_groups_response_scale_transitions(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     u_phi = torch.tensor([[1.0, 3.0, 5.0]], dtype=torch.float64)
@@ -66,12 +115,20 @@ def test_length_jump_balanced_energy_groups_response_scale_transitions(tmp_path)
         torch.tensor([torch.log(torch.tensor(4.0))], dtype=torch.float64),
     )
     torch.testing.assert_close(
-        result.unweighted,
+        result.bulk_unweighted,
         torch.tensor(expected_x + expected_y, dtype=torch.float64),
     )
     torch.testing.assert_close(
-        result.balanced,
+        result.bulk_balanced,
         torch.tensor(1.5 * expected_x + 0.5 * expected_y, dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        result.unweighted,
+        result.bulk_unweighted + result.boundary,
+    )
+    torch.testing.assert_close(
+        result.balanced,
+        result.bulk_balanced + result.boundary,
     )
     torch.testing.assert_close(
         result.regular_mean,
@@ -160,10 +217,7 @@ def test_relative_split_mass_detects_constant_solution_mismatch(tmp_path):
         ),
     )
 
-    torch.testing.assert_close(
-        result.energy_relative,
-        torch.zeros((), dtype=torch.float64),
-    )
+    assert result.energy_relative.item() > 0.0
     torch.testing.assert_close(
         result.mass_relative,
         torch.ones((), dtype=torch.float64),
@@ -172,7 +226,7 @@ def test_relative_split_mass_detects_constant_solution_mismatch(tmp_path):
     )
     torch.testing.assert_close(
         result.loss,
-        torch.tensor(6.0, dtype=torch.float64),
+        2.0 * (result.energy_relative + 3.0 * result.mass_relative),
         atol=1.0e-10,
         rtol=1.0e-10,
     )

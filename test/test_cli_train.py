@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from greenonet.config import CouplingBranchFusionConfig, CouplingModelConfig
+from greenonet.config import (
+    ComplexPreProjectionFusionConfig,
+    CouplingBranchFusionConfig,
+    CouplingModelConfig,
+)
 from greenonet.model import GreenONetModel
 from cli.eval_coupling import EvalCouplingCLI
 from cli.train import TrainCLI
@@ -160,6 +164,46 @@ class TestTrainCLIDatasetConfig:
         assert dataset_cfg.step_size == 0.25
         assert dataset_cfg.coefficient_functions_path is None
         assert not hasattr(dataset_cfg, "domain")
+
+    def test_parses_optional_complex_pre_projection_fusion(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"geometry_mode": "complex"},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "pre_projection_fusion": {
+                    "enabled": True,
+                    "nonlinear_hidden_dim": 12,
+                    "nonlinear_depth": 2,
+                    "gate_initial_value": 0.1,
+                    "eps": 1e-10,
+                }
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": False, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset,
+            _model,
+            _training,
+            coupling_model,
+            _coupling_training,
+            _pipeline,
+            _terminal,
+        ) = TrainCLI()._build_configs(config_path)
+
+        assert coupling_model.pre_projection_fusion == (
+            ComplexPreProjectionFusionConfig(
+                enabled=True,
+                nonlinear_hidden_dim=12,
+                nonlinear_depth=2,
+                gate_initial_value=0.1,
+                eps=1e-10,
+            )
+        )
 
     def test_parses_green_validation_dataset_controls(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -956,16 +1000,6 @@ class TestComplexPhysicsLossTrainingConfig:
                 "weight": 4.0,
                 "eps": 1e-9,
             },
-            "admissibility_gluing": {
-                "enabled": True,
-                "self_trace_weight": 5.0,
-                "trace_order": 1,
-                "carrier_scope": "transition_only",
-                "transition_carrier_weight": 6.0,
-                "transition_fraction": 0.4,
-                "log_length_jump_threshold": 0.7,
-                "eps": 1e-8,
-            },
             "best_physics_checkpoint": {"enabled": True},
         }
 
@@ -981,14 +1015,6 @@ class TestComplexPhysicsLossTrainingConfig:
             assert config.weak_operator_closure.enabled is True
             assert config.weak_operator_closure.weight == 4.0
             assert config.weak_operator_closure.eps == 1e-9
-            assert config.admissibility_gluing.enabled is True
-            assert config.admissibility_gluing.self_trace_weight == 5.0
-            assert config.admissibility_gluing.trace_order == 1
-            assert config.admissibility_gluing.carrier_scope == "transition_only"
-            assert config.admissibility_gluing.transition_carrier_weight == 6.0
-            assert config.admissibility_gluing.transition_fraction == 0.4
-            assert config.admissibility_gluing.log_length_jump_threshold == 0.7
-            assert config.admissibility_gluing.eps == 1e-8
             assert config.best_physics_checkpoint.enabled is True
 
     @pytest.mark.parametrize(
@@ -999,10 +1025,6 @@ class TestComplexPhysicsLossTrainingConfig:
             ("relative_split_consistency", "eps", 0.0),
             ("weak_operator_closure", "weight", -1.0),
             ("weak_operator_closure", "eps", 0.0),
-            ("admissibility_gluing", "self_trace_weight", -1.0),
-            ("admissibility_gluing", "transition_carrier_weight", -1.0),
-            ("admissibility_gluing", "transition_fraction", 0.0),
-            ("admissibility_gluing", "eps", 0.0),
         ),
     )
     def test_rejects_invalid_complex_physics_loss_values(
@@ -1022,13 +1044,18 @@ class TestComplexPhysicsLossTrainingConfig:
             "relative_split_consistency",
             "weak_operator_closure",
             "best_physics_checkpoint",
-            "admissibility_gluing",
         ),
     )
     def test_rejects_unknown_complex_physics_config_keys(self, section):
         with pytest.raises(TypeError, match=rf"{section} has unknown keys"):
             EvalCouplingCLI._build_coupling_training_config(
                 {section: {"enabled": True, "unknown": 1}}
+            )
+
+    def test_rejects_retired_admissibility_gluing_config(self):
+        with pytest.raises(TypeError, match="admissibility_gluing"):
+            TrainCLI._build_coupling_training_config(
+                {"admissibility_gluing": {"enabled": True}}
             )
 
     def test_eval_cli_parses_balance_projection_object_config(self):

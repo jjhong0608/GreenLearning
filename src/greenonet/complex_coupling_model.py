@@ -8,9 +8,14 @@ import torch
 from torch import nn
 
 from greenonet.complex_geometry import ComplexGeometryMetadata
+from greenonet.complex_pre_projection_fusion import (
+    ComplexPreProjectionFusion,
+    ComplexPreProjectionFusionResult,
+)
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingModelConfig,
 )
@@ -181,6 +186,21 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             self.branch_fuser_activation = nn.Identity()
             self.branch_fuser_dropout = nn.Identity()
 
+        pre_projection_fusion = ComplexPreProjectionFusionConfig.from_raw(
+            config.pre_projection_fusion
+        )
+        self.pre_projection_fusion_enabled = bool(pre_projection_fusion.enabled)
+        self.pre_projection_fusion: ComplexPreProjectionFusion | None
+        if self.pre_projection_fusion_enabled:
+            self.pre_projection_fusion = ComplexPreProjectionFusion(
+                pre_projection_fusion,
+                activation=config.activation,
+                use_bias=config.use_bias,
+                dtype=config.dtype,
+            )
+        else:
+            self.pre_projection_fusion = None
+
     @staticmethod
     def _validate_complex_config(config: CouplingModelConfig) -> None:
         if config.trunk_positional_encoding.enabled:
@@ -292,9 +312,93 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         y_source_amplitude: torch.Tensor,
         x_coefficient_branch: torch.Tensor,
         y_coefficient_branch: torch.Tensor,
+        rhs_phys: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return raw reference-response proposals shaped ``(B, 2, P)``."""
 
+        base_response = self._base_response(
+            geometry=geometry,
+            x_source_branch=x_source_branch,
+            y_source_branch=y_source_branch,
+            x_source_amplitude=x_source_amplitude,
+            y_source_amplitude=y_source_amplitude,
+            x_coefficient_branch=x_coefficient_branch,
+            y_coefficient_branch=y_coefficient_branch,
+        )
+        if not self.pre_projection_fusion_enabled:
+            return base_response
+        if self.pre_projection_fusion is None:
+            raise RuntimeError(
+                "pre_projection_fusion must be initialized when enabled."
+            )
+        if rhs_phys is None:
+            raise ValueError(
+                "rhs_phys is required when pre_projection_fusion.enabled=true."
+            )
+        return cast(
+            torch.Tensor,
+            self.pre_projection_fusion(
+                base_response=base_response,
+                rhs_phys=rhs_phys,
+                geometry=geometry,
+                x_source_amplitude=x_source_amplitude,
+                y_source_amplitude=y_source_amplitude,
+            ),
+        )
+
+    def forward_with_fusion_diagnostics(
+        self,
+        *,
+        geometry: ComplexGeometryMetadata,
+        x_source_branch: torch.Tensor,
+        y_source_branch: torch.Tensor,
+        x_source_amplitude: torch.Tensor,
+        y_source_amplitude: torch.Tensor,
+        x_coefficient_branch: torch.Tensor,
+        y_coefficient_branch: torch.Tensor,
+        rhs_phys: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, ComplexPreProjectionFusionResult | None]:
+        """Return projection input plus optional fusion audit tensors."""
+
+        base_response = self._base_response(
+            geometry=geometry,
+            x_source_branch=x_source_branch,
+            y_source_branch=y_source_branch,
+            x_source_amplitude=x_source_amplitude,
+            y_source_amplitude=y_source_amplitude,
+            x_coefficient_branch=x_coefficient_branch,
+            y_coefficient_branch=y_coefficient_branch,
+        )
+        if not self.pre_projection_fusion_enabled:
+            return base_response, None
+        if self.pre_projection_fusion is None:
+            raise RuntimeError(
+                "pre_projection_fusion must be initialized when enabled."
+            )
+        if rhs_phys is None:
+            raise ValueError(
+                "rhs_phys is required when pre_projection_fusion.enabled=true."
+            )
+        diagnostics = self.pre_projection_fusion.forward_with_diagnostics(
+            base_response=base_response,
+            rhs_phys=rhs_phys,
+            geometry=geometry,
+            x_source_amplitude=x_source_amplitude,
+            y_source_amplitude=y_source_amplitude,
+        )
+        return diagnostics.fused_response, diagnostics
+
+    def _base_response(
+        self,
+        *,
+        geometry: ComplexGeometryMetadata,
+        x_source_branch: torch.Tensor,
+        y_source_branch: torch.Tensor,
+        x_source_amplitude: torch.Tensor,
+        y_source_amplitude: torch.Tensor,
+        x_coefficient_branch: torch.Tensor,
+        y_coefficient_branch: torch.Tensor,
+    ) -> torch.Tensor:
         phi_response = self._axis_forward(
             geometry=geometry,
             source_branch=x_source_branch,

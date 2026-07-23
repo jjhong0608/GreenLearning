@@ -9,7 +9,11 @@ import torch
 from torch import optim
 from torch.utils.data import DataLoader
 
-from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
+from greenonet.compile_utils import (
+    maybe_compile_model,
+    model_state_dict_for_save,
+    unwrap_compiled_model,
+)
 from greenonet.complex_coupling_data import (
     ComplexCouplingBatch,
     ComplexCouplingDataset,
@@ -20,12 +24,10 @@ from greenonet.complex_coupling_objective import (
     ComplexCouplingObjectiveResult,
     compute_complex_coupling_objective,
 )
-from greenonet.complex_gluing import (
-    ComplexGluingContext,
-    build_complex_gluing_context,
-)
 from greenonet.complex_losses import (
+    ComplexBoundaryEnergyContext,
     ComplexLengthJumpPartition,
+    build_boundary_energy_context,
     build_length_jump_partition,
     relative_l2_valid,
 )
@@ -40,8 +42,8 @@ from greenonet.complex_reconstruction import (
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.config import (
     BalanceProjectionConfig,
-    ComplexAdmissibilityGluingConfig,
     ComplexLengthJumpBalanceConfig,
+    ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingBestEnergyCheckpointConfig,
@@ -68,6 +70,11 @@ class ComplexCouplingTrainer(LoggingMixin):
         "loss",
         "loss_energy_consistency",
         "loss_energy_length_balanced",
+        "loss_energy_bulk",
+        "loss_energy_bulk_length_balanced",
+        "loss_energy_boundary",
+        "loss_energy_boundary_x",
+        "loss_energy_boundary_y",
         "loss_energy_regular",
         "loss_energy_transition",
         "transition_edge_fraction",
@@ -77,18 +84,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         "loss_weak_operator_closure",
         "loss_weak_operator_x",
         "loss_weak_operator_y",
-        "loss_trace_gluing",
-        "loss_trace_self",
-        "loss_trace_self_regular",
-        "loss_trace_self_transition",
-        "loss_trace_carrier_transition",
-        "trace_self_x_rms",
-        "trace_self_y_rms",
-        "trace_carrier_x_rms",
-        "trace_carrier_y_rms",
-        "transition_trace_fraction",
         "rel_sol",
         "rel_flux",
+        "pre_projection_fusion_gate",
         "learning_rate",
     )
 
@@ -105,6 +103,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         self.balance_projection = BalanceProjectionConfig.from_raw(
             model.config.balance_projection
         )
+        self.pre_projection_fusion_config = ComplexPreProjectionFusionConfig.from_raw(
+            model.config.pre_projection_fusion
+        )
         self.config = config
         self.length_jump_config = ComplexLengthJumpBalanceConfig.from_raw(
             config.length_jump_balance
@@ -114,9 +115,6 @@ class ComplexCouplingTrainer(LoggingMixin):
         )
         self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
             config.weak_operator_closure
-        )
-        self.gluing_config = ComplexAdmissibilityGluingConfig.from_raw(
-            config.admissibility_gluing
         )
         self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
             config.best_energy_checkpoint
@@ -143,6 +141,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             work_dir=self.work_dir,
             terminal_width=terminal_width,
         )
+        self._log_pre_projection_fusion(model)
         self.device = torch.device(config.device)
         self.model.to(self.device)
         self.model = maybe_compile_model(
@@ -158,7 +157,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         self.loss_history: list[float] = []
         self.metric_rows: list[dict[str, float | int | str]] = []
         self._length_jump_partition: ComplexLengthJumpPartition | None = None
-        self._gluing_context: ComplexGluingContext | None = None
+        self._boundary_context: ComplexBoundaryEnergyContext | None = None
 
     def train(
         self,
@@ -197,6 +196,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         for epoch in range(1, self.config.epochs + 1):
             learning_rate = float(optimizer.param_groups[0]["lr"])
             train_metrics = self._run_epoch(train_loader, optimizer=optimizer)
+            fusion_gate = self._current_pre_projection_fusion_gate()
+            if fusion_gate is not None:
+                train_metrics["pre_projection_fusion_gate"] = fusion_gate
             train_metrics["learning_rate"] = learning_rate
             self.loss_history.append(float(train_metrics["loss"]))
             self._record_metrics(epoch, "train", train_metrics)
@@ -204,6 +206,8 @@ class ComplexCouplingTrainer(LoggingMixin):
                 self._log_epoch(epoch, "train", train_metrics)
             if validation_loader is not None:
                 val_metrics = self._evaluate_loader(validation_loader)
+                if fusion_gate is not None:
+                    val_metrics["pre_projection_fusion_gate"] = fusion_gate
                 val_metrics["learning_rate"] = learning_rate
                 self._record_metrics(epoch, "val", val_metrics)
                 if epoch % self.config.log_interval == 0:
@@ -295,6 +299,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             y_source_amplitude=batch.y_source_amplitude,
             x_coefficient_branch=batch.x_coefficient_branch,
             y_coefficient_branch=batch.y_coefficient_branch,
+            rhs_phys=batch.rhs_valid,
         )
         projection = apply_complex_balance_projection(
             raw_response=raw_response,
@@ -320,8 +325,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             length_jump_config=self.length_jump_config,
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
-            gluing_config=self.gluing_config,
-            gluing_context=self._trace_gluing_context(batch),
+            boundary_context=self._boundary_energy_context(batch),
             partition=self._energy_partition(batch),
         )
         loss = objective.loss
@@ -357,28 +361,19 @@ class ComplexCouplingTrainer(LoggingMixin):
             )
         return self._length_jump_partition
 
-    def _trace_gluing_context(
+    def _boundary_energy_context(
         self,
         batch: ComplexCouplingBatch,
-    ) -> ComplexGluingContext | None:
-        if not self.gluing_config.enabled:
-            return None
-        if self._gluing_context is None:
-            self._gluing_context = build_complex_gluing_context(
-                batch.geometry,
-                self.gluing_config,
-            )
+    ) -> ComplexBoundaryEnergyContext:
+        if self._boundary_context is None:
+            self._boundary_context = build_boundary_energy_context(batch.geometry)
             self.logger.info(
-                "trace gluing context x_interfaces=%d x_transition=%d "
-                "y_interfaces=%d y_transition=%d x_stencils=%d y_stencils=%d",
-                self._gluing_context.x.interface_count,
-                self._gluing_context.x.transition_interface_count,
-                self._gluing_context.y.interface_count,
-                self._gluing_context.y.transition_interface_count,
-                int(self._gluing_context.x.transition_mask.numel()),
-                int(self._gluing_context.y.transition_mask.numel()),
+                "canonical boundary energy anchors=%d x_anchors=%d y_anchors=%d",
+                self._boundary_context.total_anchors,
+                self._boundary_context.x_anchor_count,
+                self._boundary_context.y_anchor_count,
             )
-        return self._gluing_context
+        return self._boundary_context
 
     @staticmethod
     def _accumulate(
@@ -435,6 +430,32 @@ class ComplexCouplingTrainer(LoggingMixin):
             schedule.effective_warmup_epochs,
             schedule.total_epochs,
         )
+
+    def _log_pre_projection_fusion(self, model: ComplexCouplingNet) -> None:
+        gate_value: float | None = None
+        if model.pre_projection_fusion is not None:
+            gate_value = float(
+                torch.sigmoid(model.pre_projection_fusion.gate_logit.detach()).item()
+            )
+        self.logger.info(
+            "pre-projection fusion enabled=%s space=physical_source "
+            "correction=antisymmetric_difference hidden_dim=%d depth=%d "
+            "initial_gate=%.6f current_gate=%s",
+            self.pre_projection_fusion_config.enabled,
+            self.pre_projection_fusion_config.nonlinear_hidden_dim,
+            self.pre_projection_fusion_config.nonlinear_depth,
+            self.pre_projection_fusion_config.gate_initial_value,
+            "disabled" if gate_value is None else f"{gate_value:.6f}",
+        )
+
+    def _current_pre_projection_fusion_gate(self) -> float | None:
+        module = unwrap_compiled_model(self.model)
+        if not isinstance(module, ComplexCouplingNet):
+            raise TypeError("Compiled complex trainer model has an invalid origin.")
+        fusion = module.pre_projection_fusion
+        if fusion is None:
+            return None
+        return float(torch.sigmoid(fusion.gate_logit.detach()).cpu().item())
 
     def _save_checkpoint(self, filename: str) -> None:
         save_state_dict_safetensors(
