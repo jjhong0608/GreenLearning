@@ -19,6 +19,7 @@ from greenonet.complex_coupling_data import (
 )
 from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
 from greenonet.complex_coupling_model import ComplexCouplingNet
+from greenonet.complex_gluing import AxisTraceContext
 from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geometry
 from greenonet.coupling_artifacts import (
     CouplingArtifactConfigs,
@@ -28,6 +29,7 @@ from greenonet.coupling_artifacts import (
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexAdmissibilityGluingConfig,
     ComplexLengthJumpBalanceConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -563,10 +565,15 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         selected, roles, policy = self._select_sample_indices(metric_rows)
         selected_samples = self._evaluate_selected(dataset, evaluator, selected, device)
         self._write_metric_csv(metric_rows)
+        self._write_trace_metric_csv(selected_samples)
         self._write_selected_npz(selected_samples)
         self._write_coefficient_npz(coefficient_fields)
         figure_fields = self._figure_fields(selected_samples)
         sample_figure_paths = self._write_figures(
+            selected_samples,
+            self.request.theme,
+        )
+        trace_figure_paths = self._write_trace_figures(
             selected_samples,
             self.request.theme,
         )
@@ -596,6 +603,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         weak_closure = ComplexWeakOperatorClosureConfig.from_raw(
             configs.coupling_training.weak_operator_closure
         )
+        gluing = ComplexAdmissibilityGluingConfig.from_raw(
+            configs.coupling_training.admissibility_gluing
+        )
         best_energy = CouplingBestEnergyCheckpointConfig.from_raw(
             configs.coupling_training.best_energy_checkpoint
         )
@@ -603,10 +613,11 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             configs.coupling_training.best_physics_checkpoint
         )
         projection_formula = (
-            "s=max(Lx^2,Ly^2); a=Ly^2/s; b=Lx^2/s; "
-            "c=Lx^2*Ly^2*f/s; R=a*P+b*Q-c; "
-            "Phi=P-a*R/(a^2+b^2); Psi=Q-b*R/(a^2+b^2)"
+            "p=P_raw/Lx^2; q=Q_raw/Ly^2; d=p-q; "
+            "phi=(rhs+d)/2; psi=(rhs-d)/2; "
+            "Phi=Lx^2*phi; Psi=Ly^2*psi"
         )
+        gluing_context = evaluator.trace_gluing_context(geometry)
         summary = {
             "geometry_mode": "complex",
             "device": str(device),
@@ -619,7 +630,11 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "plot_workers": self.request.plot_workers,
             "save_generated_data": self.request.save_generated_data,
             "aggregate_metrics": aggregate,
-            "figure_count": len(sample_figure_paths) + len(coefficient_figure_paths),
+            "figure_count": (
+                len(sample_figure_paths)
+                + len(trace_figure_paths)
+                + len(coefficient_figure_paths)
+            ),
             "figure_fields": list(figure_fields),
             "coefficient_figure_count": len(coefficient_figure_paths),
             "coefficient_figure_fields": list(coefficient_figure_fields),
@@ -646,20 +661,50 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             ),
             "error_convention": "signed_difference",
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
-            "raw_output_space": "unit_response",
+            "raw_output_space": "reference_response",
             "output_contract_version": ComplexCouplingNet.OUTPUT_CONTRACT_VERSION,
             "balance_projection": {
                 "enabled": balance_projection.enabled,
                 "mode": balance_projection.mode,
-                "space": "unit_response",
+                "space": "physical_source",
                 "formula": projection_formula,
-                "constraint": "Phi/Lx^2 + Psi/Ly^2 = rhs",
+                "constraint": "phi + psi = rhs",
+                "raw_physical_difference_preserved": True,
+                "pre_projection_scaling": "p=P_raw/Lx^2; q=Q_raw/Ly^2",
+                "post_projection_pull_back": "Phi=Lx^2*phi; Psi=Ly^2*psi",
                 "uses_reference_targets": False,
             },
             "reconstruction_response_input": {
                 "phi": "projected Phi is used directly",
                 "psi": "projected Psi is used directly",
                 "additional_length_scaling": False,
+            },
+            "admissibility_gluing": {
+                "enabled": gluing.enabled,
+                "self_trace_weight": gluing.self_trace_weight,
+                "trace_order": gluing.trace_order,
+                "carrier_scope": gluing.carrier_scope,
+                "transition_carrier_weight": gluing.transition_carrier_weight,
+                "transition_fraction": gluing.transition_fraction,
+                "log_length_jump_threshold": gluing.log_length_jump_threshold,
+                "eps": gluing.eps,
+                "x_interface_count": (
+                    0 if gluing_context is None else gluing_context.x.interface_count
+                ),
+                "x_transition_interface_count": (
+                    0
+                    if gluing_context is None
+                    else gluing_context.x.transition_interface_count
+                ),
+                "y_interface_count": (
+                    0 if gluing_context is None else gluing_context.y.interface_count
+                ),
+                "y_transition_interface_count": (
+                    0
+                    if gluing_context is None
+                    else gluing_context.y.transition_interface_count
+                ),
+                "uses_reference_targets": False,
             },
             "length_jump_balance": {
                 "enabled": length_jump.enabled,
@@ -841,8 +886,8 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         quantile_selected = tuple(dict.fromkeys(roles.values()))
         return quantile_selected, roles, "rel_sol_quantiles"
 
-    @staticmethod
     def _evaluate_selected(
+        self,
         dataset: ComplexCouplingDataset,
         evaluator: ComplexCouplingEvaluator,
         selected: tuple[int, ...],
@@ -896,6 +941,12 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     ),
                     "raw_response_psi": (
                         prediction.raw_response[0, 1].detach().cpu().numpy()
+                    ),
+                    "raw_physical_phi": (
+                        prediction.projection.raw_physical[0, 0].detach().cpu().numpy()
+                    ),
+                    "raw_physical_psi": (
+                        prediction.projection.raw_physical[0, 1].detach().cpu().numpy()
                     ),
                     "projected_response_phi": (
                         prediction.projection.projected_response[0, 0]
@@ -989,6 +1040,37 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                         .cpu()
                         .numpy()
                     )
+                if prediction.objective.gluing is not None:
+                    gluing_result = prediction.objective.gluing
+                    gluing_context = evaluator.trace_gluing_context(
+                        prediction.batch.geometry
+                    )
+                    if gluing_context is None:
+                        raise RuntimeError("Enabled trace gluing has no context.")
+                    arrays["x_self_trace_coords"] = (
+                        gluing_context.x.trace_coords.detach().cpu().numpy()
+                    )
+                    arrays["y_self_trace_coords"] = (
+                        gluing_context.y.trace_coords.detach().cpu().numpy()
+                    )
+                    arrays["x_self_trace_residual"] = (
+                        gluing_result.x_self_residual[0].detach().cpu().numpy()
+                    )
+                    arrays["y_self_trace_residual"] = (
+                        gluing_result.y_self_residual[0].detach().cpu().numpy()
+                    )
+                    arrays["x_carrier_trace_coords"] = self._carrier_trace_coords(
+                        gluing_context.x
+                    )
+                    arrays["y_carrier_trace_coords"] = self._carrier_trace_coords(
+                        gluing_context.y
+                    )
+                    arrays["x_carrier_trace_residual"] = (
+                        gluing_result.x_carrier_residual[0].detach().cpu().numpy()
+                    )
+                    arrays["y_carrier_trace_residual"] = (
+                        gluing_result.y_carrier_residual[0].detach().cpu().numpy()
+                    )
                 partition = evaluator.energy_partition(prediction.batch.geometry)
                 arrays["x_length_jump_score"] = partition.x_score.detach().cpu().numpy()
                 arrays["y_length_jump_score"] = partition.y_score.detach().cpu().numpy()
@@ -1053,6 +1135,95 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             writer = csv.DictWriter(fp, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(metric_rows)
+
+    @staticmethod
+    def _carrier_trace_coords(context: AxisTraceContext) -> np.ndarray:
+        central = context.carrier_coords.detach().cpu().numpy()
+        boundary = context.boundary_coords.detach().cpu().numpy()
+        parts: list[np.ndarray] = []
+        if central.size:
+            parts.extend((central, central))
+        if boundary.size:
+            parts.append(boundary)
+        if not parts:
+            return np.empty((0, 2), dtype=np.float64)
+        return np.concatenate(parts, axis=0)
+
+    def _write_trace_metric_csv(
+        self,
+        selected_samples: list[ComplexSelectedSample],
+    ) -> None:
+        rows: list[dict[str, float | int | str]] = []
+        for sample in selected_samples:
+            for axis in ("x", "y"):
+                for kind in ("self", "carrier"):
+                    coords_key = f"{axis}_{kind}_trace_coords"
+                    residual_key = f"{axis}_{kind}_trace_residual"
+                    if coords_key not in sample.arrays:
+                        continue
+                    coords = sample.arrays[coords_key]
+                    residual = sample.arrays[residual_key]
+                    for point_index, (coordinate, value) in enumerate(
+                        zip(coords, residual, strict=True)
+                    ):
+                        rows.append(
+                            {
+                                "sample_id": sample.sample_id,
+                                "file_stem": sample.file_stem,
+                                "axis": axis,
+                                "trace_kind": kind,
+                                "trace_index": point_index,
+                                "x": float(coordinate[0]),
+                                "y": float(coordinate[1]),
+                                "residual": float(value),
+                            }
+                        )
+        if not rows:
+            return
+        metrics_dir = self.request.outdir / "metrics"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        with (metrics_dir / "trace_gluing_per_interface.csv").open(
+            "w", newline=""
+        ) as fp:
+            writer = csv.DictWriter(fp, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def _write_trace_figures(
+        self,
+        selected_samples: list[ComplexSelectedSample],
+        theme: str,
+    ) -> list[str]:
+        figure_paths: list[str] = []
+        for sample in selected_samples:
+            stem = f"sample_{sample.sample_id:04d}_{sample.file_stem}"
+            for axis in ("x", "y"):
+                for kind in ("self", "carrier"):
+                    coords_key = f"{axis}_{kind}_trace_coords"
+                    residual_key = f"{axis}_{kind}_trace_residual"
+                    if coords_key not in sample.arrays:
+                        continue
+                    coords = sample.arrays[coords_key]
+                    residual = sample.arrays[residual_key]
+                    if residual.size == 0:
+                        continue
+                    figure = self._scatter_figure(
+                        title=f"{stem} {axis.upper()} {kind} trace residual",
+                        coords=coords,
+                        values=residual,
+                        theme=theme,
+                        signed=True,
+                    )
+                    base_path = (
+                        self.request.outdir
+                        / "figures"
+                        / "trace_gluing"
+                        / f"{axis}_{kind}"
+                        / f"{stem}_{axis}_{kind}_trace"
+                    )
+                    save_plotly_figure(figure, base_path, logger=self.logger)
+                    figure_paths.append(str(base_path.with_suffix(".json")))
+        return figure_paths
 
     def _write_selected_npz(
         self,

@@ -4,6 +4,11 @@ from dataclasses import dataclass
 
 import torch
 
+from greenonet.complex_gluing import (
+    ComplexGluingContext,
+    ComplexGluingLossResult,
+    complex_admissibility_gluing_loss,
+)
 from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.complex_losses import (
     ComplexEnergyLossResult,
@@ -18,6 +23,7 @@ from greenonet.complex_weak_closure import (
     directional_weak_operator_closure_loss,
 )
 from greenonet.config import (
+    ComplexAdmissibilityGluingConfig,
     ComplexLengthJumpBalanceConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -33,6 +39,7 @@ class ComplexCouplingObjectiveResult:
     energy: ComplexEnergyLossResult
     relative_split: ComplexRelativeSplitLossResult | None
     weak_closure: ComplexWeakClosureResult | None
+    gluing: ComplexGluingLossResult | None
     relative_split_weight: float
     relative_split_mass_weight: float
     weak_closure_weight: float
@@ -71,6 +78,23 @@ class ComplexCouplingObjectiveResult:
                     ),
                     "loss_weak_operator_y": (
                         self.weak_closure_weight * self.weak_closure.y_loss
+                    ),
+                }
+            )
+        if self.gluing is not None:
+            metrics.update(
+                {
+                    "loss_trace_gluing": self.gluing.loss,
+                    "loss_trace_self": self.gluing.self_loss,
+                    "loss_trace_self_regular": self.gluing.self_regular,
+                    "loss_trace_self_transition": self.gluing.self_transition,
+                    "loss_trace_carrier_transition": (self.gluing.carrier_transition),
+                    "trace_self_x_rms": self.gluing.x_self_rms,
+                    "trace_self_y_rms": self.gluing.y_self_rms,
+                    "trace_carrier_x_rms": self.gluing.x_carrier_rms,
+                    "trace_carrier_y_rms": self.gluing.y_carrier_rms,
+                    "transition_trace_fraction": (
+                        self.gluing.transition_trace_fraction
                     ),
                 }
             )
@@ -121,6 +145,25 @@ class ComplexCouplingObjectiveResult:
                     ),
                 }
             )
+        if self.gluing is not None:
+            metrics.update(
+                {
+                    "loss_trace_gluing": self.gluing.loss_per_sample[sample_offset],
+                    "loss_trace_self": self.gluing.self_loss_per_sample[sample_offset],
+                    "loss_trace_self_regular": (
+                        self.gluing.self_regular_per_sample[sample_offset]
+                    ),
+                    "loss_trace_self_transition": (
+                        self.gluing.self_transition_per_sample[sample_offset]
+                    ),
+                    "loss_trace_carrier_transition": (
+                        self.gluing.carrier_transition_per_sample[sample_offset]
+                    ),
+                    "transition_trace_fraction": (
+                        self.gluing.transition_trace_fraction
+                    ),
+                }
+            )
         return metrics
 
 
@@ -136,6 +179,8 @@ def compute_complex_coupling_objective(
     length_jump_config: ComplexLengthJumpBalanceConfig,
     relative_split_config: ComplexRelativeSplitConsistencyConfig,
     weak_closure_config: ComplexWeakOperatorClosureConfig,
+    gluing_config: ComplexAdmissibilityGluingConfig,
+    gluing_context: ComplexGluingContext | None = None,
     partition: ComplexLengthJumpPartition | None = None,
 ) -> ComplexCouplingObjectiveResult:
     """Compute the configured complex objective without reference targets."""
@@ -178,12 +223,28 @@ def compute_complex_coupling_objective(
     else:
         loss_per_sample = split_loss_per_sample
 
+    gluing = None
+    if gluing_config.enabled:
+        if gluing_context is None:
+            raise ValueError(
+                "gluing_context is required when admissibility_gluing is enabled."
+            )
+        gluing = complex_admissibility_gluing_loss(
+            u_phi_valid=u_phi_valid,
+            u_psi_valid=u_psi_valid,
+            a_valid=a_valid,
+            context=gluing_context,
+            config=gluing_config,
+        )
+        loss_per_sample = loss_per_sample + gluing.loss_per_sample
+
     return ComplexCouplingObjectiveResult(
         loss=loss_per_sample.mean(),
         loss_per_sample=loss_per_sample,
         energy=energy,
         relative_split=relative_split,
         weak_closure=weak_closure,
+        gluing=gluing,
         relative_split_weight=float(relative_split_config.weight),
         relative_split_mass_weight=float(relative_split_config.mass_weight),
         weak_closure_weight=float(weak_closure_config.weight),

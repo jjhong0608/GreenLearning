@@ -143,7 +143,7 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - Complex CouplingNet primary trunk는 항상 segment-local 1D `t`를 사용한다.
   Fixed-line transverse branch는 global geometry extent 기준으로 normalized
   `r_hat`을 만들고, `axis_1d_trunk.num_frequencies`와 `max_frequency`로
-  Fourier encoding한다. v5는 `axis_1d_trunk.transverse_trunk.enabled=true`와
+  Fourier encoding한다. v6는 `axis_1d_trunk.transverse_trunk.enabled=true`와
   `length_context=true`를 필수로 둔다. 하나의 shared transverse MLP는
   `[t_perp,log(L_perp/L_ref),log(L_parallel/L_perp),kappa]` 네 feature를 함께 받으며,
   `kappa=4*L_parallel^2*L_perp^2/(L_parallel^2+L_perp^2)^2`이다. x/Phi path는
@@ -151,17 +151,19 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `fusion`은 `product` 또는 `product_fuser`이다.
   `trunk_positional_encoding`은 unit-square 2D trunk coordinate encoding이므로
   complex mode에서는 사용하지 않는다.
-- Complex CouplingNet v5 balance projection은 `enabled=true, mode="response_space"`만
-  허용한다. `sigma_x=Lx^2`, `sigma_y=Ly^2`, `s=max(sigma_x,sigma_y)`,
-  `a=sigma_y/s`, `b=sigma_x/s`, `c=sigma_x*sigma_y*rhs/s`,
-  `R=a*P+b*Q-c`를 두고 `Phi=P-a*R/(a^2+b^2)`,
-  `Psi=Q-b*R/(a^2+b^2)`로 response constraint plane에 직교 투영한다.
-  따라서 `Phi/sigma_x+Psi/sigma_y=rhs`이고 physical field는
-  `phi=Phi/sigma_x`, `psi=Psi/sigma_y`이다. Green reconstruction은 projected
-  response `Phi/Psi`를 직접 사용하며 추가 `L^2` scaling을 하지 않는다.
-  Complex `symmetric`, `response_preconditioned`, `smooth_mask`, geometry-weighted
-  mode는 폐기되었고 v5에서 fail fast한다.
-- Complex v5 training의 base split seminorm은 length-jump-balanced physical edge
+- Complex CouplingNet v6 balance projection은
+  `enabled=true, mode="physical_symmetric"`만 허용한다. Network raw output은
+  reference response `P,Q`이고 `sigma_x=Lx^2`, `sigma_y=Ly^2`를 사용해 먼저
+  `p=P/sigma_x`, `q=Q/sigma_y`로 physical directional-source proposal을 만든다.
+  Physical raw difference `d=p-q`를 보존하면서
+  `phi=(rhs+d)/2`, `psi=(rhs-d)/2`로 symmetric projection을 적용한 뒤에만
+  `Phi=sigma_x*phi`, `Psi=sigma_y*psi`로 reference response에 pull-back한다.
+  Green reconstruction은 projected response `Phi/Psi`를 직접 사용하며 추가
+  `L^2` scaling을 하지 않는다. Complex `response_space`,
+  `response_preconditioned`, `symmetric`, `smooth_mask`, geometry-weighted mode는
+  폐기되었고 v6에서 fail fast한다. Unversioned 및 v5 이하 complex CouplingNet
+  checkpoint는 재학습 오류로 거부하며 GreenNet checkpoint는 그대로 재사용한다.
+- Complex v6 training의 base split seminorm은 length-jump-balanced physical edge
   energy이다.
   Edge score는 `max(|Delta log Lx^2|,|Delta log Ly^2|)`이고 기본 threshold는
   `log(2)`이다. Regular/transition group을 각각 normalize한 뒤 기본
@@ -169,13 +171,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   fallback한다. `loss_energy_consistency`는 기존 unweighted energy를 audit metric으로
   계속 보고하며, weighted loss는 PDE나 source target을 바꾸지 않는 positive
   edge-weighted equivalent seminorm이다.
-- Complex v5의 `relative_split_consistency`는 opt-in이고 dataclass 기본값은
+- Complex v6의 `relative_split_consistency`는 opt-in이고 dataclass 기본값은
   disabled이다. Enabled이면 raw balanced energy 대신 sample별
   `(E_balanced + mass_weight*D_ref^-2*h_x*h_y*sum((u_phi-u_psi)^2)) /
   (h_x*h_y*sum(rhs^2)+eps)`를 split objective로 사용한다. `D_ref`는 global x/y
   extent 중 큰 값이다. 이 mass term은 derivative energy가 보지 못하는 constant 및
   low-frequency split mismatch를 억제한다. Reference `sol/phi/psi`는 사용하지 않는다.
-- Complex v5의 `weak_operator_closure`도 opt-in이고 dataclass 기본값은 disabled이다.
+- Complex v6의 `weak_operator_closure`도 opt-in이고 dataclass 기본값은 disabled이다.
   공통 trial solution `u_pred=0.5*(u_phi+u_psi)`를 사용하고, 각 connected axial
   segment의 true endpoint를 포함한 P1 nodal weak residual을 계산한다. X form은
   `(a,bx,c/2,phi)`, y form은 `(a,by,c/2,psi)`를 사용한다. Coefficient는 physical
@@ -183,14 +185,28 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Nodal residual은 lumped directional mass와 physical source energy로 normalize한다.
   이는 reference-free variational closure이며 sparse matrix dependency 없이
   element gather/scatter로 구현한다.
-- 두 opt-in 항이 모두 켜지면 total objective는
-  `loss_split_relative + loss_weak_operator_closure`이다. Reported split
-  energy/mass와 weak x/y/total metric은 config weight가 반영된 실제 objective
-  contribution이다. Relative split이 꺼져 있으면 raw balanced energy가 split
-  objective이고, weak closure가 꺼져 있으면 weak loss key 자체를 만들지 않는다.
+- Complex total objective는 selected split objective에 enabled weak closure와
+  admissibility gluing을 더한다. 즉 모두 enabled이면
+  `loss_split_relative + loss_weak_operator_closure + loss_trace_gluing`이다.
+  Reported split energy/mass, weak x/y/total, trace self/carrier metric은 config
+  weight가 반영된 실제 objective contribution을 구분해 기록한다. Relative split이
+  꺼져 있으면 raw balanced energy가 split objective이고, weak/gluing은 서로 독립적으로
+  enable/disable한다.
   Raw-balance gauge penalty는 이번 contract에서 구현하지 않으며 후속 현상이 남을
   때만 재검토한다.
-- Complex v5는 reference-free checkpoint selection을 강제한다.
+- Complex v6의 `admissibility_gluing`은 axial line metadata만 사용하는
+  reference-free full-domain trace compatibility loss다. Self-trace gluing은 모든
+  eligible internal x/y line interface에서 양쪽 first-order one-sided trace를
+  비교하며 transverse derivative 자체를 0으로 만들지 않는다. Interface transition은
+  segment overlap graph의 split/merge와 `log(L^2)` jump threshold로 검출한다.
+  `carrier_scope="transition_only"`에서는 transition interface에서만 더 강한
+  cross-axis carrier를 적용한다: horizontal interface의 `u_phi` traces는 같은 점을
+  통과하는 `u_psi`를 carrier로, vertical interface의 `u_psi` traces는 `u_phi`를
+  carrier로 사용한다. Point가 나타나거나 사라지는 physical boundary trace는 기존
+  opposite-axis segment endpoint에서 hard-zero carrier를 사용한다. Mesh, matrix solve,
+  `sol`, target `phi/psi`는 사용하지 않는다. Objective metric은
+  `loss_trace_gluing`, self regular/transition, transition carrier, x/y RMS를 분리한다.
+- Complex v6는 reference-free checkpoint selection을 강제한다.
   `best_rel_sol_checkpoint.enabled=true`는 fail fast한다.
   `best_energy_checkpoint`는 validation raw balanced energy가 가장 작은
   `complex_coupling_model_best_energy.safetensors`를 저장하고,
@@ -208,7 +224,8 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   learning rate를 유지한다.
 - `cli/diagnose_complex_length_response.py`는 complex CouplingNet checkpoint를 다시
   추론해 line-length amplification을 단계별로 분리하는 evaluation-only 도구이다.
-  v5에서는 physical directional-source error, projected response error, exact Green
+  v6에서는 pre-projection physical proposal, projected physical directional-source
+  error, projected reference-response error, exact Green
   source response, learned-minus-exact Green contribution, target-source exact closure를
   따로 기록한다. Production reconstruction은 projected response를 직접 사용한다.
   핵심 항등식은 `learned total error = exact source response +
@@ -259,7 +276,7 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - 같은 report의 activation 설명에서는 rational activation을 fixed activation이 아니라
   learnable activation으로 설명한다. \(P_\alpha\)와 \(Q_\beta\)의 coefficient는
   현재 초기값에서 시작하지만 학습 중 업데이트되는 parameter이며, activation은 analytic
-  Green wrapping이나 response-space balance projection을 대체하지 않고 branch/trunk 내부의
+  Green wrapping이나 physical symmetric balance projection을 대체하지 않고 branch/trunk 내부의
   representation nonlinearity 역할을 한다.
 - 같은 report는 energy analysis 문서를 단순 reference로 넘기지 않고, energy loss가
   final solution energy error를 bound한다는 핵심 의미를 독립적인 proposition 형식으로
@@ -641,9 +658,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   quantity에만 사용한다. Scalar quantities는 각각 source 또는 forcing \(f\), solution \(u\),
   coefficients \(a,c\), directional source components \(\phi,\psi\)로 직접 지칭한다.
   Active QMD의 speaker-note `Click` cue는 실제 Reveal fragment 순서에 맞추며,
-  canonical Markdown 대본보다 세분화될 수 있다. 2026-07-20 Quarto 검증에서는
-  사용자가 두 번째로 조정한 22개 notes block과 41개 click cue가 모두 rendered
-  HTML notes에 반영되었다.
+  canonical Markdown 대본보다 세분화될 수 있다. 2026-07-21부터 active deck은
+  `wccm_eccomas_2026.qmd`의 backup-free main-talk version과
+  `wccm_eccomas_2026_with_backup.qmd`의 Backup/Q&A 포함 version으로 나뉜다.
+  두 QMD의 main-talk prefix는 동일하다. Quarto 검증에서 backup-free version은
+  18개 notes block과 41개 click cue, with-backup version은 22개 notes block과
+  41개 click cue를 가지며, 각각의 rendered HTML notes와 정확히 일치했다.
 - DTE 2027 abstract source는 `docs/dte2027_abstract/DTE2027_abstracts.tex`이고,
   official `DTE2027_abstracts.cls` template를 같은 폴더에 보관한다. 초록은
   `MS018 - Scientific Machine Learning for PDEs in Complex Geometries` minisymposium용이며,

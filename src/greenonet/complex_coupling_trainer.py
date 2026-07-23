@@ -20,6 +20,10 @@ from greenonet.complex_coupling_objective import (
     ComplexCouplingObjectiveResult,
     compute_complex_coupling_objective,
 )
+from greenonet.complex_gluing import (
+    ComplexGluingContext,
+    build_complex_gluing_context,
+)
 from greenonet.complex_losses import (
     ComplexLengthJumpPartition,
     build_length_jump_partition,
@@ -36,6 +40,7 @@ from greenonet.complex_reconstruction import (
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.config import (
     BalanceProjectionConfig,
+    ComplexAdmissibilityGluingConfig,
     ComplexLengthJumpBalanceConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -72,6 +77,16 @@ class ComplexCouplingTrainer(LoggingMixin):
         "loss_weak_operator_closure",
         "loss_weak_operator_x",
         "loss_weak_operator_y",
+        "loss_trace_gluing",
+        "loss_trace_self",
+        "loss_trace_self_regular",
+        "loss_trace_self_transition",
+        "loss_trace_carrier_transition",
+        "trace_self_x_rms",
+        "trace_self_y_rms",
+        "trace_carrier_x_rms",
+        "trace_carrier_y_rms",
+        "transition_trace_fraction",
         "rel_sol",
         "rel_flux",
         "learning_rate",
@@ -100,6 +115,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
             config.weak_operator_closure
         )
+        self.gluing_config = ComplexAdmissibilityGluingConfig.from_raw(
+            config.admissibility_gluing
+        )
         self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
             config.best_energy_checkpoint
         )
@@ -108,7 +126,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         )
         if not self.length_jump_config.enabled:
             raise ValueError(
-                "ComplexCouplingTrainer output-contract version 5 requires "
+                "ComplexCouplingTrainer output-contract version 6 requires "
                 "coupling_training.length_jump_balance.enabled=true."
             )
         if config.best_rel_sol_checkpoint.enabled:
@@ -140,6 +158,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         self.loss_history: list[float] = []
         self.metric_rows: list[dict[str, float | int | str]] = []
         self._length_jump_partition: ComplexLengthJumpPartition | None = None
+        self._gluing_context: ComplexGluingContext | None = None
 
     def train(
         self,
@@ -301,6 +320,8 @@ class ComplexCouplingTrainer(LoggingMixin):
             length_jump_config=self.length_jump_config,
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
+            gluing_config=self.gluing_config,
+            gluing_context=self._trace_gluing_context(batch),
             partition=self._energy_partition(batch),
         )
         loss = objective.loss
@@ -335,6 +356,29 @@ class ComplexCouplingTrainer(LoggingMixin):
                 self.length_jump_config,
             )
         return self._length_jump_partition
+
+    def _trace_gluing_context(
+        self,
+        batch: ComplexCouplingBatch,
+    ) -> ComplexGluingContext | None:
+        if not self.gluing_config.enabled:
+            return None
+        if self._gluing_context is None:
+            self._gluing_context = build_complex_gluing_context(
+                batch.geometry,
+                self.gluing_config,
+            )
+            self.logger.info(
+                "trace gluing context x_interfaces=%d x_transition=%d "
+                "y_interfaces=%d y_transition=%d x_stencils=%d y_stencils=%d",
+                self._gluing_context.x.interface_count,
+                self._gluing_context.x.transition_interface_count,
+                self._gluing_context.y.interface_count,
+                self._gluing_context.y.transition_interface_count,
+                int(self._gluing_context.x.transition_mask.numel()),
+                int(self._gluing_context.y.transition_mask.numel()),
+            )
+        return self._gluing_context
 
     @staticmethod
     def _accumulate(

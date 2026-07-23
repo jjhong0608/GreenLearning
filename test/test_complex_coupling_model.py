@@ -47,7 +47,7 @@ def _model(
             hidden_dim=8,
             depth=1,
             dtype=torch.float64,
-            balance_projection=BalanceProjectionConfig(mode="response_space"),
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             coefficient_terms=coefficient_terms or CouplingCoefficientTermsConfig(),
             branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
             axis_1d_trunk=Axis1DTrunkConfig(
@@ -92,7 +92,7 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
     assert model.geometry_feature_dim == 6
     assert model.transverse_feature_dim == 4
     assert not hasattr(model, "axis_one_hot")
-    assert int(model._output_contract_version.item()) == 5
+    assert int(model._output_contract_version.item()) == 6
 
 
 def test_complex_pointwise_transverse_trunk_product_fusion_outputs_shape(tmp_path):
@@ -275,7 +275,7 @@ def test_complex_model_supports_product_fuser_and_source_only_branch(tmp_path):
             depth=1,
             dtype=torch.float64,
             branch_fusion=CouplingBranchFusionConfig(mode="product_fuser"),
-            balance_projection=BalanceProjectionConfig(mode="response_space"),
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             coefficient_terms=dataset.coefficient_terms,
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
@@ -303,7 +303,7 @@ def test_complex_transverse_features_use_global_normalized_coordinate(tmp_path):
             hidden_dim=4,
             depth=1,
             dtype=torch.float64,
-            balance_projection=BalanceProjectionConfig(mode="response_space"),
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
                 num_frequencies=1,
@@ -351,7 +351,7 @@ def test_complex_model_rejects_trunk_positional_encoding_enabled():
 
 
 def test_complex_model_rejects_smooth_mask_balance_projection():
-    with pytest.raises(ValueError, match="requires.*response_space"):
+    with pytest.raises(ValueError, match="requires.*physical_symmetric"):
         ComplexCouplingNet(
             CouplingModelConfig(
                 branch_input_dim=4,
@@ -363,14 +363,14 @@ def test_complex_model_rejects_smooth_mask_balance_projection():
         )
 
 
-def test_complex_model_accepts_response_space_projection():
+def test_complex_model_accepts_physical_symmetric_projection():
     model = ComplexCouplingNet(
         CouplingModelConfig(
             branch_input_dim=4,
             hidden_dim=4,
             depth=1,
             dtype=torch.float64,
-            balance_projection=BalanceProjectionConfig(mode="response_space"),
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
                 transverse_trunk=TransverseTrunkConfig(
@@ -381,7 +381,7 @@ def test_complex_model_accepts_response_space_projection():
         )
     )
 
-    assert model.config.balance_projection.mode == "response_space"
+    assert model.config.balance_projection.mode == "physical_symmetric"
 
 
 def test_complex_model_rejects_legacy_raw_unit_checkpoint(tmp_path):
@@ -397,16 +397,16 @@ def test_complex_model_rejects_legacy_raw_unit_checkpoint(tmp_path):
 
 def test_complex_model_loads_matching_output_contract_checkpoint(tmp_path):
     model = _model()
-    checkpoint = tmp_path / "complex_coupling_v5.safetensors"
+    checkpoint = tmp_path / "complex_coupling_v6.safetensors"
     save_state_dict_safetensors(model.state_dict(), checkpoint)
 
     loaded = _model()
     load_state_dict_auto(loaded, checkpoint)
 
-    assert int(loaded._output_contract_version.item()) == 5
+    assert int(loaded._output_contract_version.item()) == 6
 
 
-@pytest.mark.parametrize("version", [2, 3, 4])
+@pytest.mark.parametrize("version", [2, 3, 4, 5])
 def test_complex_model_rejects_old_versioned_checkpoint(tmp_path, version):
     state = dict(_model().state_dict())
     state["_output_contract_version"] = torch.tensor(version, dtype=torch.int64)

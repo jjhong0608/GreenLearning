@@ -89,7 +89,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         hidden_dim=4,
         depth=1,
         dtype=torch.float64,
-        balance_projection=BalanceProjectionConfig(mode="response_space"),
+        balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
         coefficient_terms=CouplingCoefficientTermsConfig(
             diffusion=True,
             convection=True,
@@ -134,7 +134,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     }
     config_payload["coupling_model"]["balance_projection"] = {
         "enabled": True,
-        "mode": "response_space",
+        "mode": "physical_symmetric",
     }
     config_payload["coupling_training"]["relative_split_consistency"] = {
         "enabled": True,
@@ -145,6 +145,16 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     config_payload["coupling_training"]["weak_operator_closure"] = {
         "enabled": True,
         "weight": 4.0,
+        "eps": 1e-12,
+    }
+    config_payload["coupling_training"]["admissibility_gluing"] = {
+        "enabled": True,
+        "self_trace_weight": 1.0,
+        "trace_order": 1,
+        "carrier_scope": "transition_only",
+        "transition_carrier_weight": 1.0,
+        "transition_fraction": 0.5,
+        "log_length_jump_threshold": 0.6931471805599453,
         "eps": 1e-12,
     }
     config_payload["coupling_training"]["best_physics_checkpoint"] = {"enabled": True}
@@ -192,19 +202,21 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert set(summary["figure_fields"]) == expected_figure_fields
     assert summary["error_convention"] == "signed_difference"
     assert summary["solution_prediction"] == "u_pred=0.5*(u_phi+u_psi)"
-    assert summary["raw_output_space"] == "unit_response"
-    assert summary["output_contract_version"] == 5
+    assert summary["raw_output_space"] == "reference_response"
+    assert summary["output_contract_version"] == 6
     assert summary["balance_projection"]["enabled"] is True
-    assert summary["balance_projection"]["mode"] == "response_space"
-    assert summary["balance_projection"]["space"] == "unit_response"
+    assert summary["balance_projection"]["mode"] == "physical_symmetric"
+    assert summary["balance_projection"]["space"] == "physical_source"
     assert summary["balance_projection"]["uses_reference_targets"] is False
-    assert "R=a*P+b*Q-c" in summary["balance_projection"]["formula"]
+    assert "p=P_raw/Lx^2" in summary["balance_projection"]["formula"]
     assert summary["reconstruction_response_input"] == {
         "phi": "projected Phi is used directly",
         "psi": "projected Psi is used directly",
         "additional_length_scaling": False,
     }
     assert summary["reference_targets_used_for_training"] is False
+    assert summary["admissibility_gluing"]["enabled"] is True
+    assert summary["admissibility_gluing"]["carrier_scope"] == "transition_only"
     assert summary["length_jump_balance"]["enabled"] is True
     assert summary["relative_split_consistency"] == {
         "enabled": True,
@@ -305,6 +317,8 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
     assert any(key.endswith("_raw_response_phi") for key in raw.files)
     assert any(key.endswith("_raw_response_psi") for key in raw.files)
+    assert any(key.endswith("_raw_physical_phi") for key in raw.files)
+    assert any(key.endswith("_raw_physical_psi") for key in raw.files)
     assert any(key.endswith("_projected_response_phi") for key in raw.files)
     assert any(key.endswith("_projected_response_psi") for key in raw.files)
     assert any(key.endswith("_x_length_squared") for key in raw.files)
@@ -324,6 +338,8 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_weak_nodal_mass_x") for key in raw.files)
     assert any(key.endswith("_weak_nodal_mass_y") for key in raw.files)
     assert any(key.endswith("_split_mass_relative_contribution") for key in raw.files)
+    assert any(key.endswith("_x_self_trace_residual") for key in raw.files)
+    assert any(key.endswith("_y_self_trace_residual") for key in raw.files)
     for suffix in (
         "_u_pred",
         "_u_pred_error",

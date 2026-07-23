@@ -1,0 +1,96 @@
+{
+  "dataset": {
+    "geometry_mode": "complex",
+    "geometry_path": "data/geometry/annulars_05_1_1_128.npz",
+    "training_path": "data/complex_samples/Smooth_Variable_Diffusion_Reaction_Annulus/train",
+    "validation_path": "data/complex_samples/Smooth_Variable_Diffusion_Reaction_Annulus/valid",
+    "test_path": "data/complex_samples/Smooth_Variable_Diffusion_Reaction_Annulus/test",
+    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py",
+    "dtype": "float64"
+  },
+  "terminal": {
+    "width": 350
+  },
+  "coupling_model": {
+    "branch_input_dim": 129,
+    "hidden_dim": 256,
+    "depth": 4,
+    "activation": "rational",
+    "use_bias": true,
+    "dropout": 0.0,
+    "dtype": "float64",
+    "balance_projection": {
+      "enabled": true,
+      "mode": "response_space"
+    },
+    "coefficient_terms": {
+      "diffusion": true,
+      "convection": false,
+      "reaction": true
+    },
+    "branch_fusion": {
+      "mode": "product_fuser"
+    },
+    "axis_1d_trunk": {
+      "enabled": true,
+      "num_frequencies": 4,
+      "max_frequency": 8.0,
+      "transverse_trunk": {
+        "enabled": true,
+        "fusion": "product",
+        "length_context": true
+      }
+    }
+  },
+  "coupling_training": {
+    "learning_rate": 0.002,
+    "epochs": 3000,
+    "batch_size": 400,
+    "weight_decay": 0.05,
+    "log_interval": 1,
+    "device": "cuda:1",
+    "gradient_clip_max_norm": 1.0,
+    "use_lr_schedule": true,
+    "warmup_epochs": 3,
+    "min_lr": 1e-5,
+    "periodic_checkpoint": {
+      "enabled": true,
+      "every_epochs": 200
+    },
+    "compile": {
+      "enabled": true
+    },
+    "length_jump_balance": {
+      "enabled": true,
+      "log_sigma_jump_threshold": 0.6931471805599453,
+      "transition_fraction": 0.5,
+      "eps": 1e-12
+    },
+    "relative_split_consistency": {
+      "enabled": true,
+      "weight": 1.0,
+      "mass_weight": 1.0,
+      "eps": 1e-12
+    },
+    "weak_operator_closure": {
+      "enabled": true,
+      "weight": 1.0,
+      "eps": 1e-12
+    },
+    "best_energy_checkpoint": {
+      "enabled": true
+    },
+    "best_physics_checkpoint": {
+      "enabled": true
+    },
+    "best_rel_sol_checkpoint": {
+      "enabled": false
+    }
+  },
+  "pipeline": {
+    "run_green": false,
+    "run_coupling": true,
+    "green_pretrained_path": "checkpoints/Smooth_Variable_Diffusion_Reaction/green/model.safetensors",
+    "coupling_pretrained_path": null
+  }
+}

@@ -122,7 +122,7 @@ def _write_diagnostic_fixture(
         hidden_dim=4,
         depth=1,
         dtype=torch.float64,
-        balance_projection=BalanceProjectionConfig(mode="response_space"),
+        balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
         axis_1d_trunk=Axis1DTrunkConfig(
             enabled=True,
             num_frequencies=2,
@@ -161,7 +161,7 @@ def _write_diagnostic_fixture(
     payload = json.loads(config_path.read_text())
     payload["coupling_model"]["balance_projection"] = {
         "enabled": True,
-        "mode": "response_space",
+        "mode": "physical_symmetric",
     }
     config_path.write_text(json.dumps(payload))
     return (
@@ -264,8 +264,8 @@ def test_diagnostic_writes_expected_outputs_and_keeps_targets_evaluation_only(
 
     assert summary["num_samples"] == 1
     assert summary["selected_samples"] == [0]
-    assert summary["projection_mode"] == "response_space"
-    assert summary["output_contract_version"] == 5
+    assert summary["projection_mode"] == "physical_symmetric"
+    assert summary["output_contract_version"] == 6
     assert summary["uses_reference_targets_for_training"] is False
     assert summary["reference_fields_role"] == "evaluation_only"
     assert summary["unit_physical_equivalence"]["passed"] is True

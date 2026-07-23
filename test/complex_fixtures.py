@@ -130,7 +130,7 @@ def write_complex_config(
             "dtype": "float64",
             "balance_projection": {
                 "enabled": True,
-                "mode": "response_space",
+                "mode": "physical_symmetric",
             },
             "axis_1d_trunk": {
                 "enabled": True,

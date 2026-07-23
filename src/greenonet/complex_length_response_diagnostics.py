@@ -1117,10 +1117,10 @@ class ComplexLengthResponseDiagnostic(
         projection = BalanceProjectionConfig.from_raw(
             configs.coupling_model.balance_projection
         )
-        if projection.mode != "response_space":
+        if projection.mode != "physical_symmetric":
             raise ValueError(
-                "Length-response diagnostic requires output-contract-v5 "
-                "response_space projection."
+                "Length-response diagnostic requires output-contract-v6 "
+                "physical_symmetric projection."
             )
 
     def _validate_selected_samples(self, dataset_size: int) -> None:
@@ -1311,6 +1311,12 @@ class ComplexLengthResponseDiagnostic(
                 "target_psi": self._numpy(prediction.batch.flux_valid[offset, 1]),
                 "raw_response_phi": self._numpy(prediction.raw_response[offset, 0]),
                 "raw_response_psi": self._numpy(prediction.raw_response[offset, 1]),
+                "raw_physical_phi": self._numpy(
+                    prediction.projection.raw_physical[offset, 0]
+                ),
+                "raw_physical_psi": self._numpy(
+                    prediction.projection.raw_physical[offset, 1]
+                ),
                 "projected_response_phi": self._numpy(
                     prediction.projection.projected_response[offset, 0]
                 ),
@@ -1476,12 +1482,17 @@ class ComplexLengthResponseDiagnostic(
             "selected_samples": list(selected),
             "selected_sample_roles": roles,
             "projection_mode": projection.mode,
-            "raw_output_space": "unit_response",
+            "raw_output_space": "reference_response",
             "output_contract_version": ComplexCouplingNet.OUTPUT_CONTRACT_VERSION,
             "reconstruction_response_input": {
                 "phi": "projected Phi is used directly",
                 "psi": "projected Psi is used directly",
                 "additional_length_scaling": False,
+            },
+            "projection_flow": {
+                "pre_projection": "p=P_raw/Lx^2; q=Q_raw/Ly^2",
+                "physical_projection": ("d=p-q; phi=(rhs+d)/2; psi=(rhs-d)/2"),
+                "post_projection": "Phi=Lx^2*phi; Psi=Ly^2*psi",
             },
             "exact_green_reference_kinds": sorted(
                 set(diagnostics.predicted_exact.reference_kinds)

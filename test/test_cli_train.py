@@ -956,6 +956,16 @@ class TestComplexPhysicsLossTrainingConfig:
                 "weight": 4.0,
                 "eps": 1e-9,
             },
+            "admissibility_gluing": {
+                "enabled": True,
+                "self_trace_weight": 5.0,
+                "trace_order": 1,
+                "carrier_scope": "transition_only",
+                "transition_carrier_weight": 6.0,
+                "transition_fraction": 0.4,
+                "log_length_jump_threshold": 0.7,
+                "eps": 1e-8,
+            },
             "best_physics_checkpoint": {"enabled": True},
         }
 
@@ -971,6 +981,14 @@ class TestComplexPhysicsLossTrainingConfig:
             assert config.weak_operator_closure.enabled is True
             assert config.weak_operator_closure.weight == 4.0
             assert config.weak_operator_closure.eps == 1e-9
+            assert config.admissibility_gluing.enabled is True
+            assert config.admissibility_gluing.self_trace_weight == 5.0
+            assert config.admissibility_gluing.trace_order == 1
+            assert config.admissibility_gluing.carrier_scope == "transition_only"
+            assert config.admissibility_gluing.transition_carrier_weight == 6.0
+            assert config.admissibility_gluing.transition_fraction == 0.4
+            assert config.admissibility_gluing.log_length_jump_threshold == 0.7
+            assert config.admissibility_gluing.eps == 1e-8
             assert config.best_physics_checkpoint.enabled is True
 
     @pytest.mark.parametrize(
@@ -981,6 +999,10 @@ class TestComplexPhysicsLossTrainingConfig:
             ("relative_split_consistency", "eps", 0.0),
             ("weak_operator_closure", "weight", -1.0),
             ("weak_operator_closure", "eps", 0.0),
+            ("admissibility_gluing", "self_trace_weight", -1.0),
+            ("admissibility_gluing", "transition_carrier_weight", -1.0),
+            ("admissibility_gluing", "transition_fraction", 0.0),
+            ("admissibility_gluing", "eps", 0.0),
         ),
     )
     def test_rejects_invalid_complex_physics_loss_values(
@@ -1000,6 +1022,7 @@ class TestComplexPhysicsLossTrainingConfig:
             "relative_split_consistency",
             "weak_operator_closure",
             "best_physics_checkpoint",
+            "admissibility_gluing",
         ),
     )
     def test_rejects_unknown_complex_physics_config_keys(self, section):

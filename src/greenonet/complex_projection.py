@@ -11,9 +11,10 @@ from greenonet.config import BalanceProjectionConfig
 
 @dataclass(frozen=True)
 class ComplexProjectionResult:
-    """Response-space split and physical-source diagnostics."""
+    """Physical symmetric split with explicit reference pull-back diagnostics."""
 
     raw_response: torch.Tensor
+    raw_physical: torch.Tensor
     projected_response: torch.Tensor
     projected_physical: torch.Tensor
     raw_response_constraint_residual: torch.Tensor
@@ -21,8 +22,8 @@ class ComplexProjectionResult:
     physical_balance_residual: torch.Tensor
     raw_difference: torch.Tensor
     projected_difference: torch.Tensor
-    normal_x: torch.Tensor
-    normal_y: torch.Tensor
+    sigma_x: torch.Tensor
+    sigma_y: torch.Tensor
 
 
 def apply_complex_balance_projection(
@@ -31,19 +32,15 @@ def apply_complex_balance_projection(
     geometry: ComplexGeometryMetadata,
     config: BalanceProjectionConfig | str | dict[str, Any],
 ) -> ComplexProjectionResult:
-    """Orthogonally project unit responses onto the physical balance constraint.
-
-    The projected responses satisfy ``Phi / Lx^2 + Psi / Ly^2 = rhs``.
-    No source pull-back is performed before or after this projection.
-    """
+    """Project in physical source space and pull back to reference responses."""
 
     projection = BalanceProjectionConfig.from_raw(config)
     if not projection.enabled:
         raise ValueError("Complex balance projection must be enabled.")
-    if projection.mode != "response_space":
+    if projection.mode != "physical_symmetric":
         raise ValueError(
-            "Complex output-contract version 5 requires "
-            "balance_projection.mode='response_space'."
+            "Complex output-contract version 6 requires "
+            "balance_projection.mode='physical_symmetric'."
         )
 
     sigma_x, sigma_y = _validate_inputs(
@@ -51,25 +48,22 @@ def apply_complex_balance_projection(
         rhs_phys=rhs_phys,
         geometry=geometry,
     )
-    scale = torch.maximum(sigma_x, sigma_y)
-    normal_x = sigma_y / scale
-    normal_y = sigma_x / scale
-    constraint = sigma_x * sigma_y / scale * rhs_phys
-    normal_norm_squared = normal_x.square() + normal_y.square()
-    projection_residual = (
-        normal_x * raw_response[:, 0] + normal_y * raw_response[:, 1] - constraint
+    raw_physical = torch.stack(
+        (raw_response[:, 0] / sigma_x, raw_response[:, 1] / sigma_y),
+        dim=1,
     )
-    projected_response = torch.stack(
+    raw_physical_difference = raw_physical[:, 0] - raw_physical[:, 1]
+    projected_physical = torch.stack(
         (
-            raw_response[:, 0] - normal_x * projection_residual / normal_norm_squared,
-            raw_response[:, 1] - normal_y * projection_residual / normal_norm_squared,
+            0.5 * (rhs_phys + raw_physical_difference),
+            0.5 * (rhs_phys - raw_physical_difference),
         ),
         dim=1,
     )
-    projected_physical = torch.stack(
+    projected_response = torch.stack(
         (
-            projected_response[:, 0] / sigma_x,
-            projected_response[:, 1] / sigma_y,
+            sigma_x * projected_physical[:, 0],
+            sigma_y * projected_physical[:, 1],
         ),
         dim=1,
     )
@@ -86,15 +80,16 @@ def apply_complex_balance_projection(
     )
     return ComplexProjectionResult(
         raw_response=raw_response,
+        raw_physical=raw_physical,
         projected_response=projected_response,
         projected_physical=projected_physical,
         raw_response_constraint_residual=raw_constraint_residual,
         response_constraint_residual=response_constraint_residual,
         physical_balance_residual=physical_balance_residual,
-        raw_difference=raw_response[:, 0] - raw_response[:, 1],
-        projected_difference=projected_response[:, 0] - projected_response[:, 1],
-        normal_x=normal_x.expand_as(rhs_phys),
-        normal_y=normal_y.expand_as(rhs_phys),
+        raw_difference=raw_physical_difference,
+        projected_difference=(projected_physical[:, 0] - projected_physical[:, 1]),
+        sigma_x=sigma_x.expand_as(rhs_phys),
+        sigma_y=sigma_y.expand_as(rhs_phys),
     )
 
 

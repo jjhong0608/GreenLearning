@@ -1,6 +1,6 @@
 # CouplingNet Design for Complex Geometry
 
-## Response-Space Output, Cross-Axis Length Context, and Balanced Physical Energy
+## Physical Projection, Axial Trace Gluing, and Balanced Physical Energy
 
 ---
 
@@ -17,7 +17,7 @@ The purpose of this document is to fix the following design decisions:
 3. how `CouplingNet` raw outputs are interpreted;
 4. how function-branch inputs are constructed;
 5. how the geometry/transverse branch is constructed;
-6. how response-space balance projection is applied;
+6. how physical symmetric balance projection and reference pull-back are applied;
 7. how segment-wise Green reconstruction is performed;
 8. how length-jump-balanced physical energy consistency is computed;
 9. how energy edges are selected;
@@ -300,7 +300,7 @@ Thus,
 \\]
 
 The primary trunk does not receive the physical axial coordinate directly. Output
-contract v5 additionally requires a shared pointwise transverse trunk. At each
+contract v6 additionally requires a shared pointwise transverse trunk. At each
 valid point it receives
 
 \\[
@@ -639,23 +639,23 @@ Thus,
 
 ---
 
-## 8. Response-Space Balance Projection
+## 8. Physical Symmetric Balance Projection
 
 ### 8.1 Projection policy
 
-Output contract v5 uses a single complex-geometry projection mode:
+Output contract v6 uses a single complex-geometry projection mode:
 
 \\[
 \boxed{
-\texttt{balance\_projection.mode=response\_space}.
+\texttt{balance\_projection.mode=physical\_symmetric}.
 }
 \\]
 
 No balance loss, reference solution, or reference split target is used. The
-unit-square symmetric and smooth-mask projections do not apply to this contract;
-the retired complex symmetric/RPS modes require a new training run.
+unit-square projection path remains separate; retired complex response-space,
+RPS, smooth-mask, and geometry-weighted modes require a new training run.
 
-### 8.2 Response constraint
+### 8.2 Pre-projection physical scaling
 
 At a valid point \\(p_q=(x_q,y_q)\\), define
 
@@ -665,65 +665,62 @@ At a valid point \\(p_q=(x_q,y_q)\\), define
 \sigma_y=(L_{\beta(q)}^y)^2.
 \\]
 
-The projected responses must satisfy
+Map raw reference responses to physical directional-source proposals:
 
 \\[
-\frac{\Phi_q}{\sigma_x}+\frac{\Psi_q}{\sigma_y}=f_q.
-\\]
-
-This is exactly the physical source balance expressed in the response variables
-consumed by the normalized Green operators.
-
-### 8.3 Stable orthogonal projection
-
-For numerical stability, set
-
-\\[
-s=\max(\sigma_x,\sigma_y),
-\quad
-a=\frac{\sigma_y}{s},
-\quad
-b=\frac{\sigma_x}{s},
-\quad
-c=\frac{\sigma_x\sigma_y}{s}f_q.
-\\]
-
-Given the raw responses \\(P_q,Q_q\\), define
-
-\\[
-R_q=aP_q+bQ_q-c,
-\\]
-
-\\[
-\Phi_q=P_q-\frac{aR_q}{a^2+b^2},
+p_q=\frac{P_q}{\sigma_x},
 \qquad
-\Psi_q=Q_q-\frac{bR_q}{a^2+b^2}.
+q_q=\frac{Q_q}{\sigma_y}.
 \\]
 
-This is the Euclidean orthogonal projection of \\((P_q,Q_q)\\) onto the response
-constraint plane. All segment lengths must be strictly positive.
+All segment lengths must be strictly positive. This is the explicit
+reference-to-physical coordinate scaling performed before projection.
 
-### 8.4 Derived physical fields
+### 8.3 Symmetric projection in physical source space
 
-Physical directional source fields are derived only for evaluation, flux
-artifacts, and the balance audit:
+Define the physical raw difference
 
 \\[
-\phi_q=\frac{\Phi_q}{\sigma_x},
-\qquad
-\psi_q=\frac{\Psi_q}{\sigma_y}.
+d_q=p_q-q_q.
 \\]
 
-Consequently, \\(\phi_q+\psi_q=f_q\\) up to floating-point tolerance.
+The physical symmetric projection is
 
-### 8.5 No post-projection length conversion
+\\[
+\phi_q=\frac{f_q+d_q}{2},
+\qquad
+\psi_q=\frac{f_q-d_q}{2}.
+\\]
 
-The projected responses \\(\Phi,\Psi\\) are already the unit-interval Green
-source quantities. Reconstruction consumes them directly:
+It exactly enforces physical source balance and preserves the physical raw
+difference:
+
+\\[
+\phi_q+\psi_q=f_q,
+\qquad
+\phi_q-\psi_q=p_q-q_q.
+\\]
+
+### 8.4 Post-projection pull-back
+
+Only after physical projection are the fields pulled back to the unit-interval
+responses consumed by the normalized Green operators:
+
+\\[
+\Phi_q=\sigma_x\phi_q,
+\qquad
+\Psi_q=\sigma_y\psi_q.
+\\]
+
+### 8.5 No additional reconstruction scaling
+
+The pull-back above is the required post-projection length conversion. Projected
+responses \\(\Phi,\Psi\\) are then already the unit-interval Green source quantities,
+so reconstruction consumes them directly:
 
 \\[
 \boxed{
-\text{No additional }L_x^2\text{ or }L_y^2\text{ multiplication after projection.}
+\text{No additional }L_x^2\text{ or }L_y^2\text{ multiplication inside reconstruction.}
 }
 \\]
 
@@ -958,7 +955,7 @@ a_{pp'}
 
 ### 10.6 Length-jump-balanced objective
 
-Output contract v5 keeps the same edge energy density but prevents the relatively
+Output contract v6 keeps the same edge energy density but prevents the relatively
 small set of line-length transition edges from being diluted by the global mean.
 For every valid edge \\(e=(i,j)\\), define
 
@@ -1049,6 +1046,31 @@ The total objective is the selected split objective plus the configured weak
 closure weight. `best_energy_checkpoint` continues to track validation raw
 balanced energy; `best_physics_checkpoint` independently tracks the total
 validation reference-free objective.
+
+### 10.9 Axial admissibility gluing
+
+When `coupling_training.admissibility_gluing.enabled=true`, add a reference-free
+trace compatibility term constructed only from the existing axial lines. For
+every eligible internal horizontal interface, compare first-order one-sided
+traces of \(u_\phi\) extrapolated from the lower and upper horizontal line
+families. Apply the analogous construction to \(u_\psi\) at vertical interfaces.
+Matching two traces at the same interface does not force the transverse
+derivative to vanish; it enforces that neighboring line reconstructions define
+one compatible full-domain trace.
+
+Classify transitions from connected-segment split/merge topology and the
+configured log-\(L^2\) jump threshold. The only supported carrier scope is
+`transition_only`. At horizontal transitions, use the crossing vertical
+reconstruction \(u_\psi\) as the common carrier for both \(u_\phi\) traces. At
+vertical transitions, use \(u_\phi\) as the common carrier for both \(u_\psi\)
+traces. When a trace appears or disappears because a physical boundary crosses
+the interface, evaluate its first-order trace at the corresponding opposite-axis
+segment endpoint and compare it with the known hard-zero boundary value.
+
+The self-trace and transition-carrier terms have independent weights. Regular and
+transition self traces are group-normalized with `transition_fraction`. The loss
+uses no mesh, global matrix solve, reference solution, or target directional
+source.
 
 ---
 
@@ -1258,8 +1280,9 @@ p_q\in\Omega.
 ### Projection
 
 - [ ] Model output is response-valued \((P,Q)\).
-- [ ] Orthogonal response-space projection enforces \(\Phi/L_x^2+\Psi/L_y^2=f\).
-- [ ] Physical \(\phi,\psi\) are derived by dividing projected responses by length squares.
+- [ ] Raw responses are mapped to physical proposals \(p=P/L_x^2\), \(q=Q/L_y^2\).
+- [ ] Physical symmetric projection preserves \(p-q\) and enforces \(\phi+\psi=f\).
+- [ ] Projected fields are pulled back as \(\Phi=L_x^2\phi\), \(\Psi=L_y^2\psi\).
 - [ ] Balance loss is not used.
 - [ ] Smooth masked projection is not used.
 
@@ -1283,6 +1306,15 @@ p_q\in\Omega.
 - [ ] y-edges require same `y_segment_id`.
 - [ ] Regular and length-transition edge groups are normalized separately.
 - [ ] Original unweighted physical energy remains an audit metric.
+
+### Admissibility gluing
+
+- [ ] Self-trace gluing covers every eligible internal x/y interface.
+- [ ] First-order two-sided trace matching does not penalize a nonzero transverse derivative.
+- [ ] Segment split/merge and log-length jumps classify transition interfaces.
+- [ ] Cross-axis trace carriers are used only on transition interfaces.
+- [ ] Appearing/disappearing traces use opposite-axis hard-zero boundary endpoints.
+- [ ] No mesh, matrix solve, or reference target enters the gluing loss.
 
 ### Cross consistency
 
@@ -1385,7 +1417,7 @@ L^2,
 
 \\[
 \boxed{
-\text{Response-space orthogonal projection only.}
+\text{Pre-scale, physical symmetric projection, and post-projection pull-back only.}
 }
 \\]
 
@@ -1410,6 +1442,12 @@ L^2,
 \\[
 \boxed{
 \text{Base split loss is length-jump-balanced physical face-energy consistency.}
+}
+\\]
+
+\\[
+\boxed{
+\text{Global self-trace gluing with transition-only cross-axis carriers.}
 }
 \\]
 
@@ -1481,12 +1519,16 @@ while
 }
 \\]
 
-The raw network output is a pair of axis-scaled directional response fields. An
-orthogonal response-space projection enforces the physical source balance at valid
-interior points, and segment-wise Green reconstruction consumes the projected
-responses directly. The shared pointwise transverse trunk exposes both axial
-segment lengths, while the balanced edge objective prevents transition edges from
-being diluted by the regular-edge population. Reference solution and split targets
-remain evaluation-only.
+The raw network output is a pair of axis-scaled directional reference-response
+fields. Pre-projection division by the corresponding length squares moves them to
+physical source space, symmetric projection enforces physical balance while
+preserving the raw physical difference, and post-projection multiplication pulls
+the fields back to the unit-interval responses consumed directly by Green
+reconstruction. The shared pointwise transverse trunk exposes both axial segment
+lengths, the balanced edge objective prevents transition edges from being diluted,
+and axial trace gluing supplies the full-domain compatibility that isolated
+segment endpoint conditions do not guarantee. Cross-axis carriers are deliberately
+restricted to transition interfaces. Reference solution and split targets remain
+evaluation-only.
 
 Cross consistency is not part of the design and must not appear in loss computation, metrics, logs, or summaries.

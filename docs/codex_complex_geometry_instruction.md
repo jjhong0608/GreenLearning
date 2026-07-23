@@ -309,7 +309,7 @@ Horizontal and vertical segment counts may differ.
 
 ### 5.7 CouplingNet raw-output convention
 
-CouplingNet output contract v5 returns two directional response fields.
+CouplingNet output contract v6 returns two directional reference-response fields.
 The mandatory source branch uses the normalized physical profile
 
 \[
@@ -332,8 +332,9 @@ Q_l(t)=(L_l^y)^2A_l^y\widetilde Q_l(t).
 
 The output shape remains `(B,2,P)`. The first channel is the x response \(P\),
 and the second is the y response \(Q\). These are not physical source fields;
-physical \(\phi,\psi\) are derived after response-space projection. This convention
-is mandatory, and complex CouplingNet checkpoints older than contract v5 must be
+physical \(\phi,\psi\) are derived by pre-projection coordinate scaling. The
+physical projection result is then pulled back to reference-response space. This
+convention is mandatory, and complex CouplingNet checkpoints older than contract v6 must be
 retrained.
 
 The corresponding projected response and physical variables satisfy
@@ -499,7 +500,7 @@ Do not include:
 - axis one-hot;
 - raw \(r_\ell\) scalar.
 
-Output contract v5 also requires one shared pointwise transverse trunk with input
+Output contract v6 also requires one shared pointwise transverse trunk with input
 
 \[
 \left[
@@ -528,54 +529,57 @@ h_{\mathrm{func}}\odot h_{\mathrm{geom}}
 
 followed by a learned fuser.
 
-### 5.11 Response-space balance projection
+### 5.11 Physical symmetric balance projection
 
-Complex output contract v5 requires `balance_projection.enabled=true` and
-`mode="response_space"`. Do not use balance loss, smooth masked projection,
-complex symmetric projection, or response-preconditioned projection.
+Complex output contract v6 requires `balance_projection.enabled=true` and
+`mode="physical_symmetric"`. Do not use balance loss, smooth masked projection,
+response-space orthogonal projection, or response-preconditioned projection.
 
 At valid point \(p_q\), define
 
 \[
 \sigma_x=(L_{\alpha(q)}^x)^2,
 \qquad
-\sigma_y=(L_{\beta(q)}^y)^2,
+\sigma_y=(L_{\beta(q)}^y)^2.
+\]
+
+Given raw reference responses \(P_q,Q_q\), first map them to physical
+directional-source proposals:
+
+\[
+p_q=\frac{P_q}{\sigma_x},
 \qquad
-s=\max(\sigma_x,\sigma_y),
+q_q=\frac{Q_q}{\sigma_y}.
+\]
+
+Preserve their physical difference \(d_q=p_q-q_q\) while imposing exact source
+balance by the symmetric physical projection
+
+\[
+d_q=p_q-q_q,
 \]
 
 \[
-a=\frac{\sigma_y}{s},
+\phi_q=\frac{f_q+d_q}{2},
 \qquad
-b=\frac{\sigma_x}{s},
-\qquad
-c=\frac{\sigma_x\sigma_y}{s}f_q.
+\psi_q=\frac{f_q-d_q}{2}.
 \]
 
-Given raw responses \(P_q,Q_q\), compute
+This projection is performed in physical source space and must enforce
 
 \[
-R_q=aP_q+bQ_q-c,
-\]
-
-\[
-\Phi_q=P_q-\frac{aR_q}{a^2+b^2},
+\phi_q+\psi_q=f_q,
 \qquad
-\Psi_q=Q_q-\frac{bR_q}{a^2+b^2}.
+\phi_q-\psi_q=p_q-q_q.
 \]
 
-This must enforce
+After projection, pull the physical fields back to the unit-interval response
+variables consumed by Green reconstruction:
 
 \[
-\frac{\Phi_q}{\sigma_x}+\frac{\Psi_q}{\sigma_y}=f_q.
-\]
-
-Derive physical outputs only by
-
-\[
-\phi_q=\frac{\Phi_q}{\sigma_x},
+\Phi_q=\sigma_x\phi_q,
 \qquad
-\psi_q=\frac{\Psi_q}{\sigma_y}.
+\Psi_q=\sigma_y\psi_q.
 \]
 
 Green reconstruction consumes \(\Phi,\Psi\) directly. Do not multiply the
@@ -741,7 +745,7 @@ using validation raw balanced energy.
 
 ### 5.14 Optional relative split consistency
 
-The derivative energy cannot detect a constant split mismatch. Complex v5 may
+The derivative energy cannot detect a constant split mismatch. Complex v6 may
 therefore replace the raw balanced-energy split objective with a source-normalized
 energy-plus-value objective. For every sample \(b\), define
 
@@ -783,7 +787,7 @@ not read `sol` or target directional fields.
 
 ### 5.15 Optional directional weak operator closure
 
-Complex v5 may additionally require the common prediction
+Complex v6 may additionally require the common prediction
 
 \[
 u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi)
@@ -851,7 +855,42 @@ When enabled, add `weight * mean(L_weak,b)` to the selected split objective.
 `complex_coupling_model_best_physics.safetensors` using the total validation
 reference-free objective. The energy and physics checkpoints are independent.
 
-### 5.16 Energy edge criterion
+### 5.16 Axial admissibility gluing
+
+Complex v6 may add `coupling_training.admissibility_gluing` to address the gap
+between segment-wise endpoint conditions and full-domain \(H_0^1\) admissibility.
+This loss must use only existing axial lines and must not introduce a 2D mesh or a
+matrix solve.
+
+For every eligible internal horizontal interface, evaluate first-order one-sided
+traces of \(u_\phi\) from the neighboring horizontal lines and penalize their
+difference. Apply the analogous construction to \(u_\psi\) at every eligible
+vertical interface. Because both traces extrapolate to the same interface, this
+self-trace term enforces gluing without penalizing a nonzero transverse derivative.
+
+Classify an interface as a transition if its connected-segment overlap graph
+contains a split/merge or if a matched segment exceeds the configured
+`log_length_jump_threshold`. The only supported carrier policy is
+`carrier_scope="transition_only"`. At those interfaces, strengthen the trace
+constraint by using the reconstruction that crosses the interface as a common
+carrier:
+
+\[
+T^-u_\phi\approx u_\psi\approx T^+u_\phi
+\quad\text{at horizontal transitions},
+\]
+
+\[
+T^-u_\psi\approx u_\phi\approx T^+u_\psi
+\quad\text{at vertical transitions}.
+\]
+
+When a valid trace appears or disappears at a transition, use the corresponding
+opposite-axis segment endpoint as a hard-zero physical-boundary carrier. This is
+still derived from the existing axial geometry metadata. `sol` and target
+directional fields remain evaluation-only.
+
+### 5.17 Energy edge criterion
 
 Do not use endpoint-validity alone to create energy edges.
 
@@ -891,7 +930,7 @@ y\_segment\_id(p)=y\_segment\_id(p').
 
 This prevents edges from connecting across holes, gaps, slits, or disconnected components on the same axial line.
 
-### 5.15 Cross consistency exclusion
+### 5.18 Cross consistency exclusion
 
 Cross consistency must be completely excluded in complex-geometry mode.
 
@@ -983,17 +1022,17 @@ Add a complex-geometry forward path that:
 
 Do not force complex geometry into a rectangular `(B, 2, m, n)` tensor.
 
-### Step 5. Implement response-space balance projection
+### Step 5. Implement physical symmetric balance projection
 
-Implement orthogonal projection onto the response constraint plane.
+Implement the pre-scale, physical projection, and post-projection pull-back path.
 
 The projection path must:
 
-1. receive raw responses \(P,Q\) directly;
+1. receive raw reference responses \(P,Q\);
 2. use positive \(L_x^2,L_y^2\) response scales;
-3. apply the stable orthogonal response projection;
-4. enforce exact \(\Phi/L_x^2+\Psi/L_y^2=f\) without reference fields;
-5. derive physical \(\phi,\psi\) for evaluation only;
+3. compute physical proposals \(p=P/L_x^2\), \(q=Q/L_y^2\);
+4. preserve \(p-q\) while enforcing exact \(\phi+\psi=f\);
+5. pull back with \(\Phi=L_x^2\phi\), \(\Psi=L_y^2\psi\);
 6. pass projected responses directly to reconstruction.
 
 Remove or bypass smooth masked projection and balance loss in complex-geometry mode.
@@ -1101,15 +1140,15 @@ Test that:
 - raw model channels are responses \(P,Q\);
 - output scaling is \(L_x^2A_x\) and \(L_y^2A_y\);
 - the shared transverse trunk receives the four length-context features with x/y role swap;
-- unversioned and version 4-or-older complex CouplingNet checkpoints are rejected by
-  output contract v5.
+- unversioned and version 5-or-older complex CouplingNet checkpoints are rejected by
+  output contract v6.
 
 ### 7.4 Projection tests
 
-Test that response-space projection enforces
+Test that physical symmetric projection enforces
 
 \[
-\frac{\Phi}{L_x^2}+\frac{\Psi}{L_y^2}=f
+\phi+\psi=f
 \]
 
 up to numerical tolerance.
@@ -1118,7 +1157,9 @@ Test that:
 
 - balance loss is not used;
 - smooth masked projection is not used;
-- derived physical fields satisfy \(\phi+\psi=f\);
+- pre-projection scaling produces \(p=P/L_x^2\) and \(q=Q/L_y^2\);
+- physical raw difference is preserved;
+- post-projection pull-back produces \(\Phi=L_x^2\phi\), \(\Psi=L_y^2\psi\);
 - very short positive segment lengths remain finite in float64.
 
 ### 7.5 Reconstruction tests
@@ -1269,7 +1310,9 @@ The task is complete when all of the following are true.
 
 ### 9.3 Projection and reconstruction
 
-- Response-space orthogonal projection is the only complex v5 mode.
+- Physical symmetric projection is the only complex v6 mode.
+- Raw reference responses are divided by length squares before projection.
+- Projected physical fields are multiplied by length squares after projection.
 - Smooth masked projection is not used.
 - Balance loss is not used.
 - Segment-wise Green reconstruction is implemented.

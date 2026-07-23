@@ -19,6 +19,10 @@ from greenonet.complex_coupling_objective import (
     compute_complex_coupling_objective,
 )
 from greenonet.complex_geometry import ComplexGeometryMetadata
+from greenonet.complex_gluing import (
+    ComplexGluingContext,
+    build_complex_gluing_context,
+)
 from greenonet.complex_losses import (
     ComplexEnergyLossResult,
     ComplexLengthJumpPartition,
@@ -35,6 +39,7 @@ from greenonet.complex_reconstruction import (
 )
 from greenonet.config import (
     BalanceProjectionConfig,
+    ComplexAdmissibilityGluingConfig,
     ComplexLengthJumpBalanceConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -81,9 +86,12 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
             config.weak_operator_closure
         )
+        self.gluing_config = ComplexAdmissibilityGluingConfig.from_raw(
+            config.admissibility_gluing
+        )
         if not self.length_jump_config.enabled:
             raise ValueError(
-                "ComplexCouplingEvaluator output-contract version 5 requires "
+                "ComplexCouplingEvaluator output-contract version 6 requires "
                 "coupling_training.length_jump_balance.enabled=true."
             )
         self.green_model = green_model.to(device)
@@ -97,6 +105,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             terminal_width=terminal_width,
         )
         self._length_jump_partition: ComplexLengthJumpPartition | None = None
+        self._gluing_context: ComplexGluingContext | None = None
 
     def evaluate(
         self,
@@ -168,6 +177,8 @@ class ComplexCouplingEvaluator(LoggingMixin):
             length_jump_config=self.length_jump_config,
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
+            gluing_config=self.gluing_config,
+            gluing_context=self.trace_gluing_context(batch.geometry),
             partition=self.energy_partition(batch.geometry),
         )
         metrics = {
@@ -233,6 +244,19 @@ class ComplexCouplingEvaluator(LoggingMixin):
                 self.length_jump_config,
             )
         return self._length_jump_partition
+
+    def trace_gluing_context(
+        self,
+        geometry: ComplexGeometryMetadata,
+    ) -> ComplexGluingContext | None:
+        if not self.gluing_config.enabled:
+            return None
+        if self._gluing_context is None:
+            self._gluing_context = build_complex_gluing_context(
+                geometry,
+                self.gluing_config,
+            )
+        return self._gluing_context
 
     def _write_outputs(
         self,

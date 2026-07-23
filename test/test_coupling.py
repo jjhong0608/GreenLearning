@@ -2277,8 +2277,17 @@ def test_response_space_config_is_complex_only():
 
 
 def test_retired_response_preconditioned_config_is_rejected():
-    with pytest.raises(ValueError, match="removed.*response_space"):
+    with pytest.raises(ValueError, match="removed.*physical_symmetric"):
         BalanceProjectionConfig.from_raw("response_preconditioned")
+
+
+def test_physical_symmetric_config_is_complex_only():
+    config = CouplingModelConfig(
+        balance_projection={"enabled": True, "mode": "physical_symmetric"}
+    )
+
+    with pytest.raises(ValueError, match="physical_symmetric.*ComplexCouplingNet"):
+        CouplingNet(config)
 
 
 def test_balance_projection_config_rejects_invalid_mask():

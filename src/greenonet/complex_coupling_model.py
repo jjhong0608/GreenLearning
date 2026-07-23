@@ -20,7 +20,7 @@ from greenonet.coupling_model import ActivationFactoryMixin, MLP
 class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
     """Source-conditioned response predictor for complex geometries."""
 
-    OUTPUT_CONTRACT_VERSION = 5
+    OUTPUT_CONTRACT_VERSION = 6
 
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
@@ -196,26 +196,26 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             raise ValueError(
                 "ComplexCouplingNet requires balance_projection.enabled=true."
             )
-        if balance_projection.mode != "response_space":
+        if balance_projection.mode != "physical_symmetric":
             raise ValueError(
-                "ComplexCouplingNet output-contract version 5 requires "
-                "balance_projection.mode='response_space'. Earlier symmetric/RPS "
-                "complex checkpoints require retraining."
+                "ComplexCouplingNet output-contract version 6 requires "
+                "balance_projection.mode='physical_symmetric'. Response-space and "
+                "earlier complex checkpoints require retraining."
             )
         axis_cfg = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
         if not axis_cfg.enabled:
             raise ValueError(
-                "ComplexCouplingNet output-contract version 5 requires "
+                "ComplexCouplingNet output-contract version 6 requires "
                 "axis_1d_trunk.enabled=true."
             )
         if not axis_cfg.transverse_trunk.enabled:
             raise ValueError(
-                "ComplexCouplingNet output-contract version 5 requires "
+                "ComplexCouplingNet output-contract version 6 requires "
                 "axis_1d_trunk.transverse_trunk.enabled=true."
             )
         if not axis_cfg.transverse_trunk.length_context:
             raise ValueError(
-                "ComplexCouplingNet output-contract version 5 requires "
+                "ComplexCouplingNet output-contract version 6 requires "
                 "axis_1d_trunk.transverse_trunk.length_context=true."
             )
         if config.source_stencil_lift.enabled:
@@ -229,15 +229,15 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         self,
         state_dict: Mapping[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """Reject checkpoints that do not use the response-space v5 contract."""
+        """Reject checkpoints that do not use the physical-projection v6 contract."""
 
         prepared = dict(state_dict)
         key = "_output_contract_version"
         if key not in prepared:
             raise ValueError(
                 "Legacy complex CouplingNet checkpoint has no output contract "
-                "version and cannot be loaded into response-space output contract "
-                "version 5. Retrain the CouplingNet; GreenNet checkpoints remain "
+                "version and cannot be loaded into physical-symmetric output "
+                "contract version 6. Retrain the CouplingNet; GreenNet checkpoints remain "
                 "compatible."
             )
 
@@ -262,13 +262,13 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         self,
         state_dict: Mapping[str, torch.Tensor],
     ) -> None:
-        """Validate the response-space output contract marker."""
+        """Validate the physical-symmetric output contract marker."""
 
         key = "_output_contract_version"
         if key not in state_dict:
             raise ValueError(
                 "Complex CouplingNet checkpoint has no output contract version. "
-                "Response-space output contract version 5 is required."
+                "Physical-symmetric output contract version 6 is required."
             )
         version_tensor = state_dict[key]
         if version_tensor.numel() != 1:
@@ -293,7 +293,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         x_coefficient_branch: torch.Tensor,
         y_coefficient_branch: torch.Tensor,
     ) -> torch.Tensor:
-        """Return raw unit-response proposals shaped ``(B, 2, P)``."""
+        """Return raw reference-response proposals shaped ``(B, 2, P)``."""
 
         phi_response = self._axis_forward(
             geometry=geometry,
