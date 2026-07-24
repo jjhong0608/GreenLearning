@@ -7,8 +7,9 @@
 - 대상 학습 경로: complex geometry CouplingNet
 - 목적: SOAP optimizer의 원리, 현재 프로젝트 적용 가능성, 기대 효과,
   위험, 그리고 향후 ablation 기준을 재사용 가능한 형태로 정리한다.
-- 구현 상태: 조사 및 적용성 검토만 완료했으며, SOAP은 아직 코드에
-  구현되지 않았다.
+- 구현 상태: official SOAP commit
+  `a1e553530fde97d0e6b307d7c82ac6d38b072340`을 vendoring하고 complex
+  CouplingNet 전용 opt-in optimizer로 구현했다. AdamW는 기본값으로 유지한다.
 
 ## Executive Conclusion
 
@@ -143,14 +144,13 @@ Eigenbasis는 매 step 새로 계산하지 않고 `precondition_frequency`에 �
 
 ## 3. 현재 프로젝트 상태
 
-2026-07-24 기준으로 현재 complex trainer는 다음 optimizer를 사용한다.
+2026-07-24 기준으로 complex trainer는
+`ComplexCouplingOptimizerFactory`를 통해 optimizer를 생성한다. Config에
+`optimizer` block이 없으면 기존과 같은 AdamW를 사용하고,
+`optimizer.name="soap"`일 때만 vendored SOAP을 사용한다.
 
 ```python
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=config.learning_rate,
-    weight_decay=config.weight_decay,
-)
+optimizer = ComplexCouplingOptimizerFactory(config).build(model.parameters())
 ```
 
 학습 step은 다음 표준 순서를 따른다.
@@ -482,7 +482,7 @@ Meta의 `facebookresearch/optimizers`에는 eigenvalue-corrected Shampoo,
 SOAP을 구현한다면 기존 AdamW를 제거하지 않고 optimizer factory를
 도입하는 것이 적절하다.
 
-예상 config surface는 다음과 같이 분리할 수 있다.
+구현된 config surface는 다음과 같다.
 
 ```json
 {
@@ -491,31 +491,53 @@ SOAP을 구현한다면 기존 AdamW를 제거하지 않고 optimizer factory를
       "name": "soap",
       "betas": [0.95, 0.95],
       "eps": 1e-8,
-      "precondition_frequency": 10,
-      "max_precondition_dim": 1024,
-      "precondition_1d": false,
-      "normalize_grads": false
+      "profile_step_time": true,
+      "soap": {
+        "shampoo_beta": -1.0,
+        "precondition_frequency": 10,
+        "max_precondition_dim": 1024,
+        "merge_dims": false,
+        "precondition_1d": false,
+        "normalize_grads": false,
+        "correct_bias": true
+      }
     }
   }
 }
 ```
 
-이 config는 설계 예시이며 현재 구현되어 있지 않다.
-
-구현 시 다음 정책이 필요하다.
+현재 구현은 다음 정책을 따른다.
 
 1. `optimizer.name="adamw"`를 backward-compatible default로 유지한다.
 2. SOAP은 complex CouplingNet의 opt-in experiment로 시작한다.
 3. GreenNet 및 unit-square CouplingNet 적용은 별도 실험으로 둔다.
 4. Scheduler, clipping, loss, projection, reconstruction은 바꾸지 않는다.
-5. SOAP-specific settings와 implementation version을 `config_used.json`과
-   training log에 기록한다.
+5. Complex CouplingNet의 `config_used.json`에는 resolved optimizer block과
+   top-level provenance를 materialize한다. 같은 metadata를
+   `optimizer_provenance.json`, training log, complex artifact summary에도
+   기록한다.
 6. Preconditioner frequency는 optimizer step 단위라고 문서화한다.
-7. AdamW와 SOAP의 optimizer time 및 peak memory를 별도로 기록한다.
+7. `profile_step_time=true`인 경우 AdamW와 SOAP의 optimizer time 및 peak
+   allocated CUDA memory를 같은 metric schema로 기록한다.
+8. Official first-step preconditioner initialization/no-update 동작을 그대로
+   유지한다.
+9. Model-only safetensors를 유지하며 optimizer-state resume는 지원하지 않는다.
+
+구현 파일은 `src/greenonet/optimizers/soap.py`,
+`src/greenonet/coupling_optimizer.py`, 그리고
+`src/greenonet/complex_coupling_trainer.py`이다. Upstream attribution과 MIT
+license는 `THIRD_PARTY_NOTICES.md`에 기록한다. Float64 model 호환을 위해
+stored Shampoo factor/eigenbasis는 upstream의 float32 정책을 유지하되,
+covariance update와 tensor contraction 경계에서 dtype을 명시적으로
+변환한다.
 
 ## 11. Recommended Ablation
 
 전체 3000-epoch run을 시작하기 전에 300--500 epoch pilot을 권장한다.
+`configs/complex_coupling_soap.json`은 canonical complex config와 model,
+dataset, loss, projection, clipping, scheduler 설정을 맞춘 SOAP template이다.
+Pilot에서는 AdamW baseline과 SOAP config의 `epochs`를 같은 300--500 값으로
+설정하고 장기 run 전에 optimizer telemetry를 먼저 비교한다.
 
 ### 11.1 Experiment Matrix
 

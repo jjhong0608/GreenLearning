@@ -3054,6 +3054,8 @@ def test_coupling_trainer_compile_enabled_calls_torch_compile(tmp_path, monkeypa
         CouplingTrainingConfig(
             best_physics_checkpoint=CouplingBestPhysicsCheckpointConfig(enabled=True)
         ),
+        CouplingTrainingConfig(optimizer={"name": "soap"}),
+        CouplingTrainingConfig(optimizer={"name": "adamw", "betas": [0.8, 0.9]}),
     ),
 )
 def test_unit_square_trainer_rejects_complex_physics_options(tmp_path, config):

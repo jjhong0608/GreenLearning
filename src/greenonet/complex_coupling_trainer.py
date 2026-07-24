@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -36,6 +37,10 @@ from greenonet.complex_projection import (
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
     reconstruct_from_projected_response,
+)
+from greenonet.coupling_optimizer import (
+    ComplexCouplingOptimizerFactory,
+    OptimizerStepProfiler,
 )
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.config import (
@@ -80,6 +85,12 @@ class ComplexCouplingTrainer(LoggingMixin):
         "rel_flux",
         "pre_projection_fusion_gate",
         "learning_rate",
+        "optimizer_step_time_mean_ms",
+        "optimizer_step_time_p95_ms",
+        "optimizer_step_time_max_ms",
+        "optimizer_step_count",
+        "optimizer_basis_refresh_count",
+        "optimizer_peak_memory_mib",
     )
 
     def __init__(
@@ -111,6 +122,8 @@ class ComplexCouplingTrainer(LoggingMixin):
         self.best_physics_checkpoint = CouplingBestPhysicsCheckpointConfig.from_raw(
             config.best_physics_checkpoint
         )
+        self.optimizer_factory = ComplexCouplingOptimizerFactory(config)
+        self.optimizer_provenance = self.optimizer_factory.provenance()
         if config.best_rel_sol_checkpoint.enabled:
             raise ValueError(
                 "Complex mode does not allow best_rel_sol_checkpoint because "
@@ -167,18 +180,25 @@ class ComplexCouplingTrainer(LoggingMixin):
             self.config,
             total_epochs=self.config.epochs,
         )
-        optimizer = optim.AdamW(
-            self.model.parameters(),
-            lr=self.config.learning_rate,
-            weight_decay=self.config.weight_decay,
+        optimizer = self.optimizer_factory.build(self.model.parameters())
+        optimizer_profiler = OptimizerStepProfiler(
+            optimizer=optimizer,
+            enabled=self.optimizer_provenance.profile_step_time,
+            device=self.device,
         )
         scheduler = schedule_config.build(optimizer)
+        self._log_optimizer()
+        self._write_optimizer_provenance()
         self._log_learning_rate_schedule(schedule_config)
         best_val_energy: float | None = None
         best_val_physics: float | None = None
         for epoch in range(1, self.config.epochs + 1):
             learning_rate = float(optimizer.param_groups[0]["lr"])
-            train_metrics = self._run_epoch(train_loader, optimizer=optimizer)
+            train_metrics = self._run_epoch(
+                train_loader,
+                optimizer=optimizer,
+                optimizer_profiler=optimizer_profiler,
+            )
             fusion_gate = self._current_pre_projection_fusion_gate()
             if fusion_gate is not None:
                 train_metrics["pre_projection_fusion_gate"] = fusion_gate
@@ -232,10 +252,12 @@ class ComplexCouplingTrainer(LoggingMixin):
         loader: DataLoader[Any],
         *,
         optimizer: optim.Optimizer,
+        optimizer_profiler: OptimizerStepProfiler,
     ) -> dict[str, float]:
         self.model.train()
         totals: dict[str, float] = {}
         samples = 0
+        optimizer_profiler.begin_epoch()
         for batch in loader:
             batch = batch.to(self.device)
             optimizer.zero_grad(set_to_none=True)
@@ -246,11 +268,13 @@ class ComplexCouplingTrainer(LoggingMixin):
                     self.model.parameters(),
                     max_norm=self.config.gradient_clip_max_norm,
                 )
-            optimizer.step()
+            optimizer_profiler.step()
             batch_size = int(batch.rhs_valid.shape[0])
             self._accumulate(totals, result.metrics, batch_size=batch_size)
             samples += batch_size
-        return self._average(totals, samples)
+        metrics = self._average(totals, samples)
+        metrics.update(optimizer_profiler.finish_epoch())
+        return metrics
 
     def _evaluate_loader(
         self,
@@ -397,6 +421,36 @@ class ComplexCouplingTrainer(LoggingMixin):
             schedule.configured_warmup_epochs,
             schedule.effective_warmup_epochs,
             schedule.total_epochs,
+        )
+
+    def _log_optimizer(self) -> None:
+        provenance = self.optimizer_provenance
+        self.logger.info(
+            "optimizer name=%s implementation=%s base_lr=%.6e "
+            "weight_decay=%.6e betas=%s eps=%.6e profile_step_time=%s "
+            "checkpoint_policy=%s",
+            provenance.name,
+            provenance.implementation,
+            provenance.learning_rate,
+            provenance.weight_decay,
+            provenance.betas,
+            provenance.eps,
+            provenance.profile_step_time,
+            provenance.checkpoint_policy,
+        )
+        if provenance.soap is not None:
+            self.logger.info(
+                "SOAP upstream_commit=%s settings=%s "
+                "frequency_unit=optimizer_step "
+                "first_step_initializes_preconditioner=true",
+                provenance.upstream_commit,
+                provenance.soap,
+            )
+
+    def _write_optimizer_provenance(self) -> None:
+        path = self.work_dir / "optimizer_provenance.json"
+        path.write_text(
+            json.dumps(self.optimizer_provenance.as_dict(), indent=2) + "\n"
         )
 
     def _log_pre_projection_fusion(self, model: ComplexCouplingNet) -> None:

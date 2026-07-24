@@ -250,6 +250,48 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `complex_training_metrics.csv`와 `training.log`에는 해당 epoch optimizer update에
   실제 사용한 `learning_rate`를 기록한다. `use_lr_schedule=false`이면 고정
   learning rate를 유지한다.
+- Complex CouplingNet optimizer의 backward-compatible default는 AdamW이다.
+  SOAP은 `coupling_training.optimizer.name="soap"`인 경우에만 사용하는
+  complex-only opt-in이며 GreenNet과 unit-square CouplingNet은 SOAP을 거부한다.
+  Vendored source는 official SOAP commit
+  `a1e553530fde97d0e6b307d7c82ac6d38b072340`에 고정되고 MIT attribution은
+  `THIRD_PARTY_NOTICES.md`에 둔다. SOAP `precondition_frequency`는 epoch가 아닌
+  optimizer-step 단위이고, 첫 `step()`은 preconditioner만 초기화하며 parameter를
+  갱신하지 않는다.
+- Complex optimizer checkpoint는 계속 model-only safetensors이다. SOAP optimizer
+  state를 이용한 interrupted-training resume는 지원하지 않는다. 각 training
+  run은 resolved optimizer block/provenance를 `config_used.json`에 materialize하고,
+  같은 설정을 `optimizer_provenance.json`에 기록하며 complex artifact summary도
+  같은 provenance를 포함한다. `optimizer.profile_step_time=true`일
+  때만 optimizer-step mean/p95/max, step count, periodic basis-refresh count,
+  peak allocated CUDA memory를 측정한다. CUDA synchronization에 따른 timing
+  overhead는 profiling opt-in에서만 발생한다.
+- SOAP은 canonical energy의 null space, boundary admissibility, geometry
+  adjacency, projection 또는 reconstruction 오류를 해결하는 수단이 아니다.
+  유지 여부는 AdamW와 같은 seed/data/loss/scheduler를 사용한 300--500 epoch
+  paired pilot에서 equal-step 및 equal-wall-clock 기준을 함께 비교한 뒤 결정하며,
+  기본 optimizer로 자동 승격하지 않는다.
+- Annulus `coupling10` SOAP pilot은 epoch당 optimizer call이 2회인 상태에서
+  `lr=2e-3`, `warmup_epochs=3`, `betas=(0.95,0.95)`,
+  `precondition_frequency=10`을 사용했고, epoch 3 validation canonical energy
+  `3.375519e-1` 이후 epoch 4에 `1.081258e6`으로 발산했다. 첫 periodic basis
+  refresh는 epoch 6이므로 refresh event 자체가 최초 발산 원인은 아니다. SOAP
+  warmup은 epoch가 아니라 optimizer-step 수로 판단한다. 다음 안정성 pilot의
+  보수적 시작점은 `lr=2e-4`, `warmup_epochs=50`,
+  `betas=(0.95,0.99)`, `shampoo_beta=0.95`,
+  `precondition_frequency=5`이며, 이는 canonical default가 아니라 20--30 epoch
+  abortable screen용 실험 설정이다. Validation energy가 best finite value의
+  10배를 넘으면 해당 설정은 즉시 실패로 판정한다.
+- 같은 `coupling10`을 보수적 설정으로 다시 실행한 결과, epoch 71까지 validation
+  canonical energy가 70회 연속 감소해 `3.481542e-1`에서 `3.148627e-1`로
+  내려갔다. Warmup epoch 1--50의 감소율은 약 1.5%에 불과했지만 epoch
+  50--71에서는 추가로 약 8.2% 감소했으므로 이 run은 plateau가 아니라
+  post-warmup 수렴 구간이다. 절대 정확도는 아직 `rel_sol=1.177138`로 낮아
+  optimization convergence와 solution quality를 구분해야 한다. Epoch
+  120--150 전에는 설정을 바꾸지 않고, 최근 20-epoch validation energy 감소율이
+  2% 이상이면 계속 실행한다. 그 감소율이 1% 미만이면서 detached `rel_sol`도
+  정체 또는 악화될 때만 plateau로 판정한다. 이 기준은 현재 Annulus SOAP
+  pilot 진단용이며 canonical optimizer default가 아니다.
 - `cli/diagnose_complex_length_response.py`는 complex CouplingNet checkpoint를 다시
   추론해 line-length amplification을 단계별로 분리하는 evaluation-only 도구이다.
   v6에서는 pre-projection physical proposal, projected physical directional-source

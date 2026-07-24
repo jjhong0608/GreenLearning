@@ -25,6 +25,7 @@ from greenonet.coupling_artifacts import (
     CouplingArtifactRequest,
     load_coupling_artifact_configs,
 )
+from greenonet.coupling_optimizer import ComplexCouplingOptimizerFactory
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
@@ -617,6 +618,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         best_physics = CouplingBestPhysicsCheckpointConfig.from_raw(
             configs.coupling_training.best_physics_checkpoint
         )
+        optimizer_provenance = ComplexCouplingOptimizerFactory(
+            configs.coupling_training
+        ).provenance()
         projection_formula = (
             "p=P_raw/Lx^2; q=Q_raw/Ly^2; d=p-q; "
             "phi=(rhs+d)/2; psi=(rhs-d)/2; "
@@ -664,6 +668,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "solution_prediction": "u_pred=0.5*(u_phi+u_psi)",
             "raw_output_space": "reference_response",
             "output_contract_version": ComplexCouplingNet.OUTPUT_CONTRACT_VERSION,
+            "optimizer": optimizer_provenance.as_dict(),
             "balance_projection": {
                 "enabled": balance_projection.enabled,
                 "mode": balance_projection.mode,

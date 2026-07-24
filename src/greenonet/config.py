@@ -709,6 +709,136 @@ class ComplexWeakOperatorClosureConfig:
 
 
 @dataclass
+class SoapOptimizerConfig:
+    """SOAP-specific optimizer settings for complex CouplingNet."""
+
+    shampoo_beta: float = -1.0
+    precondition_frequency: int = 10
+    max_precondition_dim: int = 1024
+    merge_dims: bool = False
+    precondition_1d: bool = False
+    normalize_grads: bool = False
+    correct_bias: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.shampoo_beta, (int, float)) or isinstance(
+            self.shampoo_beta, bool
+        ):
+            raise TypeError("optimizer.soap.shampoo_beta must be numeric.")
+        shampoo_beta = float(self.shampoo_beta)
+        if not math.isfinite(shampoo_beta):
+            raise ValueError("optimizer.soap.shampoo_beta must be finite.")
+        if shampoo_beta != -1.0 and not 0.0 <= shampoo_beta < 1.0:
+            raise ValueError("optimizer.soap.shampoo_beta must be -1 or in [0, 1).")
+        self.shampoo_beta = shampoo_beta
+
+        for field_name, value in (
+            ("precondition_frequency", self.precondition_frequency),
+            ("max_precondition_dim", self.max_precondition_dim),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"optimizer.soap.{field_name} must be an integer.")
+            if value < 1:
+                raise ValueError(f"optimizer.soap.{field_name} must be positive.")
+
+        for field_name, value in (
+            ("merge_dims", self.merge_dims),
+            ("precondition_1d", self.precondition_1d),
+            ("normalize_grads", self.normalize_grads),
+            ("correct_bias", self.correct_bias),
+        ):
+            if not isinstance(value, bool):
+                raise TypeError(f"optimizer.soap.{field_name} must be a boolean.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: SoapOptimizerConfig | dict[str, Any] | None,
+    ) -> SoapOptimizerConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("optimizer.soap must be an object.")
+        data = dict(raw)
+        unknown = sorted(
+            set(data)
+            - {
+                "shampoo_beta",
+                "precondition_frequency",
+                "max_precondition_dim",
+                "merge_dims",
+                "precondition_1d",
+                "normalize_grads",
+                "correct_bias",
+            }
+        )
+        if unknown:
+            raise TypeError(f"optimizer.soap has unknown keys: {', '.join(unknown)}.")
+        return cls(**data)
+
+
+@dataclass
+class CouplingOptimizerConfig:
+    """Optimizer selection shared by CouplingNet training configs."""
+
+    name: Literal["adamw", "soap"] = "adamw"
+    betas: tuple[float, float] | list[float] = (0.9, 0.999)
+    eps: float = 1.0e-8
+    profile_step_time: bool = False
+    soap: SoapOptimizerConfig | dict[str, Any] = field(
+        default_factory=SoapOptimizerConfig
+    )
+
+    def __post_init__(self) -> None:
+        if self.name not in {"adamw", "soap"}:
+            raise ValueError("optimizer.name must be 'adamw' or 'soap'.")
+        if (
+            not isinstance(self.betas, (tuple, list))
+            or len(self.betas) != 2
+            or any(
+                not isinstance(beta, (int, float)) or isinstance(beta, bool)
+                for beta in self.betas
+            )
+        ):
+            raise TypeError("optimizer.betas must contain two numeric values.")
+        betas = (float(self.betas[0]), float(self.betas[1]))
+        if any(not math.isfinite(beta) or not 0.0 <= beta < 1.0 for beta in betas):
+            raise ValueError("optimizer.betas must be finite and in [0, 1).")
+        self.betas = betas
+        if not isinstance(self.eps, (int, float)) or isinstance(self.eps, bool):
+            raise TypeError("optimizer.eps must be numeric.")
+        self.eps = float(self.eps)
+        if not math.isfinite(self.eps) or self.eps <= 0.0:
+            raise ValueError("optimizer.eps must be finite and positive.")
+        if not isinstance(self.profile_step_time, bool):
+            raise TypeError("optimizer.profile_step_time must be a boolean.")
+        self.soap = SoapOptimizerConfig.from_raw(self.soap)
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: CouplingOptimizerConfig | dict[str, Any] | None,
+    ) -> CouplingOptimizerConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("coupling_training.optimizer must be an object.")
+        data = dict(raw)
+        unknown = sorted(
+            set(data) - {"name", "betas", "eps", "profile_step_time", "soap"}
+        )
+        if unknown:
+            raise TypeError(
+                f"coupling_training.optimizer has unknown keys: {', '.join(unknown)}."
+            )
+        return cls(**data)
+
+
+@dataclass
 class CouplingTrainingConfig:
     """Training settings for CouplingNet."""
 
@@ -745,6 +875,9 @@ class CouplingTrainingConfig:
     weak_operator_closure: ComplexWeakOperatorClosureConfig | dict[str, Any] = field(
         default_factory=ComplexWeakOperatorClosureConfig
     )
+    optimizer: CouplingOptimizerConfig | dict[str, Any] = field(
+        default_factory=CouplingOptimizerConfig
+    )
 
     def __post_init__(self) -> None:
         self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
@@ -761,6 +894,7 @@ class CouplingTrainingConfig:
         self.weak_operator_closure = ComplexWeakOperatorClosureConfig.from_raw(
             self.weak_operator_closure
         )
+        self.optimizer = CouplingOptimizerConfig.from_raw(self.optimizer)
 
 
 def validate_unit_square_coupling_training_config(
@@ -786,6 +920,18 @@ def validate_unit_square_coupling_training_config(
         raise ValueError(
             "coupling_training.best_physics_checkpoint is available only for "
             "ComplexCouplingTrainer."
+        )
+    optimizer = CouplingOptimizerConfig.from_raw(config.optimizer)
+    if optimizer.name == "soap":
+        raise ValueError(
+            "coupling_training.optimizer.name='soap' is available only for "
+            "ComplexCouplingTrainer."
+        )
+    if optimizer != CouplingOptimizerConfig():
+        raise ValueError(
+            "Custom coupling_training.optimizer settings are available only for "
+            "ComplexCouplingTrainer; omit the optimizer block for unit-square "
+            "AdamW training."
         )
 
 

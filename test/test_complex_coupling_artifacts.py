@@ -161,6 +161,15 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "weight": 4.0,
         "eps": 1e-12,
     }
+    config_payload["coupling_training"]["optimizer"] = {
+        "name": "soap",
+        "betas": [0.95, 0.95],
+        "profile_step_time": True,
+        "soap": {
+            "precondition_frequency": 10,
+            "max_precondition_dim": 64,
+        },
+    }
     config_payload["coupling_training"]["best_physics_checkpoint"] = {"enabled": True}
     config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
@@ -213,6 +222,12 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert summary["solution_prediction"] == "u_pred=0.5*(u_phi+u_psi)"
     assert summary["raw_output_space"] == "reference_response"
     assert summary["output_contract_version"] == 6
+    assert summary["optimizer"]["name"] == "soap"
+    assert summary["optimizer"]["betas"] == (0.95, 0.95)
+    assert summary["optimizer"]["soap"]["precondition_frequency"] == 10
+    assert summary["optimizer"]["upstream_commit"] == (
+        "a1e553530fde97d0e6b307d7c82ac6d38b072340"
+    )
     assert summary["balance_projection"]["enabled"] is True
     assert summary["balance_projection"]["mode"] == "physical_symmetric"
     assert summary["balance_projection"]["space"] == "physical_source"

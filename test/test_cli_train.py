@@ -9,6 +9,9 @@ from greenonet.config import (
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingModelConfig,
+    CouplingTrainingConfig,
+    DatasetConfig,
+    PipelineConfig,
 )
 from greenonet.model import GreenONetModel
 from cli.eval_coupling import EvalCouplingCLI
@@ -52,6 +55,52 @@ class TestTrainCLIConfigCopy:
         assert copied.exists()
         assert json.loads(copied.read_text()) == payload
         assert captured["terminal_width"] == 250
+
+    def test_complex_config_copy_materializes_optimizer_provenance(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "dataset": {"geometry_mode": "complex"},
+                    "coupling_training": {
+                        "learning_rate": 0.002,
+                        "optimizer": {
+                            "name": "soap",
+                            "soap": {"precondition_frequency": 7},
+                        },
+                    },
+                    "pipeline": {"run_green": False, "run_coupling": True},
+                }
+            )
+        )
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        training = CouplingTrainingConfig(
+            learning_rate=0.002,
+            optimizer={
+                "name": "soap",
+                "soap": {"precondition_frequency": 7},
+            },
+        )
+
+        TrainCLI._write_config_used(
+            config_path=config_path,
+            work_dir=work_dir,
+            dataset_cfg=DatasetConfig(geometry_mode="complex"),
+            coupling_training_cfg=training,
+            pipeline_cfg=PipelineConfig(run_green=False, run_coupling=True),
+        )
+
+        used = json.loads((work_dir / "config_used.json").read_text())
+        assert used["coupling_training"]["optimizer"]["name"] == "soap"
+        assert used["coupling_training"]["optimizer"]["betas"] == [0.9, 0.999]
+        assert (
+            used["coupling_training"]["optimizer"]["soap"]["precondition_frequency"]
+            == 7
+        )
+        assert used["optimizer_provenance"]["upstream_commit"] == (
+            "a1e553530fde97d0e6b307d7c82ac6d38b072340"
+        )
 
     def test_uses_custom_coefficient_functions_for_green_training(
         self, tmp_path, monkeypatch
@@ -966,6 +1015,57 @@ class TestCanonicalEnergyTrainingConfig:
                 "enabled",
                 "coupling_model",
             )
+
+
+class TestCouplingOptimizerConfig:
+    def test_train_and_eval_parse_soap_optimizer_config(self):
+        raw = {
+            "optimizer": {
+                "name": "soap",
+                "betas": [0.95, 0.95],
+                "eps": 1e-8,
+                "profile_step_time": True,
+                "soap": {
+                    "shampoo_beta": -1.0,
+                    "precondition_frequency": 10,
+                    "max_precondition_dim": 1024,
+                    "merge_dims": False,
+                    "precondition_1d": False,
+                    "normalize_grads": False,
+                    "correct_bias": True,
+                },
+            }
+        }
+
+        for builder in (
+            TrainCLI._build_coupling_training_config,
+            EvalCouplingCLI._build_coupling_training_config,
+        ):
+            config = builder(raw)
+            assert config.optimizer.name == "soap"
+            assert config.optimizer.betas == (0.95, 0.95)
+            assert config.optimizer.profile_step_time is True
+            assert config.optimizer.soap.precondition_frequency == 10
+            assert config.optimizer.soap.max_precondition_dim == 1024
+
+    def test_optimizer_block_is_optional_and_defaults_to_adamw(self):
+        config = TrainCLI._build_coupling_training_config({})
+
+        assert config.optimizer.name == "adamw"
+        assert config.optimizer.betas == (0.9, 0.999)
+        assert config.optimizer.eps == 1e-8
+        assert config.optimizer.profile_step_time is False
+
+    @pytest.mark.parametrize(
+        "raw",
+        (
+            {"optimizer": {"unknown": 1}},
+            {"optimizer": {"soap": {"unknown": 1}}},
+        ),
+    )
+    def test_optimizer_unknown_keys_fail_fast(self, raw):
+        with pytest.raises(TypeError, match="unknown keys"):
+            EvalCouplingCLI._build_coupling_training_config(raw)
 
 
 class TestComplexPhysicsLossTrainingConfig:

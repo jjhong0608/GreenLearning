@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import replace
 
 import pytest
@@ -39,6 +40,7 @@ from test.complex_fixtures import (
     write_geometry_npz,
     write_sample_npz,
 )
+from greenonet.optimizers import SOAP
 
 
 def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
@@ -198,6 +200,101 @@ def test_complex_trainer_applies_and_records_warmup_cosine_schedule(tmp_path):
     assert "effective_warmup_epochs=2" in training_log
     assert "learning_rate=3.000000e-03" in training_log
     assert "learning_rate=1.000000e-03" in training_log
+
+
+def test_complex_trainer_soap_smoke_records_provenance_and_telemetry(
+    tmp_path,
+    monkeypatch,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    work_dir = tmp_path / "soap"
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=2,
+            batch_size=1,
+            log_interval=1,
+            learning_rate=2.0e-3,
+            weight_decay=0.01,
+            use_lr_schedule=True,
+            warmup_epochs=1,
+            min_lr=5.0e-4,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+            optimizer={
+                "name": "soap",
+                "betas": [0.95, 0.95],
+                "profile_step_time": True,
+                "soap": {
+                    "precondition_frequency": 1,
+                    "max_precondition_dim": 16,
+                },
+            },
+        ),
+        work_dir=work_dir,
+        green_model=ConstantGreen(1.0),
+    )
+    call_order: list[str] = []
+    original_clip = torch.nn.utils.clip_grad_norm_
+    original_step = SOAP.step
+
+    def tracked_clip(*args, **kwargs):
+        call_order.append("clip")
+        return original_clip(*args, **kwargs)
+
+    def tracked_step(optimizer, closure=None):
+        call_order.append("step")
+        return original_step(optimizer, closure)
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", tracked_clip)
+    monkeypatch.setattr(SOAP, "step", tracked_step)
+
+    trainer.train(dataset, dataset)
+
+    provenance = json.loads((work_dir / "optimizer_provenance.json").read_text())
+    assert provenance["name"] == "soap"
+    assert provenance["betas"] == [0.95, 0.95]
+    assert provenance["soap"]["precondition_frequency"] == 1
+    assert provenance["checkpoint_policy"] == "model_only_no_optimizer_resume"
+    train_rows = [row for row in trainer.metric_rows if row["split"] == "train"]
+    val_rows = [row for row in trainer.metric_rows if row["split"] == "val"]
+    assert [float(row["learning_rate"]) for row in train_rows] == pytest.approx(
+        [2.0e-3, 5.0e-4]
+    )
+    assert all(float(row["optimizer_step_count"]) == 1.0 for row in train_rows)
+    assert float(train_rows[0]["optimizer_basis_refresh_count"]) == 0.0
+    assert float(train_rows[1]["optimizer_basis_refresh_count"]) == 1.0
+    assert all(float(row["optimizer_step_time_mean_ms"]) > 0.0 for row in train_rows)
+    assert all("optimizer_step_time_mean_ms" not in row for row in val_rows)
+    assert (work_dir / "complex_coupling_model.safetensors").is_file()
+    with (work_dir / "complex_training_metrics.csv").open(newline="") as fp:
+        csv_rows = list(csv.DictReader(fp))
+    assert "optimizer_step_time_mean_ms" in csv_rows[0]
+    training_log = (work_dir / "training.log").read_text()
+    assert "optimizer name=soap" in training_log
+    assert "frequency_unit=optimizer_step" in training_log
+    assert "first_step_initializes_preconditioner=true" in training_log
+    assert call_order == ["clip", "step", "clip", "step"]
 
 
 def test_complex_trainer_selects_best_checkpoint_by_reference_free_energy(tmp_path):

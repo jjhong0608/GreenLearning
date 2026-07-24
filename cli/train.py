@@ -42,6 +42,7 @@ from greenonet.complex_coupling_trainer import ComplexCouplingTrainer
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_model import CouplingNet
+from greenonet.coupling_optimizer import ComplexCouplingOptimizerFactory
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.io import load_model_with_config, load_state_dict_auto
@@ -222,6 +223,29 @@ class TrainCLI:
         if pipeline_cfg.run_coupling:
             active_device_types.add(torch.device(coupling_training_cfg.device).type)
         return active_device_types
+
+    @staticmethod
+    def _write_config_used(
+        *,
+        config_path: Path,
+        work_dir: Path,
+        dataset_cfg: DatasetConfig,
+        coupling_training_cfg: CouplingTrainingConfig,
+        pipeline_cfg: PipelineConfig,
+    ) -> None:
+        destination = work_dir / "config_used.json"
+        if dataset_cfg.geometry_mode != "complex" or not pipeline_cfg.run_coupling:
+            shutil.copy2(config_path, destination)
+            return
+        with config_path.open() as fp:
+            payload = json.load(fp)
+        coupling_training = payload.setdefault("coupling_training", {})
+        if not isinstance(coupling_training, dict):
+            raise TypeError("coupling_training must be an object.")
+        factory = ComplexCouplingOptimizerFactory(coupling_training_cfg)
+        coupling_training["optimizer"] = factory.resolved_config()
+        payload["optimizer_provenance"] = factory.provenance().as_dict()
+        destination.write_text(json.dumps(payload, indent=2) + "\n")
 
     @classmethod
     def _should_apply_cpu_runtime(
@@ -580,7 +604,13 @@ class TrainCLI:
 
         work_dir = Path(args.work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(config_path, work_dir / "config_used.json")
+        self._write_config_used(
+            config_path=config_path,
+            work_dir=work_dir,
+            dataset_cfg=dataset_cfg,
+            coupling_training_cfg=coupling_training_cfg,
+            pipeline_cfg=pipeline_cfg,
+        )
         if self._should_apply_cpu_runtime(
             training_cfg,
             coupling_training_cfg,
