@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+from dataclasses import asdict
 from pathlib import Path
+from typing import Literal, cast
 
 import torch
 
@@ -22,12 +24,14 @@ from greenonet.config import (
     CouplingTrunkPositionalEncodingConfig,
     DatasetConfig,
     GreenResponseFeatureConfig,
+    IndexedGpSourceConfig,
     ModelConfig,
     PipelineConfig,
     SourceStencilLiftConfig,
     TerminalConfig,
     TrainingConfig,
     reject_retired_coupling_training_options,
+    validate_complex_coupling_source_config,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
 from greenonet.coefficients import (
@@ -39,7 +43,12 @@ from greenonet.complex_coupling_data import ComplexCouplingDataset
 from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_coupling_trainer import ComplexCouplingTrainer
-from greenonet.complex_geometry import load_complex_geometry
+from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geometry
+from greenonet.complex_sources import (
+    GeometryGridLoader,
+    IndexedGpComplexSourceProvider,
+    IndexedGpParameters,
+)
 from greenonet.coupling_data import CouplingDataset
 from greenonet.coupling_model import CouplingNet
 from greenonet.coupling_optimizer import ComplexCouplingOptimizerFactory
@@ -70,15 +79,6 @@ class TrainCLI:
         )
         self.parser = parser
 
-    @staticmethod
-    def _parse_scale_length(
-        dataset_kwargs: dict[str, object], key: str
-    ) -> dict[str, object]:
-        scale_len = dataset_kwargs.get(key)
-        if isinstance(scale_len, list) and len(scale_len) == 2:
-            dataset_kwargs[key] = (float(scale_len[0]), float(scale_len[1]))
-        return dataset_kwargs
-
     def _build_configs(
         self, config_path: Path
     ) -> tuple[
@@ -93,39 +93,7 @@ class TrainCLI:
         with config_path.open() as fp:
             raw = json.load(fp)
         terminal_cfg = self._build_terminal_config(raw.get("terminal"))
-        dataset_kwargs = dict(raw["dataset"])
-        dataset_kwargs.pop("domain", None)
-        dtype_name = dataset_kwargs.pop("dtype", "float64")
-        dataset_kwargs["dtype"] = getattr(torch, dtype_name)
-        dataset_kwargs = self._parse_scale_length(dataset_kwargs, "scale_length")
-        dataset_kwargs = self._parse_scale_length(
-            dataset_kwargs, "validation_scale_length"
-        )
-        if (
-            "training_path" in dataset_kwargs
-            and dataset_kwargs["training_path"] is not None
-        ):
-            dataset_kwargs["training_path"] = Path(dataset_kwargs["training_path"])
-        if (
-            "validation_path" in dataset_kwargs
-            and dataset_kwargs["validation_path"] is not None
-        ):
-            dataset_kwargs["validation_path"] = Path(dataset_kwargs["validation_path"])
-        if "test_path" in dataset_kwargs and dataset_kwargs["test_path"] is not None:
-            dataset_kwargs["test_path"] = Path(dataset_kwargs["test_path"])
-        if (
-            "geometry_path" in dataset_kwargs
-            and dataset_kwargs["geometry_path"] is not None
-        ):
-            dataset_kwargs["geometry_path"] = Path(dataset_kwargs["geometry_path"])
-        if (
-            "coefficient_functions_path" in dataset_kwargs
-            and dataset_kwargs["coefficient_functions_path"] is not None
-        ):
-            dataset_kwargs["coefficient_functions_path"] = Path(
-                dataset_kwargs["coefficient_functions_path"]
-            )
-        dataset_cfg = DatasetConfig(**dataset_kwargs)
+        dataset_cfg = DatasetConfig.from_raw(raw["dataset"])
 
         # model_kwargs = dict(raw["model"])
         # model_dtype = model_kwargs.pop("dtype", "float64")
@@ -245,6 +213,17 @@ class TrainCLI:
         factory = ComplexCouplingOptimizerFactory(coupling_training_cfg)
         coupling_training["optimizer"] = factory.resolved_config()
         payload["optimizer_provenance"] = factory.provenance().as_dict()
+        dataset = payload.setdefault("dataset", {})
+        if not isinstance(dataset, dict):
+            raise TypeError("dataset must be an object.")
+        dataset["coupling_source"] = asdict(dataset_cfg.coupling_source)
+        dataset["reference_diagnostics"] = asdict(dataset_cfg.reference_diagnostics)
+        payload["complex_source_provenance"] = {
+            "fixed_across_epochs": True,
+            "backend": dataset_cfg.coupling_source.mode,
+            "sample_identity": "base_seed_split_id_sample_index",
+            "test_reference_backend": "npz",
+        }
         destination.write_text(json.dumps(payload, indent=2) + "\n")
 
     @classmethod
@@ -525,32 +504,32 @@ class TrainCLI:
     ) -> None:
         if dataset_cfg.geometry_path is None:
             raise ValueError("dataset.geometry_path is required for complex mode.")
-        if dataset_cfg.training_path is None:
-            raise ValueError("dataset.training_path is required for complex mode.")
+        validate_complex_coupling_source_config(
+            dataset_cfg,
+            coupling_training_cfg,
+        )
         geometry = load_complex_geometry(
             dataset_cfg.geometry_path,
             dtype=dataset_cfg.dtype,
         )
-        train_dataset = ComplexCouplingDataset(
-            dataset_cfg.training_path,
-            geometry,
-            coeffs,
-            branch_input_dim=coupling_model_cfg.branch_input_dim,
-            dtype=dataset_cfg.dtype,
-            coefficient_terms=coupling_model_cfg.coefficient_terms,
-            integration_rule=coupling_training_cfg.integration_rule,
+        train_dataset = self._build_complex_source_dataset(
+            split="train",
+            dataset_cfg=dataset_cfg,
+            coupling_model_cfg=coupling_model_cfg,
+            coupling_training_cfg=coupling_training_cfg,
+            geometry=geometry,
+            coeffs=coeffs,
         )
-        validation_dataset = None
-        if dataset_cfg.validation_path is not None:
-            validation_dataset = ComplexCouplingDataset(
-                dataset_cfg.validation_path,
-                geometry,
-                coeffs,
-                branch_input_dim=coupling_model_cfg.branch_input_dim,
-                dtype=dataset_cfg.dtype,
-                coefficient_terms=coupling_model_cfg.coefficient_terms,
-                integration_rule=coupling_training_cfg.integration_rule,
-            )
+        if train_dataset is None:
+            raise RuntimeError("Complex training source unexpectedly resolved to none.")
+        validation_dataset = self._build_complex_source_dataset(
+            split="valid",
+            dataset_cfg=dataset_cfg,
+            coupling_model_cfg=coupling_model_cfg,
+            coupling_training_cfg=coupling_training_cfg,
+            geometry=geometry,
+            coeffs=coeffs,
+        )
         test_dataset = None
         if dataset_cfg.test_path is not None:
             test_dataset = ComplexCouplingDataset(
@@ -561,6 +540,7 @@ class TrainCLI:
                 dtype=dataset_cfg.dtype,
                 coefficient_terms=coupling_model_cfg.coefficient_terms,
                 integration_rule=coupling_training_cfg.integration_rule,
+                reference_diagnostics=True,
             )
 
         coupling_model = ComplexCouplingNet(coupling_model_cfg)
@@ -589,6 +569,73 @@ class TrainCLI:
                 batch_size=coupling_training_cfg.batch_size,
             )
 
+    @staticmethod
+    def _build_complex_source_dataset(
+        *,
+        split: Literal["train", "valid"],
+        dataset_cfg: DatasetConfig,
+        coupling_model_cfg: CouplingModelConfig,
+        coupling_training_cfg: CouplingTrainingConfig,
+        geometry: ComplexGeometryMetadata,
+        coeffs: CoefficientFunctions,
+    ) -> ComplexCouplingDataset | None:
+        source = dataset_cfg.coupling_source
+        diagnostics = dataset_cfg.reference_diagnostics
+        if source.mode == "npz":
+            data_dir = (
+                dataset_cfg.training_path
+                if split == "train"
+                else dataset_cfg.validation_path
+            )
+            if data_dir is None:
+                if split == "train":
+                    raise ValueError(
+                        "dataset.training_path is required for NPZ training."
+                    )
+                return None
+            return ComplexCouplingDataset(
+                data_dir,
+                geometry,
+                coeffs,
+                branch_input_dim=coupling_model_cfg.branch_input_dim,
+                dtype=dataset_cfg.dtype,
+                coefficient_terms=coupling_model_cfg.coefficient_terms,
+                integration_rule=coupling_training_cfg.integration_rule,
+                reference_diagnostics=(
+                    diagnostics.training if split == "train" else diagnostics.validation
+                ),
+            )
+
+        if dataset_cfg.geometry_path is None:
+            raise ValueError("dataset.geometry_path is required for indexed GP.")
+        indexed = cast(IndexedGpSourceConfig, source.indexed_gp)
+        count = indexed.num_train if split == "train" else indexed.num_valid
+        if count == 0:
+            return None
+        raw_geometry = GeometryGridLoader().load(dataset_cfg.geometry_path)
+        provider = IndexedGpComplexSourceProvider(
+            raw_geometry,
+            split=split,
+            sample_count=count,
+            parameters=IndexedGpParameters(
+                seed=indexed.seed,
+                lengthscale=indexed.lengthscale,
+                amplitude=indexed.amplitude,
+                mean=indexed.mean,
+            ),
+        )
+        return ComplexCouplingDataset(
+            None,
+            geometry,
+            coeffs,
+            branch_input_dim=coupling_model_cfg.branch_input_dim,
+            dtype=dataset_cfg.dtype,
+            coefficient_terms=coupling_model_cfg.coefficient_terms,
+            integration_rule=coupling_training_cfg.integration_rule,
+            reference_diagnostics=False,
+            source_provider=provider,
+        )
+
     def run(self) -> None:
         args = self.parser.parse_args()
         config_path = Path(args.config)
@@ -602,6 +649,11 @@ class TrainCLI:
             terminal_cfg,
         ) = self._build_configs(config_path)
 
+        if pipeline_cfg.run_coupling:
+            validate_complex_coupling_source_config(
+                dataset_cfg,
+                coupling_training_cfg,
+            )
         work_dir = Path(args.work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
         self._write_config_used(

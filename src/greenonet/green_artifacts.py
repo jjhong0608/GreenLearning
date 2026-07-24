@@ -98,21 +98,6 @@ def _parse_dtype(raw: object | None) -> torch.dtype:
     return cast(torch.dtype, dtype)
 
 
-def _parse_scale_length(raw: object, field_name: str) -> ScaleLength:
-    if isinstance(raw, bool):
-        raise TypeError(f"{field_name} must be a number or two-number list.")
-    if isinstance(raw, int | float):
-        return float(raw)
-    if isinstance(raw, list | tuple) and len(raw) == 2:
-        left, right = raw
-        if isinstance(left, bool) or isinstance(right, bool):
-            raise TypeError(f"{field_name} entries must be numbers.")
-        if not isinstance(left, int | float) or not isinstance(right, int | float):
-            raise TypeError(f"{field_name} entries must be numbers.")
-        return (float(left), float(right))
-    raise TypeError(f"{field_name} must be a number or two-number list.")
-
-
 def _jsonify(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
@@ -141,29 +126,7 @@ def load_green_artifact_configs(
     raw_dataset = raw_payload.get("dataset")
     if not isinstance(raw_dataset, dict):
         raise TypeError("Config must contain dataset object.")
-    dataset_kwargs = dict(raw_dataset)
-    dataset_kwargs.pop("domain", None)
-    dataset_kwargs["dtype"] = _parse_dtype(dataset_kwargs.pop("dtype", "float64"))
-    dataset_kwargs["scale_length"] = _parse_scale_length(
-        dataset_kwargs.get("scale_length", 0.1), "dataset.scale_length"
-    )
-    validation_scale = dataset_kwargs.get("validation_scale_length")
-    if validation_scale is not None:
-        dataset_kwargs["validation_scale_length"] = _parse_scale_length(
-            validation_scale, "dataset.validation_scale_length"
-        )
-    for key in ("training_path", "validation_path", "test_path"):
-        if dataset_kwargs.get(key) is not None:
-            dataset_kwargs[key] = Path(cast(str, dataset_kwargs[key]))
-    if dataset_kwargs.get("geometry_path") is not None:
-        dataset_kwargs["geometry_path"] = Path(
-            cast(str, dataset_kwargs["geometry_path"])
-        )
-    if dataset_kwargs.get("coefficient_functions_path") is not None:
-        dataset_kwargs["coefficient_functions_path"] = Path(
-            cast(str, dataset_kwargs["coefficient_functions_path"])
-        )
-    dataset_cfg = DatasetConfig(**dataset_kwargs)
+    dataset_cfg = DatasetConfig.from_raw(raw_dataset)
 
     raw_model = raw_payload.get("model", {})
     if not isinstance(raw_model, dict):

@@ -188,6 +188,12 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
 
     assert summary["geometry_mode"] == "complex"
     assert summary["selected_samples"] == [0]
+    assert summary["training_source"] == {"mode": "npz", "indexed_gp": None}
+    assert summary["reference_diagnostics"] == {
+        "training": True,
+        "validation": True,
+    }
+    assert summary["artifact_dataset_contract"] == "full_reference_test_npz"
     assert "cross" not in json.dumps(summary)
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_sample_metrics.csv").exists()

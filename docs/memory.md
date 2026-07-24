@@ -103,9 +103,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   기존 unit-square path는 기본값 `unit_square`로 보존한다.
 - Complex geometry v1 입력 계약은 precomputed geometry `.npz`와 full-grid sample
   `.npz` 조합이다. geometry 추출 자체는 이 repo의 v1 구현 범위가 아니다.
-- Complex geometry sample은 full-grid `rhs`, `sol`을 필수로 갖고, flux target은
-  `phi`/`psi`를 우선 사용하며 legacy `uxx`/`uyy`를 fallback으로 해석한다.
-  모든 full-grid array는 `[row=y, col=x]` convention으로 valid point에 gather한다.
+- Complex geometry full-reference sample은 full-grid `rhs`, `sol`을 필수로 갖고,
+  flux target은 `phi`/`psi`를 우선 사용하며 legacy `uxx`/`uyy`를 fallback으로
+  해석한다. Source-only train/validation sample은 `rhs`만 저장할 수 있다. 모든
+  full-grid array는 `[row=y, col=x]` convention으로 valid point에 gather한다.
 - Complex geometry Green interval normalization은 `a_unit=a_phys`,
   `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, `c_unit=L^2*c_phys`,
   `f_unit=L^2*f_phys`를 사용한다. Unit reconstruction에서 Green kernel에
@@ -242,6 +243,24 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `complex_coupling_model_best_physics.safetensors`를 독립 저장한다. Reference
   `sol/phi/psi`는 detached evaluation metric/artifact에만 사용하며 gradient, loss,
   scheduler, early stopping, 두 checkpoint selection에 사용하지 않는다.
+- Complex CouplingNet train/validation source는 모든 epoch에서 fixed이다.
+  `dataset.coupling_source.mode`는 dedicated CLI가 만드는 deterministic
+  source-only `npz`와 dataset 내부 `indexed_gp` provider 중 하나를 선택한다.
+  두 backend는 shared GP factorization, geometry mask, 그리고
+  `SeedSequence([base_seed,split_id,sample_index])` identity를 사용하므로 같은
+  설정의 같은 sample은 bitwise 동일한 full-grid `rhs`를 만든다. Split ID는
+  `train=0`, `valid=1`, `test=2`이다.
+- `dataset.reference_diagnostics.training/validation`은 기본값 `true`로 기존
+  full-reference NPZ 동작을 보존한다. Disabled split은 `rhs`만 읽고
+  `has_solution=false`, `has_flux=false`와 shape-compatible zero placeholder를
+  사용하며 `rel_sol`/`rel_flux` metric key를 생성하지 않는다. Placeholder는
+  objective에 들어가는 reference target이 아니다. Indexed GP mode에서는 두
+  diagnostic을 반드시 끈다.
+- Source-only NPZ는 `cli/make_complex_sources.py`가 `green_net` environment에서
+  FEniCSx 없이 serial로 생성한다. 각 file은 float64 full-grid `rhs` 하나만
+  저장하고 outside-domain은 `0.0`이다. Test evaluation과 artifact export는 source
+  backend와 무관하게 FEniCSx-generated `rhs/sol/phi/psi` full-reference
+  `dataset.test_path`를 계속 사용한다.
 - Unit-square와 complex CouplingNet trainer는 같은 linear-warmup + cosine-decay
   learning-rate schedule을 사용한다. `coupling_training.use_lr_schedule=true`이면
   `warmup_epochs` 동안 `learning_rate`까지 선형 증가한 뒤 마지막 epoch의
@@ -265,7 +284,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   같은 provenance를 포함한다. `optimizer.profile_step_time=true`일
   때만 optimizer-step mean/p95/max, step count, periodic basis-refresh count,
   peak allocated CUDA memory를 측정한다. CUDA synchronization에 따른 timing
-  overhead는 profiling opt-in에서만 발생한다.
+  overhead는 profiling opt-in에서만 발생한다. `optimizer_peak_memory_mib`는
+  CUDA에서만 `torch.cuda.max_memory_allocated`를 읽으며 CPU에서는
+  not-measured sentinel `0.0`을 기록한다. 따라서 CPU RSS 또는 SOAP optimizer
+  state가 실제로 0 MiB라는 의미가 아니다.
 - SOAP은 canonical energy의 null space, boundary admissibility, geometry
   adjacency, projection 또는 reconstruction 오류를 해결하는 수단이 아니다.
   유지 여부는 AdamW와 같은 seed/data/loss/scheduler를 사용한 300--500 epoch
@@ -292,6 +314,70 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   2% 이상이면 계속 실행한다. 그 감소율이 1% 미만이면서 detached `rel_sol`도
   정체 또는 악화될 때만 plateau로 판정한다. 이 기준은 현재 Annulus SOAP
   pilot 진단용이며 canonical optimizer default가 아니다.
+- `coupling10`의 후속 epoch 199 시점에는 validation canonical energy가 198회
+  연속 감소해 `3.481542e-1`에서 `1.260071e-2`로 내려갔지만, detached
+  `rel_flux`는 epoch 141의 `4.325040e-1`, detached `rel_sol`은 epoch 154의
+  `3.012693e-1`을 최저점으로 다시 증가했다. Epoch 199에서는 각각
+  `4.490581e-1`, `3.154724e-1`이다. Training 쪽 최저 epoch도 flux 142,
+  solution 155로 거의 같으므로 일반적인 train/validation overfitting이 아니다.
+  이는 SOAP 비수렴이 아니라 canonical-energy objective와 reconstructed-solution
+  quality의 late-stage misalignment다. Reference metric은 계속 evaluation-only로
+  두며 loss나 checkpoint selection에는 사용하지 않는다. 이 run에서 optimizer
+  설정을 다시 튜닝하는 것만으로 이 objective mismatch가 해결된다고 해석하지
+  않는다.
+- 별도 컴퓨터의 독립 work directory에서 실행한 AdamW 로그를 비교 목적으로
+  `coupling10` 폴더에 복사했다. 따라서 현재 Linux SOAP checkpoint와 AdamW
+  checkpoint가 서로 덮어쓰는 문제는 없다. 복사된 AdamW epoch 97 validation은
+  energy `3.580980e-3`, `rel_sol=1.467270e-1`, `rel_flux=3.957876e-1`이고,
+  이는 SOAP epoch 303까지의 전체 최저값보다 각각 약 70.7%, 51.3%, 8.5%
+  낮다. 현재 workload의 실용 결과는 AdamW를 강하게 지지한다. 다만 AdamW는
+  `lr=2e-3`, `epochs=3000`, SOAP은 `lr=2e-4`, `epochs=500`을 사용하고
+  실행 컴퓨터도 다르므로 optimizer-only causal 비교나 wall-clock 비교로
+  해석하지 않는다. Strict comparison에는 같은 hardware/seed/data/order,
+  learning-rate schedule과 step budget을 맞춘 paired run이 필요하다.
+- 다음 SOAP ablation은 안정화된 현재 recipe에서 `learning_rate`만
+  `2e-4`에서 `2e-3`으로 바꾼다. `epochs=500`, `warmup_epochs=50`,
+  `min_lr=1e-5`, `betas=(0.95,0.99)`, `shampoo_beta=0.95`,
+  `precondition_frequency=5`, batch, seed, data order, clipping, weight decay,
+  model과 hardware는 모두 고정하고 별도 work directory를 사용한다. 이 실험은
+  이전 high-LR 실패의 `warmup=3` confound를 제거한다. Non-finite 값,
+  validation energy가 best finite value의 10배 초과, 또는 3 epoch 연속 2배
+  초과 중 하나가 발생하면 즉시 중단한다.
+- `coupling10_2`는 위 single-variable ablation으로, resolved config상
+  `coupling10`과 다른 값은 `learning_rate=2e-3`뿐이다. Epoch 81 snapshot에서
+  50-epoch warmup 이후에도 finite하며 validation energy `2.494793e-3`,
+  detached `rel_sol=1.259009e-1`, detached `rel_flux=3.395570e-1`로 세 metric
+  모두 해당 run의 관측 최저값을 갱신했다. Low-LR SOAP의 epoch 309까지 관측
+  최저값보다 각각 약 79.4%, 58.2%, 21.5% 낮으므로 `lr=2e-4`는 이 workload에서
+  지나치게 보수적이었다. 이전 `lr=2e-3` 발산은 learning rate 단독 효과가 아니라
+  짧은 warmup과 당시 beta/frequency 설정의 결합으로 해석한다. 다만 low-LR
+  run의 objective-to-solution metric misalignment가 epoch 141--154부터
+  나타났으므로 high-LR run도 epoch 100--160 이후 detached metric의 turning
+  point를 계속 확인하고, 이 early snapshot만으로 SOAP을 기본 optimizer로
+  승격하지 않는다.
+- `coupling10_2`의 epoch 317 snapshot에서는 early improvement 이후 실제
+  objective overfitting이 확인된다. Validation canonical energy는 epoch 194의
+  `5.400105e-4`, detached validation `rel_sol`은 epoch 199의 `5.755842e-2`가
+  최저점이며, epoch 317에는 각각 `8.833431e-4`, `6.438856e-2`로 악화되었다.
+  같은 기간 train energy는 계속 감소해 `2.923218e-4`가 되었고, latest
+  validation/train ratio는 total energy `3.02`, bulk `2.49`, boundary `7.67`이다.
+  반면 train/validation `rel_flux`는 모두 약 `1.691e-1`로 계속 개선되고 거의
+  일치한다. 따라서 이는 optimizer 발산이 아니라 boundary-dominated
+  energy/solution generalization gap이며, reference-free 선택에는 epoch 194에
+  마지막 갱신된 `complex_coupling_model_best_energy.safetensors`를 사용한다.
+- Local SOAP 구현은 Shampoo covariance factor를 매 optimizer step 갱신하고,
+  `precondition_frequency`마다 eigenbasis/QR만 갱신한다. 따라서 frequency를
+  낮추면 basis가 더 자주 갱신된다. 현재 epoch당 optimizer step은 2회이므로
+  frequency `5`, `2`, `1`은 각각 약 2.5 epoch마다, 매 epoch, 매 step refresh다.
+  `coupling10_2` 후속 single-variable ablation은 `5 -> 2`를 우선하고, `1`은
+  frequency 2가 같은-step metric을 개선할 때만 검토한다.
+- 현재 CouplingNet의 모든 2D weight axis는 1024 이하이므로
+  `max_precondition_dim=1024`는 모든 matrix를 양쪽 축에서 precondition한다.
+  Weight parameter는 2D이고 1D parameter 비중은 작으므로
+  `merge_dims=false`, `precondition_1d=false`를 유지한다.
+  `normalize_grads`는 raw gradient가 아니라 projected-back adaptive update를
+  parameter tensor별 unit RMS로 바꾸므로 작은 frequency에서는 false를 유지한다.
+  `correct_bias=true`는 Adam moment의 초기 zero bias를 보정하므로 유지한다.
 - `cli/diagnose_complex_length_response.py`는 complex CouplingNet checkpoint를 다시
   추론해 line-length amplification을 단계별로 분리하는 evaluation-only 도구이다.
   v6에서는 pre-projection physical proposal, projected physical directional-source

@@ -5,17 +5,24 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from greenonet.coefficients import load_coefficient_functions
+from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
+    ComplexCouplingSourceConfig,
     ComplexPreProjectionFusionConfig,
+    ComplexReferenceDiagnosticsConfig,
     CouplingBranchFusionConfig,
     CouplingModelConfig,
     CouplingTrainingConfig,
     DatasetConfig,
+    IndexedGpSourceConfig,
     PipelineConfig,
+    validate_complex_coupling_source_config,
 )
 from greenonet.model import GreenONetModel
 from cli.eval_coupling import EvalCouplingCLI
 from cli.train import TrainCLI
+from test.complex_fixtures import write_coefficients, write_geometry_npz
 
 
 class TestTrainCLIConfigCopy:
@@ -101,6 +108,12 @@ class TestTrainCLIConfigCopy:
         assert used["optimizer_provenance"]["upstream_commit"] == (
             "a1e553530fde97d0e6b307d7c82ac6d38b072340"
         )
+        assert used["dataset"]["coupling_source"]["mode"] == "npz"
+        assert used["dataset"]["reference_diagnostics"] == {
+            "training": True,
+            "validation": True,
+        }
+        assert used["complex_source_provenance"]["fixed_across_epochs"] is True
 
     def test_uses_custom_coefficient_functions_for_green_training(
         self, tmp_path, monkeypatch
@@ -213,6 +226,203 @@ class TestTrainCLIDatasetConfig:
         assert dataset_cfg.step_size == 0.25
         assert dataset_cfg.coefficient_functions_path is None
         assert not hasattr(dataset_cfg, "domain")
+
+    def test_existing_dataset_config_defaults_to_reference_npz(self):
+        config = DatasetConfig.from_raw({"geometry_mode": "complex"})
+
+        assert config.coupling_source == ComplexCouplingSourceConfig(mode="npz")
+        assert config.reference_diagnostics == ComplexReferenceDiagnosticsConfig(
+            training=True,
+            validation=True,
+        )
+
+    def test_parses_indexed_gp_source_config(self):
+        config = DatasetConfig.from_raw(
+            {
+                "geometry_mode": "complex",
+                "geometry_path": "geometry.npz",
+                "test_path": "test",
+                "coupling_source": {
+                    "mode": "indexed_gp",
+                    "indexed_gp": {
+                        "num_train": 12,
+                        "num_valid": 3,
+                        "seed": 4,
+                        "lengthscale": 0.3,
+                        "amplitude": 1.5,
+                        "mean": -0.2,
+                    },
+                },
+                "reference_diagnostics": {
+                    "training": False,
+                    "validation": False,
+                },
+            }
+        )
+
+        assert config.coupling_source.indexed_gp == IndexedGpSourceConfig(
+            num_train=12,
+            num_valid=3,
+            seed=4,
+            lengthscale=0.3,
+            amplitude=1.5,
+            mean=-0.2,
+        )
+        assert config.geometry_path is not None
+        assert config.test_path is not None
+
+    @pytest.mark.parametrize(
+        ("raw", "message"),
+        [
+            (
+                {"coupling_source": {"mode": "unsupported"}},
+                "coupling_source.mode",
+            ),
+            (
+                {
+                    "coupling_source": {
+                        "mode": "indexed_gp",
+                        "indexed_gp": {
+                            "num_train": 1,
+                            "num_valid": 0,
+                            "seed": -1,
+                        },
+                    }
+                },
+                "indexed_gp.seed",
+            ),
+            (
+                {"reference_diagnostics": {"training": 1}},
+                "reference_diagnostics.training",
+            ),
+            (
+                {"coupling_source": {"mode": "npz", "unknown": True}},
+                "unknown keys",
+            ),
+        ],
+    )
+    def test_rejects_invalid_source_config(self, raw, message):
+        with pytest.raises((TypeError, ValueError), match=message):
+            DatasetConfig.from_raw({"geometry_mode": "complex", **raw})
+
+    def test_rejects_indexed_gp_paths_and_reference_diagnostics(self, tmp_path):
+        source = ComplexCouplingSourceConfig(
+            mode="indexed_gp",
+            indexed_gp=IndexedGpSourceConfig(num_train=2, num_valid=1),
+        )
+        diagnostics = ComplexReferenceDiagnosticsConfig(
+            training=False,
+            validation=False,
+        )
+        training = CouplingTrainingConfig()
+
+        with pytest.raises(ValueError, match="training_path"):
+            validate_complex_coupling_source_config(
+                DatasetConfig(
+                    geometry_mode="complex",
+                    training_path=tmp_path / "train",
+                    coupling_source=source,
+                    reference_diagnostics=diagnostics,
+                ),
+                training,
+            )
+
+    def test_rejects_indexed_gp_with_reference_diagnostics(self):
+        source = ComplexCouplingSourceConfig(
+            mode="indexed_gp",
+            indexed_gp=IndexedGpSourceConfig(num_train=2, num_valid=1),
+        )
+
+        with pytest.raises(ValueError, match="reference_diagnostics"):
+            validate_complex_coupling_source_config(
+                DatasetConfig(
+                    geometry_mode="complex",
+                    coupling_source=source,
+                ),
+                CouplingTrainingConfig(),
+            )
+
+    def test_rejects_complex_source_options_for_unit_square(self):
+        with pytest.raises(ValueError, match="complex geometry"):
+            validate_complex_coupling_source_config(
+                DatasetConfig(
+                    geometry_mode="unit_square",
+                    reference_diagnostics=ComplexReferenceDiagnosticsConfig(
+                        training=False,
+                        validation=False,
+                    ),
+                ),
+                CouplingTrainingConfig(),
+            )
+
+    def test_requires_validation_source_for_best_checkpoint(self, tmp_path):
+        with pytest.raises(ValueError, match="validation source"):
+            validate_complex_coupling_source_config(
+                DatasetConfig(
+                    geometry_mode="complex",
+                    training_path=tmp_path / "train",
+                ),
+                CouplingTrainingConfig(
+                    best_energy_checkpoint={"enabled": True},
+                ),
+            )
+
+    def test_builds_indexed_gp_train_and_validation_datasets(self, tmp_path):
+        geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+        geometry = load_complex_geometry(geometry_path)
+        coeffs = load_coefficient_functions(
+            write_coefficients(tmp_path / "coefficients.py")
+        )
+        dataset_config = DatasetConfig(
+            geometry_mode="complex",
+            geometry_path=geometry_path,
+            coupling_source=ComplexCouplingSourceConfig(
+                mode="indexed_gp",
+                indexed_gp=IndexedGpSourceConfig(
+                    num_train=3,
+                    num_valid=1,
+                    seed=8,
+                ),
+            ),
+            reference_diagnostics=ComplexReferenceDiagnosticsConfig(
+                training=False,
+                validation=False,
+            ),
+        )
+        model_config = CouplingModelConfig(branch_input_dim=4)
+        training_config = CouplingTrainingConfig(integration_rule="trapezoid")
+
+        train = TrainCLI._build_complex_source_dataset(
+            split="train",
+            dataset_cfg=dataset_config,
+            coupling_model_cfg=model_config,
+            coupling_training_cfg=training_config,
+            geometry=geometry,
+            coeffs=coeffs,
+        )
+        validation = TrainCLI._build_complex_source_dataset(
+            split="valid",
+            dataset_cfg=dataset_config,
+            coupling_model_cfg=model_config,
+            coupling_training_cfg=training_config,
+            geometry=geometry,
+            coeffs=coeffs,
+        )
+
+        assert train is not None
+        assert validation is not None
+        assert len(train) == 3
+        assert len(validation) == 1
+        fixed_rhs = train[2].rhs_valid.clone()
+        _ = train[0]
+        torch.testing.assert_close(
+            train[2].rhs_valid,
+            fixed_rhs,
+            rtol=0.0,
+            atol=0.0,
+        )
+        assert not bool(train[0].has_solution)
+        assert not bool(validation[0].has_solution)
 
     def test_parses_optional_complex_pre_projection_fusion(self, tmp_path):
         config_path = tmp_path / "config.json"

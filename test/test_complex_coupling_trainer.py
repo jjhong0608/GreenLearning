@@ -12,12 +12,18 @@ from greenonet.complex_coupling_data import (
     ComplexCouplingDataset,
     complex_coupling_collate_fn,
 )
+from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_coupling_trainer import (
     ComplexCouplingTrainer,
     complex_metric_keys_are_safe,
 )
 from greenonet.complex_geometry import load_complex_geometry
+from greenonet.complex_sources import (
+    GeometryGridLoader,
+    IndexedGpComplexSourceProvider,
+    IndexedGpParameters,
+)
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
@@ -136,6 +142,181 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     assert "learning_rate=1.000000e-03" in training_log
     assert "pre-projection fusion enabled=True" in training_log
     assert "pre_projection_fusion_gate=" in training_log
+
+
+def test_complex_trainer_omits_reference_metrics_for_rhs_only_data(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir, include_solution=False, include_flux=False)
+    dataset = ComplexCouplingDataset(
+        data_dir,
+        geometry,
+        coeffs,
+        branch_input_dim=4,
+        reference_diagnostics=False,
+    )
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    work_dir = tmp_path / "source_only"
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=1,
+            batch_size=1,
+            log_interval=1,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+            best_energy_checkpoint=CouplingBestEnergyCheckpointConfig(enabled=True),
+        ),
+        work_dir=work_dir,
+        green_model=ConstantGreen(1.0),
+    )
+
+    trainer.train(dataset, dataset)
+
+    assert (work_dir / "complex_coupling_model_best_energy.safetensors").is_file()
+    assert all(
+        "rel_sol" not in row and "rel_flux" not in row for row in trainer.metric_rows
+    )
+    csv_header = (work_dir / "complex_training_metrics.csv").read_text().splitlines()[0]
+    assert "rel_sol" not in csv_header
+    assert "rel_flux" not in csv_header
+    log = (work_dir / "training.log").read_text()
+    assert "rel_sol=" not in log
+    assert "rel_flux=" not in log
+
+
+def test_complex_evaluator_omits_reference_metrics_for_rhs_only_data(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir, include_solution=False, include_flux=False)
+    dataset = ComplexCouplingDataset(
+        data_dir,
+        geometry,
+        coeffs,
+        branch_input_dim=4,
+        reference_diagnostics=False,
+    )
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    work_dir = tmp_path / "evaluation"
+    evaluator = ComplexCouplingEvaluator(
+        model=model,
+        green_model=ConstantGreen(1.0),
+        config=CouplingTrainingConfig(
+            batch_size=1,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+        ),
+        device=torch.device("cpu"),
+        work_dir=work_dir,
+    )
+
+    summary = evaluator.evaluate(
+        dataset,
+        dataset_name="source_only",
+        batch_size=1,
+    )
+
+    assert "rel_sol" not in summary
+    assert "rel_flux" not in summary
+    summary_payload = json.loads(
+        (work_dir / "metrics" / "source_only_metrics.json").read_text()
+    )
+    assert "rel_sol" not in summary_payload
+    assert "rel_flux" not in summary_payload
+    csv_header = (
+        (work_dir / "metrics" / "source_only_per_sample_metrics.csv")
+        .read_text()
+        .splitlines()[0]
+    )
+    assert "rel_sol" not in csv_header
+    assert "rel_flux" not in csv_header
+
+
+def test_complex_trainer_accepts_fixed_indexed_gp_provider(tmp_path):
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    geometry = load_complex_geometry(geometry_path)
+    raw_geometry = GeometryGridLoader().load(geometry_path)
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    provider = IndexedGpComplexSourceProvider(
+        raw_geometry,
+        split="train",
+        sample_count=2,
+        parameters=IndexedGpParameters(seed=3),
+    )
+    dataset = ComplexCouplingDataset(
+        None,
+        geometry,
+        coeffs,
+        branch_input_dim=4,
+        reference_diagnostics=False,
+        source_provider=provider,
+    )
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=1,
+            batch_size=1,
+            log_interval=1,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+        ),
+        work_dir=tmp_path / "indexed_gp",
+        green_model=ConstantGreen(1.0),
+    )
+    before = dataset[1].rhs_valid.clone()
+
+    trainer.train(dataset)
+
+    torch.testing.assert_close(dataset[1].rhs_valid, before, rtol=0.0, atol=0.0)
+    assert all("rel_sol" not in row for row in trainer.metric_rows)
 
 
 def test_complex_trainer_applies_and_records_warmup_cosine_schedule(tmp_path):

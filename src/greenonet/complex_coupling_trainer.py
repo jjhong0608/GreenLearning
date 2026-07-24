@@ -335,10 +335,12 @@ class ComplexCouplingTrainer(LoggingMixin):
         metrics = {
             key: value.detach() for key, value in objective.metric_tensors().items()
         }
-        metrics["rel_sol"] = relative_l2_valid(
-            reconstruction.u_mean_valid,
-            batch.sol_valid,
-        ).detach()
+        if torch.any(batch.has_solution):
+            selected_solution = batch.has_solution
+            metrics["rel_sol"] = relative_l2_valid(
+                reconstruction.u_mean_valid[selected_solution],
+                batch.sol_valid[selected_solution],
+            ).detach()
         if torch.any(batch.has_flux):
             selected = batch.has_flux
             metrics["rel_flux"] = relative_l2_valid(

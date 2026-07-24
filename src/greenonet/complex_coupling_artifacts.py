@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, ClassVar
 
 import numpy as np
@@ -633,6 +633,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "coefficients": None if coeff_path is None else str(coeff_path),
             "geometry_path": str(configs.dataset.geometry_path),
             "test_path": str(configs.dataset.test_path),
+            "training_source": asdict(configs.dataset.coupling_source),
+            "reference_diagnostics": asdict(configs.dataset.reference_diagnostics),
+            "artifact_dataset_contract": "full_reference_test_npz",
             "selected_samples": list(selected),
             "selected_sample_roles": roles,
             "selected_sample_policy": policy,

@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from greenonet.coefficients import load_coefficient_functions
+from greenonet.complex_sources.seeding import derive_indexed_seed
 from greenonet.fenicsx_samples.config import FenicsxSampleConfig
 from greenonet.fenicsx_samples.domain import FenicsxDomainBuilder
 from greenonet.fenicsx_samples.fenicsx_runtime import FenicsxImportMixin
@@ -15,9 +16,6 @@ from greenonet.fenicsx_samples.geometry import GeometryGridLoader
 from greenonet.fenicsx_samples.gp import GaussianProcessSourceSampler
 from greenonet.fenicsx_samples.solver import FenicsxPdeSolver
 from greenonet.fenicsx_samples.writer import SampleWriter
-
-
-SPLIT_IDS: dict[str, int] = {"train": 0, "valid": 1, "test": 2}
 
 
 @dataclass(frozen=True)
@@ -46,13 +44,6 @@ class WorkerBatchResult:
     vertex_coverage_max_distance: float | None
     generated_count: int
     skipped_count: int
-
-
-def derive_indexed_seed(base_seed: int, split: str, index: int) -> int:
-    if split not in SPLIT_IDS:
-        raise ValueError(f"Unknown split: {split}")
-    sequence = np.random.SeedSequence([base_seed, SPLIT_IDS[split], index])
-    return int(sequence.generate_state(1, dtype=np.uint32)[0])
 
 
 def build_sample_tasks(config: FenicsxSampleConfig) -> list[SampleTask]:

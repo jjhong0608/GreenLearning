@@ -78,29 +78,7 @@ class EvalCouplingCLI:
         self.parser = parser
 
     def _build_dataset_config(self, raw_dataset: dict) -> DatasetConfig:
-        dataset_kwargs = dict(raw_dataset)
-        dataset_kwargs.pop("domain", None)
-        dtype_name = dataset_kwargs.pop("dtype", "float64")
-        dataset_kwargs["dtype"] = getattr(torch, dtype_name)
-        scale_len = dataset_kwargs.get("scale_length")
-        if isinstance(scale_len, list) and len(scale_len) == 2:
-            dataset_kwargs["scale_length"] = (float(scale_len[0]), float(scale_len[1]))
-        for key in ("training_path", "validation_path", "test_path"):
-            if key in dataset_kwargs and dataset_kwargs[key] is not None:
-                dataset_kwargs[key] = Path(dataset_kwargs[key])
-        if (
-            "geometry_path" in dataset_kwargs
-            and dataset_kwargs["geometry_path"] is not None
-        ):
-            dataset_kwargs["geometry_path"] = Path(dataset_kwargs["geometry_path"])
-        if (
-            "coefficient_functions_path" in dataset_kwargs
-            and dataset_kwargs["coefficient_functions_path"] is not None
-        ):
-            dataset_kwargs["coefficient_functions_path"] = Path(
-                dataset_kwargs["coefficient_functions_path"]
-            )
-        return DatasetConfig(**dataset_kwargs)
+        return DatasetConfig.from_raw(raw_dataset)
 
     @staticmethod
     def _build_terminal_config(raw_terminal: object | None) -> TerminalConfig:
@@ -488,7 +466,6 @@ class EvalCouplingCLI:
         coupling_training_cfg = self._build_coupling_training_config(
             raw.get("coupling_training", {})
         )
-
         if dataset_cfg.test_path is None:
             raise ValueError("test_path must be set in dataset config for evaluation.")
 

@@ -53,6 +53,7 @@ def write_sample_npz(
     data_dir: Path,
     *,
     name: str = "sample_0000.npz",
+    include_solution: bool = True,
     include_flux: bool = True,
     legacy_flux: bool = False,
 ) -> Path:
@@ -60,7 +61,9 @@ def write_sample_npz(
     grid = np.arange(25, dtype=np.float64).reshape(5, 5)
     rhs = 1.0 + grid
     sol = 2.0 + grid
-    payload: dict[str, np.ndarray] = {"rhs": rhs, "sol": sol}
+    payload: dict[str, np.ndarray] = {"rhs": rhs}
+    if include_solution:
+        payload["sol"] = sol
     if include_flux:
         if legacy_flux:
             payload["uxx"] = 3.0 + grid

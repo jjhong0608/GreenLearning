@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from greenonet.coefficients import load_coefficient_functions
@@ -97,6 +98,50 @@ def test_complex_dataset_allows_missing_optional_flux(tmp_path):
     torch.testing.assert_close(
         item.flux_valid, torch.zeros((2, 3), dtype=torch.float64)
     )
+
+
+def test_complex_dataset_loads_rhs_only_when_diagnostics_are_disabled(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir, include_solution=False, include_flux=False)
+
+    dataset = ComplexCouplingDataset(
+        data_dir,
+        geometry,
+        coeffs,
+        branch_input_dim=4,
+        reference_diagnostics=False,
+    )
+    item = dataset[0]
+    batch = complex_coupling_collate_fn([item]).to("cpu")
+
+    assert not bool(item.has_solution)
+    assert not bool(item.has_flux)
+    torch.testing.assert_close(
+        item.sol_valid,
+        torch.zeros(geometry.num_points, dtype=torch.float64),
+    )
+    assert not bool(batch.has_solution[0])
+    assert not bool(batch.has_flux[0])
+
+
+def test_complex_dataset_requires_solution_when_diagnostics_are_enabled(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir, include_solution=False, include_flux=False)
+
+    dataset = ComplexCouplingDataset(
+        data_dir,
+        geometry,
+        coeffs,
+        branch_input_dim=4,
+        reference_diagnostics=True,
+    )
+
+    with pytest.raises(KeyError, match="sol"):
+        dataset[0]
 
 
 def test_complex_dataset_normalizes_physical_source_without_length_scaling(tmp_path):

@@ -10,9 +10,157 @@ import torch
 from greenonet.numerics import IntegrationRule
 
 
+@dataclass(frozen=True)
+class IndexedGpSourceConfig:
+    """Fixed index-seeded GP source settings for complex CouplingNet."""
+
+    num_train: int
+    num_valid: int
+    seed: int = 0
+    lengthscale: float = 0.2
+    amplitude: float = 1.0
+    mean: float = 0.0
+
+    def __post_init__(self) -> None:
+        for field_name, value, minimum in (
+            ("num_train", self.num_train, 1),
+            ("num_valid", self.num_valid, 0),
+            ("seed", self.seed, 0),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"indexed_gp.{field_name} must be an integer.")
+            if value < minimum:
+                raise ValueError(f"indexed_gp.{field_name} must be >= {minimum}.")
+        for field_name, numeric_value in (
+            ("lengthscale", self.lengthscale),
+            ("amplitude", self.amplitude),
+            ("mean", self.mean),
+        ):
+            if not isinstance(numeric_value, (int, float)) or isinstance(
+                numeric_value, bool
+            ):
+                raise TypeError(f"indexed_gp.{field_name} must be numeric.")
+            if not math.isfinite(float(numeric_value)):
+                raise ValueError(f"indexed_gp.{field_name} must be finite.")
+        if self.lengthscale <= 0.0:
+            raise ValueError("indexed_gp.lengthscale must be positive.")
+        if self.amplitude < 0.0:
+            raise ValueError("indexed_gp.amplitude must be non-negative.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: IndexedGpSourceConfig | dict[str, Any] | None,
+    ) -> IndexedGpSourceConfig | None:
+        if raw is None:
+            return None
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("dataset.coupling_source.indexed_gp must be an object.")
+        data = dict(raw)
+        allowed = {
+            "num_train",
+            "num_valid",
+            "seed",
+            "lengthscale",
+            "amplitude",
+            "mean",
+        }
+        unknown = sorted(set(data) - allowed)
+        if unknown:
+            raise TypeError(
+                "dataset.coupling_source.indexed_gp has unknown keys: "
+                f"{', '.join(unknown)}."
+            )
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class ComplexCouplingSourceConfig:
+    """Source backend used by complex CouplingNet train/validation splits."""
+
+    mode: Literal["npz", "indexed_gp"] = "npz"
+    indexed_gp: IndexedGpSourceConfig | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, str):
+            raise TypeError("dataset.coupling_source.mode must be a string.")
+        if self.mode not in {"npz", "indexed_gp"}:
+            raise ValueError(
+                "dataset.coupling_source.mode must be 'npz' or 'indexed_gp'."
+            )
+        indexed_gp = IndexedGpSourceConfig.from_raw(self.indexed_gp)
+        object.__setattr__(self, "indexed_gp", indexed_gp)
+        if self.mode == "npz" and indexed_gp is not None:
+            raise ValueError(
+                "dataset.coupling_source.indexed_gp is unused when mode='npz'."
+            )
+        if self.mode == "indexed_gp" and indexed_gp is None:
+            raise ValueError(
+                "dataset.coupling_source.indexed_gp is required when mode='indexed_gp'."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexCouplingSourceConfig | dict[str, Any] | None,
+    ) -> ComplexCouplingSourceConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("dataset.coupling_source must be an object.")
+        data = dict(raw)
+        unknown = sorted(set(data) - {"mode", "indexed_gp"})
+        if unknown:
+            raise TypeError(
+                f"dataset.coupling_source has unknown keys: {', '.join(unknown)}."
+            )
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class ComplexReferenceDiagnosticsConfig:
+    """Reference metric policy for complex train/validation splits."""
+
+    training: bool = True
+    validation: bool = True
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("training", self.training),
+            ("validation", self.validation),
+        ):
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"dataset.reference_diagnostics.{field_name} must be a boolean."
+                )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexReferenceDiagnosticsConfig | dict[str, Any] | None,
+    ) -> ComplexReferenceDiagnosticsConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("dataset.reference_diagnostics must be an object.")
+        data = dict(raw)
+        unknown = sorted(set(data) - {"training", "validation"})
+        if unknown:
+            raise TypeError(
+                f"dataset.reference_diagnostics has unknown keys: {', '.join(unknown)}."
+            )
+        return cls(**data)
+
+
 @dataclass
 class DatasetConfig:
-    """Sampling settings for synthetic Poisson data."""
+    """Sampling and stored-data settings."""
 
     geometry_mode: Literal["unit_square", "complex"] = "unit_square"
     geometry_path: Optional[Path] = None
@@ -30,7 +178,83 @@ class DatasetConfig:
     validation_path: Optional[Path] = None
     test_path: Optional[Path] = None
     coefficient_functions_path: Optional[Path] = None
+    coupling_source: ComplexCouplingSourceConfig = field(
+        default_factory=ComplexCouplingSourceConfig
+    )
+    reference_diagnostics: ComplexReferenceDiagnosticsConfig = field(
+        default_factory=ComplexReferenceDiagnosticsConfig
+    )
     dtype: torch.dtype = torch.float64
+
+    def __post_init__(self) -> None:
+        if self.geometry_mode not in {"unit_square", "complex"}:
+            raise ValueError(
+                "dataset.geometry_mode must be 'unit_square' or 'complex'."
+            )
+        for field_name in (
+            "geometry_path",
+            "training_path",
+            "validation_path",
+            "test_path",
+            "coefficient_functions_path",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, Path):
+                setattr(self, field_name, Path(value))
+        self.scale_length = self._parse_scale(self.scale_length, "scale_length")
+        if self.validation_scale_length is not None:
+            self.validation_scale_length = self._parse_scale(
+                self.validation_scale_length,
+                "validation_scale_length",
+            )
+        if isinstance(self.dtype, str):
+            self.dtype = self._parse_dtype(self.dtype)
+        if self.dtype not in {torch.float32, torch.float64}:
+            raise ValueError("dataset.dtype must be float32 or float64.")
+        self.coupling_source = ComplexCouplingSourceConfig.from_raw(
+            self.coupling_source
+        )
+        self.reference_diagnostics = ComplexReferenceDiagnosticsConfig.from_raw(
+            self.reference_diagnostics
+        )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: DatasetConfig | dict[str, Any] | None,
+    ) -> DatasetConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("dataset must be an object.")
+        data = dict(raw)
+        data.pop("domain", None)
+        return cls(**data)
+
+    @staticmethod
+    def _parse_dtype(value: str) -> torch.dtype:
+        if value == "float32":
+            return torch.float32
+        if value == "float64":
+            return torch.float64
+        raise ValueError("dataset.dtype must be 'float32' or 'float64'.")
+
+    @staticmethod
+    def _parse_scale(
+        value: float | tuple[float, float] | list[float],
+        field_name: str,
+    ) -> float | tuple[float, float]:
+        if isinstance(value, list):
+            if len(value) != 2:
+                raise ValueError(f"dataset.{field_name} list must have two values.")
+            return (float(value[0]), float(value[1]))
+        if isinstance(value, tuple):
+            if len(value) != 2:
+                raise ValueError(f"dataset.{field_name} tuple must have two values.")
+            return (float(value[0]), float(value[1]))
+        return float(value)
 
 
 @dataclass
@@ -932,6 +1156,72 @@ def validate_unit_square_coupling_training_config(
             "Custom coupling_training.optimizer settings are available only for "
             "ComplexCouplingTrainer; omit the optimizer block for unit-square "
             "AdamW training."
+        )
+
+
+def validate_complex_coupling_source_config(
+    dataset: DatasetConfig,
+    training: CouplingTrainingConfig,
+) -> None:
+    """Validate source backend paths, diagnostics, and validation availability."""
+
+    source = ComplexCouplingSourceConfig.from_raw(dataset.coupling_source)
+    diagnostics = ComplexReferenceDiagnosticsConfig.from_raw(
+        dataset.reference_diagnostics
+    )
+    if dataset.geometry_mode != "complex":
+        if source != ComplexCouplingSourceConfig():
+            raise ValueError(
+                "dataset.coupling_source options are available only for complex "
+                "geometry CouplingNet training."
+            )
+        if diagnostics != ComplexReferenceDiagnosticsConfig():
+            raise ValueError(
+                "dataset.reference_diagnostics options are available only for "
+                "complex geometry CouplingNet training."
+            )
+        return
+
+    best_energy = CouplingBestEnergyCheckpointConfig.from_raw(
+        training.best_energy_checkpoint
+    ).enabled
+    best_physics = CouplingBestPhysicsCheckpointConfig.from_raw(
+        training.best_physics_checkpoint
+    ).enabled
+
+    if source.mode == "npz":
+        if dataset.training_path is None:
+            raise ValueError(
+                "dataset.training_path is required when "
+                "dataset.coupling_source.mode='npz'."
+            )
+        if (best_energy or best_physics) and dataset.validation_path is None:
+            raise ValueError(
+                "A validation source is required when best_energy_checkpoint or "
+                "best_physics_checkpoint is enabled."
+            )
+        return
+
+    if dataset.training_path is not None:
+        raise ValueError(
+            "dataset.training_path is unused when "
+            "dataset.coupling_source.mode='indexed_gp'."
+        )
+    if dataset.validation_path is not None:
+        raise ValueError(
+            "dataset.validation_path is unused when "
+            "dataset.coupling_source.mode='indexed_gp'."
+        )
+    if diagnostics.training or diagnostics.validation:
+        raise ValueError(
+            "dataset.reference_diagnostics.training and validation must both be "
+            "false when dataset.coupling_source.mode='indexed_gp'."
+        )
+    indexed = cast(IndexedGpSourceConfig, source.indexed_gp)
+    if (best_energy or best_physics) and indexed.num_valid == 0:
+        raise ValueError(
+            "indexed_gp.num_valid must be positive when best_energy_checkpoint "
+            "or best_physics_checkpoint is enabled."
         )
 
 

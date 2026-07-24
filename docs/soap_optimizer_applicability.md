@@ -523,6 +523,35 @@ SOAP을 구현한다면 기존 AdamW를 제거하지 않고 optimizer factory를
    유지한다.
 9. Model-only safetensors를 유지하며 optimizer-state resume는 지원하지 않는다.
 
+### SOAP Option Semantics
+
+- `precondition_frequency`는 covariance factor의 EMA 갱신 주기가 아니다.
+  Factor는 모든 optimizer step에서 갱신되고, 이 option은 현재 factor로부터
+  eigenbasis를 QR로 다시 계산하는 주기만 optimizer-step 단위로 정한다.
+  값이 작을수록 basis가 최신이지만 QR 비용과 basis rotation 빈도가 증가한다.
+- `max_precondition_dim`은 parameter 수나 rank가 아니라 각 tensor axis의 길이
+  상한이다. 길이가 상한보다 큰 axis에는 square Shampoo factor를 만들지 않는다.
+  다른 axis가 상한 이하이면 그 axis만 precondition하는 one-sided path가 된다.
+- `merge_dims=true`는 rank가 3 이상인 tensor의 인접 axis를 product가
+  `max_precondition_dim` 이하가 되도록 reshape한 뒤 factor를 구성한다. 현재
+  CouplingNet weight는 모두 2D이므로 `false`와 실질적인 차이가 없다.
+- `precondition_1d=true`는 길이가 상한 이하인 bias/activation vector에도
+  full square covariance와 basis를 만든다. 현재 1D parameter 비중은 작으므로
+  비용 대비 이득이 불분명해 `false`를 유지한다.
+- `normalize_grads=true`는 projected-back Adam update를 parameter tensor별로
+  `sqrt(mean(update**2))`로 나누어 RMS를 1로 만든다. Raw gradient normalization
+  또는 global gradient clipping이 아니다. Upstream은 큰 frequency에서 도움이
+  될 수 있지만 작은 frequency에서는 성능을 해칠 수 있다고 명시하므로 현재
+  frequency 5 이하에서는 `false`를 유지한다.
+- `correct_bias=true`는 Adam moments에
+  `sqrt(1-beta2**t)/(1-beta1**t)` bias correction을 적용한다. 초기 step과
+  warmup의 의미를 표준 Adam과 맞추기 위해 `true`를 유지한다.
+
+현재 `coupling10_2`의 epoch당 optimizer step은 2회다. 따라서 frequency 5는
+약 2.5 epoch마다, frequency 2는 매 epoch, frequency 1은 매 step eigenbasis를
+갱신한다. 다음 controlled ablation은 다른 설정을 고정한 frequency `5 -> 2`로
+두고, frequency 1은 그 결과가 개선될 때만 시험한다.
+
 구현 파일은 `src/greenonet/optimizers/soap.py`,
 `src/greenonet/coupling_optimizer.py`, 그리고
 `src/greenonet/complex_coupling_trainer.py`이다. Upstream attribution과 MIT

@@ -10,6 +10,10 @@ from torch.utils.data import Dataset
 
 from greenonet.coefficients import CoefficientFunctions
 from greenonet.complex_geometry import ComplexGeometryMetadata
+from greenonet.complex_sources import (
+    ComplexSourceProvider,
+    NpzComplexSourceProvider,
+)
 from greenonet.config import CouplingCoefficientTermsConfig
 from greenonet.complex_weak_closure import (
     ComplexDirectionalWeakContext,
@@ -29,6 +33,7 @@ class ComplexCouplingItem:
     weak_context: ComplexDirectionalWeakContext
     rhs_valid: torch.Tensor
     sol_valid: torch.Tensor
+    has_solution: torch.Tensor
     flux_valid: torch.Tensor
     has_flux: torch.Tensor
     a_valid: torch.Tensor
@@ -50,6 +55,7 @@ class ComplexCouplingBatch:
     weak_context: ComplexDirectionalWeakContext
     rhs_valid: torch.Tensor
     sol_valid: torch.Tensor
+    has_solution: torch.Tensor
     flux_valid: torch.Tensor
     has_flux: torch.Tensor
     a_valid: torch.Tensor
@@ -70,6 +76,7 @@ class ComplexCouplingBatch:
             weak_context=self.weak_context.to(device),
             rhs_valid=self.rhs_valid.to(device),
             sol_valid=self.sol_valid.to(device),
+            has_solution=self.has_solution.to(device),
             flux_valid=self.flux_valid.to(device),
             has_flux=self.has_flux.to(device),
             a_valid=self.a_valid.to(device),
@@ -91,7 +98,7 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
 
     def __init__(
         self,
-        data_dir: Path | str,
+        data_dir: Path | str | None,
         geometry: ComplexGeometryMetadata,
         coeffs: CoefficientFunctions,
         *,
@@ -100,12 +107,23 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
         coefficient_terms: CouplingCoefficientTermsConfig | None = None,
         integration_rule: IntegrationRule = "trapezoid",
         source_amplitude_eps: float = 1.0e-12,
+        reference_diagnostics: bool = True,
+        source_provider: ComplexSourceProvider | None = None,
     ) -> None:
         super().__init__()
-        self.data_dir = Path(data_dir)
-        self.files = sorted(self.data_dir.glob("*.npz"))
-        if not self.files:
-            raise FileNotFoundError(f"No npz files found in {self.data_dir}")
+        if source_provider is not None and data_dir is not None:
+            raise ValueError("Specify either data_dir or source_provider, not both.")
+        if source_provider is None:
+            if data_dir is None:
+                raise ValueError("data_dir is required when source_provider is absent.")
+            source_provider = NpzComplexSourceProvider(
+                data_dir,
+                reference_diagnostics=reference_diagnostics,
+            )
+        self.source_provider = source_provider
+        self.data_dir = source_provider.data_dir
+        self.files = list(source_provider.files)
+        self.reference_diagnostics = reference_diagnostics
         self.geometry = geometry
         self.coeffs = coeffs
         self.dtype = dtype
@@ -155,17 +173,41 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
         self.a_valid = coeffs.a_fun(coords[:, 0], coords[:, 1]).to(dtype=dtype)
 
     def __len__(self) -> int:
-        return len(self.files)
+        return len(self.source_provider)
 
     def __getitem__(self, index: int) -> ComplexCouplingItem:
-        path = self.files[index]
-        with np.load(path) as raw:
-            missing = sorted({"rhs", "sol"} - set(raw.files))
-            if missing:
-                raise KeyError(f"{path} is missing required keys: {', '.join(missing)}")
-            rhs_valid = self._gather_full_grid(raw["rhs"], "rhs", path)
-            sol_valid = self._gather_full_grid(raw["sol"], "sol", path)
-            flux_valid, has_flux = self._gather_optional_flux(raw, path)
+        sample = self.source_provider[index]
+        rhs_valid = self._gather_full_grid(
+            sample.rhs,
+            "rhs",
+            sample.sample_name,
+        )
+        has_solution = sample.sol is not None
+        sol_valid = (
+            self._gather_full_grid(sample.sol, "sol", sample.sample_name)
+            if sample.sol is not None
+            else torch.zeros(self.geometry.num_points, dtype=self.dtype)
+        )
+        has_flux = sample.flux is not None
+        flux_valid = (
+            torch.stack(
+                (
+                    self._gather_full_grid(
+                        sample.flux[0],
+                        "phi",
+                        sample.sample_name,
+                    ),
+                    self._gather_full_grid(
+                        sample.flux[1],
+                        "psi",
+                        sample.sample_name,
+                    ),
+                ),
+                dim=0,
+            )
+            if sample.flux is not None
+            else torch.zeros((2, self.geometry.num_points), dtype=self.dtype)
+        )
 
         x_source_branch, x_source_amplitude = self._build_source_branch(
             rhs_valid,
@@ -180,6 +222,7 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             weak_context=self.weak_context,
             rhs_valid=rhs_valid,
             sol_valid=sol_valid,
+            has_solution=torch.tensor(has_solution, dtype=torch.bool),
             flux_valid=flux_valid,
             has_flux=torch.tensor(has_flux, dtype=torch.bool),
             a_valid=self.a_valid,
@@ -191,8 +234,8 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             y_coefficient_branch=self.y_coefficient_branch,
             x_green_branch=self.x_green_branch,
             y_green_branch=self.y_green_branch,
-            sample_index=torch.tensor(index, dtype=torch.long),
-            file_stem=path.stem,
+            sample_index=torch.tensor(sample.sample_index, dtype=torch.long),
+            file_stem=sample.sample_name,
         )
 
     def _build_coefficient_branch(
@@ -306,30 +349,16 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
         weight = (self.branch_grid - t_left) / denom
         return values[left] * (1.0 - weight) + values[right] * weight
 
-    def _gather_optional_flux(
-        self,
-        raw: np.lib.npyio.NpzFile,
-        path: Path,
-    ) -> tuple[torch.Tensor, bool]:
-        if {"phi", "psi"}.issubset(raw.files):
-            phi = self._gather_full_grid(raw["phi"], "phi", path)
-            psi = self._gather_full_grid(raw["psi"], "psi", path)
-            return torch.stack((phi, psi), dim=0), True
-        if {"uxx", "uyy"}.issubset(raw.files):
-            phi = self._gather_full_grid(raw["uxx"], "uxx", path)
-            psi = self._gather_full_grid(raw["uyy"], "uyy", path)
-            return torch.stack((phi, psi), dim=0), True
-        empty = torch.zeros((2, self.geometry.num_points), dtype=self.dtype)
-        return empty, False
-
     def _gather_full_grid(
         self,
         array: np.ndarray,
         field_name: str,
-        path: Path,
+        sample_name: str,
     ) -> torch.Tensor:
         if array.ndim != 2:
-            raise ValueError(f"{path}:{field_name} must be a 2D full-grid array.")
+            raise ValueError(
+                f"{sample_name}:{field_name} must be a 2D full-grid array."
+            )
         y_index = self.geometry.valid_grid_y_index.detach().cpu().numpy()
         x_index = self.geometry.valid_grid_x_index.detach().cpu().numpy()
         if (
@@ -337,8 +366,8 @@ class ComplexCouplingDataset(Dataset[ComplexCouplingItem]):
             or int(x_index.max(initial=0)) >= array.shape[1]
         ):
             raise ValueError(
-                f"{path}:{field_name} shape {array.shape} does not cover geometry "
-                "valid_grid_y_index/x_index."
+                f"{sample_name}:{field_name} shape {array.shape} does not cover "
+                "geometry valid_grid_y_index/x_index."
             )
         gathered = array[y_index, x_index]
         return torch.as_tensor(gathered, dtype=self.dtype)
@@ -355,6 +384,7 @@ def complex_coupling_collate_fn(
         weak_context=items[0].weak_context,
         rhs_valid=torch.stack([item.rhs_valid for item in items], dim=0),
         sol_valid=torch.stack([item.sol_valid for item in items], dim=0),
+        has_solution=torch.stack([item.has_solution for item in items], dim=0),
         flux_valid=torch.stack([item.flux_valid for item in items], dim=0),
         has_flux=torch.stack([item.has_flux for item in items], dim=0),
         a_valid=torch.stack([item.a_valid for item in items], dim=0),
