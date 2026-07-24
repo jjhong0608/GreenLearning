@@ -8,9 +8,8 @@ from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.complex_losses import (
     ComplexBoundaryEnergyContext,
     ComplexEnergyLossResult,
-    ComplexLengthJumpPartition,
     ComplexRelativeSplitLossResult,
-    length_jump_balanced_edge_energy_loss,
+    canonical_complex_energy_loss,
     relative_split_consistency_loss,
 )
 from greenonet.complex_weak_closure import (
@@ -19,7 +18,6 @@ from greenonet.complex_weak_closure import (
     directional_weak_operator_closure_loss,
 )
 from greenonet.config import (
-    ComplexLengthJumpBalanceConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
 )
@@ -41,16 +39,11 @@ class ComplexCouplingObjectiveResult:
     def metric_tensors(self) -> dict[str, torch.Tensor]:
         metrics = {
             "loss": self.loss,
-            "loss_energy_consistency": self.energy.unweighted,
-            "loss_energy_length_balanced": self.energy.balanced,
-            "loss_energy_bulk": self.energy.bulk_unweighted,
-            "loss_energy_bulk_length_balanced": self.energy.bulk_balanced,
+            "loss_energy_consistency": self.energy.total,
+            "loss_energy_bulk": self.energy.bulk,
             "loss_energy_boundary": self.energy.boundary,
             "loss_energy_boundary_x": self.energy.boundary_x,
             "loss_energy_boundary_y": self.energy.boundary_y,
-            "loss_energy_regular": self.energy.regular_mean,
-            "loss_energy_transition": self.energy.transition_mean,
-            "transition_edge_fraction": self.energy.transition_edge_fraction,
         }
         if self.relative_split is not None:
             metrics.update(
@@ -85,20 +78,11 @@ class ComplexCouplingObjectiveResult:
     def sample_metric_tensors(self, sample_offset: int) -> dict[str, torch.Tensor]:
         metrics = {
             "loss": self.loss_per_sample[sample_offset],
-            "loss_energy_consistency": self.energy.unweighted_per_sample[sample_offset],
-            "loss_energy_length_balanced": self.energy.balanced_per_sample[
-                sample_offset
-            ],
-            "loss_energy_bulk": self.energy.bulk_unweighted_per_sample[sample_offset],
-            "loss_energy_bulk_length_balanced": (
-                self.energy.bulk_balanced_per_sample[sample_offset]
-            ),
+            "loss_energy_consistency": self.energy.total_per_sample[sample_offset],
+            "loss_energy_bulk": self.energy.bulk_per_sample[sample_offset],
             "loss_energy_boundary": self.energy.boundary_per_sample[sample_offset],
             "loss_energy_boundary_x": self.energy.boundary_x_per_sample[sample_offset],
             "loss_energy_boundary_y": self.energy.boundary_y_per_sample[sample_offset],
-            "loss_energy_regular": self.energy.regular_per_sample[sample_offset],
-            "loss_energy_transition": self.energy.transition_per_sample[sample_offset],
-            "transition_edge_fraction": self.energy.transition_edge_fraction,
         }
         if self.relative_split is not None:
             metrics.update(
@@ -146,21 +130,17 @@ def compute_complex_coupling_objective(
     a_valid: torch.Tensor,
     geometry: ComplexGeometryMetadata,
     weak_context: ComplexDirectionalWeakContext,
-    length_jump_config: ComplexLengthJumpBalanceConfig,
     relative_split_config: ComplexRelativeSplitConsistencyConfig,
     weak_closure_config: ComplexWeakOperatorClosureConfig,
     boundary_context: ComplexBoundaryEnergyContext,
-    partition: ComplexLengthJumpPartition | None = None,
 ) -> ComplexCouplingObjectiveResult:
     """Compute the configured complex objective without reference targets."""
 
-    energy = length_jump_balanced_edge_energy_loss(
+    energy = canonical_complex_energy_loss(
         u_phi_valid=u_phi_valid,
         u_psi_valid=u_psi_valid,
         a_valid=a_valid,
         geometry=geometry,
-        config=length_jump_config,
-        partition=partition,
         boundary_context=boundary_context,
     )
     relative_split = None
@@ -175,7 +155,7 @@ def compute_complex_coupling_objective(
         )
         split_loss_per_sample = relative_split.loss_per_sample
     else:
-        split_loss_per_sample = energy.balanced_per_sample
+        split_loss_per_sample = energy.total_per_sample
 
     weak_closure = None
     if weak_closure_config.enabled:

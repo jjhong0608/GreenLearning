@@ -1047,27 +1047,14 @@ the component-constant null mode of the bulk graph. It should still be understoo
 as a finite-dimensional analogue of the continuous energy principle, not as a
 direct proof that the continuous \(H_0^1(\Omega)\) assumptions automatically hold.
 
-Output contract v6 reports two canonical discrete objectives. The unweighted
-objective is unweighted bulk plus boundary. The optimized objective separates
-regular and line-length transition bulk edges using
-
-\[
-J_{ij}
-=
-\max\left(
-|\Delta\log L_x^2|,
-|\Delta\log L_y^2|
-\right)
-\]
-
-and normalizes the two bulk groups independently before mixing them with a fixed
-positive fraction. The same boundary term is then added to either bulk objective.
-For a fixed finite geometry with positive group weights, this is a positive
-edge-weighted equivalent discrete norm: it changes the relative sampling emphasis
-of the bulk graph, not the PDE operator, the balance constraint, or the target
-solution. Reporting unweighted bulk, boundary, and canonical totals separately is
-therefore required for interpretation and comparison. If either bulk group is
-empty, the implementation uses the unweighted bulk objective.
+Output contract v6 uses one canonical discrete objective. It sums the physical
+diffusion energy over every same-segment valid x/y edge and adds the general
+connected-segment endpoint boundary energy. No subset is identified as a
+line-length transition group and no geometry-dependent group normalization is
+applied. The implementation reports the canonical total, bulk, and boundary x/y
+components separately. This keeps the numerical objective aligned with the
+full-domain energy expression rather than assigning additional importance to a
+selected set of edges.
 
 ## 9. Why \(L^2\)-Consistency Is Insufficient
 

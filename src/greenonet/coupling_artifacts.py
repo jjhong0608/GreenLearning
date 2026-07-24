@@ -32,6 +32,7 @@ from greenonet.config import (
     ModelConfig,
     SourceStencilLiftConfig,
     TrainingConfig,
+    reject_retired_coupling_training_options,
     validate_unit_square_coupling_training_config,
 )
 from greenonet.coupling_data import CouplingDataset, split_coupling_batch
@@ -260,6 +261,7 @@ def load_coupling_artifact_configs(config_path: Path) -> CouplingArtifactConfigs
     if not isinstance(raw_coupling_training, dict):
         raise TypeError("coupling_training config section must be an object.")
     coupling_training_kwargs = dict(raw_coupling_training)
+    reject_retired_coupling_training_options(coupling_training_kwargs)
     losses_cfg = _build_coupling_losses_config(
         coupling_training_kwargs.pop("losses", None)
     )

@@ -346,18 +346,17 @@ grid heatmap 중심으로 구성할 수 있다.
 ### Complex path
 
 Complex path는 valid-point geometry만 신뢰한다. 따라서 metrics, logs, artifacts는 complex-safe field만
-남긴다. Training loss의 중심은 same-segment valid edge를 사용하는 length-jump-balanced physical energy
-consistency이다. 이 loss는 `x_edges`, `y_edges`, `hx`, `hy`, valid point coefficient `a_valid`를 사용한다.
-Face coefficient는 edge 양끝의 arithmetic average로 계산한다. Edge를
-`max(|Delta log L_x^2|,|Delta log L_y^2|)`로 regular과 transition group으로 나누고 두 group을 독립
-normalize한다. 기존 unweighted energy도 audit metric으로 남긴다.
+남긴다. Training loss의 중심은 same-segment valid edge 전체와 connected-segment endpoint boundary edge를
+사용하는 full-domain canonical physical energy consistency이다. 이 loss는 `x_edges`, `y_edges`, `hx`, `hy`,
+valid point coefficient `a_valid`를 사용한다. Face coefficient는 edge 양끝의 arithmetic average로 계산한다.
+Edge를 regular/transition group으로 나누거나 별도 가중하지 않는다.
 
 Evaluation metric은 다음처럼 valid point order를 기준으로 한다.
 
 - `loss`: training objective aggregate.
-- `loss_energy_consistency`: unweighted physical edge energy consistency.
-- `loss_energy_length_balanced`: optimized balanced edge energy.
-- `loss_energy_regular`, `loss_energy_transition`, `transition_edge_fraction`: group diagnostics.
+- `loss_energy_consistency`: canonical full-domain bulk-plus-boundary energy.
+- `loss_energy_bulk`: all same-segment physical edge contributions.
+- `loss_energy_boundary`, `loss_energy_boundary_x`, `loss_energy_boundary_y`: hard-zero endpoint edge contributions.
 - `rel_sol`: `u_pred=0.5*(u_phi+u_psi)`와 `sol`의 valid-point relative error.
 - `rel_flux`: optional target `phi`, `psi`가 sample에 있을 때만 계산되는 projected physical flux-divergence error.
 

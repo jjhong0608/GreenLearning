@@ -1,6 +1,6 @@
 # CouplingNet Design for Complex Geometry
 
-## Physical Projection, Axial Trace Gluing, and Balanced Physical Energy
+## Physical Projection and Full-Domain Canonical Energy
 
 ---
 
@@ -19,7 +19,7 @@ The purpose of this document is to fix the following design decisions:
 5. how the geometry/transverse branch is constructed;
 6. how physical symmetric balance projection and reference pull-back are applied;
 7. how segment-wise Green reconstruction is performed;
-8. how length-jump-balanced physical energy consistency is computed;
+8. how full-domain canonical physical energy consistency is computed;
 9. how energy edges are selected;
 10. how validation and visualization should be interpreted;
 11. how cross consistency is treated.
@@ -1100,8 +1100,8 @@ variational closure, implemented with differentiable element gather/scatter
 rather than a sparse matrix.
 
 The total objective is the selected split objective plus the configured weak
-closure weight. `best_energy_checkpoint` continues to track validation raw
-balanced energy; `best_physics_checkpoint` independently tracks the total
+closure weight. `best_energy_checkpoint` tracks validation
+`loss_energy_consistency`; `best_physics_checkpoint` independently tracks the total
 validation reference-free objective.
 
 ### 10.9 General connected-segment boundary energy
@@ -1260,7 +1260,7 @@ Validation metrics should follow the current `CouplingTrainer` metric philosophy
 The main validation quantities should include:
 
 - total loss;
-- unweighted and length-balanced energy consistency;
+- canonical bulk-plus-boundary energy consistency;
 - relative split energy and mass components, when enabled;
 - x/y directional weak closure components, when enabled;
 - relative solution metric, if available;
@@ -1495,7 +1495,7 @@ L^2,
 
 \\[
 \boxed{
-\text{Base split loss is length-jump-balanced physical face-energy consistency.}
+\text{Base split loss is full-domain canonical physical energy consistency.}
 }
 \\]
 
@@ -1579,9 +1579,10 @@ physical source space, symmetric projection enforces physical balance while
 preserving the raw physical difference, and post-projection multiplication pulls
 the fields back to the unit-interval responses consumed directly by Green
 reconstruction. The shared pointwise transverse trunk exposes both axial segment
-lengths, the balanced bulk objective prevents transition edges from being diluted,
-and the all-segment endpoint energy removes the constant null mode left by the
-bulk graph. The retired self-trace and carrier objectives are not part of the
-production loss. Reference solution and split targets remain evaluation-only.
+lengths, while the canonical bulk objective sums every same-segment physical
+edge without a transition partition. The all-segment endpoint energy removes the
+constant null mode left by the bulk graph. The retired length-jump weighting,
+self-trace, and carrier objectives are not part of the production loss.
+Reference solution and split targets remain evaluation-only.
 
 Cross consistency is not part of the design and must not appear in loss computation, metrics, logs, or summaries.

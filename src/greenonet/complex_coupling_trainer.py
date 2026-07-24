@@ -26,9 +26,7 @@ from greenonet.complex_coupling_objective import (
 )
 from greenonet.complex_losses import (
     ComplexBoundaryEnergyContext,
-    ComplexLengthJumpPartition,
     build_boundary_energy_context,
-    build_length_jump_partition,
     relative_l2_valid,
 )
 from greenonet.complex_projection import (
@@ -42,7 +40,6 @@ from greenonet.complex_reconstruction import (
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.config import (
     BalanceProjectionConfig,
-    ComplexLengthJumpBalanceConfig,
     ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -69,15 +66,10 @@ class ComplexCouplingTrainer(LoggingMixin):
     _METRIC_KEYS: tuple[str, ...] = (
         "loss",
         "loss_energy_consistency",
-        "loss_energy_length_balanced",
         "loss_energy_bulk",
-        "loss_energy_bulk_length_balanced",
         "loss_energy_boundary",
         "loss_energy_boundary_x",
         "loss_energy_boundary_y",
-        "loss_energy_regular",
-        "loss_energy_transition",
-        "transition_edge_fraction",
         "loss_split_relative",
         "loss_split_energy_relative",
         "loss_split_mass_relative",
@@ -107,9 +99,6 @@ class ComplexCouplingTrainer(LoggingMixin):
             model.config.pre_projection_fusion
         )
         self.config = config
-        self.length_jump_config = ComplexLengthJumpBalanceConfig.from_raw(
-            config.length_jump_balance
-        )
         self.relative_split_config = ComplexRelativeSplitConsistencyConfig.from_raw(
             config.relative_split_consistency
         )
@@ -122,11 +111,6 @@ class ComplexCouplingTrainer(LoggingMixin):
         self.best_physics_checkpoint = CouplingBestPhysicsCheckpointConfig.from_raw(
             config.best_physics_checkpoint
         )
-        if not self.length_jump_config.enabled:
-            raise ValueError(
-                "ComplexCouplingTrainer output-contract version 6 requires "
-                "coupling_training.length_jump_balance.enabled=true."
-            )
         if config.best_rel_sol_checkpoint.enabled:
             raise ValueError(
                 "Complex mode does not allow best_rel_sol_checkpoint because "
@@ -156,7 +140,6 @@ class ComplexCouplingTrainer(LoggingMixin):
             parameter.requires_grad_(False)
         self.loss_history: list[float] = []
         self.metric_rows: list[dict[str, float | int | str]] = []
-        self._length_jump_partition: ComplexLengthJumpPartition | None = None
         self._boundary_context: ComplexBoundaryEnergyContext | None = None
 
     def train(
@@ -213,9 +196,7 @@ class ComplexCouplingTrainer(LoggingMixin):
                 if epoch % self.config.log_interval == 0:
                     self._log_epoch(epoch, "val", val_metrics)
                 if self.best_energy_checkpoint.enabled:
-                    validation_energy = float(
-                        val_metrics["loss_energy_length_balanced"]
-                    )
+                    validation_energy = float(val_metrics["loss_energy_consistency"])
                     if best_val_energy is None or validation_energy < best_val_energy:
                         best_val_energy = validation_energy
                         self._save_checkpoint(
@@ -322,11 +303,9 @@ class ComplexCouplingTrainer(LoggingMixin):
             a_valid=batch.a_valid,
             geometry=batch.geometry,
             weak_context=batch.weak_context,
-            length_jump_config=self.length_jump_config,
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
             boundary_context=self._boundary_energy_context(batch),
-            partition=self._energy_partition(batch),
         )
         loss = objective.loss
         metrics = {
@@ -349,17 +328,6 @@ class ComplexCouplingTrainer(LoggingMixin):
             reconstruction=reconstruction,
             objective=objective,
         )
-
-    def _energy_partition(
-        self,
-        batch: ComplexCouplingBatch,
-    ) -> ComplexLengthJumpPartition:
-        if self._length_jump_partition is None:
-            self._length_jump_partition = build_length_jump_partition(
-                batch.geometry,
-                self.length_jump_config,
-            )
-        return self._length_jump_partition
 
     def _boundary_energy_context(
         self,

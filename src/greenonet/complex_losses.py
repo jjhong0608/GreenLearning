@@ -7,38 +7,7 @@ from typing import cast
 import torch
 
 from greenonet.complex_geometry import ComplexGeometryMetadata
-from greenonet.config import (
-    ComplexLengthJumpBalanceConfig,
-    ComplexRelativeSplitConsistencyConfig,
-)
-
-
-@dataclass(frozen=True)
-class ComplexLengthJumpPartition:
-    """Batch-shared transition classification for valid geometry edges."""
-
-    x_score: torch.Tensor
-    y_score: torch.Tensor
-    x_transition_mask: torch.Tensor
-    y_transition_mask: torch.Tensor
-
-    @property
-    def total_edges(self) -> int:
-        return int(self.x_score.numel() + self.y_score.numel())
-
-    @property
-    def transition_edges(self) -> int:
-        return int(
-            self.x_transition_mask.sum().item() + self.y_transition_mask.sum().item()
-        )
-
-    def to(self, device: torch.device | str) -> ComplexLengthJumpPartition:
-        return type(self)(
-            x_score=self.x_score.to(device),
-            y_score=self.y_score.to(device),
-            x_transition_mask=self.x_transition_mask.to(device),
-            y_transition_mask=self.y_transition_mask.to(device),
-        )
+from greenonet.config import ComplexRelativeSplitConsistencyConfig
 
 
 @dataclass(frozen=True)
@@ -86,27 +55,18 @@ class ComplexBoundaryEnergyLossResult:
 
 @dataclass(frozen=True)
 class ComplexEnergyLossResult:
-    """Canonical bulk-plus-boundary energy and its balanced optimization form."""
+    """Full-domain canonical bulk-plus-boundary energy."""
 
-    unweighted: torch.Tensor
-    balanced: torch.Tensor
-    bulk_unweighted: torch.Tensor
-    bulk_balanced: torch.Tensor
+    total: torch.Tensor
+    bulk: torch.Tensor
     boundary: torch.Tensor
     boundary_x: torch.Tensor
     boundary_y: torch.Tensor
-    regular_mean: torch.Tensor
-    transition_mean: torch.Tensor
-    transition_edge_fraction: torch.Tensor
-    unweighted_per_sample: torch.Tensor
-    balanced_per_sample: torch.Tensor
-    bulk_unweighted_per_sample: torch.Tensor
-    bulk_balanced_per_sample: torch.Tensor
+    total_per_sample: torch.Tensor
+    bulk_per_sample: torch.Tensor
     boundary_per_sample: torch.Tensor
     boundary_x_per_sample: torch.Tensor
     boundary_y_per_sample: torch.Tensor
-    regular_per_sample: torch.Tensor
-    transition_per_sample: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -122,27 +82,6 @@ class ComplexRelativeSplitLossResult:
     mass_unscaled_per_sample: torch.Tensor
     rhs_l2_squared_per_sample: torch.Tensor
     domain_length_scale: torch.Tensor
-
-
-def build_length_jump_partition(
-    geometry: ComplexGeometryMetadata,
-    config: ComplexLengthJumpBalanceConfig,
-) -> ComplexLengthJumpPartition:
-    """Classify edges by jumps in the two directional response scales."""
-
-    sigma_x = geometry.x_lengths_for_valid_points().square().clamp_min(config.eps)
-    sigma_y = geometry.y_lengths_for_valid_points().square().clamp_min(config.eps)
-    log_sigma_x = torch.log(sigma_x)
-    log_sigma_y = torch.log(sigma_y)
-    x_score = _edge_jump_score(log_sigma_x, log_sigma_y, geometry.x_edges)
-    y_score = _edge_jump_score(log_sigma_x, log_sigma_y, geometry.y_edges)
-    threshold = float(config.log_sigma_jump_threshold)
-    return ComplexLengthJumpPartition(
-        x_score=x_score,
-        y_score=y_score,
-        x_transition_mask=x_score > threshold,
-        y_transition_mask=y_score > threshold,
-    )
 
 
 def build_boundary_energy_context(
@@ -286,17 +225,15 @@ def physical_edge_energy_loss(
     return _sum_edge_energy(x_values, y_values, residual)
 
 
-def length_jump_balanced_edge_energy_loss(
+def canonical_complex_energy_loss(
     *,
     u_phi_valid: torch.Tensor,
     u_psi_valid: torch.Tensor,
     a_valid: torch.Tensor,
     geometry: ComplexGeometryMetadata,
-    config: ComplexLengthJumpBalanceConfig,
-    partition: ComplexLengthJumpPartition | None = None,
     boundary_context: ComplexBoundaryEnergyContext | None = None,
 ) -> ComplexEnergyLossResult:
-    """Return the canonical bulk-plus-boundary energy and balanced objective."""
+    """Integrate the canonical split energy over all physical valid edges."""
 
     residual, a_valid = _validate_energy_inputs(
         u_phi_valid=u_phi_valid,
@@ -317,12 +254,12 @@ def length_jump_balanced_edge_energy_loss(
         spacing=geometry.hy.to(residual.device),
         area=geometry.hx.to(residual.device) * geometry.hy.to(residual.device),
     )
-    bulk_unweighted_per_sample = _sum_edge_energy_per_sample(
+    bulk_per_sample = _sum_edge_energy_per_sample(
         x_values,
         y_values,
         residual,
     )
-    bulk_unweighted = bulk_unweighted_per_sample.mean()
+    bulk = bulk_per_sample.mean()
     if boundary_context is None:
         boundary_context = build_boundary_energy_context(geometry)
     boundary = physical_boundary_energy_loss(
@@ -331,92 +268,18 @@ def length_jump_balanced_edge_energy_loss(
         a_valid=a_valid,
         context=boundary_context,
     )
-    unweighted_per_sample = bulk_unweighted_per_sample + boundary.total_per_sample
-    unweighted = unweighted_per_sample.mean()
-    if partition is None:
-        partition = build_length_jump_partition(geometry, config)
-    partition = partition.to(residual.device)
-    transition_mask = torch.cat(
-        (partition.x_transition_mask, partition.y_transition_mask), dim=0
-    )
-    edge_values = torch.cat((x_values, y_values), dim=-1)
-    total_edges = edge_values.shape[-1]
-    if total_edges != partition.total_edges:
-        raise ValueError("Length-jump partition does not match geometry edge count.")
-    if total_edges == 0:
-        zero = residual.new_zeros(())
-        zero_per_sample = residual.new_zeros((residual.shape[0],))
-        return ComplexEnergyLossResult(
-            unweighted=unweighted,
-            balanced=unweighted,
-            bulk_unweighted=bulk_unweighted,
-            bulk_balanced=bulk_unweighted,
-            boundary=boundary.total,
-            boundary_x=boundary.x,
-            boundary_y=boundary.y,
-            regular_mean=zero,
-            transition_mean=zero,
-            transition_edge_fraction=zero,
-            unweighted_per_sample=unweighted_per_sample,
-            balanced_per_sample=unweighted_per_sample,
-            bulk_unweighted_per_sample=bulk_unweighted_per_sample,
-            bulk_balanced_per_sample=bulk_unweighted_per_sample,
-            boundary_per_sample=boundary.total_per_sample,
-            boundary_x_per_sample=boundary.x_per_sample,
-            boundary_y_per_sample=boundary.y_per_sample,
-            regular_per_sample=zero_per_sample,
-            transition_per_sample=zero_per_sample,
-        )
-
-    regular_mask = ~transition_mask
-    regular_count = int(regular_mask.sum().item())
-    transition_count = int(transition_mask.sum().item())
-    regular_per_sample = (
-        edge_values[:, regular_mask].mean(dim=-1)
-        if regular_count > 0
-        else residual.new_zeros((residual.shape[0],))
-    )
-    transition_per_sample = (
-        edge_values[:, transition_mask].mean(dim=-1)
-        if transition_count > 0
-        else residual.new_zeros((residual.shape[0],))
-    )
-    regular_mean = regular_per_sample.mean()
-    transition_mean = transition_per_sample.mean()
-    transition_fraction = residual.new_tensor(transition_count / total_edges)
-    if not config.enabled or regular_count == 0 or transition_count == 0:
-        bulk_balanced_per_sample = bulk_unweighted_per_sample
-    else:
-        alpha = float(config.transition_fraction)
-        regular_sum = edge_values[:, regular_mask].sum(dim=-1)
-        transition_sum = edge_values[:, transition_mask].sum(dim=-1)
-        bulk_balanced_per_sample = (
-            (1.0 - alpha) * total_edges / regular_count * regular_sum
-            + alpha * total_edges / transition_count * transition_sum
-        )
-    bulk_balanced = bulk_balanced_per_sample.mean()
-    balanced_per_sample = bulk_balanced_per_sample + boundary.total_per_sample
-    balanced = balanced_per_sample.mean()
+    total_per_sample = bulk_per_sample + boundary.total_per_sample
     return ComplexEnergyLossResult(
-        unweighted=unweighted,
-        balanced=balanced,
-        bulk_unweighted=bulk_unweighted,
-        bulk_balanced=bulk_balanced,
+        total=total_per_sample.mean(),
+        bulk=bulk,
         boundary=boundary.total,
         boundary_x=boundary.x,
         boundary_y=boundary.y,
-        regular_mean=regular_mean,
-        transition_mean=transition_mean,
-        transition_edge_fraction=transition_fraction,
-        unweighted_per_sample=unweighted_per_sample,
-        balanced_per_sample=balanced_per_sample,
-        bulk_unweighted_per_sample=bulk_unweighted_per_sample,
-        bulk_balanced_per_sample=bulk_balanced_per_sample,
+        total_per_sample=total_per_sample,
+        bulk_per_sample=bulk_per_sample,
         boundary_per_sample=boundary.total_per_sample,
         boundary_x_per_sample=boundary.x_per_sample,
         boundary_y_per_sample=boundary.y_per_sample,
-        regular_per_sample=regular_per_sample,
-        transition_per_sample=transition_per_sample,
     )
 
 
@@ -437,7 +300,7 @@ def relative_split_consistency_loss(
         raise ValueError("u_phi_valid and u_psi_valid must have shape (B, P).")
     if rhs_valid.shape != u_phi_valid.shape:
         raise ValueError("rhs_valid must match represented solution shape.")
-    if energy.balanced_per_sample.shape != (u_phi_valid.shape[0],):
+    if energy.total_per_sample.shape != (u_phi_valid.shape[0],):
         raise ValueError("energy per-sample values do not match batch size.")
 
     area = geometry.hx.to(u_phi_valid.device) * geometry.hy.to(u_phi_valid.device)
@@ -449,7 +312,7 @@ def relative_split_consistency_loss(
         reference=u_phi_valid,
     )
     denominator = rhs_l2_squared_per_sample + float(config.eps)
-    energy_relative_per_sample = energy.balanced_per_sample / denominator
+    energy_relative_per_sample = energy.total_per_sample / denominator
     mass_relative_per_sample = (
         mass_unscaled_per_sample / domain_length_scale.square()
     ) / denominator
@@ -539,20 +402,6 @@ def _domain_length_scale(
     if not bool(torch.isfinite(scale).item()) or float(scale.item()) <= 0.0:
         raise ValueError("Complex geometry domain length scale must be positive.")
     return scale
-
-
-def _edge_jump_score(
-    log_sigma_x: torch.Tensor,
-    log_sigma_y: torch.Tensor,
-    edges: torch.Tensor,
-) -> torch.Tensor:
-    if edges.numel() == 0:
-        return log_sigma_x.new_empty((0,))
-    left = edges[:, 0]
-    right = edges[:, 1]
-    x_jump = (log_sigma_x[right] - log_sigma_x[left]).abs()
-    y_jump = (log_sigma_y[right] - log_sigma_y[left]).abs()
-    return torch.maximum(x_jump, y_jump)
 
 
 def _append_axis_boundary_context(

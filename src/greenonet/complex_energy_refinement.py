@@ -12,8 +12,7 @@ import numpy as np
 import torch
 
 from greenonet.complex_geometry import load_complex_geometry
-from greenonet.complex_losses import length_jump_balanced_edge_energy_loss
-from greenonet.config import ComplexLengthJumpBalanceConfig
+from greenonet.complex_losses import canonical_complex_energy_loss
 
 
 @dataclass(frozen=True)
@@ -280,12 +279,11 @@ class ComplexEnergyRefinementAnalyzer(ComplexEnergyRefinementReportMixin):
             & (absolute_primary <= 0.75 * primary_extent)
         )
         residual = patch.to(coords.dtype).unsqueeze(0)
-        energy = length_jump_balanced_edge_energy_loss(
+        energy = canonical_complex_energy_loss(
             u_phi_valid=residual,
             u_psi_valid=torch.zeros_like(residual),
             a_valid=torch.ones_like(residual),
             geometry=geometry,
-            config=ComplexLengthJumpBalanceConfig(enabled=False),
         )
         step_size = float(torch.maximum(geometry.hx, geometry.hy).item())
         return RefinementMetric(
@@ -293,11 +291,11 @@ class ComplexEnergyRefinementAnalyzer(ComplexEnergyRefinementReportMixin):
             step_size=step_size,
             num_points=geometry.num_points,
             jump_coordinate=jump_coordinate,
-            bulk_energy=float(energy.bulk_unweighted.item()),
+            bulk_energy=float(energy.bulk.item()),
             boundary_energy=float(energy.boundary.item()),
-            canonical_energy=float(energy.unweighted.item()),
-            h_times_bulk_energy=step_size * float(energy.bulk_unweighted.item()),
-            h_times_canonical_energy=step_size * float(energy.unweighted.item()),
+            canonical_energy=float(energy.total.item()),
+            h_times_bulk_energy=step_size * float(energy.bulk.item()),
+            h_times_canonical_energy=step_size * float(energy.total.item()),
         )
 
     @staticmethod

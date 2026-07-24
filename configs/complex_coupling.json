@@ -67,12 +67,6 @@
     "compile": {
       "enabled": true
     },
-    "length_jump_balance": {
-      "enabled": true,
-      "log_sigma_jump_threshold": 0.6931471805599453,
-      "transition_fraction": 0.5,
-      "eps": 1e-12
-    },
     "best_energy_checkpoint": {
       "enabled": true
     }

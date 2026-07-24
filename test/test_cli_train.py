@@ -917,47 +917,29 @@ class TestTrainCLIDatasetConfig:
             )
 
 
-class TestComplexLengthJumpTrainingConfig:
-    def test_parses_length_jump_and_best_energy_checkpoint(self):
+class TestCanonicalEnergyTrainingConfig:
+    def test_parses_best_energy_checkpoint_without_transition_config(self):
         cfg = TrainCLI._build_coupling_training_config(
             {
-                "length_jump_balance": {
-                    "enabled": True,
-                    "log_sigma_jump_threshold": 0.7,
-                    "transition_fraction": 0.4,
-                    "eps": 1e-10,
-                },
                 "best_energy_checkpoint": {"enabled": True},
                 "best_rel_sol_checkpoint": {"enabled": False},
             }
         )
 
-        assert cfg.length_jump_balance.enabled is True
-        assert cfg.length_jump_balance.log_sigma_jump_threshold == 0.7
-        assert cfg.length_jump_balance.transition_fraction == 0.4
-        assert cfg.length_jump_balance.eps == 1e-10
+        assert not hasattr(cfg, "length_jump_balance")
         assert cfg.best_energy_checkpoint.enabled is True
         assert cfg.best_rel_sol_checkpoint.enabled is False
 
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        (
-            ("log_sigma_jump_threshold", -1.0),
-            ("transition_fraction", 0.0),
-            ("transition_fraction", 1.0),
-            ("eps", 0.0),
-        ),
-    )
-    def test_rejects_invalid_length_jump_values(self, field, value):
-        with pytest.raises(ValueError, match=f"length_jump_balance.{field}"):
+    def test_train_cli_rejects_retired_length_jump_config(self):
+        with pytest.raises(TypeError, match="full-domain canonical"):
             TrainCLI._build_coupling_training_config(
-                {"length_jump_balance": {"enabled": True, field: value}}
+                {"length_jump_balance": {"enabled": True}}
             )
 
-    def test_rejects_unknown_length_jump_key(self):
-        with pytest.raises(TypeError, match="length_jump_balance has unknown keys"):
+    def test_eval_cli_rejects_retired_length_jump_config(self):
+        with pytest.raises(TypeError, match="full-domain canonical"):
             EvalCouplingCLI._build_coupling_training_config(
-                {"length_jump_balance": {"enabled": True, "unknown": 1}}
+                {"length_jump_balance": {"enabled": True}}
             )
 
     def test_eval_cli_parses_trunk_positional_encoding_config(self):

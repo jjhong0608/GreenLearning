@@ -28,7 +28,6 @@ from greenonet.coupling_artifacts import (
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
-    ComplexLengthJumpBalanceConfig,
     ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -606,9 +605,6 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         pre_projection_fusion = ComplexPreProjectionFusionConfig.from_raw(
             configs.coupling_model.pre_projection_fusion
         )
-        length_jump = ComplexLengthJumpBalanceConfig.from_raw(
-            configs.coupling_training.length_jump_balance
-        )
         relative_split = ComplexRelativeSplitConsistencyConfig.from_raw(
             configs.coupling_training.relative_split_consistency
         )
@@ -731,12 +727,16 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 "covers_all_connected_segment_endpoints": True,
                 "uses_reference_targets": False,
             },
-            "length_jump_balance": {
-                "enabled": length_jump.enabled,
-                "log_sigma_jump_threshold": length_jump.log_sigma_jump_threshold,
-                "transition_fraction": length_jump.transition_fraction,
-                "eps": length_jump.eps,
-                "checkpoint_metric": "loss_energy_length_balanced",
+            "canonical_energy": {
+                "enabled": True,
+                "domain": "all_valid_same_segment_edges",
+                "bulk_formula": (
+                    "sum_edges arithmetic_mean(a)*(delta(u_phi-u_psi)/h_axis)^2*hx*hy"
+                ),
+                "boundary_included": True,
+                "transition_partition": False,
+                "checkpoint_metric": "loss_energy_consistency",
+                "uses_reference_targets": False,
             },
             "relative_split_consistency": {
                 "enabled": relative_split.enabled,
@@ -1130,15 +1130,6 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 arrays["boundary_split_residual"] = (u_phi - u_psi)[
                     boundary_indices.numpy()
                 ]
-                partition = evaluator.energy_partition(prediction.batch.geometry)
-                arrays["x_length_jump_score"] = partition.x_score.detach().cpu().numpy()
-                arrays["y_length_jump_score"] = partition.y_score.detach().cpu().numpy()
-                arrays["x_transition_edge_mask"] = (
-                    partition.x_transition_mask.detach().cpu().numpy()
-                )
-                arrays["y_transition_edge_mask"] = (
-                    partition.y_transition_mask.detach().cpu().numpy()
-                )
                 arrays["x_transverse_length_context"] = (
                     evaluator.model.transverse_length_context_features(
                         prediction.batch.geometry,
@@ -1348,15 +1339,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         for key in (
             "loss",
             "loss_energy_consistency",
-            "loss_energy_length_balanced",
             "loss_energy_bulk",
-            "loss_energy_bulk_length_balanced",
             "loss_energy_boundary",
             "loss_energy_boundary_x",
             "loss_energy_boundary_y",
-            "loss_energy_regular",
-            "loss_energy_transition",
-            "transition_edge_fraction",
             "rel_sol",
             "rel_flux",
         ):

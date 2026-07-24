@@ -152,12 +152,6 @@ def write_complex_config(
             "device": "cpu",
             "integration_rule": "trapezoid",
             "compile": {"enabled": False},
-            "length_jump_balance": {
-                "enabled": True,
-                "log_sigma_jump_threshold": 0.6931471805599453,
-                "transition_fraction": 0.5,
-                "eps": 1e-12,
-            },
             "best_energy_checkpoint": {"enabled": True},
             "best_rel_sol_checkpoint": {"enabled": False},
             "losses": {

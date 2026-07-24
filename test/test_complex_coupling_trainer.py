@@ -21,7 +21,6 @@ from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CompileConfig,
-    ComplexLengthJumpBalanceConfig,
     ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -78,7 +77,6 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
         learning_rate=1e-3,
         device="cpu",
         compile=CompileConfig(enabled=False),
-        length_jump_balance=ComplexLengthJumpBalanceConfig(enabled=True),
         relative_split_consistency=ComplexRelativeSplitConsistencyConfig(enabled=True),
         weak_operator_closure=ComplexWeakOperatorClosureConfig(enabled=True),
         losses=CouplingLossesConfig(
@@ -102,13 +100,15 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     assert (tmp_path / "physical_symmetric" / "complex_training_metrics.csv").exists()
     assert complex_metric_keys_are_safe(trainer.metric_rows[0].keys())
     assert "cross" not in (tmp_path / "physical_symmetric" / "training.log").read_text()
-    assert "loss_energy_length_balanced" in trainer.metric_rows[0]
+    assert "loss_energy_consistency" in trainer.metric_rows[0]
     assert "loss_energy_bulk" in trainer.metric_rows[0]
     assert "loss_energy_boundary" in trainer.metric_rows[0]
     assert "loss_energy_boundary_x" in trainer.metric_rows[0]
     assert "loss_energy_boundary_y" in trainer.metric_rows[0]
-    assert "loss_energy_regular" in trainer.metric_rows[0]
-    assert "loss_energy_transition" in trainer.metric_rows[0]
+    assert "loss_energy_length_balanced" not in trainer.metric_rows[0]
+    assert "loss_energy_regular" not in trainer.metric_rows[0]
+    assert "loss_energy_transition" not in trainer.metric_rows[0]
+    assert "transition_edge_fraction" not in trainer.metric_rows[0]
     assert "loss_split_relative" in trainer.metric_rows[0]
     assert "loss_split_mass_relative" in trainer.metric_rows[0]
     assert "loss_weak_operator_closure" in trainer.metric_rows[0]
@@ -171,7 +171,6 @@ def test_complex_trainer_applies_and_records_warmup_cosine_schedule(tmp_path):
             min_lr=1.0e-3,
             device="cpu",
             compile=CompileConfig(enabled=False),
-            length_jump_balance=ComplexLengthJumpBalanceConfig(enabled=True),
         ),
         work_dir=work_dir,
         green_model=ConstantGreen(1.0),
@@ -230,7 +229,6 @@ def test_complex_trainer_selects_best_checkpoint_by_reference_free_energy(tmp_pa
             batch_size=1,
             device="cpu",
             compile=CompileConfig(enabled=False),
-            length_jump_balance=ComplexLengthJumpBalanceConfig(enabled=True),
             best_energy_checkpoint=CouplingBestEnergyCheckpointConfig(enabled=True),
             best_physics_checkpoint=CouplingBestPhysicsCheckpointConfig(enabled=True),
             relative_split_consistency=ComplexRelativeSplitConsistencyConfig(
@@ -284,7 +282,6 @@ def test_complex_training_loss_graph_excludes_reference_targets(tmp_path):
             batch_size=1,
             device="cpu",
             compile=CompileConfig(enabled=False),
-            length_jump_balance=ComplexLengthJumpBalanceConfig(enabled=True),
             relative_split_consistency=ComplexRelativeSplitConsistencyConfig(
                 enabled=True
             ),
@@ -331,7 +328,6 @@ def test_complex_trainer_rejects_reference_based_checkpoint_selection(tmp_path):
             model=model,
             config=CouplingTrainingConfig(
                 epochs=1,
-                length_jump_balance=ComplexLengthJumpBalanceConfig(enabled=True),
                 best_rel_sol_checkpoint=CouplingBestRelSolCheckpointConfig(
                     enabled=True
                 ),

@@ -25,9 +25,7 @@ from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.complex_losses import (
     ComplexBoundaryEnergyContext,
     ComplexEnergyLossResult,
-    ComplexLengthJumpPartition,
     build_boundary_energy_context,
-    build_length_jump_partition,
     relative_l2_valid,
 )
 from greenonet.complex_projection import (
@@ -40,7 +38,6 @@ from greenonet.complex_reconstruction import (
 )
 from greenonet.config import (
     BalanceProjectionConfig,
-    ComplexLengthJumpBalanceConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingTrainingConfig,
@@ -78,20 +75,12 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self.balance_projection = BalanceProjectionConfig.from_raw(
             model.config.balance_projection
         )
-        self.length_jump_config = ComplexLengthJumpBalanceConfig.from_raw(
-            config.length_jump_balance
-        )
         self.relative_split_config = ComplexRelativeSplitConsistencyConfig.from_raw(
             config.relative_split_consistency
         )
         self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
             config.weak_operator_closure
         )
-        if not self.length_jump_config.enabled:
-            raise ValueError(
-                "ComplexCouplingEvaluator output-contract version 6 requires "
-                "coupling_training.length_jump_balance.enabled=true."
-            )
         self.green_model = green_model.to(device)
         self.green_model.eval()
         self.device = device
@@ -102,7 +91,6 @@ class ComplexCouplingEvaluator(LoggingMixin):
             work_dir=self.work_dir,
             terminal_width=terminal_width,
         )
-        self._length_jump_partition: ComplexLengthJumpPartition | None = None
         self._boundary_context: ComplexBoundaryEnergyContext | None = None
 
     def evaluate(
@@ -173,11 +161,9 @@ class ComplexCouplingEvaluator(LoggingMixin):
             a_valid=batch.a_valid,
             geometry=batch.geometry,
             weak_context=batch.weak_context,
-            length_jump_config=self.length_jump_config,
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
             boundary_context=self.boundary_energy_context(batch.geometry),
-            partition=self.energy_partition(batch.geometry),
         )
         metrics = {
             key: value.detach() for key, value in objective.metric_tensors().items()
@@ -232,17 +218,6 @@ class ComplexCouplingEvaluator(LoggingMixin):
                 ).item()
             )
         return row
-
-    def energy_partition(
-        self,
-        geometry: ComplexGeometryMetadata,
-    ) -> ComplexLengthJumpPartition:
-        if self._length_jump_partition is None:
-            self._length_jump_partition = build_length_jump_partition(
-                geometry,
-                self.length_jump_config,
-            )
-        return self._length_jump_partition
 
     def boundary_energy_context(
         self,

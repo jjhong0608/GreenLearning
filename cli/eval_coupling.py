@@ -33,6 +33,7 @@ from greenonet.config import (
     SourceStencilLiftConfig,
     TerminalConfig,
     TrainingConfig,
+    reject_retired_coupling_training_options,
     validate_unit_square_coupling_training_config,
 )
 from greenonet.compile_utils import maybe_compile_model
@@ -230,6 +231,7 @@ class EvalCouplingCLI:
             raise TypeError("coupling_training.hybrid_detach has been removed.")
         if "stage2" in coupling_training_kwargs:
             raise TypeError("coupling_training.stage2 has been removed.")
+        reject_retired_coupling_training_options(coupling_training_kwargs)
         losses_raw = coupling_training_kwargs.pop("losses", None)
         compile_raw = coupling_training_kwargs.pop("compile", None)
         periodic_raw = coupling_training_kwargs.pop("periodic_checkpoint", None)

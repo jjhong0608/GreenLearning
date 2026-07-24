@@ -669,7 +669,7 @@ post-projection \(L^2\) scaling.
 
 Do not use raw-output reconstruction loss.
 
-### 5.13 Length-jump-balanced energy consistency loss
+### 5.13 Full-domain canonical energy consistency loss
 
 The default consistency loss is physical valid-point face-energy consistency.
 
@@ -729,43 +729,42 @@ Use arithmetic face averaging:
 a_{pp'}=\frac12(a(p)+a(p')).
 \]
 
-For every valid edge \((i,j)\), compute
+Sum every same-segment x/y edge exactly once. Do not classify edges by line-length
+jump or normalize regular and transition subsets separately.
+
+Complete the valid-point bulk graph with both hard-zero endpoint edges of every
+connected x/y segment. If \(p_\gamma\) is the nearest represented interior point
+to endpoint \(\gamma\), \(d_\gamma\) is their physical distance, and
+\(h_{\perp,\gamma}\) is the transverse grid measure, add
 
 \[
-J_{ij}
+E_{\partial}
 =
-\max\left(
-|\Delta\log L_x^2|,
-|\Delta\log L_y^2|
-\right).
+\sum_\gamma
+a(p_\gamma)r(p_\gamma)^2
+\frac{h_{\perp,\gamma}}{d_\gamma}.
 \]
 
-Use \(J_{ij}>\tau\) for the transition group, with default
-\(\tau=\log 2\). Normalize regular and transition edge sums separately:
+The production objective is
 
 \[
-E_{\mathrm{balanced}}
-=
-(1-\alpha)\frac{N}{N_r}\sum_{e\in r}e
-+
-\alpha\frac{N}{N_t}\sum_{e\in t}e,
+\mathcal L_{\mathrm{energy}}
+=E_x+E_y+E_{\partial}.
 \]
 
-with default \(\alpha=0.5\). If either group is empty, fall back to the
-unweighted physical energy. Report both balanced and unweighted objectives plus
-the two group means and transition edge fraction. These positive edge weights do
-not alter the PDE or introduce reference targets.
+Report this as `loss_energy_consistency`, with bulk and boundary x/y
+decompositions. Do not emit transition-specific metrics.
 
 In complex mode, `sol` and optional `phi/psi` targets are evaluation-only. They
 must not affect gradients, loss, scheduler, early stopping, or checkpoint
 selection. Reject `best_rel_sol_checkpoint.enabled=true`.
 `best_energy_checkpoint` selects `complex_coupling_model_best_energy.safetensors`
-using validation raw balanced energy.
+using validation `loss_energy_consistency`.
 
 ### 5.14 Optional relative split consistency
 
 The derivative energy cannot detect a constant split mismatch. Complex v6 may
-therefore replace the raw balanced-energy split objective with a source-normalized
+therefore replace the raw canonical-energy split objective with a source-normalized
 energy-plus-value objective. For every sample \(b\), define
 
 \[
@@ -1053,7 +1052,7 @@ Implement segment-wise reconstruction using:
 
 Do not add a raw-output reconstruction loss.
 
-### Step 7. Implement length-jump-balanced physical valid-point energy loss
+### Step 7. Implement full-domain canonical physical energy loss
 
 Implement valid-point graph energy loss.
 
@@ -1064,17 +1063,16 @@ Use:
 - same-segment edge criterion;
 - area weight \(h_xh_y\);
 - arithmetic face coefficient average;
-- cached regular/transition masks from length-square log jumps;
-- independently normalized regular and transition edge sums;
-- unweighted energy as a separate audit metric.
+- both hard-zero endpoint edges of every connected segment;
+- no regular/transition edge partition or geometry-dependent reweighting.
 
 The energy loss should operate on physical valid points, not on reference coordinates.
-Use validation balanced energy for the optional best-energy checkpoint.
+Use validation `loss_energy_consistency` for the optional best-energy checkpoint.
 
 ### Step 8. Add optional value and weak consistency objectives
 
 Implement `relative_split_consistency` as the per-sample source-normalized sum
-of balanced edge energy and domain-scaled split mass. Implement
+of canonical bulk-plus-boundary energy and domain-scaled split mass. Implement
 `weak_operator_closure` using shared `u_pred`, connected-segment P1 nodal test
 functions, direct midpoint coefficient evaluation, hard-zero endpoints, and
 differentiable element gather/scatter. Save the optional best-physics checkpoint
@@ -1331,13 +1329,13 @@ The task is complete when all of the following are true.
 
 ### 9.4 Loss and metrics
 
-- The base complex-geometry split loss is length-jump-balanced valid-point energy consistency.
+- The base complex-geometry split loss is full-domain canonical valid-point energy consistency.
 - Optional relative split consistency adds source-normalized value consistency.
 - Optional directional weak closure uses common `u_pred` and full `a,bx/by,c/2`.
 - Energy area weight is \(h_xh_y\).
 - Face coefficient uses arithmetic average.
 - Energy edges follow same axial connected-segment criterion.
-- Unweighted energy and regular/transition group metrics are reported separately.
+- Canonical bulk and boundary x/y components are reported separately.
 - Best-energy and best-physics checkpoints use independent reference-free criteria.
 - Reference `sol/phi/psi` never enters a loss or checkpoint criterion.
 - Cross consistency is completely absent from computation, metrics, logs, and summaries.

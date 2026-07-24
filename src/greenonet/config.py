@@ -709,67 +709,6 @@ class ComplexWeakOperatorClosureConfig:
 
 
 @dataclass
-class ComplexLengthJumpBalanceConfig:
-    """Geometry-shared edge grouping for complex energy optimization."""
-
-    enabled: bool = False
-    log_sigma_jump_threshold: float = math.log(2.0)
-    transition_fraction: float = 0.5
-    eps: float = 1.0e-12
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.enabled, bool):
-            raise TypeError("length_jump_balance.enabled must be a boolean.")
-        for field_name, value in (
-            ("log_sigma_jump_threshold", self.log_sigma_jump_threshold),
-            ("transition_fraction", self.transition_fraction),
-            ("eps", self.eps),
-        ):
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                raise TypeError(f"length_jump_balance.{field_name} must be numeric.")
-            if not math.isfinite(float(value)):
-                raise ValueError(f"length_jump_balance.{field_name} must be finite.")
-        if self.log_sigma_jump_threshold < 0.0:
-            raise ValueError(
-                "length_jump_balance.log_sigma_jump_threshold must be non-negative."
-            )
-        if not 0.0 < self.transition_fraction < 1.0:
-            raise ValueError(
-                "length_jump_balance.transition_fraction must be strictly between "
-                "0 and 1."
-            )
-        if self.eps <= 0.0:
-            raise ValueError("length_jump_balance.eps must be positive.")
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: ComplexLengthJumpBalanceConfig | dict[str, Any] | None,
-    ) -> ComplexLengthJumpBalanceConfig:
-        if raw is None:
-            return cls()
-        if isinstance(raw, cls):
-            return raw
-        if isinstance(raw, dict):
-            data = dict(raw)
-            unknown = sorted(
-                set(data)
-                - {
-                    "enabled",
-                    "log_sigma_jump_threshold",
-                    "transition_fraction",
-                    "eps",
-                }
-            )
-            if unknown:
-                raise TypeError(
-                    f"length_jump_balance has unknown keys: {', '.join(unknown)}."
-                )
-            return cls(**data)
-        raise TypeError("length_jump_balance must be an object.")
-
-
-@dataclass
 class CouplingTrainingConfig:
     """Training settings for CouplingNet."""
 
@@ -800,9 +739,6 @@ class CouplingTrainingConfig:
     best_physics_checkpoint: CouplingBestPhysicsCheckpointConfig | dict[str, Any] = (
         field(default_factory=CouplingBestPhysicsCheckpointConfig)
     )
-    length_jump_balance: ComplexLengthJumpBalanceConfig | dict[str, Any] = field(
-        default_factory=ComplexLengthJumpBalanceConfig
-    )
     relative_split_consistency: (
         ComplexRelativeSplitConsistencyConfig | dict[str, Any]
     ) = field(default_factory=ComplexRelativeSplitConsistencyConfig)
@@ -816,9 +752,6 @@ class CouplingTrainingConfig:
         )
         self.best_physics_checkpoint = CouplingBestPhysicsCheckpointConfig.from_raw(
             self.best_physics_checkpoint
-        )
-        self.length_jump_balance = ComplexLengthJumpBalanceConfig.from_raw(
-            self.length_jump_balance
         )
         self.relative_split_consistency = (
             ComplexRelativeSplitConsistencyConfig.from_raw(
@@ -835,11 +768,6 @@ def validate_unit_square_coupling_training_config(
 ) -> None:
     """Reject complex-only training options on the unit-square path."""
 
-    if ComplexLengthJumpBalanceConfig.from_raw(config.length_jump_balance).enabled:
-        raise ValueError(
-            "coupling_training.length_jump_balance is available only for "
-            "ComplexCouplingTrainer."
-        )
     if ComplexRelativeSplitConsistencyConfig.from_raw(
         config.relative_split_consistency
     ).enabled:
@@ -858,6 +786,17 @@ def validate_unit_square_coupling_training_config(
         raise ValueError(
             "coupling_training.best_physics_checkpoint is available only for "
             "ComplexCouplingTrainer."
+        )
+
+
+def reject_retired_coupling_training_options(raw: dict[str, Any]) -> None:
+    """Reject removed training options before dataclass construction."""
+
+    if "length_jump_balance" in raw:
+        raise TypeError(
+            "coupling_training.length_jump_balance has been removed. "
+            "Complex CouplingNet now always uses the full-domain canonical "
+            "bulk-plus-boundary energy; remove this config block."
         )
 
 

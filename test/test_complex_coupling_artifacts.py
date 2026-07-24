@@ -244,7 +244,18 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "covers_all_connected_segment_endpoints": True,
         "uses_reference_targets": False,
     }
-    assert summary["length_jump_balance"]["enabled"] is True
+    assert summary["canonical_energy"] == {
+        "enabled": True,
+        "domain": "all_valid_same_segment_edges",
+        "bulk_formula": (
+            "sum_edges arithmetic_mean(a)*(delta(u_phi-u_psi)/h_axis)^2*hx*hy"
+        ),
+        "boundary_included": True,
+        "transition_partition": False,
+        "checkpoint_metric": "loss_energy_consistency",
+        "uses_reference_targets": False,
+    }
+    assert "length_jump_balance" not in summary
     assert summary["relative_split_consistency"] == {
         "enabled": True,
         "weight": 2.0,
@@ -367,10 +378,10 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_blended_difference_correction") for key in raw.files)
     assert any(key.endswith("_fusion_source_scale") for key in raw.files)
     assert any(key.endswith("_fusion_gate") for key in raw.files)
-    assert any(key.endswith("_x_length_jump_score") for key in raw.files)
-    assert any(key.endswith("_y_length_jump_score") for key in raw.files)
-    assert any(key.endswith("_x_transition_edge_mask") for key in raw.files)
-    assert any(key.endswith("_y_transition_edge_mask") for key in raw.files)
+    assert not any(key.endswith("_x_length_jump_score") for key in raw.files)
+    assert not any(key.endswith("_y_length_jump_score") for key in raw.files)
+    assert not any(key.endswith("_x_transition_edge_mask") for key in raw.files)
+    assert not any(key.endswith("_y_transition_edge_mask") for key in raw.files)
     assert any(key.endswith("_x_transverse_length_context") for key in raw.files)
     assert any(key.endswith("_y_transverse_length_context") for key in raw.files)
     assert any(key.endswith("_weak_residual_x") for key in raw.files)

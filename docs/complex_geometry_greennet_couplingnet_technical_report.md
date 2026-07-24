@@ -1198,24 +1198,11 @@ This expression penalizes disagreement between the two axial reconstructions in
 the diffusion-weighted energy geometry of the PDE. It is stronger than comparing
 only pointwise values because it also measures gradient-level inconsistency.
 
-In v6, the same physical edge-energy density is grouped by the geometry score
-
-\[
-J_{ij}
-=
-\max\left(
-|\Delta\log L_x^2|,
-|\Delta\log L_y^2|
-\right).
-\]
-
-Regular and transition edge sums are normalized independently and mixed with a
-configured transition fraction. The unweighted energy remains an audit metric.
-This positive reweighting changes how the discrete seminorm samples the geometry;
-it does not alter the PDE balance or add a reference target. Reference
-\(u,\phi,\psi\) fields are detached evaluation metrics only, and the best complex
-checkpoint is selected by validation balanced energy rather than relative solution
-error.
+In v6, the physical edge-energy density is summed over every same-segment valid
+x/y edge without a regular/transition partition. The all-segment boundary term is
+then added to form `loss_energy_consistency`. Reference \(u,\phi,\psi\) fields are
+detached evaluation metrics only, and the best complex energy checkpoint is
+selected by validation canonical energy rather than relative solution error.
 
 The canonical energy completes the bulk valid-point graph with both hard-zero
 endpoint edges of every connected x/y segment. Each endpoint contributes
@@ -1448,7 +1435,7 @@ The following mathematical algorithm summarizes the framework.
     \[
     u_{\mathrm{pred}}=\frac12(u_\phi+u_\psi).
     \]
-11. Optimize canonical length-jump-balanced bulk-plus-boundary energy, plus only
+11. Optimize full-domain canonical bulk-plus-boundary energy, plus only
     explicitly enabled relative-split or weak-closure terms; evaluate detached
     solution/split accuracy when references are available.
 
@@ -1490,9 +1477,10 @@ presentation.
    \]
    is obtained after applying Green reconstruction to the projected split fields.
 
-7. **Length-jump-balanced energy links the two axial reconstructions.**
-   The disagreement \(u_\phi-u_\psi\) is measured in a diffusion-weighted energy
-   sense, while transition and regular edge groups are normalized separately.
+7. **Canonical energy links the two axial reconstructions.**
+   The disagreement \(u_\phi-u_\psi\) is measured over every same-segment
+   physical edge and all connected-segment endpoint boundary edges without a
+   transition-specific weight.
 
 8. **Disconnected intervals are separate Green domains.**
    This is essential for annular or multiply connected geometries, where a

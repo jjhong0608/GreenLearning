@@ -5,16 +5,12 @@ import torch
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.complex_losses import (
     build_boundary_energy_context,
-    build_length_jump_partition,
-    length_jump_balanced_edge_energy_loss,
+    canonical_complex_energy_loss,
     physical_boundary_energy_loss,
     physical_edge_energy_loss,
     relative_split_consistency_loss,
 )
-from greenonet.config import (
-    ComplexLengthJumpBalanceConfig,
-    ComplexRelativeSplitConsistencyConfig,
-)
+from greenonet.config import ComplexRelativeSplitConsistencyConfig
 from test.complex_fixtures import write_geometry_npz
 
 
@@ -69,125 +65,72 @@ def test_boundary_energy_anchors_constant_residual(tmp_path):
         a_valid=torch.ones_like(residual),
         context=context,
     )
-    energy = length_jump_balanced_edge_energy_loss(
+    energy = canonical_complex_energy_loss(
         u_phi_valid=residual,
         u_psi_valid=torch.zeros_like(residual),
         a_valid=torch.ones_like(residual),
         geometry=geometry,
-        config=ComplexLengthJumpBalanceConfig(enabled=False),
         boundary_context=context,
     )
 
     expected = torch.tensor(44.0 / 3.0, dtype=torch.float64)
     torch.testing.assert_close(boundary.total, expected)
-    torch.testing.assert_close(energy.bulk_unweighted, torch.zeros_like(expected))
+    torch.testing.assert_close(energy.bulk, torch.zeros_like(expected))
     torch.testing.assert_close(energy.boundary, expected)
-    torch.testing.assert_close(energy.unweighted, expected)
-    torch.testing.assert_close(energy.balanced, expected)
+    torch.testing.assert_close(energy.total, expected)
 
 
-def test_length_jump_balanced_energy_groups_response_scale_transitions(tmp_path):
+def test_canonical_energy_sums_all_edges_without_transition_partition(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     u_phi = torch.tensor([[1.0, 3.0, 5.0]], dtype=torch.float64)
     u_psi = torch.zeros_like(u_phi)
     a_valid = torch.tensor([[2.0, 4.0, 6.0]], dtype=torch.float64)
-    config = ComplexLengthJumpBalanceConfig(
-        enabled=True,
-        transition_fraction=0.25,
-    )
-    partition = build_length_jump_partition(geometry, config)
 
-    result = length_jump_balanced_edge_energy_loss(
+    result = canonical_complex_energy_loss(
         u_phi_valid=u_phi,
         u_psi_valid=u_psi,
         a_valid=a_valid,
         geometry=geometry,
-        config=config,
-        partition=partition,
     )
 
     expected_x = 0.5 * 0.5 * 0.5 * (2.0 + 4.0) * ((3.0 - 1.0) / 0.5) ** 2
     expected_y = 0.5 * 0.5 * 0.5 * (2.0 + 6.0) * ((5.0 - 1.0) / 0.5) ** 2
-    assert not bool(partition.x_transition_mask[0])
-    assert bool(partition.y_transition_mask[0])
     torch.testing.assert_close(
-        partition.y_score,
-        torch.tensor([torch.log(torch.tensor(4.0))], dtype=torch.float64),
-    )
-    torch.testing.assert_close(
-        result.bulk_unweighted,
+        result.bulk,
         torch.tensor(expected_x + expected_y, dtype=torch.float64),
     )
     torch.testing.assert_close(
-        result.bulk_balanced,
-        torch.tensor(1.5 * expected_x + 0.5 * expected_y, dtype=torch.float64),
-    )
-    torch.testing.assert_close(
-        result.unweighted,
-        result.bulk_unweighted + result.boundary,
-    )
-    torch.testing.assert_close(
-        result.balanced,
-        result.bulk_balanced + result.boundary,
-    )
-    torch.testing.assert_close(
-        result.regular_mean,
-        torch.tensor(expected_x, dtype=torch.float64),
-    )
-    torch.testing.assert_close(
-        result.transition_mean,
-        torch.tensor(expected_y, dtype=torch.float64),
-    )
-    assert result.transition_edge_fraction.item() == 0.5
-
-
-def test_length_jump_balanced_energy_falls_back_without_transition_edges(tmp_path):
-    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
-    u_phi = torch.tensor([[1.0, 3.0, 5.0]], dtype=torch.float64)
-    config = ComplexLengthJumpBalanceConfig(
-        enabled=True,
-        log_sigma_jump_threshold=10.0,
+        result.total,
+        result.bulk + result.boundary,
     )
 
-    result = length_jump_balanced_edge_energy_loss(
-        u_phi_valid=u_phi,
-        u_psi_valid=torch.zeros_like(u_phi),
-        a_valid=torch.ones_like(u_phi),
-        geometry=geometry,
-        config=config,
-    )
 
-    torch.testing.assert_close(result.balanced, result.unweighted)
-    assert result.transition_edge_fraction.item() == 0.0
-
-
-def test_length_jump_balanced_energy_exposes_per_sample_values(tmp_path):
+def test_canonical_energy_exposes_per_sample_values(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     u_phi = torch.tensor(
         [[1.0, 3.0, 5.0], [2.0, 6.0, 10.0]],
         dtype=torch.float64,
     )
-    result = length_jump_balanced_edge_energy_loss(
+    result = canonical_complex_energy_loss(
         u_phi_valid=u_phi,
         u_psi_valid=torch.zeros_like(u_phi),
         a_valid=torch.ones_like(u_phi),
         geometry=geometry,
-        config=ComplexLengthJumpBalanceConfig(enabled=True),
     )
 
-    assert result.unweighted_per_sample.shape == (2,)
-    assert result.balanced_per_sample.shape == (2,)
+    assert result.total_per_sample.shape == (2,)
+    assert result.bulk_per_sample.shape == (2,)
     torch.testing.assert_close(
-        result.unweighted,
-        result.unweighted_per_sample.mean(),
+        result.total,
+        result.total_per_sample.mean(),
     )
     torch.testing.assert_close(
-        result.balanced,
-        result.balanced_per_sample.mean(),
+        result.bulk,
+        result.bulk_per_sample.mean(),
     )
     torch.testing.assert_close(
-        result.unweighted_per_sample[1],
-        4.0 * result.unweighted_per_sample[0],
+        result.total_per_sample[1],
+        4.0 * result.total_per_sample[0],
     )
 
 
@@ -196,12 +139,11 @@ def test_relative_split_mass_detects_constant_solution_mismatch(tmp_path):
     u_phi = torch.ones((1, geometry.num_points), dtype=torch.float64)
     u_psi = torch.zeros_like(u_phi)
     rhs = torch.ones_like(u_phi)
-    energy = length_jump_balanced_edge_energy_loss(
+    energy = canonical_complex_energy_loss(
         u_phi_valid=u_phi,
         u_psi_valid=u_psi,
         a_valid=torch.ones_like(u_phi),
         geometry=geometry,
-        config=ComplexLengthJumpBalanceConfig(enabled=True),
     )
 
     result = relative_split_consistency_loss(
@@ -238,18 +180,16 @@ def test_relative_split_loss_is_invariant_to_common_source_scale(tmp_path):
     base_psi = torch.tensor([[0.5, 0.5, 0.5]], dtype=torch.float64)
     base_rhs = torch.tensor([[2.0, 3.0, 5.0]], dtype=torch.float64)
     config = ComplexRelativeSplitConsistencyConfig(enabled=True)
-    jump_config = ComplexLengthJumpBalanceConfig(enabled=True)
 
     def compute(scale: float):
         u_phi = scale * base_phi
         u_psi = scale * base_psi
         rhs = scale * base_rhs
-        energy = length_jump_balanced_edge_energy_loss(
+        energy = canonical_complex_energy_loss(
             u_phi_valid=u_phi,
             u_psi_valid=u_psi,
             a_valid=torch.ones_like(u_phi),
             geometry=geometry,
-            config=jump_config,
         )
         return relative_split_consistency_loss(
             u_phi_valid=u_phi,
@@ -277,12 +217,11 @@ def test_relative_split_normalizes_each_sample_before_batch_reduction(tmp_path):
     u_phi = scales * base_phi
     u_psi = scales * base_psi
     rhs = scales * base_rhs
-    energy = length_jump_balanced_edge_energy_loss(
+    energy = canonical_complex_energy_loss(
         u_phi_valid=u_phi,
         u_psi_valid=u_psi,
         a_valid=torch.ones_like(u_phi),
         geometry=geometry,
-        config=ComplexLengthJumpBalanceConfig(enabled=True),
     )
 
     result = relative_split_consistency_loss(
