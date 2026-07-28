@@ -1,21 +1,24 @@
-# SOAP Optimizer Applicability for Complex CouplingNet
+# SOAP Optimizer Applicability for Complex CouplingNet and GreenNet
 
 ## Document Status
 
 - 작성일: 2026-07-24
 - 대상 프로젝트: `ComplexGeometry`
-- 대상 학습 경로: complex geometry CouplingNet
+- 대상 학습 경로: complex geometry CouplingNet, unit-square GreenNet, complex
+  geometry GreenNet
 - 목적: SOAP optimizer의 원리, 현재 프로젝트 적용 가능성, 기대 효과,
   위험, 그리고 향후 ablation 기준을 재사용 가능한 형태로 정리한다.
 - 구현 상태: official SOAP commit
-  `a1e553530fde97d0e6b307d7c82ac6d38b072340`을 vendoring하고 complex
-  CouplingNet 전용 opt-in optimizer로 구현했다. AdamW는 기본값으로 유지한다.
+  `a1e553530fde97d0e6b307d7c82ac6d38b072340`을 vendoring했다. SOAP은
+  complex CouplingNet 및 두 GreenNet geometry path의 opt-in optimizer이고,
+  AdamW는 모든 해당 first-stage trainer의 기본값이다.
 
 ## Executive Conclusion
 
-SOAP은 현재 Complex CouplingNet에 기술적으로 적용할 수 있다. 현재 trainer가
-표준 `torch.optim.Optimizer` 인터페이스를 사용하고 있고, CouplingNet
-파라미터의 대부분이 2차원 weight matrix이므로 구조적인 적합성도 높다.
+SOAP은 현재 Complex CouplingNet과 GreenNet에 기술적으로 적용할 수 있다.
+각 trainer가 표준 `torch.optim.Optimizer` 인터페이스를 사용하고 있고,
+CouplingNet과 GreenNet 파라미터의 대부분이 2차원 weight matrix이므로
+구조적인 적합성도 높다.
 
 다만 SOAP을 AdamW의 즉각적인 대체재로 채택할 근거는 아직 부족하다.
 SOAP 원 논문의 실험은 주로 360M 및 660M parameter language model의
@@ -25,8 +28,8 @@ wall-clock 감소로 이어지는지 별도로 확인해야 한다.
 
 따라서 권장 결론은 다음과 같다.
 
-> AdamW를 유지하면서 SOAP을 opt-in optimizer로 추가하고, 동일한 model,
-> dataset, loss, seed를 사용하는 paired ablation으로 검증한다.
+> AdamW를 기본값으로 유지하면서 SOAP을 opt-in optimizer로 제공하고, 동일한
+> model, dataset, loss, seed를 사용하는 paired ablation으로 검증한다.
 
 SOAP은 optimization dynamics를 개선할 수 있지만, 잘못된 loss, 실제 null
 space, 누락된 admissibility 또는 geometry regularity 조건을 수정하지는
@@ -191,6 +194,30 @@ total optimizer steps      = about 6000
 eigenbasis를 갱신하는 것과 같다. 반면 현재 3-epoch warmup은 optimizer
 step으로는 6회뿐이므로 SOAP에서는 warmup duration을 별도로 검토할 필요가
 있다.
+
+GreenNet은 `GreenOptimizerFactory`를 통해 unit-square와 complex geometry
+trainer에 같은 first-stage optimizer contract를 적용한다.
+
+```python
+optimizer = GreenOptimizerFactory(config).build(model.parameters())
+```
+
+`training.optimizer`을 생략하면 AdamW를 사용하고
+`training.optimizer.name="soap"`일 때만 vendored SOAP을 사용한다. 명시적인
+`"adam"`은 제거된 runtime이므로 fail fast한다. 두 GreenNet trainer는 같은
+linear-warmup + cosine-decay schedule을 AdamW/SOAP first stage에만 적용한다.
+First stage가 끝나면 `model_pre_lbfgs.safetensors`를 저장하고, 이후 optional
+LBFGS는 기존 learning rate, closure, strong-Wolfe line search를 scheduler 없이
+그대로 사용한다.
+
+`configs/default_green.json`과 `configs/complex_green.json`은 AdamW 예시이고
+`configs/complex_green_soap.json`은 complex GreenNet paired-pilot 예시다. 각
+run은 resolved optimizer/scheduler metadata를 `config_used.json`,
+`green_optimizer_provenance.json`, Green artifact summary에 기록한다.
+`green_training_metrics.csv`와 `training.log`에는 epoch에서 실제 사용한
+learning rate와 opt-in optimizer telemetry를 기록한다. Green checkpoint는
+Coupling checkpoint와 마찬가지로 model-only safetensors이며 optimizer/scheduler
+resume state를 포함하지 않는다.
 
 ## 4. Model Structure Suitability
 
@@ -482,7 +509,7 @@ Meta의 `facebookresearch/optimizers`에는 eigenvalue-corrected Shampoo,
 SOAP을 구현한다면 기존 AdamW를 제거하지 않고 optimizer factory를
 도입하는 것이 적절하다.
 
-구현된 config surface는 다음과 같다.
+Complex CouplingNet에 구현된 config surface는 다음과 같다.
 
 ```json
 {
@@ -506,22 +533,57 @@ SOAP을 구현한다면 기존 AdamW를 제거하지 않고 optimizer factory를
 }
 ```
 
+GreenNet은 같은 nested optimizer schema를 `training` 아래에서 사용한다.
+
+```json
+{
+  "training": {
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0,
+    "use_lr_schedule": true,
+    "warmup_epochs": 100,
+    "min_lr": 1e-5,
+    "optimizer": {
+      "name": "soap",
+      "betas": [0.95, 0.95],
+      "eps": 1e-8,
+      "profile_step_time": true,
+      "soap": {
+        "shampoo_beta": -1.0,
+        "precondition_frequency": 10,
+        "max_precondition_dim": 1024,
+        "merge_dims": false,
+        "precondition_1d": false,
+        "normalize_grads": false,
+        "correct_bias": true
+      }
+    }
+  }
+}
+```
+
 현재 구현은 다음 정책을 따른다.
 
 1. `optimizer.name="adamw"`를 backward-compatible default로 유지한다.
-2. SOAP은 complex CouplingNet의 opt-in experiment로 시작한다.
-3. GreenNet 및 unit-square CouplingNet 적용은 별도 실험으로 둔다.
+2. SOAP은 complex CouplingNet과 unit-square/complex GreenNet의 opt-in
+   experiment이고 unit-square CouplingNet에서는 거부한다.
+3. GreenNet의 이전 Adam runtime은 제거하며 `"adam"` config를 자동 변환하지
+   않는다.
 4. Scheduler, clipping, loss, projection, reconstruction은 바꾸지 않는다.
 5. Complex CouplingNet의 `config_used.json`에는 resolved optimizer block과
    top-level provenance를 materialize한다. 같은 metadata를
    `optimizer_provenance.json`, training log, complex artifact summary에도
    기록한다.
-6. Preconditioner frequency는 optimizer step 단위라고 문서화한다.
-7. `profile_step_time=true`인 경우 AdamW와 SOAP의 optimizer time 및 peak
+6. GreenNet도 resolved optimizer/scheduler metadata를 `config_used.json`,
+   `green_optimizer_provenance.json`, training log, metrics CSV, artifact
+   summary에 기록한다.
+7. Preconditioner frequency는 optimizer step 단위라고 문서화한다.
+8. `profile_step_time=true`인 경우 AdamW와 SOAP의 optimizer time 및 peak
    allocated CUDA memory를 같은 metric schema로 기록한다.
-8. Official first-step preconditioner initialization/no-update 동작을 그대로
+9. Official first-step preconditioner initialization/no-update 동작을 그대로
    유지한다.
-9. Model-only safetensors를 유지하며 optimizer-state resume는 지원하지 않는다.
+10. Model-only safetensors를 유지하며 optimizer/scheduler-state resume는
+    지원하지 않는다.
 
 ### SOAP Option Semantics
 
@@ -552,19 +614,26 @@ SOAP을 구현한다면 기존 AdamW를 제거하지 않고 optimizer factory를
 갱신한다. 다음 controlled ablation은 다른 설정을 고정한 frequency `5 -> 2`로
 두고, frequency 1은 그 결과가 개선될 때만 시험한다.
 
-구현 파일은 `src/greenonet/optimizers/soap.py`,
-`src/greenonet/coupling_optimizer.py`, 그리고
-`src/greenonet/complex_coupling_trainer.py`이다. Upstream attribution과 MIT
-license는 `THIRD_PARTY_NOTICES.md`에 기록한다. Float64 model 호환을 위해
-stored Shampoo factor/eigenbasis는 upstream의 float32 정책을 유지하되,
-covariance update와 tensor contraction 경계에서 dtype을 명시적으로
-변환한다.
+공통 구현 파일은 `src/greenonet/optimizers/soap.py`,
+`src/greenonet/optimizer_support.py`, `src/greenonet/learning_rate_scheduler.py`
+이다. Coupling adapter는 `src/greenonet/coupling_optimizer.py`와
+`src/greenonet/coupling_lr_scheduler.py`, Green adapter는
+`src/greenonet/green_optimizer.py`와 `src/greenonet/green_lr_scheduler.py`에
+둔다. Upstream attribution과 MIT license는 `THIRD_PARTY_NOTICES.md`에
+기록한다. Float64 model 호환을 위해 stored Shampoo factor/eigenbasis는
+upstream의 float32 정책을 유지하되, covariance update와 tensor contraction
+경계에서 dtype을 명시적으로 변환한다.
 
 ## 11. Recommended Ablation
 
 전체 3000-epoch run을 시작하기 전에 300--500 epoch pilot을 권장한다.
 `configs/complex_coupling_soap.json`은 canonical complex config와 model,
 dataset, loss, projection, clipping, scheduler 설정을 맞춘 SOAP template이다.
+GreenNet의 장기 SOAP ablation도 바로 실행하지 않고
+`configs/complex_green_soap.json`에서 동일한 data/model/LBFGS 설정을 유지한
+AdamW control과 짧은 paired pilot을 먼저 수행한다. GreenNet 비교에서는
+first-stage optimizer-step budget과 wall-clock을 함께 보고, LBFGS 결과는
+first-stage 비교와 분리해 해석한다.
 Pilot에서는 AdamW baseline과 SOAP config의 `epochs`를 같은 300--500 값으로
 설정하고 장기 run 전에 optimizer telemetry를 먼저 비교한다.
 

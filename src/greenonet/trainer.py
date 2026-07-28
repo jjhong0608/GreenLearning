@@ -19,7 +19,10 @@ from greenonet.greens import (
     select_green_reference_policy,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
+from greenonet.green_lr_scheduler import GreenLearningRateSchedule
+from greenonet.green_optimizer import GreenOptimizerFactory, GreenTrainingRecorder
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
+from greenonet.optimizer_support import OptimizerStepProfiler
 
 
 AxialBatch = tuple[
@@ -67,6 +70,13 @@ class Trainer(LoggingMixin):
         self.rel_sol_history: List[float] = []
         self.val_rel_sol_history: List[float] = []
         self.rel_green_history: List[float] = []
+        self.optimizer_factory = GreenOptimizerFactory(config)
+        self.optimizer_provenance = self.optimizer_factory.provenance()
+        self.training_recorder = GreenTrainingRecorder(
+            work_dir=self.work_dir,
+            logger=self.logger,
+            provenance=self.optimizer_provenance,
+        )
 
     @staticmethod
     def _green_reconstruction_loss(
@@ -742,11 +752,25 @@ class Trainer(LoggingMixin):
             raise ValueError(
                 "validation_dataset must be provided when compute_validation_rel_sol=True."
             )
-        optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
+        schedule_config = GreenLearningRateSchedule.from_config(
+            self.config,
+            total_epochs=self.config.epochs,
+        )
+        optimizer = self.optimizer_factory.build(self.model.parameters())
+        optimizer_profiler = OptimizerStepProfiler(
+            optimizer=optimizer,
+            enabled=self.optimizer_provenance.profile_step_time,
+            device=self.device,
+        )
+        scheduler = schedule_config.build(optimizer)
+        self.training_recorder.log_startup(schedule_config)
+        self.training_recorder.write_provenance(schedule_config)
 
         for epoch in range(1, self.config.epochs + 1):
+            learning_rate = float(optimizer.param_groups[0]["lr"])
             epoch_losses: List[float] = []
             last_batch = None
+            optimizer_profiler.begin_epoch()
             for (
                 coords,
                 solution,
@@ -784,7 +808,7 @@ class Trainer(LoggingMixin):
                     integration_rule=self.config.integration_rule,
                 )
                 cast(Any, loss).backward()
-                optimizer.step()
+                optimizer_profiler.step()
 
                 epoch_losses.append(loss.detach().item())
                 last_batch = (
@@ -800,6 +824,10 @@ class Trainer(LoggingMixin):
 
             mean_loss = float(sum(epoch_losses) / max(len(epoch_losses), 1))
             self.loss_history.append(mean_loss)
+            optimizer_metrics = optimizer_profiler.finish_epoch()
+            epoch_rel_sol: float | None = None
+            epoch_val_rel_sol: float | None = None
+            epoch_rel_green: float | None = None
 
             # Logging metrics at interval using the last processed batch
             if epoch % self.config.log_interval == 0 and last_batch is not None:
@@ -829,6 +857,8 @@ class Trainer(LoggingMixin):
                         val_rel_sol = self._dataset_rel_sol(validation_dataset)
                         self.rel_sol_history.append(train_rel_sol)
                         self.val_rel_sol_history.append(val_rel_sol)
+                        epoch_rel_sol = train_rel_sol
+                        epoch_val_rel_sol = val_rel_sol
                     else:
                         _, rel_sol = self._green_reconstruction_loss(
                             prediction=pred_eval,
@@ -837,27 +867,55 @@ class Trainer(LoggingMixin):
                             trunk_grid=trunk_grid,
                             integration_rule=self.config.integration_rule,
                         )
-                        self.rel_sol_history.append(float(rel_sol.detach().item()))
-                    self.rel_green_history.append(float(rel_green.detach().item()))
+                        epoch_rel_sol = float(rel_sol.detach().item())
+                        self.rel_sol_history.append(epoch_rel_sol)
+                    epoch_rel_green = float(rel_green.detach().item())
+                    self.rel_green_history.append(epoch_rel_green)
                 if self.config.compute_validation_rel_sol:
                     self.logger.info(
-                        "Epoch %s: loss=%.4e | train_rel_sol=%.4e | val_rel_sol=%.4e | rel_green=%.4e",
+                        "Epoch %s: lr=%.6e | loss=%.4e | train_rel_sol=%.4e | "
+                        "val_rel_sol=%.4e | rel_green=%.4e%s",
                         epoch,
+                        learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
                         self.val_rel_sol_history[-1],
                         self.rel_green_history[-1],
+                        self._optimizer_metrics_log_suffix(optimizer_metrics),
                     )
                 else:
                     self.logger.info(
-                        "Epoch %s: loss=%.4e | rel_sol=%.4e | rel_green=%.4e",
+                        "Epoch %s: lr=%.6e | loss=%.4e | rel_sol=%.4e | "
+                        "rel_green=%.4e%s",
                         epoch,
+                        learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
                         self.rel_green_history[-1],
+                        self._optimizer_metrics_log_suffix(optimizer_metrics),
                     )
             elif epoch % self.config.log_interval == 0:
-                self.logger.info(f"Epoch {epoch}: loss={mean_loss:.4e}")
+                self.logger.info(
+                    "Epoch %s: lr=%.6e | loss=%.4e%s",
+                    epoch,
+                    learning_rate,
+                    mean_loss,
+                    self._optimizer_metrics_log_suffix(optimizer_metrics),
+                )
+            self.training_recorder.record(
+                phase=self.optimizer_provenance.name,
+                epoch=epoch,
+                learning_rate=learning_rate,
+                loss=mean_loss,
+                rel_sol=epoch_rel_sol,
+                val_rel_sol=epoch_val_rel_sol,
+                rel_green=epoch_rel_green,
+                telemetry=optimizer_metrics,
+            )
+            if scheduler is not None:
+                scheduler.step()
+
+        self._save_model_checkpoint("model_pre_lbfgs.safetensors")
 
         # Optional LBFGS fine-tuning stage
         if self.config.lbfgs_max_iter > 0 and self.config.lbfgs_epochs > 0:
@@ -976,6 +1034,19 @@ class Trainer(LoggingMixin):
                             self.rel_sol_history[-1],
                             self.rel_green_history[-1],
                         )
+                    self.training_recorder.record(
+                        phase="lbfgs",
+                        epoch=lbfgs_epoch,
+                        learning_rate=float(lbfgs_optimizer.param_groups[0]["lr"]),
+                        loss=last_lbfgs,
+                        rel_sol=self.rel_sol_history[-1],
+                        val_rel_sol=(
+                            self.val_rel_sol_history[-1]
+                            if self.config.compute_validation_rel_sol
+                            else None
+                        ),
+                        rel_green=self.rel_green_history[-1],
+                    )
 
         if self.loss_history:
             LossVisualizer.save_loss_curve(
@@ -1025,8 +1096,19 @@ class Trainer(LoggingMixin):
             except StopIteration:
                 self.logger.warning("No data available to plot Green heatmap.")
         self._save_per_line_metrics(dataset, validation_dataset)
-        # Persist the trained weights
-        model_path = self.work_dir / "model.safetensors"
+        self.training_recorder.write_csv()
+        self._save_model_checkpoint("model.safetensors")
+
+    @staticmethod
+    def _optimizer_metrics_log_suffix(metrics: dict[str, float]) -> str:
+        if not metrics:
+            return ""
+        return " | " + " | ".join(
+            f"{key}={value:.6e}" for key, value in metrics.items()
+        )
+
+    def _save_model_checkpoint(self, filename: str) -> None:
+        model_path = self.work_dir / filename
         if self.model_cfg is not None:
             save_model_with_config(self.model, self.model_cfg, model_path, self.logger)
         else:

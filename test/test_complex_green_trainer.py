@@ -4,6 +4,7 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
 from greenonet.coefficients import load_coefficient_functions
@@ -134,6 +135,12 @@ def test_complex_green_trainer_one_epoch_outputs_safe_metrics(tmp_path):
 
     assert model.forward_pairs_calls > 0
     assert (tmp_path / "work" / "model.safetensors").exists()
+    assert (tmp_path / "work" / "model_pre_lbfgs.safetensors").exists()
+    assert (tmp_path / "work" / "green_training_metrics.csv").exists()
+    provenance = json.loads(
+        (tmp_path / "work" / "green_optimizer_provenance.json").read_text()
+    )
+    assert provenance["optimizer"]["name"] == "adamw"
     assert (tmp_path / "work" / "loss_curve.html").exists()
     assert (tmp_path / "work" / "rel_sol_curve.html").exists()
     assert (tmp_path / "work" / "rel_green_curve.html").exists()
@@ -215,6 +222,71 @@ def test_complex_green_trainer_split_quadrature_uses_eval_coefficients(tmp_path)
     assert summary["green_quadrature"]["rel_green"] == "uniform_grid_existing"
 
 
+def test_complex_green_trainer_soap_schedule_and_telemetry(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(
+        _write_reaction_free_coefficients(tmp_path / "coeffs.py")
+    )
+    data = generate_complex_green_data(
+        geometry,
+        coeffs,
+        branch_input_dim=5,
+        samples_per_interval=1,
+        sampler_mode="forward",
+        scale_length=0.1,
+        deterministic=True,
+        integration_rule="trapezoid",
+        dtype=torch.float64,
+    )
+    dataset = ComplexGreenDataset(data)
+    model_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        activation="tanh",
+        use_green=False,
+        branch_input_dim=5,
+        dtype=torch.float64,
+    )
+    trainer = ComplexGreenTrainer(
+        model=CountingGreenONetModel(model_cfg),
+        config=TrainingConfig(
+            epochs=3,
+            batch_size=1,
+            learning_rate=1e-3,
+            log_interval=1,
+            device="cpu",
+            use_lr_schedule=True,
+            warmup_epochs=2,
+            min_lr=1e-4,
+            optimizer={
+                "name": "soap",
+                "profile_step_time": True,
+                "soap": {
+                    "precondition_frequency": 2,
+                    "max_precondition_dim": 16,
+                },
+            },
+            integration_rule="trapezoid",
+            compile=CompileConfig(enabled=False),
+            lbfgs_max_iter=0,
+        ),
+        work_dir=tmp_path / "work_soap",
+        model_cfg=model_cfg,
+    )
+
+    trainer.train(dataset)
+
+    rows = list(
+        csv.DictReader((tmp_path / "work_soap" / "green_training_metrics.csv").open())
+    )
+    assert [row["phase"] for row in rows] == ["soap", "soap", "soap"]
+    assert [float(row["learning_rate"]) for row in rows] == pytest.approx(
+        [5.0e-4, 1.0e-3, 1.0e-4]
+    )
+    assert all(float(row["optimizer_step_count"]) == 1.0 for row in rows)
+    assert (tmp_path / "work_soap" / "model_pre_lbfgs.safetensors").exists()
+
+
 def test_complex_green_trainer_lbfgs_logs_validation_and_rel_green(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(
@@ -250,6 +322,9 @@ def test_complex_green_trainer_lbfgs_logs_validation_and_rel_green(tmp_path):
             learning_rate=1e-3,
             log_interval=1,
             device="cpu",
+            use_lr_schedule=True,
+            warmup_epochs=2,
+            min_lr=1e-4,
             compute_validation_rel_sol=True,
             integration_rule="trapezoid",
             compile=CompileConfig(enabled=False),
@@ -271,3 +346,9 @@ def test_complex_green_trainer_lbfgs_logs_validation_and_rel_green(tmp_path):
     assert "val_rel_sol=" in lbfgs_lines[0]
     assert "rel_green=" in lbfgs_lines[0]
     assert "cross" not in training_log
+    rows = list(
+        csv.DictReader((tmp_path / "work_lbfgs" / "green_training_metrics.csv").open())
+    )
+    assert [row["phase"] for row in rows] == ["adamw", "lbfgs"]
+    assert float(rows[0]["learning_rate"]) == pytest.approx(1.0e-4)
+    assert float(rows[-1]["learning_rate"]) == pytest.approx(1.0)

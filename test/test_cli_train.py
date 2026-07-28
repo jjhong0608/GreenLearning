@@ -17,6 +17,7 @@ from greenonet.config import (
     DatasetConfig,
     IndexedGpSourceConfig,
     PipelineConfig,
+    TrainingConfig,
     validate_complex_coupling_source_config,
 )
 from greenonet.model import GreenONetModel
@@ -41,7 +42,7 @@ class TestTrainCLIConfigCopy:
 
     def test_copies_config(self, tmp_path, monkeypatch):
         config_path = tmp_path / "config.json"
-        payload = self._write_config(config_path)
+        self._write_config(config_path)
         work_dir = tmp_path / "work"
         captured = {}
 
@@ -60,8 +61,81 @@ class TestTrainCLIConfigCopy:
 
         copied = work_dir / "config_used.json"
         assert copied.exists()
-        assert json.loads(copied.read_text()) == payload
+        used = json.loads(copied.read_text())
+        assert used["training"]["optimizer"]["name"] == "adamw"
+        assert used["training"]["optimizer"]["betas"] == [0.9, 0.999]
+        assert used["green_optimizer_provenance"]["implementation"] == (
+            "torch.optim.AdamW"
+        )
+        assert used["green_learning_rate_schedule"]["kind"] == "fixed"
         assert captured["terminal_width"] == 250
+
+    def test_green_config_copy_materializes_soap_provenance(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "dataset": {},
+                    "training": {
+                        "learning_rate": 0.002,
+                        "epochs": 3,
+                        "use_lr_schedule": True,
+                        "warmup_epochs": 1,
+                        "min_lr": 1e-5,
+                        "optimizer": {
+                            "name": "soap",
+                            "soap": {"precondition_frequency": 7},
+                        },
+                    },
+                    "pipeline": {"run_green": True, "run_coupling": False},
+                }
+            )
+        )
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        training = TrainingConfig(
+            learning_rate=0.002,
+            epochs=3,
+            use_lr_schedule=True,
+            warmup_epochs=1,
+            min_lr=1e-5,
+            optimizer={
+                "name": "soap",
+                "soap": {"precondition_frequency": 7},
+            },
+        )
+
+        TrainCLI._write_config_used(
+            config_path=config_path,
+            work_dir=work_dir,
+            dataset_cfg=DatasetConfig(),
+            training_cfg=training,
+            coupling_training_cfg=CouplingTrainingConfig(),
+            pipeline_cfg=PipelineConfig(run_green=True, run_coupling=False),
+        )
+
+        used = json.loads((work_dir / "config_used.json").read_text())
+        assert used["training"]["optimizer"]["name"] == "soap"
+        assert used["training"]["optimizer"]["soap"]["precondition_frequency"] == 7
+        assert used["green_optimizer_provenance"]["upstream_commit"] == (
+            "a1e553530fde97d0e6b307d7c82ac6d38b072340"
+        )
+        assert used["green_learning_rate_schedule"]["enabled"] is True
+
+    def test_training_config_rejects_removed_adam_optimizer(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "dataset": {},
+                    "training": {"optimizer": {"name": "adam"}},
+                    "pipeline": {"run_green": True, "run_coupling": False},
+                }
+            )
+        )
+
+        with pytest.raises(ValueError, match="Adam has been removed"):
+            TrainCLI()._build_configs(config_path)
 
     def test_complex_config_copy_materializes_optimizer_provenance(self, tmp_path):
         config_path = tmp_path / "config.json"

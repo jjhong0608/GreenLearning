@@ -55,6 +55,8 @@ from greenonet.coupling_optimizer import ComplexCouplingOptimizerFactory
 from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.coupling_evaluator import CouplingEvaluator
 from greenonet.io import load_model_with_config, load_state_dict_auto
+from greenonet.green_lr_scheduler import GreenLearningRateSchedule
+from greenonet.green_optimizer import GreenOptimizerFactory
 from greenonet.model import GreenONetModel
 from greenonet.runner import run_complex_green_o_net, run_green_o_net
 from greenonet.runtime import apply_runtime_cpu_settings, write_runtime_cpu_summary
@@ -198,32 +200,55 @@ class TrainCLI:
         config_path: Path,
         work_dir: Path,
         dataset_cfg: DatasetConfig,
+        training_cfg: TrainingConfig | None = None,
         coupling_training_cfg: CouplingTrainingConfig,
         pipeline_cfg: PipelineConfig,
     ) -> None:
         destination = work_dir / "config_used.json"
-        if dataset_cfg.geometry_mode != "complex" or not pipeline_cfg.run_coupling:
+        materialize_green = pipeline_cfg.run_green
+        materialize_complex_coupling = (
+            dataset_cfg.geometry_mode == "complex" and pipeline_cfg.run_coupling
+        )
+        if not materialize_green and not materialize_complex_coupling:
             shutil.copy2(config_path, destination)
             return
         with config_path.open() as fp:
             payload = json.load(fp)
-        coupling_training = payload.setdefault("coupling_training", {})
-        if not isinstance(coupling_training, dict):
-            raise TypeError("coupling_training must be an object.")
-        factory = ComplexCouplingOptimizerFactory(coupling_training_cfg)
-        coupling_training["optimizer"] = factory.resolved_config()
-        payload["optimizer_provenance"] = factory.provenance().as_dict()
-        dataset = payload.setdefault("dataset", {})
-        if not isinstance(dataset, dict):
-            raise TypeError("dataset must be an object.")
-        dataset["coupling_source"] = asdict(dataset_cfg.coupling_source)
-        dataset["reference_diagnostics"] = asdict(dataset_cfg.reference_diagnostics)
-        payload["complex_source_provenance"] = {
-            "fixed_across_epochs": True,
-            "backend": dataset_cfg.coupling_source.mode,
-            "sample_identity": "base_seed_split_id_sample_index",
-            "test_reference_backend": "npz",
-        }
+        if materialize_green:
+            if training_cfg is None:
+                raise ValueError(
+                    "training_cfg is required when pipeline.run_green is true."
+                )
+            training = payload.setdefault("training", {})
+            if not isinstance(training, dict):
+                raise TypeError("training must be an object.")
+            green_factory = GreenOptimizerFactory(training_cfg)
+            green_schedule = GreenLearningRateSchedule.from_config(
+                training_cfg,
+                total_epochs=training_cfg.epochs,
+            )
+            training["optimizer"] = green_factory.resolved_config()
+            payload["green_optimizer_provenance"] = green_factory.provenance().as_dict()
+            payload["green_learning_rate_schedule"] = green_schedule.as_dict()
+
+        if materialize_complex_coupling:
+            coupling_training = payload.setdefault("coupling_training", {})
+            if not isinstance(coupling_training, dict):
+                raise TypeError("coupling_training must be an object.")
+            factory = ComplexCouplingOptimizerFactory(coupling_training_cfg)
+            coupling_training["optimizer"] = factory.resolved_config()
+            payload["optimizer_provenance"] = factory.provenance().as_dict()
+            dataset = payload.setdefault("dataset", {})
+            if not isinstance(dataset, dict):
+                raise TypeError("dataset must be an object.")
+            dataset["coupling_source"] = asdict(dataset_cfg.coupling_source)
+            dataset["reference_diagnostics"] = asdict(dataset_cfg.reference_diagnostics)
+            payload["complex_source_provenance"] = {
+                "fixed_across_epochs": True,
+                "backend": dataset_cfg.coupling_source.mode,
+                "sample_identity": "base_seed_split_id_sample_index",
+                "test_reference_backend": "npz",
+            }
         destination.write_text(json.dumps(payload, indent=2) + "\n")
 
     @classmethod
@@ -333,7 +358,13 @@ class TrainCLI:
         training_kwargs = dict(raw_training)
         compile_raw = training_kwargs.pop("compile", None)
         compile_cfg = cls._build_compile_config(compile_raw, "training")
-        return TrainingConfig(compile=compile_cfg, **training_kwargs)
+        config = TrainingConfig(compile=compile_cfg, **training_kwargs)
+        GreenOptimizerFactory(config)
+        GreenLearningRateSchedule.from_config(
+            config,
+            total_epochs=config.epochs,
+        )
+        return config
 
     @staticmethod
     def _build_coupling_training_config(
@@ -660,6 +691,7 @@ class TrainCLI:
             config_path=config_path,
             work_dir=work_dir,
             dataset_cfg=dataset_cfg,
+            training_cfg=training_cfg,
             coupling_training_cfg=coupling_training_cfg,
             pipeline_cfg=pipeline_cfg,
         )

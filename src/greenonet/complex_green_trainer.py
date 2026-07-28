@@ -34,9 +34,12 @@ from greenonet.green_quadrature import (
     reconstruct_split_gauss_legendre,
     split_gauss_legendre_nodes,
 )
+from greenonet.green_lr_scheduler import GreenLearningRateSchedule
+from greenonet.green_optimizer import GreenOptimizerFactory, GreenTrainingRecorder
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.numerics import IntegrationRule, integrate
+from greenonet.optimizer_support import OptimizerStepProfiler
 from greenonet.plotly_io import save_plotly_figure
 from greenonet.visualizer import LossVisualizer
 
@@ -87,6 +90,13 @@ class ComplexGreenTrainer(LoggingMixin):
         self.rel_sol_history: List[float] = []
         self.val_rel_sol_history: List[float] = []
         self.rel_green_history: List[float] = []
+        self.optimizer_factory = GreenOptimizerFactory(config)
+        self.optimizer_provenance = self.optimizer_factory.provenance()
+        self.training_recorder = GreenTrainingRecorder(
+            work_dir=self.work_dir,
+            logger=self.logger,
+            provenance=self.optimizer_provenance,
+        )
 
     @staticmethod
     def _build_trunk_grid(unit_grid: Tensor) -> Tensor:
@@ -641,11 +651,25 @@ class ComplexGreenTrainer(LoggingMixin):
             )
         self.model.train()
         loader = self._make_loader(dataset, shuffle=True)
-        optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
+        schedule_config = GreenLearningRateSchedule.from_config(
+            self.config,
+            total_epochs=self.config.epochs,
+        )
+        optimizer = self.optimizer_factory.build(self.model.parameters())
+        optimizer_profiler = OptimizerStepProfiler(
+            optimizer=optimizer,
+            enabled=self.optimizer_provenance.profile_step_time,
+            device=self.device,
+        )
+        scheduler = schedule_config.build(optimizer)
+        self.training_recorder.log_startup(schedule_config)
+        self.training_recorder.write_provenance(schedule_config)
 
         for epoch in range(1, self.config.epochs + 1):
+            learning_rate = float(optimizer.param_groups[0]["lr"])
             epoch_losses: List[float] = []
             last_batch: ComplexGreenBatch | None = None
+            optimizer_profiler.begin_epoch()
             for batch in loader:
                 batch = batch.to(self.device)
                 optimizer.zero_grad()
@@ -664,12 +688,16 @@ class ComplexGreenTrainer(LoggingMixin):
                     prediction=prediction,
                 )
                 cast(Any, loss).backward()
-                optimizer.step()
+                optimizer_profiler.step()
                 epoch_losses.append(float(loss.detach().item()))
                 last_batch = batch
 
             mean_loss = float(sum(epoch_losses) / max(len(epoch_losses), 1))
             self.loss_history.append(mean_loss)
+            optimizer_metrics = optimizer_profiler.finish_epoch()
+            epoch_rel_sol: float | None = None
+            epoch_val_rel_sol: float | None = None
+            epoch_rel_green: float | None = None
 
             if epoch % self.config.log_interval == 0 and last_batch is not None:
                 with torch.no_grad():
@@ -679,6 +707,8 @@ class ComplexGreenTrainer(LoggingMixin):
                         val_rel_sol = self._dataset_rel_sol(validation_dataset)
                         self.rel_sol_history.append(train_rel_sol)
                         self.val_rel_sol_history.append(val_rel_sol)
+                        epoch_rel_sol = train_rel_sol
+                        epoch_val_rel_sol = val_rel_sol
                     else:
                         pred_eval = None
                         if not self._green_quadrature_enabled():
@@ -694,11 +724,13 @@ class ComplexGreenTrainer(LoggingMixin):
                             last_batch,
                             prediction=pred_eval,
                         )
-                        self.rel_sol_history.append(float(rel_sol.detach().item()))
+                        epoch_rel_sol = float(rel_sol.detach().item())
+                        self.rel_sol_history.append(epoch_rel_sol)
 
                     rel_green_line = self._green_kernel_rel_by_interval(last_batch)
                     rel_green_mean = self._finite_mean(rel_green_line.detach().cpu())
                     if rel_green_mean is not None:
+                        epoch_rel_green = rel_green_mean
                         self.rel_green_history.append(rel_green_mean)
 
                 if self.config.compute_validation_rel_sol:
@@ -706,27 +738,51 @@ class ComplexGreenTrainer(LoggingMixin):
                         "nan" if rel_green_mean is None else f"{rel_green_mean:.4e}"
                     )
                     self.logger.info(
-                        "Epoch %s: loss=%.4e | train_rel_sol=%.4e | val_rel_sol=%.4e | rel_green=%s",
+                        "Epoch %s: lr=%.6e | loss=%.4e | train_rel_sol=%.4e | "
+                        "val_rel_sol=%.4e | rel_green=%s%s",
                         epoch,
+                        learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
                         self.val_rel_sol_history[-1],
                         rel_green_text,
+                        self._optimizer_metrics_log_suffix(optimizer_metrics),
                     )
                 else:
                     rel_green_text = (
                         "nan" if rel_green_mean is None else f"{rel_green_mean:.4e}"
                     )
                     self.logger.info(
-                        "Epoch %s: loss=%.4e | rel_sol=%.4e | rel_green=%s",
+                        "Epoch %s: lr=%.6e | loss=%.4e | rel_sol=%.4e | rel_green=%s%s",
                         epoch,
+                        learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
                         rel_green_text,
+                        self._optimizer_metrics_log_suffix(optimizer_metrics),
                     )
             elif epoch % self.config.log_interval == 0:
-                self.logger.info("Epoch %s: loss=%.4e", epoch, mean_loss)
+                self.logger.info(
+                    "Epoch %s: lr=%.6e | loss=%.4e%s",
+                    epoch,
+                    learning_rate,
+                    mean_loss,
+                    self._optimizer_metrics_log_suffix(optimizer_metrics),
+                )
+            self.training_recorder.record(
+                phase=self.optimizer_provenance.name,
+                epoch=epoch,
+                learning_rate=learning_rate,
+                loss=mean_loss,
+                rel_sol=epoch_rel_sol,
+                val_rel_sol=epoch_val_rel_sol,
+                rel_green=epoch_rel_green,
+                telemetry=optimizer_metrics,
+            )
+            if scheduler is not None:
+                scheduler.step()
 
+        self._save_model_checkpoint("model_pre_lbfgs.safetensors")
         if self.config.lbfgs_max_iter > 0 and self.config.lbfgs_epochs > 0:
             self._run_lbfgs(dataset, validation_dataset)
 
@@ -817,6 +873,19 @@ class ComplexGreenTrainer(LoggingMixin):
                         self.rel_sol_history[-1],
                         rel_green_text,
                     )
+                self.training_recorder.record(
+                    phase="lbfgs",
+                    epoch=lbfgs_epoch,
+                    learning_rate=float(optimizer.param_groups[0]["lr"]),
+                    loss=last_loss,
+                    rel_sol=self.rel_sol_history[-1],
+                    val_rel_sol=(
+                        self.val_rel_sol_history[-1]
+                        if self.config.compute_validation_rel_sol
+                        else None
+                    ),
+                    rel_green=rel_green_mean,
+                )
 
     def _save_outputs(
         self,
@@ -849,8 +918,19 @@ class ComplexGreenTrainer(LoggingMixin):
             )
         self._save_green_heatmap(dataset)
         self._save_interval_metrics(dataset, validation_dataset)
+        self.training_recorder.write_csv()
+        self._save_model_checkpoint("model.safetensors")
 
-        model_path = self.work_dir / "model.safetensors"
+    @staticmethod
+    def _optimizer_metrics_log_suffix(metrics: dict[str, float]) -> str:
+        if not metrics:
+            return ""
+        return " | " + " | ".join(
+            f"{key}={value:.6e}" for key, value in metrics.items()
+        )
+
+    def _save_model_checkpoint(self, filename: str) -> None:
+        model_path = self.work_dir / filename
         if self.model_cfg is not None:
             save_model_with_config(self.model, self.model_cfg, model_path, self.logger)
         else:

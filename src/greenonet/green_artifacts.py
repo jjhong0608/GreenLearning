@@ -36,6 +36,8 @@ from greenonet.green_quadrature import (
     reconstruct_split_gauss_legendre,
     split_gauss_legendre_nodes,
 )
+from greenonet.green_lr_scheduler import GreenLearningRateSchedule
+from greenonet.green_optimizer import GreenOptimizerFactory
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.numerics import IntegrationRule, integrate
@@ -147,6 +149,11 @@ def load_green_artifact_configs(
     else:
         raise TypeError("training.compile must be an object.")
     training_cfg = TrainingConfig(compile=compile_cfg, **training_kwargs)
+    GreenOptimizerFactory(training_cfg)
+    GreenLearningRateSchedule.from_config(
+        training_cfg,
+        total_epochs=training_cfg.epochs,
+    )
 
     return dataset_cfg, model_cfg, training_cfg, raw_payload
 
@@ -337,6 +344,7 @@ class GreenArtifactExporter:
             "device": str(device),
             "theme": self.request.theme,
             "integration_rule": training_cfg.integration_rule,
+            **self._optimization_summary(training_cfg),
             "eval_seed": self.request.eval_seed,
             "eval_split": self.request.eval_split,
             "eval_sampling": _jsonify(asdict(sampling_cfg)),
@@ -655,6 +663,7 @@ class GreenArtifactExporter:
             "device": str(device),
             "theme": self.request.theme,
             "integration_rule": training_cfg.integration_rule,
+            **self._optimization_summary(training_cfg),
             "eval_seed": self.request.eval_seed,
             "eval_split": self.request.eval_split,
             "eval_sampling": _jsonify(asdict(sampling_cfg)),
@@ -703,6 +712,22 @@ class GreenArtifactExporter:
                 "Saved complex GreenNet artifact summary to %s", summary_path
             )
         return summary
+
+    @staticmethod
+    def _optimization_summary(
+        training_cfg: TrainingConfig,
+    ) -> dict[str, object]:
+        factory = GreenOptimizerFactory(training_cfg)
+        schedule = GreenLearningRateSchedule.from_config(
+            training_cfg,
+            total_epochs=training_cfg.epochs,
+        )
+        return {
+            "green_optimizer_provenance": factory.provenance().as_dict(),
+            "green_learning_rate_schedule": schedule.as_dict(),
+            "optimizer_state_resume": "not_supported_model_only_checkpoint",
+            "lbfgs_scheduler": "disabled",
+        }
 
     @staticmethod
     def _build_unit_trunk_grid(unit_grid: Tensor) -> Tensor:

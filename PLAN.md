@@ -1,347 +1,185 @@
-# Complex CouplingNet Source-Only Dataset 및 Fixed GP Source 구현 계획
+# GreenNet AdamW, SOAP 및 Warmup-Cosine Scheduler 통합 계획
 
 ## Summary
 
-- Complex CouplingNet의 train/validation source는 모든 epoch에서 동일하게 유지하는 **fixed source policy**로 고정한다.
-- Source backend는 config에서 다음 두 방식 중 하나를 선택한다.
-  - `npz`: 전용 CLI가 미리 생성한 deterministic source-only `.npz`
-  - `indexed_gp`: `(base_seed, split_id, sample_index)`로 매번 같은 source를 재현하는 runtime GP generator
-- 두 backend는 동일한 GP sampler, seed derivation, geometry masking을 공유하며 같은 설정과 sample identity에 대해 같은 full-grid `rhs`를 생성해야 한다.
-- Train/validation reference diagnostics는 별도 config로 on/off한다.
-  - enabled: 현재처럼 `sol`을 요구하고 `rel_sol`, optional `rel_flux`를 계산한다.
-  - disabled: `rhs`만 요구하고 `rel_sol`, `rel_flux`를 계산하거나 출력하지 않는다.
-- Test evaluation은 기존 FEniCSx-generated `rhs/sol/phi/psi` 경로를 유지한다.
-- GreenNet, Complex CouplingNet architecture, output contract, objective, projection, reconstruction, model checkpoint key는 변경하지 않는다.
-- `plan.md`는 이번 작업에서 수정하지 않으며, 사용자가 이 계획을 project root의 `plan.md`에 작성한다.
+- Unit-square 및 complex GreenNet의 기본 optimizer를 `torch.optim.Adam`에서 `torch.optim.AdamW`로 변경하고, GreenNet 경로에서 기존 Adam 구현과 `"adam"` config option을 완전히 제거한다.
+- SOAP은 GreenNet 전용 `training.optimizer.name="soap"` opt-in option으로 추가하며, 이미 vendoring된 공식 SOAP 구현과 provenance를 재사용한다.
+- Linear warmup + cosine annealing scheduler는 AdamW와 SOAP의 1차 학습 단계에만 적용한다.
+- AdamW/SOAP 단계가 끝난 뒤 실행되는 LBFGS는 현재 optimizer 생성, closure, line search, epoch 및 tolerance 설정을 그대로 유지한다.
+- GreenONet model, reconstruction loss, `rel_sol`, `rel_green`, quadrature, dataset, geometry, checkpoint tensor key는 변경하지 않는다.
+- 이 계획은 사용자가 project root의 `PLAN.md`에 저장하며, 이번 단계에서는 코드를 수정하지 않는다.
 
 ## Public Configuration
 
-`dataset`에 complex CouplingNet 전용 nested config를 추가한다.
-
-### 기존 Full-Reference NPZ 동작
-
-Config block이 없을 때도 아래와 동일하게 해석하여 기존 config를 보존한다.
+`TrainingConfig`에 다음 GreenNet optimizer/scheduler 설정을 추가한다.
 
 ```json
-"dataset": {
-  "coupling_source": {
-    "mode": "npz"
-  },
-  "reference_diagnostics": {
-    "training": true,
-    "validation": true
-  },
-  "training_path": "data/complex_samples/example/train",
-  "validation_path": "data/complex_samples/example/valid",
-  "test_path": "data/complex_samples/example/test"
-}
-```
-
-- Train/validation NPZ는 `rhs`, `sol`을 요구한다.
-- `phi/psi` 또는 legacy `uxx/uyy`는 optional이다.
-- `rel_sol`과 available `rel_flux`를 기존처럼 기록한다.
-
-### Source-Only NPZ 동작
-
-```json
-"dataset": {
-  "coupling_source": {
-    "mode": "npz"
-  },
-  "reference_diagnostics": {
-    "training": false,
-    "validation": false
-  },
-  "training_path": "data/complex_sources/annulus_gp/train",
-  "validation_path": "data/complex_sources/annulus_gp/valid",
-  "test_path": "data/complex_samples/annulus_reference/test"
-}
-```
-
-- Train/validation NPZ는 `rhs`만 요구한다.
-- 파일에 `sol/phi/psi`가 있더라도 읽거나 diagnostic에 사용하지 않는다.
-- Test dataset은 기존 full-reference contract로 별도 로드한다.
-
-### Index-Seeded Fixed GP 동작
-
-```json
-"dataset": {
-  "coupling_source": {
-    "mode": "indexed_gp",
-    "indexed_gp": {
-      "num_train": 4000,
-      "num_valid": 200,
-      "seed": 0,
-      "lengthscale": 0.2,
-      "amplitude": 1.0,
-      "mean": 0.0
+"training": {
+  "learning_rate": 0.0005,
+  "weight_decay": 0.0,
+  "epochs": 4000,
+  "use_lr_schedule": true,
+  "warmup_epochs": 100,
+  "min_lr": 1e-5,
+  "optimizer": {
+    "name": "adamw",
+    "betas": [0.9, 0.999],
+    "eps": 1e-8,
+    "profile_step_time": false,
+    "soap": {
+      "shampoo_beta": -1.0,
+      "precondition_frequency": 10,
+      "max_precondition_dim": 1024,
+      "merge_dims": false,
+      "precondition_1d": false,
+      "normalize_grads": false,
+      "correct_bias": true
     }
-  },
-  "reference_diagnostics": {
-    "training": false,
-    "validation": false
-  },
-  "test_path": "data/complex_samples/annulus_reference/test"
+  }
 }
 ```
 
-- `training_path`와 `validation_path`는 지정하지 않는다.
-- `test_path`는 기존 full-reference test dataset을 계속 가리킨다.
-- 같은 index를 다시 읽을 때 source를 다시 계산할 수는 있지만 값은 항상 동일하다.
-- Runtime provider는 전체 source를 메모리에 cache하지 않는다. GP covariance factor만 provider 초기화 시 한 번 계산하고, sample은 index seed로 재생성하여 memory 사용량을 sample 수와 독립적으로 유지한다.
-
-### Validation Rules
-
-- `coupling_source.mode`는 `"npz"` 또는 `"indexed_gp"`만 허용한다.
-- `npz` mode:
-  - `training_path`는 필수다.
-  - validation을 사용하면 `validation_path`도 필수다.
-  - `indexed_gp` block이 있으면 fail fast한다.
-- `indexed_gp` mode:
-  - `num_train >= 1`, `num_valid >= 0`
-  - `seed >= 0`
-  - `lengthscale > 0`, `amplitude >= 0`, finite `mean`
-  - `training_path` 또는 `validation_path`가 있으면 unused-path 오류로 fail fast한다.
-  - train/validation reference diagnostics가 enabled이면 reference가 없으므로 fail fast한다.
-- `best_energy_checkpoint` 또는 `best_physics_checkpoint`가 enabled이면 validation source가 반드시 존재해야 한다.
-- Unit-square mode에서 non-default `coupling_source` 또는 `reference_diagnostics`를 사용하면 complex-only option 오류를 낸다.
-- Unknown nested key와 잘못된 bool/numeric 타입은 fail fast한다.
+- `optimizer.name`은 `"adamw"` 또는 `"soap"`만 허용한다.
+- `optimizer` block이 없으면 `AdamW`, `betas=(0.9,0.999)`, `eps=1e-8`, `weight_decay=0.0`을 사용한다.
+- `"adam"`은 지원하지 않으며 명시되면 “GreenNet Adam has been removed; use adamw” 오류로 fail fast한다.
+- SOAP 예시 config에서는 `betas=(0.95,0.95)`를 명시하되, optimizer 종류에 따라 숨겨진 dynamic default를 적용하지 않는다.
+- `use_lr_schedule=false`이면 AdamW 또는 SOAP가 전체 1차 학습 동안 고정 learning rate를 사용한다.
+- `use_lr_schedule=true`이면 `warmup_epochs >= 0`, `0 <= min_lr <= learning_rate`를 검증한다.
+- `weight_decay`는 finite nonnegative 값으로 검증하며 기본값 `0.0`으로 기존 GreenNet의 no-weight-decay 의미를 보존한다.
+- 기존 Green config에 새 field가 없어도 정상적으로 parse되지만 optimizer는 의도적으로 AdamW로 변경된다.
 
 ## Implementation Changes
 
-### 1. Shared Source Core
+### 1. Shared Optimizer Configuration
 
-- FEniCSx package 아래의 순수 NumPy GP, indexed seed, raw geometry-grid masking을 generic `src/greenonet/complex_sources/` package로 이동한다.
-- 다음 공통 contract를 제공한다.
-  - separable squared-exponential GP sampler
-  - `derive_indexed_seed(base_seed, split, index)`
-  - geometry full-grid loader와 valid-mask 적용
-  - `generate_fixed_rhs(...)`
-- Seed는 기존 규칙을 유지한다.
+- `GreenOptimizerConfig`를 추가해 AdamW/SOAP 선택, betas, epsilon, profiling 및 SOAP nested config를 strict parsing한다.
+- 기존 `SoapOptimizerConfig`는 GreenNet과 Complex CouplingNet이 공유할 수 있도록 설명과 validation error prefix를 일반화한다.
+- 기존 vendored `SOAP` source, upstream commit, MIT attribution 및 float64 bridge는 수정하지 않는다.
+- `GreenOptimizerFactory`를 추가한다.
+  - `adamw`: `torch.optim.AdamW`.
+  - `soap`: 기존 vendored `SOAP`.
+  - 두 optimizer 모두 `learning_rate`, `weight_decay`, `betas`, `eps`를 resolved Green config에서 받는다.
+- 기존 Green trainer의 직접 `optim.Adam(...)` 호출과 Adam 관련 import를 모두 제거한다.
+- SOAP 공식 첫-step preconditioner initialization과 parameter-update skip 동작은 유지한다.
+
+### 2. Shared Warmup-Cosine Scheduler
+
+- CouplingNet의 검증된 scheduler 수식을 generic `LinearWarmupCosineSchedule` helper로 추출한다.
+- 기존 `CouplingLearningRateSchedule`은 wrapper를 유지해 현재 CouplingNet LR sequence가 bitwise-equivalent하게 보존되도록 한다.
+- GreenNet은 같은 core helper를 `TrainingConfig`와 `training.*` 오류 prefix로 사용한다.
+- 총 epoch \(T\), effective warmup \(W=\min(W_{\mathrm{configured}},T-1)\)에 대해 다음 LR을 사용한다.
 
 \[
-\mathrm{SeedSequence}
+\eta_e=\eta_{\max}\frac{e}{W},
+\qquad 1\le e\le W,
+\]
+
+\[
+\eta_e=
+\eta_{\min}
++\frac12(\eta_{\max}-\eta_{\min})
 \left[
-\mathrm{base\_seed},
-\mathrm{split\_id},
-\mathrm{sample\_index}
+1+\cos\left(
+\pi\frac{e-W-1}{T-W-1}
+\right)
 \right].
 \]
 
-- Split ID는 `train=0`, `valid=1`, `test=2`로 고정한다.
-- GP는 full Cartesian grid에서 먼저 sampling하고, valid point만 full-grid output에 남기며 outside-domain은 `0.0`으로 채운다.
-- Existing FEniCSx imports는 backward-compatible re-export 또는 새 shared module import로 전환하여 기존 FEniCSx sample 값과 seed 정책을 바꾸지 않는다.
-- NumPy가 권장하는 deterministic ID와 root seed 조합 방식을 따른다: [NumPy parallel random generation](https://numpy.org/doc/stable/reference/random/parallel.html).
+- Epoch 순서는 `현재 LR 기록 -> AdamW/SOAP batch updates -> diagnostics/output -> scheduler.step()`으로 고정한다.
+- Scheduler는 epoch마다 정확히 한 번만 step한다.
+- 여러 optimizer parameter group이 있으면 기존 group LR 비율을 보존한다.
+- SOAP의 `precondition_frequency`는 scheduler epoch가 아니라 optimizer step 기준임을 로그와 문서에 명시한다.
 
-### 2. Source Providers
+### 3. Green Trainer Integration
 
-- 공통 provider contract를 추가한다.
+- Unit-square `Trainer`와 `ComplexGreenTrainer`가 동일한 Green optimizer factory, scheduler 및 optimizer profiler를 사용한다.
+- Current Green configs처럼 dataset sample 수가 batch size보다 작으면 epoch당 optimizer step이 한 번이라는 사실을 telemetry에 정확히 반영한다.
+- SOAP profiling이 활성화되면 step mean/p95/max time, step count, basis refresh count 및 CUDA peak memory를 기록한다.
+- `green_training_metrics.csv`를 추가해 다음을 기록한다.
+  - `phase`: `adamw`, `soap`, `lbfgs`
+  - `epoch`, `learning_rate`, `loss`
+  - `rel_sol`, optional `val_rel_sol`, optional `rel_green`
+  - optional optimizer telemetry
+- `training.log` 시작부에 resolved optimizer, weight decay, betas, SOAP frequency와 scheduler 설정을 기록하고 epoch log에 실제 사용 LR을 포함한다.
+- `config_used.json`에는 resolved `training.optimizer`를 저장하고 `green_optimizer_provenance`에 implementation, SOAP upstream commit 및 model-only checkpoint policy를 기록한다.
+- Optimizer/scheduler state는 safetensors에 넣지 않는다. 중단 지점부터의 exact optimizer resume는 이번 범위에 포함하지 않는다.
 
-```text
-len(provider)
-provider[index] -> rhs_full, sample_index, sample_name
-```
+### 4. LBFGS Preservation
 
-- `NpzComplexSourceProvider`
-  - split directory의 `.npz` 파일을 정렬해서 읽는다.
-  - diagnostics disabled이면 `rhs`만 요구한다.
-  - diagnostics enabled이면 `rhs`, `sol`을 요구하고 optional flux target을 읽는다.
-- `IndexedGpComplexSourceProvider`
-  - configured sample count를 dataset length로 사용한다.
-  - split과 index로 seed를 파생한다.
-  - shared source core를 이용해 deterministic masked full-grid `rhs`를 반환한다.
-  - `sol/phi/psi`는 반환하지 않는다.
-- `ComplexCouplingDataset`은 provider에서 받은 full-grid `rhs`를 기존 valid-point gather, source branch interpolation, amplitude normalization 경로로 전달한다.
-- Existing `ComplexCouplingDataset(path, ...)` constructor는 NPZ + diagnostics-enabled default로 유지하여 직접 호출하는 기존 tests와 downstream code를 보존한다.
+- AdamW/SOAP epoch가 모두 끝난 후 scheduler와 1차 optimizer를 더 이상 사용하지 않는다.
+- 기존 `torch.optim.LBFGS` 생성 인자, `lbfgs_lr`, `max_iter`, `history_size`, `tolerance_grad`, `tolerance_change`, `strong_wolfe` line search 및 closure를 변경하지 않는다.
+- LBFGS epoch 중에는 warmup/cosine scheduler를 step하지 않는다.
+- LBFGS가 disabled이면 AdamW/SOAP 종료 결과를 바로 최종 checkpoint로 저장한다.
+- 비교 가능성을 위해 AdamW/SOAP 종료 시점에 `model_pre_lbfgs.safetensors`를 저장하고, 기존 `model.safetensors`는 전체 LBFGS 종료 후 최종 모델로 유지한다.
+- Existing Green model checkpoint tensor key와 load contract는 유지한다.
 
-### 3. Optional Reference Tensors 및 Metrics
+### 5. Configs, Artifacts, and Documentation
 
-- Batch tensor shape와 compile stability를 유지하기 위해 reference가 없을 때는 shape-compatible zero tensor와 `has_solution=false`, `has_flux=false`를 사용한다.
-- Diagnostics enabled split에서는 `sol` 누락을 오류로 처리한다.
-- Diagnostics disabled split에서는 reference array가 파일에 있어도 읽지 않는다.
-- Trainer와 evaluator metric 계산을 조건부로 변경한다.
-  - `has_solution=true`: `rel_sol` 계산
-  - flux target available: `rel_flux` 계산
-  - 둘 다 false: metric key 자체를 생성하지 않음
-- Diagnostics disabled이면 console log와 `complex_training_metrics.csv`에서 `rel_sol`, `rel_flux` field를 출력하지 않는다.
-- Canonical energy, bulk/boundary energy, learning rate, optimizer telemetry, best-energy/best-physics checkpoint 동작은 변경하지 않는다.
-- Reference-free objective 계산에는 계속 predicted `u_phi/u_psi`, projected `phi/psi`, `rhs`, coefficients, geometry를 사용한다.
-
-### 4. Dataset/Runner Dispatch
-
-- `DatasetConfig`에 strict `from_raw(...)` parsing을 추가해 path, dtype, scale fields와 새 nested config를 한 곳에서 복원한다.
-- Train, eval, Green/Coupling artifact config loader의 중복 `DatasetConfig(**raw)` parsing을 공통 parser로 통일한다.
-- Complex train dispatch:
-  - `npz`: 기존 paths에서 NPZ provider 생성
-  - `indexed_gp`: config count와 GP options로 generated provider 생성
-- Test dispatch는 source backend와 무관하게 `test_path`의 full-reference NPZ를 diagnostics-enabled mode로 로드한다.
-- `config_used.json`에는 resolved source backend, GP parameters, diagnostics policy, fixed-source convention을 기록한다.
-
-### 5. Source-Only NPZ CLI
-
-새 CLI `cli/make_complex_sources.py`를 추가한다.
-
-```bash
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python \
-  cli/make_complex_sources.py \
-  --geometry data/geometry/annulus_02_05_1_128.npz \
-  --out data/complex_sources/annulus_gp \
-  --num-train 4000 \
-  --num-valid 200 \
-  --lengthscale 0.2 \
-  --amplitude 1.0 \
-  --mean 0.0 \
-  --seed 0
-```
-
-CLI options:
-
-```text
---geometry PATH
---out PATH
---num-train INT
---num-valid INT
---lengthscale FLOAT
---amplitude FLOAT
---mean FLOAT
---seed INT
---overwrite
---validate / --no-validate
-```
-
-- v1 CLI는 serial generation으로 고정한다. Source generation은 FEniCSx solve보다 충분히 저렴하며, parallel worker option은 이번 범위에 포함하지 않는다.
-- OOP 구조로 `ComplexSourceGenerationConfig`, generator, atomic writer, CLI class를 둔다.
-- Rich console logging과 `<out>/make_complex_sources.log`를 사용한다.
-- Output:
-
-```text
-<out>/
-  train/sample_000000.npz
-  valid/sample_000000.npz
-  generation_summary.json
-  make_complex_sources.log
-```
-
-- 각 sample NPZ는 full-grid float64 `rhs` 하나만 저장한다.
-- Existing file은 기본 fail fast, `--overwrite`일 때만 atomic replace한다.
-- Summary에는 geometry path, grid shape, valid count, split counts, GP parameters, root seed, indexed seed policy, outside-domain policy를 기록한다.
-- Validation enabled이면 저장 직후 key, shape, dtype, finite value, outside-domain zero를 검사한다.
-
-### 6. Documentation
-
-- `README.md`에 두 backend config와 source-only generation command를 추가한다.
-- `docs/memory.md`에는 다음 durable convention을 기록한다.
-  - train/validation source는 fixed
-  - source backend는 NPZ 또는 indexed GP
-  - 두 backend는 동일 sample identity를 공유
-  - diagnostics-off train/validation은 `rhs` only
-  - test reference는 FEniCSx 경로 유지
-- FEniCSx sample docs에는 GP source core가 공유되지만 PDE reference solve contract는 변경되지 않는다고 명시한다.
-- 사용자가 작성할 root `plan.md`는 구현 agent가 기준 문서로 사용한다.
-
-## Affected Files
-
-- **Config 및 dispatch:** `src/greenonet/config.py`, `cli/train.py`, eval/artifact config loaders.
-- **Core data:** 새 `src/greenonet/complex_sources/`, `src/greenonet/complex_coupling_data.py`, trainer/evaluator의 conditional diagnostic path.
-- **CLI:** 새 `cli/make_complex_sources.py`; 기존 FEniCSx GP/seed modules는 shared core를 import하거나 re-export한다.
-- **Tests:** source core/CLI tests, complex dataset/trainer/config tests, FEniCSx regression tests.
-- **Docs:** `README.md`, `docs/memory.md`, FEniCSx/source-generation documentation.
-- Model architecture, GreenNet, projection, reconstruction, sample geometry schema는 영향받지 않는다.
+- `configs/default_green.json`과 `configs/complex_green.json`은 AdamW 및 scheduler를 명시적으로 사용하도록 갱신한다.
+  - `learning_rate=5e-4`
+  - `weight_decay=0.0`
+  - `use_lr_schedule=true`
+  - `warmup_epochs=100`
+  - `min_lr=1e-5`
+- Paired optimizer 실험용 `configs/complex_green_soap.json`을 추가하고 AdamW config와 model/data/LBFGS 설정을 동일하게 유지한다.
+- SOAP config는 `betas=(0.95,0.95)`, `precondition_frequency=10`, `max_precondition_dim=1024`, `precondition_1d=false`, `normalize_grads=false`, `correct_bias=true`를 명시한다.
+- Green artifact summary에는 optimizer/scheduler provenance를 추가하지만 artifact reconstruction 및 `rel_green` 의미는 변경하지 않는다.
+- README와 `docs/memory.md`에 Adam 제거, AdamW default, SOAP opt-in, scheduler 적용 범위, LBFGS 분리 및 model-only resume 정책을 기록한다.
 
 ## Test Plan
 
-### Source Core 및 Backend Parity
+- **Config:** optimizer block 누락 시 AdamW default, Adam 명시 거부, SOAP round-trip, unknown key와 invalid beta/epsilon/weight decay/frequency/dimension 검증.
+- **Scheduler:** warmup LR sequence, cosine 시작점, 마지막 epoch의 정확한 `min_lr`, zero warmup, disabled fixed LR, parameter-group ratio 보존을 검증한다.
+- **Factory:** AdamW 생성 인자, SOAP 생성 인자와 provenance, SOAP 첫-step no-op 및 float64 finite update를 검증한다.
+- **Unit-square trainer:** AdamW fixed/scheduled smoke와 SOAP 2-step 이상 smoke를 수행하고 실제 LR 및 telemetry 기록을 확인한다.
+- **Complex trainer:** `forward_pairs(...)`, uniform/split-quadrature reconstruction 모두에서 AdamW와 SOAP smoke를 실행한다.
+- **LBFGS:** AdamW/SOAP 종료 뒤 LBFGS가 기존 인자와 closure로 실행되고 scheduler가 LBFGS 중 호출되지 않는지 확인한다.
+- **Checkpoint:** 기존 Green safetensors를 새 코드에서 로드할 수 있고 model key가 바뀌지 않으며 pre-LBFGS/final checkpoint가 구분되는지 확인한다.
+- **Regression:** CouplingNet scheduler와 SOAP factory의 기존 결과, complex Green scaling, `rel_green`, artifact export 및 unit-square Green reconstruction을 유지한다.
 
-- 같은 `(seed, split, index, geometry, GP config)`에서 repeated generation이 동일한 `rhs`를 반환한다.
-- 다른 split 또는 index는 다른 source를 반환한다.
-- DataLoader access order와 shuffle에 관계없이 sample identity가 유지된다.
-- NPZ CLI의 `sample_000047.npz`와 indexed provider의 index 47이 같은 `rhs`를 생성한다.
-- Full-grid shape, finite values, valid-point values, outside-domain zero를 검증한다.
-- Existing FEniCSx generator가 shared core 전후 동일한 indexed source를 생성하는지 regression으로 확인한다.
-
-### Config
-
-- Block이 없는 기존 config가 `mode=npz`, diagnostics train/validation enabled로 해석된다.
-- NPZ source-only 및 indexed GP config가 parse/save/load round-trip한다.
-- Invalid mode, count, seed, GP numeric value, unknown key, conflicting path를 거부한다.
-- Indexed GP와 enabled reference diagnostics 조합을 거부한다.
-- Unit-square mode에서 complex source options를 거부한다.
-- Validation checkpoint enabled인데 validation source가 없는 config를 거부한다.
-
-### Dataset 및 Collate
-
-- Source-only NPZ가 diagnostics-off mode에서 `rhs`만으로 load/collate된다.
-- 같은 NPZ가 diagnostics-on mode에서는 missing `sol` 오류를 낸다.
-- Full-reference NPZ의 기존 `rhs/sol/phi/psi` behavior가 유지된다.
-- Indexed provider가 epoch 반복과 접근 순서에 관계없이 같은 sample을 반환한다.
-- Both provider outputs가 동일한 source branch와 source amplitude를 만든다.
-- Missing reference를 나타내는 mask와 zero placeholder가 batch/device 이동에서 유지된다.
-
-### Trainer 및 Evaluation
-
-- Source-only NPZ와 indexed GP 각각 one-epoch complex training smoke를 통과한다.
-- Diagnostics disabled run은 `rel_sol`/`rel_flux`를 계산하거나 log/CSV에 기록하지 않는다.
-- Validation canonical energy로 best-energy checkpoint가 정상 저장된다.
-- Reference array를 변경해도 diagnostics-off loss와 checkpoint criterion이 변하지 않는다.
-- Diagnostics-enabled 기존 run은 기존 metric을 유지한다.
-- Test evaluator와 artifact exporter는 full-reference test dataset에서 `rel_sol`, optional `rel_flux`, solution/flux figures를 계속 생성한다.
-- Model safetensors key와 output contract가 변경되지 않는지 확인한다.
-
-### CLI 및 Regression
-
-- Source CLI schema, overwrite, atomic write, validation, summary/log 생성을 검증한다.
-- `green_net` environment에서 `dolfinx/gmsh/petsc4py` import 없이 CLI가 실행되는지 확인한다.
-- Existing complex CouplingNet, FEniCSx sample, unit-square CouplingNet, complex GreenNet tests를 실행한다.
-
-검증 순서:
+검증 순서는 다음과 같다.
 
 ```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_complex_sources.py \
-  test/test_make_complex_sources.py \
-  test/test_complex_coupling_data.py \
-  test/test_complex_coupling_trainer.py \
+  test/test_green_optimizer.py \
+  test/test_green_lr_scheduler.py \
+  test/test_runner.py \
+  test/test_complex_green_trainer.py \
   test/test_io_config.py \
-  test/test_cli_train.py
+  test/test_cli_train.py \
+  test/test_export_green_artifacts.py
 
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_fenicsx_sample_schema.py \
-  test/test_complex_coupling_artifacts.py \
-  test/test_coupling.py
+  test/test_coupling_optimizer.py \
+  test/test_coupling_lr_scheduler.py \
+  test/test_complex_coupling_trainer.py
 
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
 
-ruff check src cli test
-ruff format src cli test
+~/.conda/envs/green_net/bin/python -m ruff check src cli test
+~/.conda/envs/green_net/bin/python -m ruff format src cli test
 ~/.conda/envs/green_net/bin/python -m mypy src
 git diff --check
 ```
 
 ## Rollback Strategy
 
-- Runtime rollback은 `coupling_source.mode="npz"`와 reference diagnostics train/validation enabled를 사용하거나 새 config block을 제거하는 것이다.
-- Source-only NPZ와 CLI output은 additive artifact이므로 기존 FEniCSx sample을 수정하거나 삭제하지 않는다.
-- Code rollback은 source providers, source-only CLI, nested config, conditional diagnostic path만 제거하고 existing NPZ dataset constructor를 복원한다.
-- Shared GP extraction을 롤백할 때는 backward-compatible re-export를 제거하고 기존 FEniCSx import 위치로 되돌린다.
-- Model architecture와 safetensors state dict를 변경하지 않으므로 checkpoint migration은 필요 없다.
-- Backend parity를 유지할 수 없다면 indexed GP rollout을 중단하고 deterministic NPZ backend만 보존한 뒤 seed/kernel/masking 차이를 보고한다.
-- Existing config의 current behavior가 깨지면 새 source integration을 merge하지 않고 기존 full-reference NPZ path를 우선 복구한다.
+- SOAP runtime rollback은 `training.optimizer.name="adamw"`로 변경한다.
+- Scheduler runtime rollback은 `training.use_lr_schedule=false`로 변경한다.
+- SOAP 또는 scheduler integration에 문제가 생기면 Green model/loss/data/LBFGS를 건드리지 않고 factory 또는 scheduler branch만 비활성화할 수 있어야 한다.
+- Adam은 의도적으로 제거하므로 rollback option으로 유지하지 않는다.
+- Optimizer와 scheduler가 model state key를 변경하지 않으므로 checkpoint migration은 없어야 한다.
+- Existing checkpoint compatibility가 깨지면 구현을 중단하고 정확한 incompatible key, 영향받는 checkpoint와 최소 migration을 보고한다.
 
-## Acceptance Criteria
+## Assumptions and Confidence
 
-- Train/validation source가 epoch마다 바뀌지 않는다.
-- Config로 NPZ와 indexed GP backend를 선택할 수 있다.
-- 같은 identity의 두 backend가 같은 `rhs`를 생성한다.
-- Source-only train/validation은 FEniCSx 없이 실행된다.
-- Diagnostics disabled run은 `sol/phi/psi`를 요구하지 않고 `rel_sol/rel_flux`를 출력하지 않는다.
-- Test evaluation은 FEniCSx reference metrics와 artifacts를 유지한다.
-- Best-energy checkpoint selection은 source-only validation에서 정상 동작한다.
-- Existing config, model checkpoint, unit-square, GreenNet, FEniCSx sample behavior에 regression이 없다.
-
-## Confidence
-
-- 구현 계획 확신도: **0.97**
-- Source backend parity와 reference-free train/validation 구현 가능성: **0.99**
-- 남은 불확실성은 정보 부족이나 규칙 모호성이 아니라, 대규모 indexed GP dataset을 epoch마다 deterministic regeneration할 때의 실제 CPU 비용에 관한 일반적인 성능 리스크다.
-- v1은 memory-bounded regeneration을 채택하고 cache와 parallel source generation은 후속 최적화로 남긴다.
+- AdamW는 unit-square와 complex GreenNet 모두의 기본 optimizer다.
+- SOAP은 두 GreenNet geometry mode에서 opt-in으로 사용할 수 있다.
+- Scheduler는 AdamW/SOAP 단계에만 적용하고 LBFGS에는 적용하지 않는다.
+- `weight_decay=0.0`을 기본으로 두어 optimizer class 변경 외의 regularization 변화는 만들지 않는다.
+- Canonical Green configs는 scheduler를 활성화하지만, 외부 legacy config가 scheduler field를 생략하면 fixed LR을 사용한다.
+- Existing model checkpoint는 호환되며 optimizer/scheduler resume는 지원하지 않는다.
+- 구현 계획 확신도는 **0.98**다.
+- SOAP의 GreenNet 수렴 개선 가능성에 대한 경험적 확신도는 **0.65**다.
+- 남은 불확실성은 규칙 모호성이나 구현 정보 부족이 아니라, effective source batch 25인 GreenNet에서 SOAP이 AdamW보다 좋은 convergence/wall-clock을 제공할지에 대한 실험적 불확실성이다.
 

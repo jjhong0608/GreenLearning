@@ -11,7 +11,7 @@
     "deterministic": true,
     "use_operator_learning": true,
     "dtype": "float64",
-	"coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py"
+    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py"
   },
   "terminal": {
     "width": 250
@@ -31,11 +31,24 @@
   },
   "training": {
     "learning_rate": 0.0005,
+    "weight_decay": 0.0,
     "epochs": 4000,
     "batch_size": 20000,
     "log_interval": 1,
     "compute_validation_rel_sol": true,
     "device": "cuda:1",
+    "use_lr_schedule": true,
+    "warmup_epochs": 100,
+    "min_lr": 1e-5,
+    "optimizer": {
+      "name": "adamw",
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "eps": 1e-8,
+      "profile_step_time": false
+    },
     "lbfgs_max_iter": 1000,
     "lbfgs_history_size": 200,
     "lbfgs_lr": 1.0,

@@ -14,14 +14,15 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Train with the sample config: `PYTHONPATH=src python cli/train.py --config configs/default.json --work-dir checkpoints/run`
 - Logs: Rich console output plus `training.log` in the chosen `work-dir`.
 - Artifacts: `loss_curve.html`, `green_heatmap.html`, and weights `model.safetensors` in `work-dir`.
-- Config: the CLI writes `config_used.json` in the `work-dir`. GreenNet and unit-square runs preserve the input JSON verbatim; complex CouplingNet runs additionally materialize the resolved optimizer block and top-level optimizer provenance so defaults and the pinned implementation commit remain auditable.
+- Config: the CLI writes `config_used.json` in the `work-dir`. GreenNet runs materialize the resolved `training.optimizer` block plus top-level Green optimizer/scheduler provenance, and complex CouplingNet runs materialize the resolved Coupling optimizer block and provenance. Unit-square CouplingNet-only runs preserve the input JSON unless another resolved runtime section requires materialization.
 - Checkpoints: `*.safetensors` include JSON-encoded model config metadata; use `greenonet.io.load_model_with_config` to restore model+config.
 - Loss: Green's-function reconstruction — integrates the learned Green kernel against the source and matches the recovered solution (no direct output MSE).
 - GreenNet structure: the analytic Green wrapping remains active when `model.use_green=true`, while the learned correction now uses fused line encoders for `a`, `a'`, `b`, and `c` plus a hybrid trunk with smooth `(x, xi)` features.
 - Green analytic coefficients: under the conservative operator `-d_x(a(x) d_x u) + b(x) d_x u + c(x) u = f`, the implemented wrapping uses `A(x, xi) = 1 / a(x)` and `B(x, xi) = (a'(x) + b(x)) / a(x)^2`, so both coefficients depend on the evaluation-side `x` values.
 - Exact Green references: `greenonet.greens.ExactGreenFunction` keeps its default diffusion-only reference for `forward()`, `__call__()`, and `error()`. GreenNet `rel_green` uses the exact/reference line kernel selected from sampled coefficients: diffusion reference when `b=0, c=0`, convection-diffusion reference via `convection_diffusion(b)` when `b!=0, c=0`, and skip/invalid when reaction `c` is nonzero. Exact kernels follow the reconstruction convention `G[row=x, col=xi]`; for convection-diffusion lines, pass the axis-local convection slice (`bx` for x-lines, `by` for y-lines).
 - Integration rule: set `training.integration_rule` and `coupling_training.integration_rule` to `"simpson"` or `"trapezoid"` to control sampled-data quadrature in Green/Coupling training, evaluation metrics, and coupling RHS normalization. Green synthetic samplers reuse `training.integration_rule` for sample normalization.
-- Optimizers: GreenONet uses Adam by default with optional multi-epoch LBFGS fine-tuning (see `TrainingConfig.lbfgs_*`). CouplingNet training uses AdamW by default. Complex CouplingNet can opt into the pinned SOAP implementation through `coupling_training.optimizer.name="soap"`; GreenNet and unit-square CouplingNet do not use SOAP.
+- Optimizers: both unit-square and complex GreenNet use AdamW by default. Set `training.optimizer.name="soap"` to opt into the pinned SOAP implementation; explicit `training.optimizer.name="adam"` is rejected because Adam has been removed from the GreenNet runtime. The optional multi-epoch LBFGS fine-tuning stage remains controlled by `TrainingConfig.lbfgs_*` and is unchanged. CouplingNet also defaults to AdamW, while SOAP remains complex CouplingNet-only under `coupling_training.optimizer.name="soap"`.
+- AMUSE research status: AMUSE (Anytime MUon with Stable gradient Evaluation) is not implemented. A current-code applicability review is in `docs/amuse_optimizer_applicability.md`. AMUSE and SOAP share the broad goal of improving matrix-parameter optimization, but SOAP runs Adam in a Shampoo-derived eigenbasis whereas AMUSE combines per-step Muon orthogonalization with Schedule-Free gradient evaluation and averaged inference. The model is structurally suitable because 99.61% of its trainable parameters are 2D matrices, but AMUSE needs optimizer `train()`/`eval()` lifecycle integration, averaged-iterate checkpointing, optimizer-step warmup without cosine decay, and an explicit `bfloat16` Newton-Schulz precision policy. It must remain a complex-only opt-in pilot rather than replacing AdamW or SOAP.
 - Torch compile: set `training.compile.enabled=true` to wrap GreenONet with `torch.compile`, and set `coupling_training.compile.enabled=true` to do the same for CouplingNet. The flags are independent, optional, and checkpoint saving still unwraps compiled models to keep load/save compatibility.
 - Terminal logging: set top-level `terminal.width` to a positive integer such as `250` to fix Rich console log width for all project loggers. Omit `terminal` or set `width=null` to keep Rich's automatic terminal-width detection; disk `training.log` output is unchanged.
 - CouplingNet: a shared branch/trunk MIONet consumes axial-line inputs `(a, b, c, f)` together with interior coordinates and predicts axial flux-divergences `(phi_x, psi_y)` through a single shared DeepONet-style readout followed by optional balance projection.
@@ -223,6 +224,43 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   "reference_diagnostics": {"training": false, "validation": false}
   ```
   Omit `dataset.training_path` and `dataset.validation_path` in this mode. Keep `dataset.geometry_path` and the full-reference `dataset.test_path`. A positive validation count is required when best-energy or best-physics checkpointing is enabled.
+- SOAP paired-pilot config: `configs/complex_coupling_soap.json` uses the fixed
+  runtime `indexed_gp` backend with `num_train=4800`, `num_valid=400`,
+  `seed=0`, `lengthscale=0.15`, `amplitude=1.0`, and `mean=0.0`. With
+  `batch_size=400`, `epochs=125`, and `warmup_epochs=13`, the run keeps about
+  1,500 optimizer steps and 156 warmup steps while reducing repeated exposure
+  to each fixed source. Training and validation reference diagnostics are
+  disabled; its full-reference `dataset.test_path` remains available for
+  detached test evaluation.
+- Fixed-source runs must be interpreted through the validation-selected
+  best-energy checkpoint rather than the final epoch. In the exploratory
+  `coupling11_2000_train` run, validation energy was lowest at epoch 133 and
+  then increased by 5.22x while train energy continued to fall. The generated
+  diagnostic bundle is under
+  `checkpoints/Annulus_poisson/coupling11_2000_train/analysis/`. This run also
+  changed `hidden_dim` from 256 to 384, so it is not a controlled source-count
+  ablation.
+- The completed `coupling12` Annulus run used 4,800 fixed indexed-GP train
+  sources, 300 validation sources, the original 1,814,587-parameter model, and
+  1,600 SOAP steps. Validation canonical energy reached its minimum
+  `4.366951e-4` at epoch 65 and finished only 2.19% higher, so late overfitting
+  was mild. Its best-energy checkpoint reduced mean test energy by 24.03%,
+  `rel_sol` by 5.07%, and `rel_flux` by 9.37% relative to `coupling11`.
+  Inner-radius transition seams nevertheless remain visible; the full report,
+  CSV/JSON diagnostics, and Plotly figures are under
+  `checkpoints/Annulus_poisson/coupling12/analysis/`.
+- A same-checkpoint ablation of the trained `coupling12` pre-projection fuser
+  confirms that it is functionally important: bypassing only the fuser raises
+  mean test canonical energy from `4.050432e-4` to `2.568269e-3` (6.34x) and
+  mean `rel_sol` from 5.602% to 12.578% (2.25x), with the enabled path better on
+  all 50 test samples. Mean transition solution-error RMS falls by 58.94% with
+  the fuser, but the transition/bulk ratio falls by only 3.65%, so the fuser
+  reduces the seam amplitude without eliminating its structural concentration.
+  Mean `rel_flux` improves by only 1.02%. This inference-time bypass measures
+  the fuser's contribution inside the co-adapted checkpoint; an architecture
+  claim still requires a separately trained disabled control. The report and
+  paired Plotly artifacts are under
+  `checkpoints/Annulus_poisson/coupling12/pre_projection_fuser_ablation/`.
 - Complex disabled features: `cross_consistency`, `smooth_mask`, `balance_loss`, `source_stencil_lift`, and `green_response_feature` are unit-square-only surfaces. Complex trainer/evaluator/artifact paths do not compute, log, serialize, or export cross-related metric keys or placeholder fields.
 - CouplingNet coefficient terms: in the standard branch path (`source_stencil_lift.enabled=false`), `coupling_model.coefficient_terms` controls which operator coefficients enter the generic `branch_coefficient`. Unit-square mode concatenates enabled terms in `[a, b, c]` order from `diffusion`, `convection`, and `reaction`; complex mode expands enabled convection into `[b_primary, b_transverse]` while preserving the same config surface. The default `diffusion=true, convection=false, reaction=false` preserves the diffusion-only coefficient branch. If all three are false, CouplingNet uses a source-only pure Poisson branch path and skips `branch_coefficient`.
 - CouplingNet branch fusion: set `coupling_model.branch_fusion.mode` to choose how branch features are combined before the trunk readout. The default `product` keeps the existing multiplicative fusion of source, coefficient, and optional transverse branch features. The experimental `product_fuser` mode concatenates the active branch features with their component-wise product and passes them through a learned fuser, preserving the product bias while allowing a learned final branch representation.
@@ -255,8 +293,12 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Cross consistency auxiliary loss: `cross_consistency` penalizes the cross-operator terms `L_x(u_psi^(y)) <-> phi` and `L_y(u_phi^(x)) <-> psi`, reusing the same represented solutions, conservative stencil, common-grid slicing, and quadrature rule as the rest of the Coupling trainer.
 - Green hybrid trunk: the learned Green correction always sees smooth handcrafted features `x`, `xi`, `x*xi`, `x^2`, `xi^2`, `x-xi`, `(x-xi)^2`, and `sqrt((x-xi)^2 + eps)`. If `model.use_fourier=true`, the Fourier embedding is appended to that structured trunk basis instead of replacing it.
 - Coupling LR schedule: both unit-square and complex CouplingNet trainers honor `coupling_training.use_lr_schedule=true` with `warmup_epochs` and `min_lr`. The shared schedule applies linear warmup, then cosine decay from `learning_rate` to `min_lr`; it steps once after each epoch's optimizer updates, validation, and checkpoint writes. Complex training records the learning rate actually used by every train/validation epoch in `complex_training_metrics.csv` and `training.log`. With `use_lr_schedule=false`, AdamW keeps the configured fixed `learning_rate`.
+- GreenNet optimizer config: omit `training.optimizer` to use AdamW with `betas=[0.9,0.999]`, `eps=1e-8`, and `training.weight_decay` (default `0.0`). Set `training.optimizer.name="soap"` for either GreenNet geometry path; supported SOAP options and pinned source are shared with complex CouplingNet. `configs/complex_green_soap.json` is the paired-pilot example, while `configs/default_green.json` and `configs/complex_green.json` remain AdamW examples.
+- GreenNet LR schedule: both unit-square and complex GreenNet honor `training.use_lr_schedule=true` with `warmup_epochs` and `min_lr`. Linear warmup followed by cosine decay is applied only to the AdamW/SOAP first stage and steps once after each completed epoch. The pre-LBFGS model is saved as `model_pre_lbfgs.safetensors`; LBFGS then uses its existing independent optimizer, learning rate, closure, and strong-Wolfe line search without any scheduler.
+- GreenNet optimizer audit: every run writes `green_optimizer_provenance.json` and `green_training_metrics.csv`, records the actual first-stage learning rate in `training.log`, and includes resolved Green optimizer/scheduler metadata in `config_used.json` and Green artifact summaries. `training.optimizer.profile_step_time=true` enables the same optimizer-step timing, SOAP basis-refresh, and CUDA peak-memory telemetry used by complex CouplingNet. Green checkpoints remain model-only safetensors; optimizer/scheduler resume state is not stored.
 - Coefficients: the training CLI resolves `a_fun`, `apx_fun`, `apy_fun`, directional convection coefficients `bx_fun`/`by_fun`, and `c_fun`, then forwards the same function set into the axial sampler and Coupling datasets. Internally `b_vals[0]` stores x-direction convection and `b_vals[1]` stores y-direction convection.
 - Coefficient functions: set `dataset.coefficient_functions_path` to a Python file that defines callable `a_fun`, `apx_fun`, `apy_fun`, `bx_fun`, `by_fun`, and `c_fun` with signature `(x, y) -> Tensor`; `configs/sinusoidal_coefficients.py` is a default-equivalent example. Legacy files that define only `b_fun` are interpreted as `bx_fun = b_fun` and `by_fun = b_fun`; mixing `b_fun` with `bx_fun`/`by_fun` or defining only one directional convection function fails fast.
+- Annulus convection-diffusion-reaction coefficients: `coefficients/Annulus_Convection_Diffusion_Reaction.py` keeps the diffusion and reaction fields from `Convection_Diffusion_Reaction.py` and replaces convection by a smooth counter-clockwise tangential field for the centered annulus with `inner_radius=0.2` and `outer_radius=0.5`. Its radial polynomial envelope makes the full vector field zero on both circular boundaries, and `CONVECTION_AMPLITUDE=0.5` preserves the original coefficient family's convection scale. Point `dataset.coefficient_functions_path` to this file for the matching Annulus experiment.
 - Sampler mode: set `dataset.sampler_mode` to `"forward"` (sample `u`, derive `f`) or `"backward"` (sample `f`, solve `-d/dx(a u') + b u' + c u = f` with `scipy.integrate.solve_bvp` to recover `u`).
 - Green validation reconstruction: set `training.compute_validation_rel_sol=true` to generate a separate synthetic validation dataset for GreenONet and log `val_rel_sol` alongside training `rel_sol`.
 - Green validation dataset controls: use `dataset.validation_samples_per_line` to choose how many validation samples are generated per axial line, `dataset.validation_scale_length` to override the validation sampler length scale, and `dataset.validation_sampler_mode` to override the validation sampler type. If either validation override is omitted, Green validation reuses the training-side `dataset.scale_length` and `dataset.sampler_mode`.

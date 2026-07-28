@@ -444,7 +444,7 @@ class TestTrainer:
             model_cfg=model_cfg,
         )
         trainer.train(dataset)
-        # One Adam epoch + two LBFGS aggregate entries
+        # One AdamW epoch + two LBFGS aggregate entries
         assert len(trainer.loss_history) >= 3
 
     def test_validation_rel_sol_is_recorded_and_exported(

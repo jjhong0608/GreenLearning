@@ -1,30 +1,24 @@
 {
   "dataset": {
-    "step_size": 0.0078125,
-    "n_points_per_line": 129,
+    "geometry_mode": "complex",
+    "geometry_path": "data/geometry/annulars_05_1_1_128.npz",
     "samples_per_line": 25,
     "validation_samples_per_line": 5,
-    "validation_sampler_mode": "backward",
-    "scale_length": [
-      0.05,
-      0.25
-    ],
-    "validation_scale_length": [
-      0.05,
-      0.25
-    ],
+    "sampler_mode": "forward",
+    "validation_sampler_mode": "forward",
+    "scale_length": 0.15,
+    "validation_scale_length": 0.15,
     "deterministic": true,
-    "sampler_mode": "backward",
     "use_operator_learning": true,
     "dtype": "float64",
-    "coefficient_functions_path": "coefficients/Divergence_Free_Convection_Diffusion2.py"
+    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py"
   },
   "terminal": {
     "width": 250
   },
   "model": {
     "input_dim": 2,
-    "hidden_dim": 256,
+    "hidden_dim": 128,
     "depth": 4,
     "activation": "rational",
     "use_bias": true,
@@ -39,7 +33,7 @@
     "learning_rate": 0.0005,
     "weight_decay": 0.0,
     "epochs": 4000,
-    "batch_size": 1500,
+    "batch_size": 20000,
     "log_interval": 1,
     "compute_validation_rel_sol": true,
     "device": "cuda:1",
@@ -47,13 +41,22 @@
     "warmup_epochs": 100,
     "min_lr": 1e-5,
     "optimizer": {
-      "name": "adamw",
+      "name": "soap",
       "betas": [
-        0.9,
-        0.999
+        0.95,
+        0.95
       ],
       "eps": 1e-8,
-      "profile_step_time": false
+      "profile_step_time": true,
+      "soap": {
+        "shampoo_beta": -1.0,
+        "precondition_frequency": 10,
+        "max_precondition_dim": 1024,
+        "merge_dims": false,
+        "precondition_1d": false,
+        "normalize_grads": false,
+        "correct_bias": true
+      }
     },
     "lbfgs_max_iter": 1000,
     "lbfgs_history_size": 200,
@@ -61,6 +64,13 @@
     "lbfgs_tolerance_grad": 1e-20,
     "lbfgs_epochs": 100,
     "integration_rule": "trapezoid",
+    "green_quadrature": {
+      "enabled": false,
+      "rule": "split_gauss_legendre",
+      "order": 16,
+      "source_sampling_factor": 4,
+      "source_interpolation": "cubic"
+    },
     "compile": {
       "enabled": true
     }

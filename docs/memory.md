@@ -50,6 +50,11 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - `Smooth_Variable_Diffusion_Reaction.py`: smooth variable diffusion with reaction,
   zero convection.
 - `Convection_Diffusion_Reaction.py`: variable diffusion with convection and reaction.
+- `Annulus_Convection_Diffusion_Reaction.py`: `Convection_Diffusion_Reaction.py`와
+  동일한 diffusion/reaction을 사용하고, `inner_radius=0.2`,
+  `outer_radius=0.5`에서 0이 되는 smooth counter-clockwise tangential
+  convection을 사용한다. Convection amplitude scale은 `0.5`이고, radial
+  polynomial envelope 때문에 annulus 내부 vector field는 divergence-free이다.
 - `Divergence_Free_Convection_Diffusion.py`: variable diffusion,
   divergence-free convection with amplitude `2.0`, zero reaction.
 - 새 coefficient file을 추가할 때는 `a_fun`, `apx_fun`, `apy_fun`,
@@ -261,6 +266,46 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   저장하고 outside-domain은 `0.0`이다. Test evaluation과 artifact export는 source
   backend와 무관하게 FEniCSx-generated `rhs/sol/phi/psi` full-reference
   `dataset.test_path`를 계속 사용한다.
+- `configs/complex_coupling_soap.json`은 fixed runtime `indexed_gp` source를
+  `num_train=4800`, `num_valid=400`, `seed=0`, `lengthscale=0.15`,
+  `amplitude=1.0`, `mean=0.0`으로 사용한다. `batch_size=400`, `epochs=125`,
+  `warmup_epochs=13`으로 약 1,500 total optimizer steps와 156 warmup steps를
+  유지하면서 source별 반복 노출을 줄인다. Periodic checkpoint는 같은 step
+  간격에 가깝도록 50 epoch마다 저장한다. Train/validation reference
+  diagnostics는 모두 꺼져 있고, full-reference `test_path`만 detached test
+  evaluation용으로 유지한다.
+- Fixed indexed-GP source를 사용한 `coupling11_2000_train` 실험은 validation
+  canonical energy가 epoch 133에서 `5.320162e-4`로 최소가 된 뒤 epoch 447에서
+  `2.777888e-3`까지 증가한 반면 train energy는 계속 감소했다. Late validation
+  bulk는 best 대비 4.38배, boundary는 9.32배 증가했으므로 명확한 fixed-source
+  overfitting이다. Artifact의 fusion gate는 epoch-133 값과 일치하므로 현재
+  artifact는 stopped state가 아니라 best-energy checkpoint를 나타낸다.
+  이 실험은 source 수뿐 아니라 `hidden_dim=256 -> 384`와 parameter count
+  `1,814,587 -> 4,048,827`도 함께 바뀌었으므로 source-count 단독 ablation으로
+  해석하지 않는다. 상세 결과는
+  `checkpoints/Annulus_poisson/coupling11_2000_train/analysis/`에 둔다.
+- 완료된 `coupling12` Annulus 실험은 4,800 fixed indexed-GP train source, 300
+  validation source, 기존 1,814,587-parameter architecture, 1,600 SOAP
+  optimizer step을 사용했다. Validation canonical energy는 epoch 65에서
+  `4.366951e-4`로 최소였고 epoch 100은 그보다 2.19% 높아 late overfitting이
+  경미했다. Best-energy checkpoint의 mean test energy/`rel_sol`/`rel_flux`는
+  `4.050432e-4`/`5.602%`/`17.310%`이며 `coupling11` 대비 각각
+  24.03%/5.07%/9.37% 개선되었다. 그러나 inner-radius line-length-squared
+  scale이 4.796배 바뀌는 `|x|,|y| ~= 0.2` transition seam은 남아 있다.
+  Physical balance residual은 machine precision이므로 seam은 balance violation이
+  아니다. 상세 분석은 `checkpoints/Annulus_poisson/coupling12/analysis/`에 둔다.
+- `coupling12` best-energy checkpoint의 pre-projection fuser를 inference에서만
+  bypass한 50-sample paired ablation에서 fuser-on mean test energy/`rel_sol`은
+  `4.050432e-4`/5.602%, fuser-off는 `2.568269e-3`/12.578%였다. Energy와
+  `rel_sol`은 50개 전부 fuser-on이 더 좋았고 transition solution-error RMS도
+  58.94% 낮았다. 반면 transition/bulk ratio 개선은 3.65%, mean `rel_flux`
+  개선은 1.02%에 그쳤다. 따라서 이 checkpoint 안에서 fuser는 solution과
+  canonical energy에 필수적인 learned difference-mode correction이지만 annulus
+  seam 자체를 제거하거나 supervised flux split을 크게 개선하지는 않는다.
+  Backbone과 fuser가 함께 학습되었으므로 이것은 same-checkpoint functional
+  ablation이며 architecture-level causality에는 separately trained no-fuser
+  control이 필요하다. 상세 산출물은
+  `checkpoints/Annulus_poisson/coupling12/pre_projection_fuser_ablation/`에 둔다.
 - Unit-square와 complex CouplingNet trainer는 같은 linear-warmup + cosine-decay
   learning-rate schedule을 사용한다. `coupling_training.use_lr_schedule=true`이면
   `warmup_epochs` 동안 `learning_rate`까지 선형 증가한 뒤 마지막 epoch의
@@ -269,9 +314,26 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `complex_training_metrics.csv`와 `training.log`에는 해당 epoch optimizer update에
   실제 사용한 `learning_rate`를 기록한다. `use_lr_schedule=false`이면 고정
   learning rate를 유지한다.
+- Unit-square와 complex GreenNet의 first-stage optimizer 기본값은 AdamW이다.
+  `training.optimizer.name="soap"`이면 두 GreenNet geometry path 모두 pinned
+  SOAP을 사용하고, 명시적인 `"adam"`은 폐기된 optimizer이므로 fail fast한다.
+  `training.weight_decay`, nested optimizer `betas`/`eps`, SOAP option은
+  `TrainingConfig`의 strict parser를 통해 동일하게 적용한다.
+- GreenNet의 `training.use_lr_schedule=true`는 AdamW 또는 SOAP first stage에만
+  linear warmup과 cosine decay를 적용한다. 실제 epoch learning rate는
+  `training.log`와 `green_training_metrics.csv`에 기록하고, first stage가 끝나면
+  `model_pre_lbfgs.safetensors`를 저장한다. 이후 LBFGS는 기존 독립 learning
+  rate, closure, strong-Wolfe line search를 그대로 사용하며 scheduler를
+  적용하지 않는다.
+- GreenNet run은 `green_optimizer_provenance.json`을 저장하고
+  `config_used.json`과 Green artifact summary에 resolved optimizer/scheduler
+  metadata를 materialize한다. Checkpoint는 계속 model-only safetensors이며
+  optimizer/scheduler state resume는 지원하지 않는다. Optional optimizer
+  profiling은 step timing, SOAP basis refresh, CUDA peak allocated memory를
+  기록하고 CPU peak-memory 값 `0.0`은 not-measured sentinel이다.
 - Complex CouplingNet optimizer의 backward-compatible default는 AdamW이다.
   SOAP은 `coupling_training.optimizer.name="soap"`인 경우에만 사용하는
-  complex-only opt-in이며 GreenNet과 unit-square CouplingNet은 SOAP을 거부한다.
+  CouplingNet complex-only opt-in이며 unit-square CouplingNet은 SOAP을 거부한다.
   Vendored source는 official SOAP commit
   `a1e553530fde97d0e6b307d7c82ac6d38b072340`에 고정되고 MIT attribution은
   `THIRD_PARTY_NOTICES.md`에 둔다. SOAP `precondition_frequency`는 epoch가 아닌
@@ -293,6 +355,30 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   유지 여부는 AdamW와 같은 seed/data/loss/scheduler를 사용한 300--500 epoch
   paired pilot에서 equal-step 및 equal-wall-clock 기준을 함께 비교한 뒤 결정하며,
   기본 optimizer로 자동 승격하지 않는다.
+- AMUSE (Anytime MUon with Stable gradient Evaluation)는 아직 구현하지 않은
+  complex CouplingNet optimizer 연구 후보이다. 2026-07-27 조사 기준 current
+  SOAP pilot architecture의 1,814,586 trainable parameter 중 1,807,506개,
+  즉 99.61%가 2D matrix이므로 Muon 구조 적용성은 높다. 그러나 AMUSE는
+  drop-in `optimizer.step()` 교체가 아니다. Training에서는 optimizer
+  `train()` 상태의 gradient-evaluation iterate를 사용하고 validation,
+  best-energy selection, checkpoint 저장에서는 optimizer `eval()` 상태의
+  averaged iterate를 사용해야 한다.
+- AMUSE를 후속 구현할 경우 complex CouplingNet-only opt-in으로 제한하고
+  AdamW/SOAP default와 GreenNet/unit-square path를 보존한다. Official AMUSE는
+  optimizer-step linear warmup 뒤 constant learning rate를 사용하므로 external
+  cosine decay와 동시에 사용하지 않는다. Model-only checkpoint는 averaged
+  iterate만 저장하고 optimizer resume는 지원하지 않는다고 명시한다.
+  Official Newton-Schulz path가 matrix update를 `bfloat16`으로 변환하므로
+  current `float64` model에서는 precision policy와 numerical test를 반드시
+  provenance에 포함한다. AMUSE 적용성 상세는
+  `docs/amuse_optimizer_applicability.md`를 따른다.
+- SOAP과 AMUSE는 matrix-parameter optimization을 개선한다는 상위 목적만
+  공유하며 같은 preconditioner 계열로 취급하지 않는다. SOAP은 Shampoo
+  covariance에서 얻은 slowly changing eigenbasis로 gradient를 회전해 그
+  좌표계에서 Adam moments를 사용한다. AMUSE는 matrix momentum을 매 step
+  Newton-Schulz로 orthogonalize하고, fast base iterate와 averaged iterate 사이의
+  time-varying evaluation point를 사용한다. 따라서 SOAP hyperparameter,
+  basis-refresh frequency, cosine scheduler를 AMUSE에 그대로 이전하지 않는다.
 - Annulus `coupling10` SOAP pilot은 epoch당 optimizer call이 2회인 상태에서
   `lr=2e-3`, `warmup_epochs=3`, `betas=(0.95,0.95)`,
   `precondition_frequency=10`을 사용했고, epoch 3 validation canonical energy

@@ -80,6 +80,7 @@ def _write_complex_config(
     *,
     split_quadrature: bool = False,
     source_interpolation: str = "linear",
+    optimizer: dict[str, object] | None = None,
 ) -> None:
     payload = {
         "dataset": {
@@ -132,6 +133,8 @@ def _write_complex_config(
             "source_sampling_factor": 2,
             "source_interpolation": source_interpolation,
         }
+    if optimizer is not None:
+        payload["training"]["optimizer"] = optimizer
     path.write_text(json.dumps(payload))
 
 
@@ -211,6 +214,9 @@ def test_export_green_artifacts_smoke_diffusion_only(
     assert saved_summary["eval_seed"] == 7
     assert saved_summary["eval_sampling"]["samples_per_line"] == 1
     assert saved_summary["device"] == "cpu"
+    assert saved_summary["green_optimizer_provenance"]["name"] == "adamw"
+    assert saved_summary["green_learning_rate_schedule"]["kind"] == "fixed"
+    assert saved_summary["lbfgs_scheduler"] == "disabled"
 
 
 def test_export_green_artifacts_seed_reproduces_generated_eval_data(
@@ -418,7 +424,14 @@ def test_export_green_artifacts_complex_geometry_uses_flat_intervals(
     config_path = tmp_path / "config.json"
     outdir = tmp_path / "artifacts"
     _write_checkpoint(checkpoint_path)
-    _write_complex_config(config_path, geometry_path)
+    _write_complex_config(
+        config_path,
+        geometry_path,
+        optimizer={
+            "name": "soap",
+            "soap": {"precondition_frequency": 7},
+        },
+    )
 
     summary = export_green_artifacts(
         GreenArtifactRequest(
@@ -437,6 +450,12 @@ def test_export_green_artifacts_complex_geometry_uses_flat_intervals(
     assert summary["num_x_segments"] == 2
     assert summary["num_y_segments"] == 3
     assert summary["selected_interval_indices"] == [0]
+    assert summary["green_optimizer_provenance"]["name"] == "soap"
+    assert summary["green_optimizer_provenance"]["upstream_commit"] == (
+        "a1e553530fde97d0e6b307d7c82ac6d38b072340"
+    )
+    assert summary["green_optimizer_provenance"]["soap"]["precondition_frequency"] == 7
+    assert summary["green_learning_rate_schedule"]["kind"] == "fixed"
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_interval_metrics.csv").exists()
     assert (outdir / "metrics" / "sample_metrics.csv").exists()

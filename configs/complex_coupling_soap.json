@@ -2,10 +2,23 @@
   "dataset": {
     "geometry_mode": "complex",
     "geometry_path": "data/geometry/annulus_02_05_1_128.npz",
-    "training_path": "data/complex_samples/annulus_02_05_1_128_poisson/train",
-    "validation_path": "data/complex_samples/annulus_02_05_1_128_poisson/valid",
     "test_path": "data/complex_samples/annulus_02_05_1_128_poisson/test",
     "coefficient_functions_path": "coefficients/Pure_Poisson.py",
+    "coupling_source": {
+      "mode": "indexed_gp",
+      "indexed_gp": {
+        "num_train": 4800,
+        "num_valid": 300,
+        "seed": 0,
+        "lengthscale": 0.15,
+        "amplitude": 1.0,
+        "mean": 0.0
+      }
+    },
+    "reference_diagnostics": {
+      "training": false,
+      "validation": false
+    },
     "dtype": "float64"
   },
   "terminal": {
@@ -51,14 +64,14 @@
   },
   "coupling_training": {
     "learning_rate": 0.002,
-    "epochs": 500,
-    "batch_size": 400,
+    "epochs": 100,
+    "batch_size": 300,
     "weight_decay": 0.05,
     "log_interval": 1,
     "device": "cuda:1",
     "gradient_clip_max_norm": 1.0,
     "use_lr_schedule": true,
-    "warmup_epochs": 50,
+    "warmup_epochs": 10,
     "min_lr": 1e-5,
     "optimizer": {
       "name": "soap",
@@ -70,17 +83,17 @@
       "profile_step_time": true,
       "soap": {
         "shampoo_beta": 0.95,
-        "precondition_frequency": 5,
+        "precondition_frequency": 3,
         "max_precondition_dim": 1024,
         "merge_dims": false,
-        "precondition_1d": false,
+        "precondition_1d": true,
         "normalize_grads": false,
         "correct_bias": true
       }
     },
     "periodic_checkpoint": {
       "enabled": true,
-      "every_epochs": 200
+      "every_epochs": 50
     },
     "compile": {
       "enabled": true

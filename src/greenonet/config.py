@@ -934,7 +934,7 @@ class ComplexWeakOperatorClosureConfig:
 
 @dataclass
 class SoapOptimizerConfig:
-    """SOAP-specific optimizer settings for complex CouplingNet."""
+    """SOAP-specific optimizer settings shared by supported training paths."""
 
     shampoo_beta: float = -1.0
     precondition_frequency: int = 10
@@ -1058,6 +1058,68 @@ class CouplingOptimizerConfig:
         if unknown:
             raise TypeError(
                 f"coupling_training.optimizer has unknown keys: {', '.join(unknown)}."
+            )
+        return cls(**data)
+
+
+@dataclass
+class GreenOptimizerConfig:
+    """Optimizer selection shared by unit-square and complex GreenNet."""
+
+    name: Literal["adamw", "soap"] = "adamw"
+    betas: tuple[float, float] | list[float] = (0.9, 0.999)
+    eps: float = 1.0e-8
+    profile_step_time: bool = False
+    soap: SoapOptimizerConfig | dict[str, Any] = field(
+        default_factory=SoapOptimizerConfig
+    )
+
+    def __post_init__(self) -> None:
+        name = str(self.name)
+        if name == "adam":
+            raise ValueError("GreenNet Adam has been removed; use adamw.")
+        if name not in {"adamw", "soap"}:
+            raise ValueError("training.optimizer.name must be 'adamw' or 'soap'.")
+        if (
+            not isinstance(self.betas, (tuple, list))
+            or len(self.betas) != 2
+            or any(
+                not isinstance(beta, (int, float)) or isinstance(beta, bool)
+                for beta in self.betas
+            )
+        ):
+            raise TypeError("training.optimizer.betas must contain two numeric values.")
+        betas = (float(self.betas[0]), float(self.betas[1]))
+        if any(not math.isfinite(beta) or not 0.0 <= beta < 1.0 for beta in betas):
+            raise ValueError("training.optimizer.betas must be finite and in [0, 1).")
+        self.betas = betas
+        if not isinstance(self.eps, (int, float)) or isinstance(self.eps, bool):
+            raise TypeError("training.optimizer.eps must be numeric.")
+        self.eps = float(self.eps)
+        if not math.isfinite(self.eps) or self.eps <= 0.0:
+            raise ValueError("training.optimizer.eps must be finite and positive.")
+        if not isinstance(self.profile_step_time, bool):
+            raise TypeError("training.optimizer.profile_step_time must be a boolean.")
+        self.soap = SoapOptimizerConfig.from_raw(self.soap)
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: GreenOptimizerConfig | dict[str, Any] | None,
+    ) -> GreenOptimizerConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("training.optimizer must be an object.")
+        data = dict(raw)
+        unknown = sorted(
+            set(data) - {"name", "betas", "eps", "profile_step_time", "soap"}
+        )
+        if unknown:
+            raise TypeError(
+                f"training.optimizer has unknown keys: {', '.join(unknown)}."
             )
         return cls(**data)
 
@@ -1305,11 +1367,18 @@ class TrainingConfig:
     """Training hyperparameters."""
 
     learning_rate: float = 1e-3
+    weight_decay: float = 0.0
     epochs: int = 10
     batch_size: int = 32
     log_interval: int = 1
     device: str = "cpu"
     compute_validation_rel_sol: bool = False
+    use_lr_schedule: bool = False
+    warmup_epochs: int = 0
+    min_lr: float = 1e-6
+    optimizer: GreenOptimizerConfig | dict[str, Any] = field(
+        default_factory=GreenOptimizerConfig
+    )
     integration_rule: IntegrationRule = "simpson"
     green_quadrature: GreenQuadratureConfig = field(
         default_factory=GreenQuadratureConfig
@@ -1323,6 +1392,7 @@ class TrainingConfig:
 
     def __post_init__(self) -> None:
         self.green_quadrature = GreenQuadratureConfig.from_raw(self.green_quadrature)
+        self.optimizer = GreenOptimizerConfig.from_raw(self.optimizer)
 
 
 @dataclass
