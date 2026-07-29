@@ -14,23 +14,43 @@ from greenonet.coupling_model import ActivationFactoryMixin
 
 @dataclass(frozen=True)
 class ComplexPreProjectionFusionResult:
-    """Audit tensors for the optional physical difference correction."""
+    """Audit tensors for the optional physical difference fusion."""
 
+    mode: str
+    combination: str
     base_response: torch.Tensor
     base_physical: torch.Tensor
     fused_response: torch.Tensor
     fused_physical: torch.Tensor
     base_difference: torch.Tensor
     fused_difference: torch.Tensor
-    linear_correction: torch.Tensor
-    nonlinear_correction: torch.Tensor
-    blended_correction: torch.Tensor
+    linear_component: torch.Tensor
+    nonlinear_component: torch.Tensor
+    combined_component: torch.Tensor
     source_scale: torch.Tensor
     gate: torch.Tensor
 
+    @property
+    def linear_correction(self) -> torch.Tensor:
+        """Legacy alias used by residual-correction diagnostics."""
+
+        return self.linear_component
+
+    @property
+    def nonlinear_correction(self) -> torch.Tensor:
+        """Legacy alias used by residual-correction diagnostics."""
+
+        return self.nonlinear_component
+
+    @property
+    def blended_correction(self) -> torch.Tensor:
+        """Legacy alias used by residual-correction diagnostics."""
+
+        return self.combined_component
+
 
 class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
-    """Blend small linear/nonlinear corrections to the physical split difference."""
+    """Fuse linear/nonlinear components of the physical split difference."""
 
     NONLINEAR_FEATURE_NAMES = (
         "normalized_difference",
@@ -75,14 +95,25 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
         gate = float(self.config.gate_initial_value)
         gate_logit = math.log(gate / (1.0 - gate))
         self.gate_logit = nn.Parameter(torch.tensor(gate_logit, dtype=dtype))
-        self._reset_to_identity()
+        self._reset_parameters()
 
-    def _reset_to_identity(self) -> None:
-        nn.init.zeros_(self.linear_correction.weight)
+    def _reset_parameters(self) -> None:
         final_layer = cast(nn.Linear, self.nonlinear_correction[-1])
-        nn.init.zeros_(final_layer.weight)
-        if final_layer.bias is not None:
-            nn.init.zeros_(final_layer.bias)
+        if self.config.mode == "residual_correction":
+            nn.init.zeros_(self.linear_correction.weight)
+            nn.init.zeros_(final_layer.weight)
+            if final_layer.bias is not None:
+                nn.init.zeros_(final_layer.bias)
+            return
+
+        with torch.no_grad():
+            self.linear_correction.weight.copy_(
+                self.linear_correction.weight.new_tensor([[1.0, 0.0]])
+            )
+            scale = float(self.config.nonlinear_final_init_scale)
+            final_layer.weight.mul_(scale)
+            if final_layer.bias is not None:
+                final_layer.bias.mul_(scale)
 
     def forward(
         self,
@@ -121,9 +152,9 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             fused_physical,
             base_difference,
             fused_difference,
-            linear_correction,
-            nonlinear_correction,
-            blended_correction,
+            linear_component,
+            nonlinear_component,
+            combined_component,
             source_scale,
             gate,
         ) = self._forward_tensors(
@@ -134,15 +165,17 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             y_source_amplitude=y_source_amplitude,
         )
         return ComplexPreProjectionFusionResult(
+            mode=self.config.mode,
+            combination=self.config.combination,
             base_response=computed_base_response,
             base_physical=base_physical,
             fused_response=fused_response,
             fused_physical=fused_physical,
             base_difference=base_difference,
             fused_difference=fused_difference,
-            linear_correction=linear_correction,
-            nonlinear_correction=nonlinear_correction,
-            blended_correction=blended_correction,
+            linear_component=linear_component,
+            nonlinear_component=nonlinear_component,
+            combined_component=combined_component,
             source_scale=source_scale,
             gate=gate,
         )
@@ -210,18 +243,19 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
         nonlinear_input = torch.cat((linear_input, expanded_geometry), dim=-1)
         nonlinear_normalized = self.nonlinear_correction(nonlinear_input).squeeze(-1)
 
-        linear_correction = source_scale * linear_normalized
-        nonlinear_correction = source_scale * nonlinear_normalized
+        linear_component = source_scale * linear_normalized
+        nonlinear_component = source_scale * nonlinear_normalized
         gate = torch.sigmoid(self.gate_logit)
-        blended_correction = (
-            1.0 - gate
-        ) * linear_correction + gate * nonlinear_correction
-        fused_physical = torch.stack(
-            (
-                base_physical[:, 0] + 0.5 * blended_correction,
-                base_physical[:, 1] - 0.5 * blended_correction,
-            ),
-            dim=1,
+        combined_component, fused_difference = self._combine_components(
+            base_difference=base_difference,
+            linear_component=linear_component,
+            nonlinear_component=nonlinear_component,
+            gate=gate,
+        )
+        fused_physical = self._physical_pair_from_difference(
+            base_physical=base_physical,
+            fused_difference=fused_difference,
+            combined_component=combined_component,
         )
         fused_response = torch.stack(
             (
@@ -236,12 +270,59 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             fused_response,
             fused_physical,
             base_difference,
-            fused_physical[:, 0] - fused_physical[:, 1],
-            linear_correction,
-            nonlinear_correction,
-            blended_correction,
+            fused_difference,
+            linear_component,
+            nonlinear_component,
+            combined_component,
             source_scale,
             gate,
+        )
+
+    def _combine_components(
+        self,
+        *,
+        base_difference: torch.Tensor,
+        linear_component: torch.Tensor,
+        nonlinear_component: torch.Tensor,
+        gate: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.config.mode == "residual_correction":
+            blended_correction = (
+                1.0 - gate
+            ) * linear_component + gate * nonlinear_component
+            return blended_correction, base_difference + blended_correction
+
+        if self.config.combination == "linear_plus_nonlinear":
+            absolute_difference = linear_component + gate * nonlinear_component
+        else:
+            absolute_difference = (
+                1.0 - gate
+            ) * linear_component + gate * nonlinear_component
+        return absolute_difference, absolute_difference
+
+    def _physical_pair_from_difference(
+        self,
+        *,
+        base_physical: torch.Tensor,
+        fused_difference: torch.Tensor,
+        combined_component: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.config.mode == "residual_correction":
+            return torch.stack(
+                (
+                    base_physical[:, 0] + 0.5 * combined_component,
+                    base_physical[:, 1] - 0.5 * combined_component,
+                ),
+                dim=1,
+            )
+
+        base_common = base_physical[:, 0] + base_physical[:, 1]
+        return torch.stack(
+            (
+                0.5 * (base_common + fused_difference),
+                0.5 * (base_common - fused_difference),
+            ),
+            dim=1,
         )
 
     def _geometry_features(

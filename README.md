@@ -168,13 +168,16 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     "mode": "physical_symmetric"
   }
   ```
-- Complex optional pre-projection fusion: set `coupling_model.pre_projection_fusion.enabled=true` to insert a small linear/nonlinear correction block between the two axis-conditioned raw responses and the physical symmetric projection. The block first forms `p0=P0/L_x^2`, `q0=Q0/L_y^2`, then changes only the physical difference mode through `p=p0+Delta_d/2`, `q=q0-Delta_d/2`; therefore the base common mode `p0+q0` is preserved exactly. Its linear path receives the source-normalized `[p0-q0, rhs]`, while its nonlinear path additionally receives `[x_local_t,y_local_t,log(L_x/L_ref),log(L_y/L_ref),log(L_x/L_y),kappa]`. A trainable sigmoid gate blends the two corrections. Both correction heads are zero-initialized, so enabling the block starts exactly from the unfused v6 prediction. The correction is scaled by `sqrt((A_x^2+A_y^2)/2)` and is exactly zero when that source scale is zero. This option is complex-only, introduces no new loss or reference target, and does not change output-contract version 6. Existing v6 checkpoints remain loadable with the option disabled; enabling it adds fusion parameters and therefore starts a new CouplingNet training run rather than loading a disabled-architecture checkpoint.
+- Complex optional pre-projection fusion: set `coupling_model.pre_projection_fusion.enabled=true` to insert a small linear/nonlinear difference block between the two axis-conditioned raw responses and the physical symmetric projection. Both modes first form `p0=P0/L_x^2`, `q0=Q0/L_y^2`, preserve the base common mode `p0+q0`, and use `A=sqrt((A_x^2+A_y^2)/2)` with normalized inputs `[d_base/A_safe,rhs/A_safe]`. The backward-compatible `residual_correction` mode keeps `d_fused=d_base+(1-g)*delta_linear+g*delta_nonlinear` and its exact zero-correction initialization. The opt-in `absolute_difference` mode removes the outer `+d_base`: its linear candidate is `d_linear=A*h_linear(d_base/A_safe,rhs/A_safe)` with weight `[1,0]`, and `linear_plus_nonlinear` uses `d_fused=d_linear+g*r_nonlinear`; `convex_average` instead uses `(1-g)*d_linear+g*d_nonlinear`. The nonlinear input additionally contains `[x_local_t,y_local_t,log(L_x/L_ref),log(L_y/L_ref),log(L_x/L_y),kappa]`. Absolute mode scales the standard nonlinear final-layer initialization by `nonlinear_final_init_scale`; `0.01` with gate `0.5` is the canonical small-residual setting, while scale `1.0` with a small gate such as `0.05` keeps standard final initialization. This complex-only option adds no reference-target loss and leaves output contract v6, projection, reconstruction, GreenNet, and NPZ schemas unchanged. Existing residual checkpoints remain load-compatible because parameter names and shapes are unchanged and missing new config fields resolve to the legacy mode.
   ```json
   "pre_projection_fusion": {
     "enabled": true,
+    "mode": "absolute_difference",
+    "combination": "linear_plus_nonlinear",
     "nonlinear_hidden_dim": 16,
     "nonlinear_depth": 1,
-    "gate_initial_value": 0.05,
+    "nonlinear_final_init_scale": 0.01,
+    "gate_initial_value": 0.5,
     "eps": 1e-12
   }
   ```
@@ -421,6 +424,48 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   ```
 
   The default output is `<coupling-checkpoint-parent>/length_response_diagnostics`. It contains `summary.json`, per-sample/per-segment/transition-zone CSVs, `data/selected_diagnostic_arrays.npz`, grouped Plotly figures, and `diagnose_complex_length_response.log`. Sample 47 is selected by default, and unique min/q25/q50/q75/max `rel_sol` representatives are added unless `--no-include-rel-sol-quantiles` is used. The diagnostic decomposition is `learned total error = exact source response + exact target closure + learned-minus-exact Green contribution`; reference `sol/phi/psi` are evaluation-only and never enter a training loss.
+- Annulus CDR CouplingNet reference audit (2026-07-29):
+  `checkpoints/annulus_CDR/coupling` uses fixed indexed-GP sources
+  (`4800` train, `100` validation), canonical-energy-only training, output
+  contract v6, physical-symmetric projection, optional pre-projection fusion,
+  and SOAP. Validation energy reached its minimum at epoch 82
+  (`4.2700e-4`) and ended at `4.3083e-4` at epoch 100. The final checkpoint's
+  50-sample test means are `rel_sol=5.1905%`, `rel_flux=17.1055%`, and
+  canonical energy `4.4634e-4`. Exported artifacts use the epoch-82
+  best-energy checkpoint, verified by its learned fusion gate, and therefore
+  have slightly different aggregate metrics. Across the selected artifact
+  samples, the annulus `|x|`/`|y| ~= 0.2` transition band occupies `8.12%` of
+  valid points but contains `21.85%` of the largest 1% solution errors and
+  roughly `25-27%` of the largest split/flux errors. Canonical energy and
+  detached `rel_sol` have only weak sample ranking correlation, so both must
+  be reported when interpreting this run. The selected fusion diagnostics also
+  show that the raw nonlinear correction has `6.20x` the transition-edge jump
+  RMS of the linear correction. This does not transfer directly to the final
+  field: the learned nonlinear gate is only `0.06854`, and the pooled blended
+  transition jump is `0.987x` the linear-only jump. Therefore the nonlinear
+  artifact is visibly more discontinuous, but this run alone does not show
+  that it increases the final solution seam. The current nonlinear fuser is
+  transition-aware, not transition-regularizing: it can detect discontinuous
+  length features but has no structural continuity constraint. Because the
+  physical-symmetric projection preserves the fused physical difference mode,
+  any seam that survives blending also survives projection.
+  The current nonlinear path is a shared pointwise MLP: the linear path maps
+  normalized `(base_difference, rhs)` from `2` to `1`, while the nonlinear
+  path augments those values with six local geometry features and applies
+  `8 -> hidden_dim -> 1` for depth one. It has no neighboring-line input,
+  continuity operator, pointwise gate, or coefficient field input. The active
+  implementation supports backward-compatible `residual_correction` and opt-in
+  `absolute_difference` modes. Absolute mode can combine an identity-initialized
+  linear candidate with a scaled nonlinear residual, or take a true convex
+  average of two absolute candidates; its artifact metadata distinguishes these
+  component semantics and records whether the outer base residual is used.
+  Internally, the fuser converts base reference responses to physical
+  directional sources, applies fusion, and temporarily converts the fused
+  values back to reference responses because the model forward contract
+  returns reference-space tensors. The projection immediately converts that
+  temporary response back to physical source space, so this intermediate
+  multiply/divide pair cancels algebraically. It is distinct from the required
+  post-projection pull-back used by Green reconstruction.
 - Coupling null-space diagnostics: evaluation also exports `null_sol_x`, `null_sol_y`, and `null_sol_residual` heatmaps, where `q` is inferred from the flux errors and integrated with the pretrained Green kernels to visualize the hidden null-space contribution in solution space.
 - Coupling closure diagnostics: evaluation also exports `closure_phi_residual` and `closure_psi_residual` heatmaps for the exact-flux baseline `L_fd(G(phi_exact)) - phi_exact` and `L_fd(G(psi_exact)) - psi_exact`, where `L_fd` is the conservative stencil for `-d_s(a d_s u) + b d_s u + c u`.
 - Evaluation batching: CouplingNet evaluation uses `coupling_training.batch_size` to batch computations while still saving plots per sample.

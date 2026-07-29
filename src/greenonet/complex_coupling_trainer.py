@@ -463,11 +463,14 @@ class ComplexCouplingTrainer(LoggingMixin):
             )
         self.logger.info(
             "pre-projection fusion enabled=%s space=physical_source "
-            "correction=antisymmetric_difference hidden_dim=%d depth=%d "
-            "initial_gate=%.6f current_gate=%s",
+            "mode=%s combination=%s hidden_dim=%d depth=%d "
+            "nonlinear_final_init_scale=%.6e initial_gate=%.6f current_gate=%s",
             self.pre_projection_fusion_config.enabled,
+            self.pre_projection_fusion_config.mode,
+            self.pre_projection_fusion_config.combination,
             self.pre_projection_fusion_config.nonlinear_hidden_dim,
             self.pre_projection_fusion_config.nonlinear_depth,
+            self.pre_projection_fusion_config.nonlinear_final_init_scale,
             self.pre_projection_fusion_config.gate_initial_value,
             "disabled" if gate_value is None else f"{gate_value:.6f}",
         )

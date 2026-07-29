@@ -1,185 +1,651 @@
-# GreenNet AdamW, SOAP 및 Warmup-Cosine Scheduler 통합 계획
+# Complex Pre-Projection Fuser Absolute-Difference Optional Mode 구현 계획
 
 ## Summary
 
-- Unit-square 및 complex GreenNet의 기본 optimizer를 `torch.optim.Adam`에서 `torch.optim.AdamW`로 변경하고, GreenNet 경로에서 기존 Adam 구현과 `"adam"` config option을 완전히 제거한다.
-- SOAP은 GreenNet 전용 `training.optimizer.name="soap"` opt-in option으로 추가하며, 이미 vendoring된 공식 SOAP 구현과 provenance를 재사용한다.
-- Linear warmup + cosine annealing scheduler는 AdamW와 SOAP의 1차 학습 단계에만 적용한다.
-- AdamW/SOAP 단계가 끝난 뒤 실행되는 LBFGS는 현재 optimizer 생성, closure, line search, epoch 및 tolerance 설정을 그대로 유지한다.
-- GreenONet model, reconstruction loss, `rel_sol`, `rel_green`, quadrature, dataset, geometry, checkpoint tensor key는 변경하지 않는다.
-- 이 계획은 사용자가 project root의 `PLAN.md`에 저장하며, 이번 단계에서는 코드를 수정하지 않는다.
+- 기존 `residual_correction` 방식은 그대로 보존한다.
+
+\[
+d_{\mathrm{fused}}
+=
+d_{\mathrm{base}}
++
+\delta_{\mathrm{blend}},
+\]
+
+\[
+\delta_{\mathrm{blend}}
+=
+(1-g)\delta_{\mathrm{linear}}
++
+g\delta_{\mathrm{nonlinear}}.
+\]
+
+- 새 `absolute_difference` mode에서는 외부의 `+d_base` skip connection을 제거하고 fuser가 만든 difference만 사용한다.
+- Linear candidate도 기존 fuser와 동일한 source-amplitude normalization을 유지한다.
+
+\[
+\boxed{
+d_{\mathrm{linear}}
+=
+A h_{\mathrm{linear}}
+\left(
+\frac{d_{\mathrm{base}}}{A},
+\frac{f}{A}
+\right)
+}
+\]
+
+- Nonlinear branch도 같은 normalized difference/source에 geometry feature를 추가하는 현재 contract를 유지한다.
+- 새 mode는 `linear_plus_nonlinear`과 `convex_average`를 모두 지원한다.
+- Canonical 새 설정은 다음으로 고정한다.
+  - `mode="absolute_difference"`
+  - `combination="linear_plus_nonlinear"`
+  - `nonlinear_final_init_scale=0.01`
+  - `gate_initial_value=0.5`
+- 대안으로 standard nonlinear final-layer initialization과 작은 learnable gate를 지원한다.
+  - `nonlinear_final_init_scale=1.0`
+  - `gate_initial_value=0.05`
+- Complex CouplingNet 외의 GreenNet, unit-square CouplingNet, projection, reconstruction, objective, dataset 및 NPZ contract는 변경하지 않는다.
 
 ## Public Configuration
 
-`TrainingConfig`에 다음 GreenNet optimizer/scheduler 설정을 추가한다.
-
 ```json
-"training": {
-  "learning_rate": 0.0005,
-  "weight_decay": 0.0,
-  "epochs": 4000,
-  "use_lr_schedule": true,
-  "warmup_epochs": 100,
-  "min_lr": 1e-5,
-  "optimizer": {
-    "name": "adamw",
-    "betas": [0.9, 0.999],
-    "eps": 1e-8,
-    "profile_step_time": false,
-    "soap": {
-      "shampoo_beta": -1.0,
-      "precondition_frequency": 10,
-      "max_precondition_dim": 1024,
-      "merge_dims": false,
-      "precondition_1d": false,
-      "normalize_grads": false,
-      "correct_bias": true
-    }
-  }
+"pre_projection_fusion": {
+  "enabled": true,
+  "mode": "absolute_difference",
+  "combination": "linear_plus_nonlinear",
+  "nonlinear_hidden_dim": 16,
+  "nonlinear_depth": 1,
+  "nonlinear_final_init_scale": 0.01,
+  "gate_initial_value": 0.5,
+  "eps": 1e-12
 }
 ```
 
-- `optimizer.name`은 `"adamw"` 또는 `"soap"`만 허용한다.
-- `optimizer` block이 없으면 `AdamW`, `betas=(0.9,0.999)`, `eps=1e-8`, `weight_decay=0.0`을 사용한다.
-- `"adam"`은 지원하지 않으며 명시되면 “GreenNet Adam has been removed; use adamw” 오류로 fail fast한다.
-- SOAP 예시 config에서는 `betas=(0.95,0.95)`를 명시하되, optimizer 종류에 따라 숨겨진 dynamic default를 적용하지 않는다.
-- `use_lr_schedule=false`이면 AdamW 또는 SOAP가 전체 1차 학습 동안 고정 learning rate를 사용한다.
-- `use_lr_schedule=true`이면 `warmup_epochs >= 0`, `0 <= min_lr <= learning_rate`를 검증한다.
-- `weight_decay`는 finite nonnegative 값으로 검증하며 기본값 `0.0`으로 기존 GreenNet의 no-weight-decay 의미를 보존한다.
-- 기존 Green config에 새 field가 없어도 정상적으로 parse되지만 optimizer는 의도적으로 AdamW로 변경된다.
+지원 값은 다음과 같다.
+
+```text
+mode:
+  residual_correction
+  absolute_difference
+
+combination:
+  convex_average
+  linear_plus_nonlinear
+```
+
+기존 config에 새 필드가 없으면 다음처럼 해석한다.
+
+```text
+mode = residual_correction
+combination = convex_average
+nonlinear_final_init_scale = 0.0
+```
+
+Validation은 다음으로 고정한다.
+
+- `mode`와 `combination`은 지원 enum만 허용한다.
+- `nonlinear_final_init_scale`은 finite하고 `>=0`이어야 한다.
+- `gate_initial_value`는 기존과 같이 `(0,1)` 범위여야 한다.
+- `residual_correction` mode는 기존 수식을 보존하기 위해 `convex_average`만 허용한다.
+- `absolute_difference` mode에서는 두 combination을 모두 허용한다.
+- Unknown key는 fail fast한다.
+- Unit-square CouplingNet에서는 pre-projection fusion을 계속 거부한다.
+
+## Mathematical Contract
+
+### Source Scale과 Normalized Input
+
+현재 fuser와 같은 physical source scale을 사용한다.
+
+\[
+A
+=
+\sqrt{
+\frac{A_x^2+A_y^2}{2}
+}.
+\]
+
+수치적으로는
+
+\[
+A_{\mathrm{safe}}
+=
+\max(A,\varepsilon)
+\]
+
+를 사용한다.
+
+Normalized input은
+
+\[
+\widetilde d
+=
+\frac{d_{\mathrm{base}}}{A_{\mathrm{safe}}},
+\qquad
+\widetilde f
+=
+\frac{f}{A_{\mathrm{safe}}}
+\]
+
+이다.
+
+Linear/nonlinear branch 모두 같은 normalized pair를 공유한다.
+
+### 기존 `residual_correction`
+
+기존 linear correction은 그대로 유지한다.
+
+\[
+\delta_{\mathrm{linear}}
+=
+A h_{\mathrm{linear}}
+\left(
+\widetilde d,\widetilde f
+\right).
+\]
+
+Nonlinear correction도 현재 geometry feature contract를 유지한다.
+
+\[
+\delta_{\mathrm{nonlinear}}
+=
+A h_{\mathrm{nonlinear}}
+\left(
+\widetilde d,
+\widetilde f,
+\mathcal G
+\right),
+\]
+
+\[
+\mathcal G
+=
+[
+t_x,t_y,
+\log(L_x/L_{\mathrm{ref}}),
+\log(L_y/L_{\mathrm{ref}}),
+\log(L_x/L_y),
+\kappa
+].
+\]
+
+\[
+\delta_{\mathrm{blend}}
+=
+(1-g)\delta_{\mathrm{linear}}
++
+g\delta_{\mathrm{nonlinear}}.
+\]
+
+\[
+d_{\mathrm{fused}}
+=
+d_{\mathrm{base}}
++
+\delta_{\mathrm{blend}}.
+\]
+
+Initialization은 기존과 동일하다.
+
+- Linear correction weight: zero.
+- Nonlinear final layer weight/bias: zero.
+- 초기 `d_fused=d_base`.
+
+### 새 Absolute Linear Candidate
+
+새 mode에서도 linear map의 수식은 기존 normalized formulation을 따른다.
+
+\[
+d_{\mathrm{linear}}
+=
+A h_{\mathrm{linear}}
+\left(
+\widetilde d,\widetilde f
+\right).
+\]
+
+Linear layer는
+
+\[
+h_{\mathrm{linear}}
+\left(
+\widetilde d,\widetilde f
+\right)
+=
+w_d\widetilde d+w_f\widetilde f
+\]
+
+이다.
+
+초기값은
+
+\[
+w_d=1,\qquad w_f=0
+\]
+
+으로 둔다.
+
+따라서 \(A\ge\varepsilon\)인 일반 sample에서는
+
+\[
+d_{\mathrm{linear}}
+=
+A\frac{d_{\mathrm{base}}}{A}
+=
+d_{\mathrm{base}}
+\]
+
+가 정확히 성립한다.
+
+\(A<\varepsilon\)에서는 기존 safe-scale convention을 따른다.
+
+\[
+d_{\mathrm{linear}}
+=
+\frac{A}{\varepsilon}d_{\mathrm{base}}.
+\]
+
+특히 zero source amplitude에서는
+
+\[
+A=0
+\quad\Longrightarrow\quad
+d_{\mathrm{linear}}=0.
+\]
+
+이는 zero source에서 zero directional difference를 만드는 물리적으로 일관된 behavior로 채택한다.
+
+### 새 Absolute Nonlinear Component
+
+Nonlinear branch도 기존 normalized source/geometry input을 유지한다.
+
+\[
+r_{\mathrm{nonlinear}}
+=
+A h_{\mathrm{nonlinear}}
+\left(
+\widetilde d,
+\widetilde f,
+\mathcal G
+\right).
+\]
+
+Hidden layer는 표준 initialization을 사용한다.
+
+Final layer는 PyTorch 표준 initialization 후 다음 scale을 적용한다.
+
+\[
+W_{\mathrm{final}}
+\leftarrow
+s_{\mathrm{init}}W_{\mathrm{final}},
+\]
+
+\[
+b_{\mathrm{final}}
+\leftarrow
+s_{\mathrm{init}}b_{\mathrm{final}},
+\]
+
+\[
+s_{\mathrm{init}}
+=
+\texttt{nonlinear\_final\_init\_scale}.
+\]
+
+따라서:
+
+- `scale=0.01`: 작은 nonlinear component.
+- `scale=1.0`: 표준 final-layer initialization.
+- `scale=0.0`: exact-zero nonlinear component.
+
+### `linear_plus_nonlinear`
+
+Canonical absolute mode는 다음 수식을 사용한다.
+
+\[
+\boxed{
+d_{\mathrm{fused}}
+=
+d_{\mathrm{linear}}
++
+g r_{\mathrm{nonlinear}}
+}
+\]
+
+여기서
+
+\[
+g=\operatorname{sigmoid}(\gamma)
+\]
+
+는 learnable scalar gate이다.
+
+외부에서 `d_base`를 다시 더하지 않는다.
+
+Canonical initialization은
+
+\[
+w_d=1,\qquad w_f=0,
+\]
+
+\[
+s_{\mathrm{init}}=0.01,
+\qquad
+g_0=0.5
+\]
+
+로 고정한다.
+
+대안 initialization은
+
+\[
+s_{\mathrm{init}}=1.0,
+\qquad
+g_0=0.05
+\]
+
+로 설정할 수 있다.
+
+### `convex_average`
+
+Convex mode에서는 nonlinear output을 absolute candidate로 해석한다.
+
+\[
+d_{\mathrm{nonlinear}}
+=
+A h_{\mathrm{nonlinear}}
+\left(
+\widetilde d,
+\widetilde f,
+\mathcal G
+\right).
+\]
+
+최종 difference는 true convex average로 정의한다.
+
+\[
+\boxed{
+d_{\mathrm{fused}}
+=
+(1-g)d_{\mathrm{linear}}
++
+g d_{\mathrm{nonlinear}}
+}
+\]
+
+이 mode에서는 nonlinear candidate가 linear candidate와 같은 값으로 초기화되지 않는 한 전체 fuser가 exact identity로 시작하지 않는다. 이 차이를 config documentation과 artifact summary에 명시한다.
+
+### Physical Components와 Projection
+
+Base common mode를 보존해 temporary physical pair를 구성한다.
+
+\[
+s_{\mathrm{base}}
+=
+p_{\mathrm{base}}+q_{\mathrm{base}}.
+\]
+
+\[
+p_{\mathrm{fused}}
+=
+\frac12
+\left(
+s_{\mathrm{base}}+d_{\mathrm{fused}}
+\right),
+\]
+
+\[
+q_{\mathrm{fused}}
+=
+\frac12
+\left(
+s_{\mathrm{base}}-d_{\mathrm{fused}}
+\right).
+\]
+
+기존 model return contract를 유지한다.
+
+\[
+P_{\mathrm{fused}}
+=
+L_x^2p_{\mathrm{fused}},
+\qquad
+Q_{\mathrm{fused}}
+=
+L_y^2q_{\mathrm{fused}}.
+\]
+
+Physical-symmetric projection은 변경하지 않는다.
+
+\[
+\phi
+=
+\frac12(f+d_{\mathrm{fused}}),
+\qquad
+\psi
+=
+\frac12(f-d_{\mathrm{fused}}).
+\]
+
+따라서 모든 mode에서
+
+\[
+\phi+\psi=f
+\]
+
+가 정확히 유지된다.
+
+이번 작업에서는 model forward의 reference-response tensor contract와 중간 physical/reference 왕복을 유지한다. 이 API 리팩터링은 absolute-mode 수식 변경과 분리한다.
 
 ## Implementation Changes
 
-### 1. Shared Optimizer Configuration
+### 1. Config와 Serialization
 
-- `GreenOptimizerConfig`를 추가해 AdamW/SOAP 선택, betas, epsilon, profiling 및 SOAP nested config를 strict parsing한다.
-- 기존 `SoapOptimizerConfig`는 GreenNet과 Complex CouplingNet이 공유할 수 있도록 설명과 validation error prefix를 일반화한다.
-- 기존 vendored `SOAP` source, upstream commit, MIT attribution 및 float64 bridge는 수정하지 않는다.
-- `GreenOptimizerFactory`를 추가한다.
-  - `adamw`: `torch.optim.AdamW`.
-  - `soap`: 기존 vendored `SOAP`.
-  - 두 optimizer 모두 `learning_rate`, `weight_decay`, `betas`, `eps`를 resolved Green config에서 받는다.
-- 기존 Green trainer의 직접 `optim.Adam(...)` 호출과 Adam 관련 import를 모두 제거한다.
-- SOAP 공식 첫-step preconditioner initialization과 parameter-update skip 동작은 유지한다.
+영향 파일:
 
-### 2. Shared Warmup-Cosine Scheduler
+- `src/greenonet/config.py`
+- `src/greenonet/io.py`
+- complex CouplingNet config examples
 
-- CouplingNet의 검증된 scheduler 수식을 generic `LinearWarmupCosineSchedule` helper로 추출한다.
-- 기존 `CouplingLearningRateSchedule`은 wrapper를 유지해 현재 CouplingNet LR sequence가 bitwise-equivalent하게 보존되도록 한다.
-- GreenNet은 같은 core helper를 `TrainingConfig`와 `training.*` 오류 prefix로 사용한다.
-- 총 epoch \(T\), effective warmup \(W=\min(W_{\mathrm{configured}},T-1)\)에 대해 다음 LR을 사용한다.
+작업:
 
-\[
-\eta_e=\eta_{\max}\frac{e}{W},
-\qquad 1\le e\le W,
-\]
+- `ComplexPreProjectionFusionConfig`에 `mode`, `combination`, `nonlinear_final_init_scale`을 추가한다.
+- Strict enum/numeric validation을 추가한다.
+- 기존 config는 residual mode로 복원한다.
+- Canonical config는 현재 residual behavior를 유지한다.
+- 새 absolute-mode example config를 추가하거나 README에 완전한 example을 제공한다.
+- Standard-final/small-gate 대안도 문서화한다.
 
-\[
-\eta_e=
-\eta_{\min}
-+\frac12(\eta_{\max}-\eta_{\min})
-\left[
-1+\cos\left(
-\pi\frac{e-W-1}{T-W-1}
-\right)
-\right].
-\]
+### 2. Mode-Aware Initialization
 
-- Epoch 순서는 `현재 LR 기록 -> AdamW/SOAP batch updates -> diagnostics/output -> scheduler.step()`으로 고정한다.
-- Scheduler는 epoch마다 정확히 한 번만 step한다.
-- 여러 optimizer parameter group이 있으면 기존 group LR 비율을 보존한다.
-- SOAP의 `precondition_frequency`는 scheduler epoch가 아니라 optimizer step 기준임을 로그와 문서에 명시한다.
+영향 파일:
 
-### 3. Green Trainer Integration
+- `src/greenonet/complex_pre_projection_fusion.py`
 
-- Unit-square `Trainer`와 `ComplexGreenTrainer`가 동일한 Green optimizer factory, scheduler 및 optimizer profiler를 사용한다.
-- Current Green configs처럼 dataset sample 수가 batch size보다 작으면 epoch당 optimizer step이 한 번이라는 사실을 telemetry에 정확히 반영한다.
-- SOAP profiling이 활성화되면 step mean/p95/max time, step count, basis refresh count 및 CUDA peak memory를 기록한다.
-- `green_training_metrics.csv`를 추가해 다음을 기록한다.
-  - `phase`: `adamw`, `soap`, `lbfgs`
-  - `epoch`, `learning_rate`, `loss`
-  - `rel_sol`, optional `val_rel_sol`, optional `rel_green`
-  - optional optimizer telemetry
-- `training.log` 시작부에 resolved optimizer, weight decay, betas, SOAP frequency와 scheduler 설정을 기록하고 epoch log에 실제 사용 LR을 포함한다.
-- `config_used.json`에는 resolved `training.optimizer`를 저장하고 `green_optimizer_provenance`에 implementation, SOAP upstream commit 및 model-only checkpoint policy를 기록한다.
-- Optimizer/scheduler state는 safetensors에 넣지 않는다. 중단 지점부터의 exact optimizer resume는 이번 범위에 포함하지 않는다.
+작업:
 
-### 4. LBFGS Preservation
+- 기존 initialization을 residual/absolute helper로 분리한다.
+- Residual mode는 현재 zero-correction initialization을 그대로 사용한다.
+- Absolute mode의 linear weight를 `[1,0]`으로 초기화한다.
+- Linear bias는 계속 사용하지 않는다.
+- Nonlinear hidden layers는 현재 activation-compatible 표준 initialization을 유지한다.
+- Nonlinear final layer는 표준 initialization 후 `nonlinear_final_init_scale`을 곱한다.
+- Small nonzero scale에서 첫 backward부터 nonlinear hidden layer에 gradient가 전달되어야 한다.
 
-- AdamW/SOAP epoch가 모두 끝난 후 scheduler와 1차 optimizer를 더 이상 사용하지 않는다.
-- 기존 `torch.optim.LBFGS` 생성 인자, `lbfgs_lr`, `max_iter`, `history_size`, `tolerance_grad`, `tolerance_change`, `strong_wolfe` line search 및 closure를 변경하지 않는다.
-- LBFGS epoch 중에는 warmup/cosine scheduler를 step하지 않는다.
-- LBFGS가 disabled이면 AdamW/SOAP 종료 결과를 바로 최종 checkpoint로 저장한다.
-- 비교 가능성을 위해 AdamW/SOAP 종료 시점에 `model_pre_lbfgs.safetensors`를 저장하고, 기존 `model.safetensors`는 전체 LBFGS 종료 후 최종 모델로 유지한다.
-- Existing Green model checkpoint tensor key와 load contract는 유지한다.
+### 3. Mode와 Combination Dispatcher
 
-### 5. Configs, Artifacts, and Documentation
+영향 파일:
 
-- `configs/default_green.json`과 `configs/complex_green.json`은 AdamW 및 scheduler를 명시적으로 사용하도록 갱신한다.
-  - `learning_rate=5e-4`
-  - `weight_decay=0.0`
-  - `use_lr_schedule=true`
-  - `warmup_epochs=100`
-  - `min_lr=1e-5`
-- Paired optimizer 실험용 `configs/complex_green_soap.json`을 추가하고 AdamW config와 model/data/LBFGS 설정을 동일하게 유지한다.
-- SOAP config는 `betas=(0.95,0.95)`, `precondition_frequency=10`, `max_precondition_dim=1024`, `precondition_1d=false`, `normalize_grads=false`, `correct_bias=true`를 명시한다.
-- Green artifact summary에는 optimizer/scheduler provenance를 추가하지만 artifact reconstruction 및 `rel_green` 의미는 변경하지 않는다.
-- README와 `docs/memory.md`에 Adam 제거, AdamW default, SOAP opt-in, scheduler 적용 범위, LBFGS 분리 및 model-only resume 정책을 기록한다.
+- `src/greenonet/complex_pre_projection_fusion.py`
+- `src/greenonet/complex_coupling_model.py`
+
+작업:
+
+- 공통 source scale과 normalized input을 한 번 계산한다.
+- Residual mode는 현재 수식 그대로 실행한다.
+- Absolute mode는 동일한 normalized linear formulation을 사용한다.
+- `linear_plus_nonlinear`과 `convex_average`를 별도 private helper로 구현한다.
+- 최종 absolute difference로 base common mode를 보존하는 physical pair를 만든다.
+- 기존 `(B,2,P)` fused response를 반환한다.
+- `forward()`와 `forward_with_diagnostics()`가 같은 core tensor helper를 사용한다.
+- `torch.compile`이 mode별로 정상 동작하도록 mode branch를 module construction 시 고정한다.
+
+### 4. Diagnostic와 Artifact Contract
+
+현재 correction 중심 명칭을 absolute mode에서 그대로 사용하지 않는다.
+
+공통 diagnostic field를 추가한다.
+
+```text
+base_physical_difference
+linear_difference_component
+nonlinear_difference_component
+combined_difference_component
+fused_physical_difference
+fusion_gate
+source_scale
+```
+
+Mode별 semantics:
+
+- Residual:
+  - linear/nonlinear component는 correction.
+  - combined component는 blended correction.
+  - 기존 `linear_difference_correction`,
+    `nonlinear_difference_correction`,
+    `blended_difference_correction` key와 figure를 유지한다.
+- Absolute + linear-plus:
+  - linear component는 absolute candidate.
+  - nonlinear component는 residual.
+  - combined component는 final absolute difference.
+- Absolute + convex:
+  - linear/nonlinear component는 각각 absolute candidate.
+  - combined component는 convex-averaged final difference.
+
+Artifact summary에 다음을 기록한다.
+
+```text
+mode
+combination
+linear_input_normalization
+linear_initialization
+nonlinear_final_initialization
+nonlinear_final_init_scale
+gate_initial_value
+gate_value
+nonlinear_component_semantics
+outer_base_residual_used
+```
+
+Absolute mode에서는
+
+```text
+outer_base_residual_used = false
+```
+
+로 기록한다.
+
+### 5. Trainer와 Evaluator
+
+- Existing projection/reconstruction 호출 순서를 유지한다.
+- Startup log에 resolved mode, combination, final init scale와 gate를 기록한다.
+- Existing `pre_projection_fusion_gate` metric을 유지한다.
+- Canonical energy, optimizer, scheduler, checkpoint selection은 변경하지 않는다.
+- `sol/phi/psi` reference는 계속 detached evaluation-only로 유지한다.
+- Absolute/residual checkpoint의 embedded config를 artifact exporter가 그대로 사용한다.
+
+### 6. Checkpoint Compatibility
+
+- Output shape와 model response space가 유지되므로 output contract version은 `6`으로 유지한다.
+- Parameter names와 tensor shapes를 유지한다.
+- 기존 residual checkpoint는 새 field가 없는 config를 residual mode로 해석해 계속 로드한다.
+- 새 absolute checkpoint는 embedded `model_config`에 mode, combination과 initialization을 저장한다.
+- Absolute checkpoint를 residual config로 재해석하지 않는다.
+- GreenNet checkpoint에는 변화가 없다.
 
 ## Test Plan
 
-- **Config:** optimizer block 누락 시 AdamW default, Adam 명시 거부, SOAP round-trip, unknown key와 invalid beta/epsilon/weight decay/frequency/dimension 검증.
-- **Scheduler:** warmup LR sequence, cosine 시작점, 마지막 epoch의 정확한 `min_lr`, zero warmup, disabled fixed LR, parameter-group ratio 보존을 검증한다.
-- **Factory:** AdamW 생성 인자, SOAP 생성 인자와 provenance, SOAP 첫-step no-op 및 float64 finite update를 검증한다.
-- **Unit-square trainer:** AdamW fixed/scheduled smoke와 SOAP 2-step 이상 smoke를 수행하고 실제 LR 및 telemetry 기록을 확인한다.
-- **Complex trainer:** `forward_pairs(...)`, uniform/split-quadrature reconstruction 모두에서 AdamW와 SOAP smoke를 실행한다.
-- **LBFGS:** AdamW/SOAP 종료 뒤 LBFGS가 기존 인자와 closure로 실행되고 scheduler가 LBFGS 중 호출되지 않는지 확인한다.
-- **Checkpoint:** 기존 Green safetensors를 새 코드에서 로드할 수 있고 model key가 바뀌지 않으며 pre-LBFGS/final checkpoint가 구분되는지 확인한다.
-- **Regression:** CouplingNet scheduler와 SOAP factory의 기존 결과, complex Green scaling, `rel_green`, artifact export 및 unit-square Green reconstruction을 유지한다.
+### Config
 
-검증 순서는 다음과 같다.
+- 기존 config가 residual mode로 parse되는지 확인한다.
+- Absolute linear-plus config round-trip.
+- Absolute convex config round-trip.
+- `scale=0`, `0.01`, `1.0` 검증.
+- Invalid enum, negative/nonfinite scale, invalid gate, unknown key rejection.
+- Unit-square fuser rejection 유지.
+
+### Initialization
+
+- Residual mode가 기존 exact identity인지 확인한다.
+- Absolute linear weight가 `[1,0]`인지 확인한다.
+- \(A\ge\varepsilon\)에서 `d_linear == d_base`인지 확인한다.
+- \(A=0\)에서 `d_linear == 0`인지 확인한다.
+- `scale=0.01` final parameter가 같은 seed의 standard parameter 대비 정확히 0.01배인지 확인한다.
+- `scale=1.0`이 standard initialization과 일치하는지 확인한다.
+- Small nonzero final initialization에서 hidden-layer gradient가 첫 step부터 finite/nonzero인지 확인한다.
+
+### Math
+
+- Residual mode 결과가 기존 구현과 일치한다.
+- Linear-plus가
+
+\[
+d_{\mathrm{linear}}+g r_{\mathrm{nonlinear}}
+\]
+
+을 정확히 계산한다.
+
+- Convex mode가
+
+\[
+(1-g)d_{\mathrm{linear}}+g d_{\mathrm{nonlinear}}
+\]
+
+을 정확히 계산한다.
+
+- Absolute mode에서 외부 `+d_base`가 없는지 확인한다.
+- Base common mode가 temporary pair에서 보존되는지 확인한다.
+- Projection 후 `phi+psi=rhs`를 확인한다.
+- Unequal line lengths, short segment, zero source scale에서 finite한지 확인한다.
+
+### Integration
+
+- 두 mode와 두 absolute combination에서 output `(B,2,P)` 유지.
+- One-step trainer smoke.
+- `torch.compile` smoke.
+- Artifact summary/raw schema 검증.
+- Existing residual artifact keys 유지.
+- Reference target이 loss/checkpoint graph에 들어가지 않음.
+- Existing complex GreenNet 및 unit-square CouplingNet regression 통과.
+
+### Verification
 
 ```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_green_optimizer.py \
-  test/test_green_lr_scheduler.py \
-  test/test_runner.py \
-  test/test_complex_green_trainer.py \
+  test/test_complex_pre_projection_fusion.py \
+  test/test_complex_coupling_model.py \
+  test/test_complex_coupling_trainer.py \
+  test/test_complex_coupling_artifacts.py \
   test/test_io_config.py \
-  test/test_cli_train.py \
-  test/test_export_green_artifacts.py
+  test/test_cli_train.py
+```
 
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_coupling_optimizer.py \
-  test/test_coupling_lr_scheduler.py \
-  test/test_complex_coupling_trainer.py
-
+```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
-
-~/.conda/envs/green_net/bin/python -m ruff check src cli test
-~/.conda/envs/green_net/bin/python -m ruff format src cli test
+ruff check src cli test
+ruff format src cli test
 ~/.conda/envs/green_net/bin/python -m mypy src
 git diff --check
 ```
 
 ## Rollback Strategy
 
-- SOAP runtime rollback은 `training.optimizer.name="adamw"`로 변경한다.
-- Scheduler runtime rollback은 `training.use_lr_schedule=false`로 변경한다.
-- SOAP 또는 scheduler integration에 문제가 생기면 Green model/loss/data/LBFGS를 건드리지 않고 factory 또는 scheduler branch만 비활성화할 수 있어야 한다.
-- Adam은 의도적으로 제거하므로 rollback option으로 유지하지 않는다.
-- Optimizer와 scheduler가 model state key를 변경하지 않으므로 checkpoint migration은 없어야 한다.
-- Existing checkpoint compatibility가 깨지면 구현을 중단하고 정확한 incompatible key, 영향받는 checkpoint와 최소 migration을 보고한다.
-
-## Assumptions and Confidence
-
-- AdamW는 unit-square와 complex GreenNet 모두의 기본 optimizer다.
-- SOAP은 두 GreenNet geometry mode에서 opt-in으로 사용할 수 있다.
-- Scheduler는 AdamW/SOAP 단계에만 적용하고 LBFGS에는 적용하지 않는다.
-- `weight_decay=0.0`을 기본으로 두어 optimizer class 변경 외의 regularization 변화는 만들지 않는다.
-- Canonical Green configs는 scheduler를 활성화하지만, 외부 legacy config가 scheduler field를 생략하면 fixed LR을 사용한다.
-- Existing model checkpoint는 호환되며 optimizer/scheduler resume는 지원하지 않는다.
-- 구현 계획 확신도는 **0.98**다.
-- SOAP의 GreenNet 수렴 개선 가능성에 대한 경험적 확신도는 **0.65**다.
-- 남은 불확실성은 규칙 모호성이나 구현 정보 부족이 아니라, effective source batch 25인 GreenNet에서 SOAP이 AdamW보다 좋은 convergence/wall-clock을 제공할지에 대한 실험적 불확실성이다.
+- Config에서 `mode="residual_correction"`을 사용하거나 새 field를 제거하면 기존 동작으로 돌아간다.
+- Default가 residual mode이므로 기존 config migration은 없다.
+- Model backbone과 parameter shape를 바꾸지 않으므로 architecture rollback은 필요 없다.
+- Code rollback은 absolute dispatcher, 새 config fields, mode-specific diagnostics와 관련 tests만 제거한다.
+- Projection, reconstruction, objective, optimizer, scheduler, dataset은 rollback 대상이 아니다.
+- Residual regression이 발견되면 absolute implementation을 중단하고 기존 residual formula와 zero initialization을 먼저 복원한다.
+- Absolute checkpoint는 residual mode로 재해석하지 않고 해당 embedded config로만 사용한다.
 

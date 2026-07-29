@@ -49,7 +49,20 @@ from test.complex_fixtures import (
 from greenonet.optimizers import SOAP
 
 
-def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
+@pytest.mark.parametrize(
+    ("fusion_mode", "combination", "final_scale", "gate"),
+    [
+        ("residual_correction", "convex_average", 0.0, 0.05),
+        ("absolute_difference", "linear_plus_nonlinear", 0.01, 0.5),
+    ],
+)
+def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
+    tmp_path,
+    fusion_mode,
+    combination,
+    final_scale,
+    gate,
+):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
     data_dir = tmp_path / "data"
@@ -64,8 +77,12 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             pre_projection_fusion=ComplexPreProjectionFusionConfig(
                 enabled=True,
+                mode=fusion_mode,
+                combination=combination,
                 nonlinear_hidden_dim=8,
                 nonlinear_depth=1,
+                nonlinear_final_init_scale=final_scale,
+                gate_initial_value=gate,
             ),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
@@ -92,22 +109,21 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             balance_loss=CouplingLossTermConfig(enabled=True, weight=99.0),
         ),
     )
+    work_dir = tmp_path / fusion_mode
     trainer = ComplexCouplingTrainer(
         model=model,
         config=training,
-        work_dir=tmp_path / "physical_symmetric",
+        work_dir=work_dir,
         green_model=ConstantGreen(1.0),
         terminal_width=120,
     )
 
     trainer.train(dataset)
 
-    assert (
-        tmp_path / "physical_symmetric" / "complex_coupling_model.safetensors"
-    ).exists()
-    assert (tmp_path / "physical_symmetric" / "complex_training_metrics.csv").exists()
+    assert (work_dir / "complex_coupling_model.safetensors").exists()
+    assert (work_dir / "complex_training_metrics.csv").exists()
     assert complex_metric_keys_are_safe(trainer.metric_rows[0].keys())
-    assert "cross" not in (tmp_path / "physical_symmetric" / "training.log").read_text()
+    assert "cross" not in (work_dir / "training.log").read_text()
     assert "loss_energy_consistency" in trainer.metric_rows[0]
     assert "loss_energy_bulk" in trainer.metric_rows[0]
     assert "loss_energy_boundary" in trainer.metric_rows[0]
@@ -137,10 +153,13 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     assert float(row["loss"]) == pytest.approx(
         float(row["loss_split_relative"]) + float(row["loss_weak_operator_closure"])
     )
-    training_log = (tmp_path / "physical_symmetric" / "training.log").read_text()
+    training_log = (work_dir / "training.log").read_text()
     assert "kind=fixed" in training_log
     assert "learning_rate=1.000000e-03" in training_log
     assert "pre-projection fusion enabled=True" in training_log
+    assert f"mode={fusion_mode}" in training_log
+    assert f"combination={combination}" in training_log
+    assert f"nonlinear_final_init_scale={final_scale:.6e}" in training_log
     assert "pre_projection_fusion_gate=" in training_log
 
 

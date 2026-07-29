@@ -41,6 +41,10 @@ def _model(
     transverse_trunk_fusion: str = "product",
     coefficient_terms: CouplingCoefficientTermsConfig | None = None,
     pre_projection_fusion_enabled: bool = False,
+    pre_projection_fusion_mode: str = "residual_correction",
+    pre_projection_fusion_combination: str = "convex_average",
+    pre_projection_fusion_final_scale: float = 0.0,
+    pre_projection_fusion_gate: float = 0.05,
 ) -> ComplexCouplingNet:
     torch.manual_seed(0)
     return ComplexCouplingNet(
@@ -52,9 +56,12 @@ def _model(
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             pre_projection_fusion=ComplexPreProjectionFusionConfig(
                 enabled=pre_projection_fusion_enabled,
+                mode=pre_projection_fusion_mode,
+                combination=pre_projection_fusion_combination,
                 nonlinear_hidden_dim=8,
                 nonlinear_depth=1,
-                gate_initial_value=0.05,
+                nonlinear_final_init_scale=pre_projection_fusion_final_scale,
+                gate_initial_value=pre_projection_fusion_gate,
             ),
             coefficient_terms=coefficient_terms or CouplingCoefficientTermsConfig(),
             branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
@@ -178,6 +185,59 @@ def test_complex_pre_projection_fusion_supports_torch_compile(tmp_path):
     assert output.shape == (1, 2, geometry.num_points)
     assert model.pre_projection_fusion is not None
     assert model.pre_projection_fusion.linear_correction.weight.grad is not None
+
+
+def test_complex_absolute_pre_projection_fusion_integrates_with_model(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(
+        pre_projection_fusion_enabled=True,
+        pre_projection_fusion_mode="absolute_difference",
+        pre_projection_fusion_combination="linear_plus_nonlinear",
+        pre_projection_fusion_final_scale=0.01,
+        pre_projection_fusion_gate=0.5,
+    )
+
+    output, diagnostics = model.forward_with_fusion_diagnostics(
+        geometry=geometry,
+        x_source_branch=item.x_source_branch.unsqueeze(0),
+        y_source_branch=item.y_source_branch.unsqueeze(0),
+        x_source_amplitude=item.x_source_amplitude.unsqueeze(0),
+        y_source_amplitude=item.y_source_amplitude.unsqueeze(0),
+        x_coefficient_branch=item.x_coefficient_branch.unsqueeze(0),
+        y_coefficient_branch=item.y_coefficient_branch.unsqueeze(0),
+        rhs_phys=item.rhs_valid.unsqueeze(0),
+    )
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert diagnostics is not None
+    assert model.pre_projection_fusion is not None
+    assert model.pre_projection_fusion.config.mode == "absolute_difference"
+    torch.testing.assert_close(
+        diagnostics.fused_difference,
+        diagnostics.combined_component,
+    )
+
+
+def test_complex_absolute_pre_projection_fusion_supports_torch_compile(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(
+        pre_projection_fusion_enabled=True,
+        pre_projection_fusion_mode="absolute_difference",
+        pre_projection_fusion_combination="linear_plus_nonlinear",
+        pre_projection_fusion_final_scale=0.01,
+        pre_projection_fusion_gate=0.5,
+    )
+    compiled = torch.compile(model, backend="eager")
+
+    output = _forward(compiled, geometry, item)
+    output.square().mean().backward()
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.pre_projection_fusion is not None
+    first_layer = model.pre_projection_fusion.nonlinear_correction[0]
+    assert isinstance(first_layer, torch.nn.Linear)
+    assert first_layer.weight.grad is not None
+    assert torch.count_nonzero(first_layer.weight.grad) > 0
 
 
 def test_complex_pointwise_transverse_trunk_product_fusion_outputs_shape(tmp_path):
@@ -489,6 +549,21 @@ def test_complex_model_loads_matching_output_contract_checkpoint(tmp_path):
     load_state_dict_auto(loaded, checkpoint)
 
     assert int(loaded._output_contract_version.item()) == 6
+
+
+def test_complex_model_loads_existing_residual_fuser_checkpoint_surface(tmp_path):
+    model = _model(pre_projection_fusion_enabled=True)
+    checkpoint = tmp_path / "complex_coupling_v6_residual_fuser.safetensors"
+    save_state_dict_safetensors(model.state_dict(), checkpoint)
+
+    loaded = _model(pre_projection_fusion_enabled=True)
+    load_state_dict_auto(loaded, checkpoint)
+
+    assert loaded.pre_projection_fusion is not None
+    assert loaded.pre_projection_fusion.config.mode == "residual_correction"
+    assert loaded.state_dict().keys() == model.state_dict().keys()
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(loaded.state_dict()[key], value)
 
 
 @pytest.mark.parametrize("version", [2, 3, 4, 5])

@@ -708,9 +708,9 @@ t_q^x,t_q^y,
 \right].
 \\]
 
-If \\(\ell_q\\) and \\(n_q\\) are the normalized linear and nonlinear
-corrections and \\(\alpha=\operatorname{sigmoid}(g)\\), the physical correction
-is
+The backward-compatible `residual_correction` mode interprets the two outputs
+as corrections. If \\(\ell_q\\) and \\(n_q\\) are the normalized linear and
+nonlinear corrections and \\(\alpha=\operatorname{sigmoid}(g)\\), then
 
 \\[
 \Delta d_q
@@ -726,12 +726,41 @@ p_q=p_{0,q}+\frac{\Delta d_q}{2},
 q_q=q_{0,q}-\frac{\Delta d_q}{2}.
 \\]
 
-Consequently \\(p_q+q_q=p_{0,q}+q_{0,q}\\): the block changes only the
-difference mode. Both correction heads are initialized to zero, so enabling the
-block starts from the exact unfused v6 prediction. The unclamped \\(S_q\\)
-multiplies the correction, so a zero source scale produces exactly zero
-correction. When the option is disabled, \\(p_q=p_{0,q}\\) and
-\\(q_q=q_{0,q}\\).
+The opt-in `absolute_difference` mode instead defines
+
+\\[
+d_q^{L}=S_q h_L(\widehat d_q,\widehat f_q),
+\\]
+
+with the linear weight initialized to \\([1,0]\\). It then uses either
+
+\\[
+d_q=d_q^L+\alpha r_q^N
+\\]
+
+for `linear_plus_nonlinear`, or
+
+\\[
+d_q=(1-\alpha)d_q^L+\alpha d_q^N
+\\]
+
+for `convex_average`. There is no outer \\(+d_{0,q}\\) in absolute mode.
+The physical pair is recovered from the base common mode
+\\(s_{0,q}=p_{0,q}+q_{0,q}\\) as
+
+\\[
+p_q=\frac{s_{0,q}+d_q}{2},
+\qquad
+q_q=\frac{s_{0,q}-d_q}{2}.
+\\]
+
+Consequently every mode preserves \\(p_q+q_q=p_{0,q}+q_{0,q}\\) while changing
+only the difference mode. Residual mode keeps exact zero-correction
+initialization. Absolute mode scales the standard nonlinear final-layer
+initialization by `nonlinear_final_init_scale`; the canonical setting is
+`0.01` with gate `0.5`. The unclamped \\(S_q\\) multiplies both components, so
+zero source scale gives zero linear/nonlinear component. When the option is
+disabled, \\(p_q=p_{0,q}\\) and \\(q_q=q_{0,q}\\).
 
 ### 8.4 Symmetric projection in physical source space
 

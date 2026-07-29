@@ -219,6 +219,9 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "split_mass_relative_contribution",
         "base_physical_difference",
         "fused_physical_difference",
+        "linear_difference_component",
+        "nonlinear_difference_component",
+        "combined_difference_component",
         "linear_difference_correction",
         "nonlinear_difference_correction",
         "blended_difference_correction",
@@ -241,10 +244,23 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert "p=P_raw/Lx^2" in summary["balance_projection"]["formula"]
     assert summary["pre_projection_fusion"]["enabled"] is True
     assert summary["pre_projection_fusion"]["space"] == ("physical_directional_source")
+    assert summary["pre_projection_fusion"]["mode"] == "residual_correction"
+    assert summary["pre_projection_fusion"]["combination"] == "convex_average"
     assert summary["pre_projection_fusion"]["correction_mode"] == (
         "antisymmetric_difference"
     )
     assert summary["pre_projection_fusion"]["common_mode_preserved"] is True
+    assert summary["pre_projection_fusion"]["linear_initialization"] == (
+        "zero_correction"
+    )
+    assert summary["pre_projection_fusion"]["nonlinear_final_initialization"] == (
+        "zero_correction"
+    )
+    assert summary["pre_projection_fusion"]["nonlinear_final_init_scale"] == 0.0
+    assert summary["pre_projection_fusion"]["nonlinear_component_semantics"] == (
+        "correction"
+    )
+    assert summary["pre_projection_fusion"]["outer_base_residual_used"] is True
     assert summary["pre_projection_fusion"]["gate_value"] == pytest.approx(0.05)
     assert summary["pre_projection_fusion"]["uses_reference_targets"] is False
     assert summary["reconstruction_response_input"] == {
@@ -394,6 +410,9 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_fused_physical_p") for key in raw.files)
     assert any(key.endswith("_fused_physical_q") for key in raw.files)
     assert any(key.endswith("_fused_physical_difference") for key in raw.files)
+    assert any(key.endswith("_linear_difference_component") for key in raw.files)
+    assert any(key.endswith("_nonlinear_difference_component") for key in raw.files)
+    assert any(key.endswith("_combined_difference_component") for key in raw.files)
     assert any(key.endswith("_linear_difference_correction") for key in raw.files)
     assert any(key.endswith("_nonlinear_difference_correction") for key in raw.files)
     assert any(key.endswith("_blended_difference_correction") for key in raw.files)
@@ -526,6 +545,113 @@ def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(
     assert statistics["b_magnitude"]["figure_exported"] is False
     assert statistics["c"]["physical_nonzero"] is False
     assert statistics["c"]["figure_exported"] is False
+
+
+def test_complex_artifact_records_absolute_fusion_semantics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coefficient_path = _write_zero_coefficients(tmp_path / "coefficients.py")
+    data_dir = tmp_path / "test_data"
+    write_sample_npz(data_dir)
+    coupling_cfg = CouplingModelConfig(
+        branch_input_dim=4,
+        hidden_dim=4,
+        depth=1,
+        dtype=torch.float64,
+        balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+        pre_projection_fusion=ComplexPreProjectionFusionConfig(
+            enabled=True,
+            mode="absolute_difference",
+            combination="linear_plus_nonlinear",
+            nonlinear_hidden_dim=8,
+            nonlinear_depth=1,
+            nonlinear_final_init_scale=0.01,
+            gate_initial_value=0.5,
+        ),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            num_frequencies=2,
+            max_frequency=2.0,
+            transverse_trunk=TransverseTrunkConfig(
+                enabled=True,
+                length_context=True,
+            ),
+        ),
+    )
+    green_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        branch_input_dim=4,
+        use_green=False,
+        dtype=torch.float64,
+    )
+    coupling_path = tmp_path / "complex_coupling.safetensors"
+    green_path = tmp_path / "green.safetensors"
+    save_state_dict_safetensors(
+        ComplexCouplingNet(coupling_cfg).state_dict(),
+        coupling_path,
+    )
+    save_model_with_config(GreenONetModel(green_cfg), green_cfg, green_path)
+    config_path = write_complex_config(
+        tmp_path / "config.json",
+        geometry_path=geometry_path,
+        train_path=None,
+        test_path=data_dir,
+        coefficient_path=coefficient_path,
+    )
+    config_payload = json.loads(config_path.read_text())
+    config_payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "physical_symmetric",
+    }
+    config_payload["coupling_model"]["pre_projection_fusion"] = {
+        "enabled": True,
+        "mode": "absolute_difference",
+        "combination": "linear_plus_nonlinear",
+        "nonlinear_hidden_dim": 8,
+        "nonlinear_depth": 1,
+        "nonlinear_final_init_scale": 0.01,
+        "gate_initial_value": 0.5,
+        "eps": 1e-12,
+    }
+    config_path.write_text(json.dumps(config_payload))
+    outdir = tmp_path / "artifacts"
+
+    summary = export_complex_coupling_artifacts(
+        CouplingArtifactRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_path,
+            green_checkpoint=green_path,
+            outdir=outdir,
+            device="cpu",
+            theme="plotly_white",
+        )
+    )
+
+    fusion_summary = summary["pre_projection_fusion"]
+    assert fusion_summary["mode"] == "absolute_difference"
+    assert fusion_summary["combination"] == "linear_plus_nonlinear"
+    assert fusion_summary["linear_initialization"] == ("absolute_identity_weight_[1,0]")
+    assert fusion_summary["nonlinear_final_initialization"] == (
+        "standard_initialization_scaled"
+    )
+    assert fusion_summary["nonlinear_final_init_scale"] == pytest.approx(0.01)
+    assert fusion_summary["gate_initial_value"] == pytest.approx(0.5)
+    assert fusion_summary["nonlinear_component_semantics"] == "residual"
+    assert fusion_summary["outer_base_residual_used"] is False
+    assert fusion_summary["identity_initialized"] is False
+    raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
+    assert any(key.endswith("_linear_difference_component") for key in raw.files)
+    assert any(key.endswith("_nonlinear_difference_component") for key in raw.files)
+    assert any(key.endswith("_combined_difference_component") for key in raw.files)
+    assert not any(key.endswith("_linear_difference_correction") for key in raw.files)
+    assert not any(
+        key.endswith("_nonlinear_difference_correction") for key in raw.files
+    )
+    assert not any(key.endswith("_blended_difference_correction") for key in raw.files)
 
 
 def test_complex_coefficient_artifacts_export_enabled_zero_fields(

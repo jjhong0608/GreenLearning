@@ -587,14 +587,36 @@ class ComplexPreProjectionFusionConfig:
     """Optional physical difference correction before complex projection."""
 
     enabled: bool = False
+    mode: Literal["residual_correction", "absolute_difference"] = "residual_correction"
+    combination: Literal["convex_average", "linear_plus_nonlinear"] = "convex_average"
     nonlinear_hidden_dim: int = 16
     nonlinear_depth: int = 1
+    nonlinear_final_init_scale: float = 0.0
     gate_initial_value: float = 0.05
     eps: float = 1.0e-12
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
             raise TypeError("pre_projection_fusion.enabled must be a boolean.")
+        if not isinstance(self.mode, str):
+            raise TypeError("pre_projection_fusion.mode must be a string.")
+        if self.mode not in {"residual_correction", "absolute_difference"}:
+            raise ValueError(
+                "pre_projection_fusion.mode must be 'residual_correction' or "
+                "'absolute_difference'."
+            )
+        if not isinstance(self.combination, str):
+            raise TypeError("pre_projection_fusion.combination must be a string.")
+        if self.combination not in {"convex_average", "linear_plus_nonlinear"}:
+            raise ValueError(
+                "pre_projection_fusion.combination must be 'convex_average' or "
+                "'linear_plus_nonlinear'."
+            )
+        if self.mode == "residual_correction" and self.combination != "convex_average":
+            raise ValueError(
+                "pre_projection_fusion.mode='residual_correction' requires "
+                "combination='convex_average' to preserve the legacy behavior."
+            )
         if (
             isinstance(self.nonlinear_hidden_dim, bool)
             or not isinstance(self.nonlinear_hidden_dim, int)
@@ -610,6 +632,16 @@ class ComplexPreProjectionFusionConfig:
         ):
             raise ValueError(
                 "pre_projection_fusion.nonlinear_depth must be a positive integer."
+            )
+        if isinstance(self.nonlinear_final_init_scale, bool):
+            raise TypeError(
+                "pre_projection_fusion.nonlinear_final_init_scale must be numeric."
+            )
+        nonlinear_scale = float(self.nonlinear_final_init_scale)
+        if not math.isfinite(nonlinear_scale) or nonlinear_scale < 0.0:
+            raise ValueError(
+                "pre_projection_fusion.nonlinear_final_init_scale must be finite "
+                "and nonnegative."
             )
         gate = float(self.gate_initial_value)
         if not math.isfinite(gate) or not 0.0 < gate < 1.0:
@@ -636,8 +668,11 @@ class ComplexPreProjectionFusionConfig:
                 set(data)
                 - {
                     "enabled",
+                    "mode",
+                    "combination",
                     "nonlinear_hidden_dim",
                     "nonlinear_depth",
+                    "nonlinear_final_init_scale",
                     "gate_initial_value",
                     "eps",
                 }

@@ -43,8 +43,11 @@
     },
     "pre_projection_fusion": {
       "enabled": true,
+      "mode": "residual_correction",
+      "combination": "convex_average",
       "nonlinear_hidden_dim": 16,
       "nonlinear_depth": 1,
+      "nonlinear_final_init_scale": 0.0,
       "gate_initial_value": 0.05,
       "eps": 1e-12
     },

@@ -170,19 +170,23 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   폐기되었고 v6에서 fail fast한다. Unversioned 및 v5 이하 complex CouplingNet
   checkpoint는 재학습 오류로 거부하며 GreenNet checkpoint는 그대로 재사용한다.
 - Complex CouplingNet의 `coupling_model.pre_projection_fusion`은 optional
-  architecture ablation이며 기본값은 disabled이다. Enabled이면 axis network의
-  base response \(P_0,Q_0\)를 \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\)로 옮긴 뒤,
-  small linear/nonlinear block이 physical difference correction \(\Delta d\)를
-  예측한다. 최종 proposal은 \(p=p_0+\Delta d/2\),
-  \(q=q_0-\Delta d/2\)이므로 physical common mode \(p+q\)는 정확히 보존된다.
-  Linear path는 normalized difference/source를, nonlinear path는 여기에
-  `x_local_t`, `y_local_t`, 양 축 line-length log feature와 \(\kappa\)를 함께
-  사용한다. Trainable sigmoid gate가 두 correction을 혼합하고 두 output head는
-  zero initialization되어 enabled run의 초기 prediction이 disabled baseline과
-  정확히 같다. 이 block은 projection 이전에만 작동하고 새 loss나 reference
-  `sol/phi/psi`를 사용하지 않으며 output contract는 v6를 유지한다. 기존 v6
-  checkpoint는 disabled config로 계속 load할 수 있지만 enabled config는 fusion
-  parameter가 추가되는 새 architecture이므로 CouplingNet을 새로 학습한다.
+  architecture ablation이며 기본값은 disabled이다. 두 mode 모두 axis network의
+  base response \(P_0,Q_0\)를 \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\)로 옮기고,
+  physical common mode \(p_0+q_0\)를 보존한다. Backward-compatible
+  `residual_correction`은 기존 zero-initialized correction을
+  `d_base+(1-g)*delta_linear+g*delta_nonlinear`로 적용한다. Opt-in
+  `absolute_difference`는 외부 `+d_base`를 사용하지 않고,
+  `d_linear=A*h_linear(d_base/A_safe,f/A_safe)`를 weight `[1,0]`으로
+  초기화한다. `linear_plus_nonlinear`은
+  `d_fused=d_linear+g*r_nonlinear`, `convex_average`는 두 absolute candidate의
+  convex average다. Nonlinear path는 normalized difference/source와
+  `x_local_t`, `y_local_t`, 양 축 line-length log feature, \(\kappa\)를 사용하며,
+  absolute mode의 standard final initialization에
+  `nonlinear_final_init_scale`을 곱한다. Canonical absolute setting은
+  scale `0.01`, gate `0.5`이고 standard-final/small-gate 대안은 scale `1.0`,
+  gate `0.05`다. 이 block은 새 loss나 reference `sol/phi/psi`를 사용하지 않고
+  output contract v6를 유지한다. Parameter key/shape도 유지되므로 새 field가
+  없는 기존 residual checkpoint config는 그대로 load된다.
 - Complex v6 training의 base split seminorm은 full-domain canonical physical
   energy이다. Residual `r=u_phi-u_psi`에 대해 모든 same-segment `x_edges`와
   `y_edges`의 diffusion face energy를 물리 spacing과 `hx*hy` area weight로 합하고,
@@ -1150,6 +1154,55 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   - metric comparison table/bar chart
   - solution reconstruction and error heatmap
   - flux reconstruction and error heatmap
+
+## Annulus CDR CouplingNet Reference Audit
+
+- `checkpoints/annulus_CDR/coupling`의 2026-07-29 audit 기준:
+  fixed indexed-GP source는 train `4800`, validation `100`이고,
+  train/validation reference diagnostics는 꺼져 있다. Training objective는
+  canonical energy only이며 output contract v6, physical-symmetric projection,
+  pre-projection fusion, SOAP optimizer를 사용한다.
+- Validation canonical energy의 best는 epoch 82의 `4.2700e-4`이고 epoch 100
+  final은 `4.3083e-4`이다. Final checkpoint의 50-sample test mean은
+  `rel_sol=5.1905%`, `rel_flux=17.1055%`, canonical energy `4.4634e-4`이다.
+- `artifacts/`는 epoch-82 best-energy checkpoint로 생성되었다. Artifact의
+  learned fusion gate가 epoch-82 checkpoint와 일치하므로, final-model
+  `metrics/test_*`와 artifact aggregate를 같은 checkpoint 결과로 혼동하지 않는다.
+- Selected artifact samples에서 `|x|` 또는 `|y|`가 inner radius `0.2`에 가까운
+  transition band는 valid points의 `8.12%`이지만, absolute error 상위 1% 중
+  `u_pred_error`의 `21.85%`, split/flux error의 약 `25-27%`를 차지한다.
+- 이 run에서는 sample-level canonical energy와 detached `rel_sol`의 상관이
+  약하다. Best-energy selection은 reference-free 원칙에 맞지만, evaluation
+  report에서는 canonical energy와 `rel_sol`/`rel_flux`를 함께 해석한다.
+- Selected pre-projection fusion diagnostics에서 raw nonlinear correction의
+  transition-edge jump RMS는 linear correction의 `6.20`배이고, regular edge
+  대비 transition jump 비율은 nonlinear `13.09`, linear `2.93`이다. 그러나
+  learned gate가 `0.06854`이므로 pooled blended transition jump는 linear-only의
+  `0.987`배이다. Raw nonlinear figure의 큰 seam과 최종 solution seam의 인과를
+  혼동하지 않으며, 기여 판단에는 fuser-off 또는 linear-only ablation이 필요하다.
+- 현재 nonlinear fuser는 transition-aware이지만 transition-regularizing 구조는
+  아니다. Discontinuous length feature를 감지해 correction에 반영할 수 있지만
+  correction continuity를 강제하지 않는다. Physical-symmetric projection은
+  fused physical difference mode를 그대로 보존하므로 blend에 남은 seam을 제거하지
+  않는다.
+- 현재 nonlinear fuser는 모든 valid point에 공유되는 pointwise MLP이다. Linear
+  path는 normalized `(base_difference, rhs)`의 `2 -> 1`, nonlinear path는 여기에
+  local coordinate와 length context 여섯 개를 더한 `8 -> hidden -> 1` 구조다.
+  Neighboring point/line coupling, coefficient direct input, pointwise gate, continuity
+  constraint는 없다.
+- Pre-projection fusion은 config에서 선택 가능한 optional mode다. 기존
+  `residual_correction`은 그대로 보존되고, `absolute_difference`는 외부
+  `+d_base` 없이 전체 difference를 예측한다. Absolute linear candidate는
+  normalized base difference identity weight `[1,0]`으로 초기화하며,
+  nonlinear component는 scaled standard final-layer initialization을 사용한다.
+  Artifact는 mode, combination, initialization, component semantics와
+  `outer_base_residual_used`를 기록한다.
+- 현재 fuser는 physical source에서 correction을 계산한 뒤 model forward의
+  reference-response return contract를 맞추기 위해 임시로 `L_x^2/L_y^2`를
+  곱한다. 외부 physical projection은 즉시 같은 scale로 나누므로 이 중간
+  multiply/divide pair는 대수적으로 상쇄된다. 이것은 projection 이후
+  `Phi=L_x^2 phi`, `Psi=L_y^2 psi`를 만들어 Green reconstruction에 전달하는
+  필수 pull-back과 구분한다.
 
 ## Verification Defaults
 

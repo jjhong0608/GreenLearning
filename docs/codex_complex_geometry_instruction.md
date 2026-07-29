@@ -553,7 +553,8 @@ q_{0,q}=\frac{Q_{0,q}}{\sigma_y}.
 \]
 
 The optional `coupling_model.pre_projection_fusion` block may modify only the
-physical difference before projection. It must use
+physical difference before projection. Its backward-compatible
+`residual_correction` mode uses
 
 \[
 p_q=p_{0,q}+\frac{\Delta d_q}{2},
@@ -561,15 +562,31 @@ p_q=p_{0,q}+\frac{\Delta d_q}{2},
 q_q=q_{0,q}-\frac{\Delta d_q}{2},
 \]
 
-so that \(p_q+q_q=p_{0,q}+q_{0,q}\) exactly. Its linear path uses normalized
-physical difference/source values, and its small nonlinear path additionally uses
-the two local coordinates, both pointwise line lengths relative to the global
+with a zero-initialized blended correction. The opt-in `absolute_difference`
+mode must not add \(d_{\mathrm{base}}\) outside the fuser. It uses
+
+\[
+d_{\mathrm{linear}}
+=
+A h_{\mathrm{linear}}
+\left(
+\frac{d_{\mathrm{base}}}{A_{\mathrm{safe}}},
+\frac{f}{A_{\mathrm{safe}}}
+\right)
+\]
+
+with linear weight `[1,0]`. `linear_plus_nonlinear` defines
+\(d_{\mathrm{fused}}=d_{\mathrm{linear}}+g r_{\mathrm{nonlinear}}\), while
+`convex_average` blends two absolute candidates. Reconstruct the temporary
+physical pair from the base common mode and the fused difference, so that
+\(p_q+q_q=p_{0,q}+q_{0,q}\) exactly. The nonlinear path additionally uses the
+two local coordinates, both pointwise line lengths relative to the global
 reference extent, their log ratio, and
-\(\kappa=4L_x^2L_y^2/(L_x^2+L_y^2)^2\). A sigmoid gate blends the linear and
-nonlinear corrections. Both correction heads must be initialized to zero, the
-unclamped source scale must multiply the correction, and the option must default
-to disabled. It is complex-only, uses no reference target, and does not change
-output contract v6.
+\(\kappa=4L_x^2L_y^2/(L_x^2+L_y^2)^2\). Absolute mode scales the standard
+nonlinear final-layer initialization by `nonlinear_final_init_scale`; the
+canonical setting is scale `0.01` and gate `0.5`. The option must default to
+disabled, is complex-only, uses no reference target, and does not change output
+contract v6.
 
 Preserve the resulting physical difference \(d_q=p_q-q_q\) while imposing exact source
 balance by the symmetric physical projection

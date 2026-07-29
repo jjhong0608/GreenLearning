@@ -1444,14 +1444,14 @@ class ComplexLengthResponseDiagnostic(
                         "fused_physical_difference": self._numpy(
                             fusion.fused_difference[offset]
                         ),
-                        "linear_difference_correction": self._numpy(
-                            fusion.linear_correction[offset]
+                        "linear_difference_component": self._numpy(
+                            fusion.linear_component[offset]
                         ),
-                        "nonlinear_difference_correction": self._numpy(
-                            fusion.nonlinear_correction[offset]
+                        "nonlinear_difference_component": self._numpy(
+                            fusion.nonlinear_component[offset]
                         ),
-                        "blended_difference_correction": self._numpy(
-                            fusion.blended_correction[offset]
+                        "combined_difference_component": self._numpy(
+                            fusion.combined_component[offset]
                         ),
                         "fusion_source_scale": self._numpy(fusion.source_scale[offset]),
                         "fusion_gate": np.asarray(
@@ -1459,6 +1459,20 @@ class ComplexLengthResponseDiagnostic(
                         ),
                     }
                 )
+                if fusion.mode == "residual_correction":
+                    arrays.update(
+                        {
+                            "linear_difference_correction": self._numpy(
+                                fusion.linear_component[offset]
+                            ),
+                            "nonlinear_difference_correction": self._numpy(
+                                fusion.nonlinear_component[offset]
+                            ),
+                            "blended_difference_correction": self._numpy(
+                                fusion.combined_component[offset]
+                            ),
+                        }
+                    )
             selected_arrays[sample_id] = arrays
         return selected_arrays
 
@@ -1562,11 +1576,43 @@ class ComplexLengthResponseDiagnostic(
             "pre_projection_fusion": {
                 "enabled": fusion_config.enabled,
                 "space": "physical_directional_source",
+                "mode": fusion_config.mode,
+                "combination": fusion_config.combination,
                 "correction_mode": "antisymmetric_difference",
                 "common_mode_preserved": True,
                 "nonlinear_hidden_dim": fusion_config.nonlinear_hidden_dim,
                 "nonlinear_depth": fusion_config.nonlinear_depth,
+                "linear_input_normalization": (
+                    "[d_base/A_safe, rhs/A_safe], output multiplied by A"
+                ),
+                "linear_initialization": (
+                    "zero_correction"
+                    if fusion_config.mode == "residual_correction"
+                    else "absolute_identity_weight_[1,0]"
+                ),
+                "nonlinear_final_initialization": (
+                    "zero_correction"
+                    if fusion_config.mode == "residual_correction"
+                    else "standard_initialization_scaled"
+                ),
+                "nonlinear_final_init_scale": (
+                    0.0
+                    if fusion_config.mode == "residual_correction"
+                    else fusion_config.nonlinear_final_init_scale
+                ),
                 "gate_initial_value": fusion_config.gate_initial_value,
+                "nonlinear_component_semantics": (
+                    "correction"
+                    if fusion_config.mode == "residual_correction"
+                    else (
+                        "residual"
+                        if fusion_config.combination == "linear_plus_nonlinear"
+                        else "absolute_candidate"
+                    )
+                ),
+                "outer_base_residual_used": (
+                    fusion_config.mode == "residual_correction"
+                ),
                 "gate_value": (
                     None
                     if fusion_module is None
