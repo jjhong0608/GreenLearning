@@ -7,6 +7,7 @@ from greenonet.coefficients import load_coefficient_functions
 from greenonet.complex_coupling_data import ComplexCouplingDataset
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_geometry import load_complex_geometry
+from greenonet.complex_projection import apply_complex_balance_projection
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
@@ -41,10 +42,8 @@ def _model(
     transverse_trunk_fusion: str = "product",
     coefficient_terms: CouplingCoefficientTermsConfig | None = None,
     pre_projection_fusion_enabled: bool = False,
-    pre_projection_fusion_mode: str = "residual_correction",
-    pre_projection_fusion_combination: str = "convex_average",
-    pre_projection_fusion_final_scale: float = 0.0,
-    pre_projection_fusion_gate: float = 0.05,
+    pre_projection_fusion_hidden_dim: int = 8,
+    pre_projection_fusion_depth: int = 1,
 ) -> ComplexCouplingNet:
     torch.manual_seed(0)
     return ComplexCouplingNet(
@@ -56,12 +55,8 @@ def _model(
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             pre_projection_fusion=ComplexPreProjectionFusionConfig(
                 enabled=pre_projection_fusion_enabled,
-                mode=pre_projection_fusion_mode,
-                combination=pre_projection_fusion_combination,
-                nonlinear_hidden_dim=8,
-                nonlinear_depth=1,
-                nonlinear_final_init_scale=pre_projection_fusion_final_scale,
-                gate_initial_value=pre_projection_fusion_gate,
+                hidden_dim=pre_projection_fusion_hidden_dim,
+                depth=pre_projection_fusion_depth,
             ),
             coefficient_terms=coefficient_terms or CouplingCoefficientTermsConfig(),
             branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
@@ -141,9 +136,28 @@ def test_complex_pre_projection_fusion_enabled_is_identity_initialized(tmp_path)
         rhs_phys=item.rhs_valid.unsqueeze(0),
     )
 
-    torch.testing.assert_close(enabled_output, disabled_output)
     assert diagnostics is not None
-    torch.testing.assert_close(diagnostics.fused_response, disabled_output)
+    config = BalanceProjectionConfig(enabled=True, mode="physical_symmetric")
+    disabled_projection = apply_complex_balance_projection(
+        disabled_output,
+        item.rhs_valid.unsqueeze(0),
+        geometry,
+        config,
+    )
+    enabled_projection = apply_complex_balance_projection(
+        enabled_output,
+        item.rhs_valid.unsqueeze(0),
+        geometry,
+        config,
+    )
+    torch.testing.assert_close(
+        enabled_projection.projected_response,
+        disabled_projection.projected_response,
+    )
+    torch.testing.assert_close(
+        diagnostics.physical_residual,
+        torch.zeros_like(diagnostics.physical_residual),
+    )
     assert enabled.pre_projection_fusion is not None
     assert any(key.startswith("pre_projection_fusion.") for key in enabled.state_dict())
     assert int(enabled._output_contract_version.item()) == 6
@@ -184,18 +198,21 @@ def test_complex_pre_projection_fusion_supports_torch_compile(tmp_path):
 
     assert output.shape == (1, 2, geometry.num_points)
     assert model.pre_projection_fusion is not None
-    assert model.pre_projection_fusion.linear_correction.weight.grad is not None
+    final_layer = model.pre_projection_fusion.residual_mlp[-1]
+    assert isinstance(final_layer, torch.nn.Linear)
+    assert final_layer.weight.grad is not None
+    assert torch.count_nonzero(final_layer.weight.grad) > 0
 
 
-def test_complex_absolute_pre_projection_fusion_integrates_with_model(tmp_path):
+def test_complex_pre_projection_residual_integrates_with_model(tmp_path):
     geometry, item = _build_item(tmp_path)
-    model = _model(
-        pre_projection_fusion_enabled=True,
-        pre_projection_fusion_mode="absolute_difference",
-        pre_projection_fusion_combination="linear_plus_nonlinear",
-        pre_projection_fusion_final_scale=0.01,
-        pre_projection_fusion_gate=0.5,
-    )
+    model = _model(pre_projection_fusion_enabled=True)
+    assert model.pre_projection_fusion is not None
+    final_layer = model.pre_projection_fusion.residual_mlp[-1]
+    assert isinstance(final_layer, torch.nn.Linear)
+    with torch.no_grad():
+        assert final_layer.bias is not None
+        final_layer.bias.fill_(0.25)
 
     output, diagnostics = model.forward_with_fusion_diagnostics(
         geometry=geometry,
@@ -210,34 +227,31 @@ def test_complex_absolute_pre_projection_fusion_integrates_with_model(tmp_path):
 
     assert output.shape == (1, 2, geometry.num_points)
     assert diagnostics is not None
-    assert model.pre_projection_fusion is not None
-    assert model.pre_projection_fusion.config.mode == "absolute_difference"
     torch.testing.assert_close(
         diagnostics.fused_difference,
-        diagnostics.combined_component,
+        diagnostics.base_difference + diagnostics.physical_residual,
+    )
+    torch.testing.assert_close(
+        diagnostics.fused_physical.sum(dim=1),
+        item.rhs_valid.unsqueeze(0),
     )
 
 
-def test_complex_absolute_pre_projection_fusion_supports_torch_compile(tmp_path):
+def test_complex_pre_projection_residual_uses_only_two_inputs(tmp_path):
     geometry, item = _build_item(tmp_path)
     model = _model(
         pre_projection_fusion_enabled=True,
-        pre_projection_fusion_mode="absolute_difference",
-        pre_projection_fusion_combination="linear_plus_nonlinear",
-        pre_projection_fusion_final_scale=0.01,
-        pre_projection_fusion_gate=0.5,
+        pre_projection_fusion_hidden_dim=7,
+        pre_projection_fusion_depth=2,
     )
-    compiled = torch.compile(model, backend="eager")
 
-    output = _forward(compiled, geometry, item)
-    output.square().mean().backward()
-
-    assert output.shape == (1, 2, geometry.num_points)
     assert model.pre_projection_fusion is not None
-    first_layer = model.pre_projection_fusion.nonlinear_correction[0]
+    first_layer = model.pre_projection_fusion.residual_mlp[0]
     assert isinstance(first_layer, torch.nn.Linear)
-    assert first_layer.weight.grad is not None
-    assert torch.count_nonzero(first_layer.weight.grad) > 0
+    assert first_layer.in_features == 2
+    assert first_layer.out_features == 7
+    output = _forward(model, geometry, item)
+    assert output.shape == (1, 2, geometry.num_points)
 
 
 def test_complex_pointwise_transverse_trunk_product_fusion_outputs_shape(tmp_path):
@@ -551,19 +565,53 @@ def test_complex_model_loads_matching_output_contract_checkpoint(tmp_path):
     assert int(loaded._output_contract_version.item()) == 6
 
 
-def test_complex_model_loads_existing_residual_fuser_checkpoint_surface(tmp_path):
+def test_complex_model_loads_single_residual_fuser_checkpoint_surface(tmp_path):
     model = _model(pre_projection_fusion_enabled=True)
-    checkpoint = tmp_path / "complex_coupling_v6_residual_fuser.safetensors"
+    checkpoint = tmp_path / "complex_coupling_v6_single_residual_fuser.safetensors"
     save_state_dict_safetensors(model.state_dict(), checkpoint)
 
     loaded = _model(pre_projection_fusion_enabled=True)
     load_state_dict_auto(loaded, checkpoint)
 
     assert loaded.pre_projection_fusion is not None
-    assert loaded.pre_projection_fusion.config.mode == "residual_correction"
+    assert hasattr(loaded.pre_projection_fusion, "residual_mlp")
     assert loaded.state_dict().keys() == model.state_dict().keys()
     for key, value in model.state_dict().items():
         torch.testing.assert_close(loaded.state_dict()[key], value)
+
+
+def test_complex_model_rejects_legacy_enabled_fuser_checkpoint(tmp_path):
+    model = _model(pre_projection_fusion_enabled=True)
+    legacy_state = {
+        key: value
+        for key, value in model.state_dict().items()
+        if not key.startswith("pre_projection_fusion.")
+    }
+    legacy_state.update(
+        {
+            "pre_projection_fusion.linear_correction.weight": torch.zeros(
+                (1, 2), dtype=torch.float64
+            ),
+            "pre_projection_fusion.nonlinear_correction.0.weight": torch.zeros(
+                (8, 8), dtype=torch.float64
+            ),
+            "pre_projection_fusion.nonlinear_correction.0.bias": torch.zeros(
+                8, dtype=torch.float64
+            ),
+            "pre_projection_fusion.nonlinear_correction.2.weight": torch.zeros(
+                (1, 8), dtype=torch.float64
+            ),
+            "pre_projection_fusion.nonlinear_correction.2.bias": torch.zeros(
+                1, dtype=torch.float64
+            ),
+            "pre_projection_fusion.gate_logit": torch.zeros((), dtype=torch.float64),
+        }
+    )
+    checkpoint = tmp_path / "complex_coupling_v6_legacy_fuser.safetensors"
+    save_state_dict_safetensors(legacy_state, checkpoint)
+
+    with pytest.raises(RuntimeError, match="Missing key.*residual_mlp"):
+        load_state_dict_auto(_model(pre_projection_fusion_enabled=True), checkpoint)
 
 
 @pytest.mark.parametrize("version", [2, 3, 4, 5])

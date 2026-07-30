@@ -552,41 +552,55 @@ p_{0,q}=\frac{P_{0,q}}{\sigma_x},
 q_{0,q}=\frac{Q_{0,q}}{\sigma_y}.
 \]
 
-The optional `coupling_model.pre_projection_fusion` block may modify only the
-physical difference before projection. Its backward-compatible
-`residual_correction` mode uses
+The optional `coupling_model.pre_projection_fusion` block modifies only the
+physical difference before projection. Define
 
 \[
-p_q=p_{0,q}+\frac{\Delta d_q}{2},
+d_{\mathrm{base},q}=p_{0,q}-q_{0,q},
 \qquad
-q_q=q_{0,q}-\frac{\Delta d_q}{2},
+A_q=
+\sqrt{\frac{(A^x_{\alpha(q)})^2+(A^y_{\beta(q)})^2}{2}},
 \]
-
-with a zero-initialized blended correction. The opt-in `absolute_difference`
-mode must not add \(d_{\mathrm{base}}\) outside the fuser. It uses
 
 \[
-d_{\mathrm{linear}}
-=
-A h_{\mathrm{linear}}
-\left(
-\frac{d_{\mathrm{base}}}{A_{\mathrm{safe}}},
-\frac{f}{A_{\mathrm{safe}}}
-\right)
+A_{\mathrm{safe},q}=\max(A_q,\varepsilon),
+\qquad
+z_q=
+\left[
+\frac{d_{\mathrm{base},q}}{A_{\mathrm{safe},q}},
+\frac{f_q}{A_{\mathrm{safe},q}}
+\right].
 \]
 
-with linear weight `[1,0]`. `linear_plus_nonlinear` defines
-\(d_{\mathrm{fused}}=d_{\mathrm{linear}}+g r_{\mathrm{nonlinear}}\), while
-`convex_average` blends two absolute candidates. Reconstruct the temporary
-physical pair from the base common mode and the fused difference, so that
-\(p_q+q_q=p_{0,q}+q_{0,q}\) exactly. The nonlinear path additionally uses the
-two local coordinates, both pointwise line lengths relative to the global
-reference extent, their log ratio, and
-\(\kappa=4L_x^2L_y^2/(L_x^2+L_y^2)^2\). Absolute mode scales the standard
-nonlinear final-layer initialization by `nonlinear_final_init_scale`; the
-canonical setting is scale `0.01` and gate `0.5`. The option must default to
-disabled, is complex-only, uses no reference target, and does not change output
-contract v6.
+One pointwise nonlinear MLP produces a normalized residual:
+
+\[
+r_{\theta,q}=\operatorname{MLP}_{\theta}(z_q),
+\qquad
+d_{\mathrm{fused},q}
+=
+d_{\mathrm{base},q}+A_{\mathrm{safe},q}r_{\theta,q}.
+\]
+
+Construct the temporary physical pair directly from the physical source and
+the fused difference:
+
+\[
+p_q=\frac{f_q+d_{\mathrm{fused},q}}{2},
+\qquad
+q_q=\frac{f_q-d_{\mathrm{fused},q}}{2}.
+\]
+
+Thus the optional block presents an exactly balanced pair to the physical
+symmetric projection. It has one `2 -> hidden_dim -> ... -> 1` MLP, a fixed
+identity skip through \(d_{\mathrm{base}}\), and no learned linear branch,
+learned gate, combination mode, or direct coordinate/geometry/line-length
+feature. The final MLP layer weight and bias are zero-initialized, so the
+enabled path initially produces the same projected result as the disabled
+path. If \(A_q=0\), force the physical residual to zero. The option must default
+to disabled, is complex-only, uses no reference target, and does not change
+output contract v6. Its config accepts only `enabled`, `hidden_dim`, `depth`,
+and `eps`; retired split-fuser configs and enabled checkpoints are rejected.
 
 Preserve the resulting physical difference \(d_q=p_q-q_q\) while imposing exact source
 balance by the symmetric physical projection
@@ -1159,8 +1173,10 @@ Test that:
 - output scaling is \(L_x^2A_x\) and \(L_y^2A_y\);
 - the shared transverse trunk receives the four length-context features with x/y role swap;
 - disabled pre-projection fusion leaves the v6 state/output path unchanged;
-- enabled pre-projection fusion is identity-initialized, preserves the physical
-  common mode, and changes only the difference mode;
+- enabled pre-projection fusion has one two-input nonlinear MLP, a fixed
+  identity skip, and a zero-initialized final layer;
+- enabled pre-projection fusion constructs an exactly balanced physical pair
+  from `rhs` and the fused difference;
 - zero source amplitude gives an exact zero fusion correction;
 - unversioned and version 5-or-older complex CouplingNet checkpoints are rejected by
   output contract v6.
@@ -1180,8 +1196,10 @@ Test that:
 - balance loss is not used;
 - smooth masked projection is not used;
 - pre-projection scaling produces \(p_0=P_0/L_x^2\) and \(q_0=Q_0/L_y^2\);
-- optional fusion preserves the base common mode and produces the difference
-  presented to projection;
+- optional fusion uses only normalized physical difference/source inputs and
+  produces the difference presented to projection;
+- optional fusion has no learned linear branch, learned gate, or direct
+  geometry/length input;
 - the fused physical difference is preserved by projection;
 - post-projection pull-back produces \(\Phi=L_x^2\phi\), \(\Psi=L_y^2\psi\);
 - very short positive segment lengths remain finite in float64.

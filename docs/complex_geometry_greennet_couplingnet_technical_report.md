@@ -968,11 +968,12 @@ structure constrains the same physical point.
 
 Together with the source, coefficient, geometry, and transverse branches, these
 trunk components produce raw directional reference responses. These are first
-scaled to physical directional-source proposals. An optional small
-linear/nonlinear pre-projection fusion block can then correct only their physical
-difference mode while preserving their common mode. The resulting proposals are
-projected in physical source space and pulled back to the unit-interval responses
-consumed by GreenNet.
+scaled to physical directional-source proposals. An optional small single
+nonlinear residual MLP can then correct only their physical difference using
+normalized physical difference/source values. It has a fixed identity skip and
+does not receive geometry or line-length features directly. The resulting
+balanced physical pair is projected in physical source space and pulled back to
+the unit-interval responses consumed by GreenNet.
 
 ### Learnable Rational Activation
 
@@ -1055,38 +1056,48 @@ q_0=\frac{Q_0}{\sigma_y}.
 \]
 
 If optional pre-projection fusion is disabled, set \(p=p_0\) and \(q=q_0\).
-When enabled, a bias-free linear path acts on the source-normalized physical
-difference and source, while a small nonlinear path additionally receives the two
-local coordinates and the pointwise line-length features
+When enabled, define
 
 \[
-\log(L_x/L_{\mathrm{ref}}),\quad
-\log(L_y/L_{\mathrm{ref}}),\quad
-\log(L_x/L_y),\quad
-\kappa=\frac{4L_x^2L_y^2}{(L_x^2+L_y^2)^2}.
-\]
-
-With source scale \(S=\sqrt{(A_x^2+A_y^2)/2}\), trainable gate
-\(\alpha=\operatorname{sigmoid}(g)\), and normalized head outputs
-\(\ell,n\), define
-
-\[
-\Delta d=S[(1-\alpha)\ell+\alpha n],
-\]
-
-\[
-p=p_0+\frac{\Delta d}{2},
+d_{\mathrm{base}}=p_0-q_0,
 \qquad
-q=q_0-\frac{\Delta d}{2}.
+A=\sqrt{\frac{A_x^2+A_y^2}{2}},
+\qquad
+A_{\mathrm{safe}}=\max(A,\varepsilon),
 \]
 
-This preserves \(p+q=p_0+q_0\) exactly and changes only the difference passed to
-projection. Both correction heads are zero-initialized, so the enabled model
-starts from the unfused prediction. The block uses no reference
-\(u,\phi,\psi\) target.
+\[
+z=
+\left[
+\frac{d_{\mathrm{base}}}{A_{\mathrm{safe}}},
+\frac{f}{A_{\mathrm{safe}}}
+\right],
+\qquad
+r_\theta=\operatorname{MLP}_\theta(z),
+\]
 
-The symmetric projection preserves the fused physical difference \(d=p-q\) and
-enforces the physical source balance:
+\[
+d_{\mathrm{fused}}
+=
+d_{\mathrm{base}}+A_{\mathrm{safe}}r_\theta,
+\]
+
+\[
+\phi_{\mathrm{pre}}=\frac{f+d_{\mathrm{fused}}}{2},
+\qquad
+\psi_{\mathrm{pre}}=\frac{f-d_{\mathrm{fused}}}{2}.
+\]
+
+This uses one pointwise `2 -> hidden -> ... -> 1` nonlinear MLP. It has no
+learned linear branch, learned gate, combination mode, or direct geometry/
+line-length input. The final layer is zero-initialized, so the fixed identity
+skip initially preserves \(d_{\mathrm{base}}\), while the constructed physical
+pair satisfies \(\phi_{\mathrm{pre}}+\psi_{\mathrm{pre}}=f\) exactly. The block
+uses no reference \(u,\phi,\psi\) target.
+
+The symmetric projection receives
+\(p=\phi_{\mathrm{pre}},q=\psi_{\mathrm{pre}}\), preserves the fused physical
+difference \(d=p-q\), and enforces the physical source balance:
 
 \[
 d=p-q,

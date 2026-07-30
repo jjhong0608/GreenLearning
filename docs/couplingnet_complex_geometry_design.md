@@ -676,7 +676,7 @@ q_{0,q}=\frac{Q_{0,q}}{\sigma_y}.
 All segment lengths must be strictly positive. This is the explicit
 reference-to-physical coordinate scaling performed before projection.
 
-### 8.3 Optional linear/nonlinear pre-projection fusion
+### 8.3 Optional single nonlinear residual pre-projection fusion
 
 The optional `coupling_model.pre_projection_fusion` block operates only in
 physical directional-source space. Define the source scale
@@ -686,81 +686,54 @@ S_q=
 \sqrt{\frac{(A^x_{\alpha(q)})^2+(A^y_{\beta(q)})^2}{2}},
 \\]
 
-and normalized inputs
+and the safe scale and normalized inputs
 
 \\[
-\widehat d_q=\frac{p_{0,q}-q_{0,q}}{\max(S_q,\varepsilon)},
+A_{\mathrm{safe},q}=\max(S_q,\varepsilon),
 \qquad
-\widehat f_q=\frac{f_q}{\max(S_q,\varepsilon)}.
+d_{0,q}=p_{0,q}-q_{0,q},
 \\]
 
-A bias-free linear head receives
-\\([\widehat d_q,\widehat f_q]\\). A small nonlinear head receives those two
-values together with
-
 \\[
+z_q=
 \left[
-t_q^x,t_q^y,
-\log\frac{L_x}{L_{\mathrm{ref}}},
-\log\frac{L_y}{L_{\mathrm{ref}}},
-\log\frac{L_x}{L_y},
-\frac{4L_x^2L_y^2}{(L_x^2+L_y^2)^2}
+\frac{d_{0,q}}{A_{\mathrm{safe},q}},
+\frac{f_q}{A_{\mathrm{safe},q}}
 \right].
 \\]
 
-The backward-compatible `residual_correction` mode interprets the two outputs
-as corrections. If \\(\ell_q\\) and \\(n_q\\) are the normalized linear and
-nonlinear corrections and \\(\alpha=\operatorname{sigmoid}(g)\\), then
+One shared pointwise nonlinear MLP predicts a normalized residual:
 
 \\[
-\Delta d_q
+r_{\theta,q}=\operatorname{MLP}_{\theta}(z_q).
+\\]
+
+The fixed identity skip and physical rescaling define
+
+\\[
+d_{\mathrm{fused},q}
 =
-S_q\left[(1-\alpha)\ell_q+\alpha n_q\right].
+d_{0,q}+A_{\mathrm{safe},q}r_{\theta,q}.
 \\]
 
-The fused proposals are
+The physical pair presented to projection is then constructed from the source:
 
 \\[
-p_q=p_{0,q}+\frac{\Delta d_q}{2},
+p_q=\frac{f_q+d_{\mathrm{fused},q}}{2},
 \qquad
-q_q=q_{0,q}-\frac{\Delta d_q}{2}.
+q_q=\frac{f_q-d_{\mathrm{fused},q}}{2}.
 \\]
 
-The opt-in `absolute_difference` mode instead defines
-
-\\[
-d_q^{L}=S_q h_L(\widehat d_q,\widehat f_q),
-\\]
-
-with the linear weight initialized to \\([1,0]\\). It then uses either
-
-\\[
-d_q=d_q^L+\alpha r_q^N
-\\]
-
-for `linear_plus_nonlinear`, or
-
-\\[
-d_q=(1-\alpha)d_q^L+\alpha d_q^N
-\\]
-
-for `convex_average`. There is no outer \\(+d_{0,q}\\) in absolute mode.
-The physical pair is recovered from the base common mode
-\\(s_{0,q}=p_{0,q}+q_{0,q}\\) as
-
-\\[
-p_q=\frac{s_{0,q}+d_q}{2},
-\qquad
-q_q=\frac{s_{0,q}-d_q}{2}.
-\\]
-
-Consequently every mode preserves \\(p_q+q_q=p_{0,q}+q_{0,q}\\) while changing
-only the difference mode. Residual mode keeps exact zero-correction
-initialization. Absolute mode scales the standard nonlinear final-layer
-initialization by `nonlinear_final_init_scale`; the canonical setting is
-`0.01` with gate `0.5`. The unclamped \\(S_q\\) multiplies both components, so
-zero source scale gives zero linear/nonlinear component. When the option is
-disabled, \\(p_q=p_{0,q}\\) and \\(q_q=q_{0,q}\\).
+Consequently \\(p_q+q_q=f_q\\) exactly before projection. The MLP has
+`depth` hidden layers of width `hidden_dim`, uses the CouplingNet activation and
+bias setting, and ends in one scalar output. Its final layer weight and bias are
+zero-initialized, so the enabled block starts with
+\\(d_{\mathrm{fused}}=d_0\\) and the same projected result as the disabled path.
+There is no learned linear branch, learned gate, convex combination, or direct
+coordinate/geometry/line-length input. When the raw source scale is zero, the
+physical residual is explicitly zeroed. When the option is disabled,
+\\(p_q=p_{0,q}\\) and \\(q_q=q_{0,q}\\). Retired split-fuser checkpoints are
+not migrated.
 
 ### 8.4 Symmetric projection in physical source space
 

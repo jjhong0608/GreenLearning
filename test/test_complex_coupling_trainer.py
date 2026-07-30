@@ -49,20 +49,7 @@ from test.complex_fixtures import (
 from greenonet.optimizers import SOAP
 
 
-@pytest.mark.parametrize(
-    ("fusion_mode", "combination", "final_scale", "gate"),
-    [
-        ("residual_correction", "convex_average", 0.0, 0.05),
-        ("absolute_difference", "linear_plus_nonlinear", 0.01, 0.5),
-    ],
-)
-def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
-    tmp_path,
-    fusion_mode,
-    combination,
-    final_scale,
-    gate,
-):
+def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
     data_dir = tmp_path / "data"
@@ -77,12 +64,8 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             pre_projection_fusion=ComplexPreProjectionFusionConfig(
                 enabled=True,
-                mode=fusion_mode,
-                combination=combination,
-                nonlinear_hidden_dim=8,
-                nonlinear_depth=1,
-                nonlinear_final_init_scale=final_scale,
-                gate_initial_value=gate,
+                hidden_dim=8,
+                depth=1,
             ),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
@@ -109,7 +92,7 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
             balance_loss=CouplingLossTermConfig(enabled=True, weight=99.0),
         ),
     )
-    work_dir = tmp_path / fusion_mode
+    work_dir = tmp_path / "single_residual_mlp"
     trainer = ComplexCouplingTrainer(
         model=model,
         config=training,
@@ -138,7 +121,7 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
     assert "loss_weak_operator_closure" in trainer.metric_rows[0]
     assert "loss_weak_operator_x" in trainer.metric_rows[0]
     assert "loss_weak_operator_y" in trainer.metric_rows[0]
-    assert "pre_projection_fusion_gate" in trainer.metric_rows[0]
+    assert "pre_projection_fusion_gate" not in trainer.metric_rows[0]
     assert "loss_trace_gluing" not in trainer.metric_rows[0]
     assert "loss_trace_carrier_transition" not in trainer.metric_rows[0]
     row = trainer.metric_rows[0]
@@ -157,10 +140,14 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
     assert "kind=fixed" in training_log
     assert "learning_rate=1.000000e-03" in training_log
     assert "pre-projection fusion enabled=True" in training_log
-    assert f"mode={fusion_mode}" in training_log
-    assert f"combination={combination}" in training_log
-    assert f"nonlinear_final_init_scale={final_scale:.6e}" in training_log
-    assert "pre_projection_fusion_gate=" in training_log
+    assert "architecture=single_nonlinear_residual_mlp" in training_log
+    assert "input_dim=2" in training_log
+    assert "hidden_dim=8" in training_log
+    assert "depth=1" in training_log
+    assert "identity_skip=true" in training_log
+    assert "final_initialization=zeros" in training_log
+    assert "explicit_geometry_features=false" in training_log
+    assert "pre_projection_fusion_gate" not in training_log
 
 
 def test_complex_trainer_omits_reference_metrics_for_rhs_only_data(tmp_path):

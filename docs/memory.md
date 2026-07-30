@@ -170,23 +170,23 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   폐기되었고 v6에서 fail fast한다. Unversioned 및 v5 이하 complex CouplingNet
   checkpoint는 재학습 오류로 거부하며 GreenNet checkpoint는 그대로 재사용한다.
 - Complex CouplingNet의 `coupling_model.pre_projection_fusion`은 optional
-  architecture ablation이며 기본값은 disabled이다. 두 mode 모두 axis network의
+  single nonlinear residual MLP이며 기본값은 disabled이다. Axis network의
   base response \(P_0,Q_0\)를 \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\)로 옮기고,
-  physical common mode \(p_0+q_0\)를 보존한다. Backward-compatible
-  `residual_correction`은 기존 zero-initialized correction을
-  `d_base+(1-g)*delta_linear+g*delta_nonlinear`로 적용한다. Opt-in
-  `absolute_difference`는 외부 `+d_base`를 사용하지 않고,
-  `d_linear=A*h_linear(d_base/A_safe,f/A_safe)`를 weight `[1,0]`으로
-  초기화한다. `linear_plus_nonlinear`은
-  `d_fused=d_linear+g*r_nonlinear`, `convex_average`는 두 absolute candidate의
-  convex average다. Nonlinear path는 normalized difference/source와
-  `x_local_t`, `y_local_t`, 양 축 line-length log feature, \(\kappa\)를 사용하며,
-  absolute mode의 standard final initialization에
-  `nonlinear_final_init_scale`을 곱한다. Canonical absolute setting은
-  scale `0.01`, gate `0.5`이고 standard-final/small-gate 대안은 scale `1.0`,
-  gate `0.05`다. 이 block은 새 loss나 reference `sol/phi/psi`를 사용하지 않고
-  output contract v6를 유지한다. Parameter key/shape도 유지되므로 새 field가
-  없는 기존 residual checkpoint config는 그대로 load된다.
+  \(d_{\mathrm{base}}=p_0-q_0\),
+  \(A=\sqrt{(A_x^2+A_y^2)/2}\), \(A_{\mathrm{safe}}=\max(A,\varepsilon)\)로 둔다.
+  유일한 MLP 입력은
+  \([d_{\mathrm{base}}/A_{\mathrm{safe}},f/A_{\mathrm{safe}}]\)이고,
+  \(d_{\mathrm{fused}}=d_{\mathrm{base}}+
+  A_{\mathrm{safe}}r_\theta\)를 사용한다. Pre-projection pair는
+  \(\phi_{\mathrm{pre}}=(f+d_{\mathrm{fused}})/2\),
+  \(\psi_{\mathrm{pre}}=(f-d_{\mathrm{fused}})/2\)로 구성해 balance를 정확히
+  만족한다. Learned linear branch, gate, combination mode, direct coordinate/
+  geometry/length feature는 없다. Final MLP layer는 weight와 bias를 zero
+  initialization하므로 enabled 초기 projected output은 disabled path와 같다.
+  Source amplitude가 zero이면 residual도 정확히 zero다. Config는
+  `enabled`, `hidden_dim`, `depth`, `eps`만 허용한다. 이 block은 새 loss나
+  reference `sol/phi/psi`를 사용하지 않고 output contract v6를 유지한다.
+  Retired split-fuser checkpoint와 config는 호환하지 않으며 재학습한다.
 - Complex v6 training의 base split seminorm은 full-domain canonical physical
   energy이다. Residual `r=u_phi-u_psi`에 대해 모든 same-segment `x_edges`와
   `y_edges`의 diffusion face energy를 물리 spacing과 `hx*hy` area weight로 합하고,
@@ -298,7 +298,8 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   scale이 4.796배 바뀌는 `|x|,|y| ~= 0.2` transition seam은 남아 있다.
   Physical balance residual은 machine precision이므로 seam은 balance violation이
   아니다. 상세 분석은 `checkpoints/Annulus_poisson/coupling12/analysis/`에 둔다.
-- `coupling12` best-energy checkpoint의 pre-projection fuser를 inference에서만
+- `coupling12` best-energy checkpoint의 retired split linear/nonlinear
+  pre-projection fuser를 inference에서만
   bypass한 50-sample paired ablation에서 fuser-on mean test energy/`rel_sol`은
   `4.050432e-4`/5.602%, fuser-off는 `2.568269e-3`/12.578%였다. Energy와
   `rel_sol`은 50개 전부 fuser-on이 더 좋았고 transition solution-error RMS도
@@ -308,7 +309,8 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   seam 자체를 제거하거나 supervised flux split을 크게 개선하지는 않는다.
   Backbone과 fuser가 함께 학습되었으므로 이것은 same-checkpoint functional
   ablation이며 architecture-level causality에는 separately trained no-fuser
-  control이 필요하다. 상세 산출물은
+  control이 필요하다. 이 결과는 현재 single residual MLP의 동작을 의미하지
+  않는다. 상세 산출물은
   `checkpoints/Annulus_poisson/coupling12/pre_projection_fuser_ablation/`에 둔다.
 - Unit-square와 complex CouplingNet trainer는 같은 linear-warmup + cosine-decay
   learning-rate schedule을 사용한다. `coupling_training.use_lr_schedule=true`이면
@@ -1174,30 +1176,35 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - 이 run에서는 sample-level canonical energy와 detached `rel_sol`의 상관이
   약하다. Best-energy selection은 reference-free 원칙에 맞지만, evaluation
   report에서는 canonical energy와 `rel_sol`/`rel_flux`를 함께 해석한다.
-- Selected pre-projection fusion diagnostics에서 raw nonlinear correction의
+- 이 historical checkpoint의 selected pre-projection fusion diagnostics에서
+  raw nonlinear correction의
   transition-edge jump RMS는 linear correction의 `6.20`배이고, regular edge
   대비 transition jump 비율은 nonlinear `13.09`, linear `2.93`이다. 그러나
   learned gate가 `0.06854`이므로 pooled blended transition jump는 linear-only의
   `0.987`배이다. Raw nonlinear figure의 큰 seam과 최종 solution seam의 인과를
   혼동하지 않으며, 기여 판단에는 fuser-off 또는 linear-only ablation이 필요하다.
-- 현재 nonlinear fuser는 transition-aware이지만 transition-regularizing 구조는
+- 이 retired nonlinear fuser는 transition-aware이지만 transition-regularizing
+  구조는
   아니다. Discontinuous length feature를 감지해 correction에 반영할 수 있지만
   correction continuity를 강제하지 않는다. Physical-symmetric projection은
   fused physical difference mode를 그대로 보존하므로 blend에 남은 seam을 제거하지
   않는다.
-- 현재 nonlinear fuser는 모든 valid point에 공유되는 pointwise MLP이다. Linear
+- 이 audit의 retired nonlinear fuser는 모든 valid point에 공유되는 pointwise
+  MLP이다. Linear
   path는 normalized `(base_difference, rhs)`의 `2 -> 1`, nonlinear path는 여기에
   local coordinate와 length context 여섯 개를 더한 `8 -> hidden -> 1` 구조다.
   Neighboring point/line coupling, coefficient direct input, pointwise gate, continuity
   constraint는 없다.
-- Pre-projection fusion은 config에서 선택 가능한 optional mode다. 기존
+- 이 historical run의 pre-projection fusion은 config에서 선택 가능한 optional
+  split-fuser mode였다. 기존
   `residual_correction`은 그대로 보존되고, `absolute_difference`는 외부
   `+d_base` 없이 전체 difference를 예측한다. Absolute linear candidate는
   normalized base difference identity weight `[1,0]`으로 초기화하며,
   nonlinear component는 scaled standard final-layer initialization을 사용한다.
   Artifact는 mode, combination, initialization, component semantics와
   `outer_base_residual_used`를 기록한다.
-- 현재 fuser는 physical source에서 correction을 계산한 뒤 model forward의
+- 이 historical fuser는 physical source에서 correction을 계산한 뒤 model
+  forward의
   reference-response return contract를 맞추기 위해 임시로 `L_x^2/L_y^2`를
   곱한다. 외부 physical projection은 즉시 같은 scale로 나누므로 이 중간
   multiply/divide pair는 대수적으로 상쇄된다. 이것은 projection 이후

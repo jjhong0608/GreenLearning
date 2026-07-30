@@ -168,16 +168,12 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     "mode": "physical_symmetric"
   }
   ```
-- Complex optional pre-projection fusion: set `coupling_model.pre_projection_fusion.enabled=true` to insert a small linear/nonlinear difference block between the two axis-conditioned raw responses and the physical symmetric projection. Both modes first form `p0=P0/L_x^2`, `q0=Q0/L_y^2`, preserve the base common mode `p0+q0`, and use `A=sqrt((A_x^2+A_y^2)/2)` with normalized inputs `[d_base/A_safe,rhs/A_safe]`. The backward-compatible `residual_correction` mode keeps `d_fused=d_base+(1-g)*delta_linear+g*delta_nonlinear` and its exact zero-correction initialization. The opt-in `absolute_difference` mode removes the outer `+d_base`: its linear candidate is `d_linear=A*h_linear(d_base/A_safe,rhs/A_safe)` with weight `[1,0]`, and `linear_plus_nonlinear` uses `d_fused=d_linear+g*r_nonlinear`; `convex_average` instead uses `(1-g)*d_linear+g*d_nonlinear`. The nonlinear input additionally contains `[x_local_t,y_local_t,log(L_x/L_ref),log(L_y/L_ref),log(L_x/L_y),kappa]`. Absolute mode scales the standard nonlinear final-layer initialization by `nonlinear_final_init_scale`; `0.01` with gate `0.5` is the canonical small-residual setting, while scale `1.0` with a small gate such as `0.05` keeps standard final initialization. This complex-only option adds no reference-target loss and leaves output contract v6, projection, reconstruction, GreenNet, and NPZ schemas unchanged. Existing residual checkpoints remain load-compatible because parameter names and shapes are unchanged and missing new config fields resolve to the legacy mode.
+- Complex optional pre-projection fusion: set `coupling_model.pre_projection_fusion.enabled=true` to insert one small nonlinear residual MLP between the two axis-conditioned raw responses and the physical symmetric projection. The block first forms `p0=P0/L_x^2`, `q0=Q0/L_y^2`, `d_base=p0-q0`, and `A=sqrt((A_x^2+A_y^2)/2)`. Its only inputs are the normalized physical values `z=[d_base/A_safe,rhs/A_safe]`, where `A_safe=max(A,eps)`. For an MLP output `r_theta(z)`, the fused difference is `d_fused=d_base+A_safe*r_theta(z)`, and the pre-projection physical pair is constructed as `phi_pre=0.5*(rhs+d_fused)`, `psi_pre=0.5*(rhs-d_fused)`. The fixed identity skip preserves `d_base`; there is no learned linear branch, learned gate, convex combination, or direct coordinate/geometry/line-length input. The final MLP layer is zero-initialized, so enabling the block initially gives the same projected result as disabling it. Zero source amplitude forces an exact zero residual. This complex-only option adds no reference-target loss and leaves output contract v6, physical symmetric projection, reconstruction, GreenNet, and NPZ schemas unchanged. Checkpoints trained with the retired split linear/nonlinear fuser are not compatible with the enabled new fuser and must be retrained.
   ```json
   "pre_projection_fusion": {
     "enabled": true,
-    "mode": "absolute_difference",
-    "combination": "linear_plus_nonlinear",
-    "nonlinear_hidden_dim": 16,
-    "nonlinear_depth": 1,
-    "nonlinear_final_init_scale": 0.01,
-    "gate_initial_value": 0.5,
+    "hidden_dim": 16,
+    "depth": 1,
     "eps": 1e-12
   }
   ```
@@ -252,7 +248,8 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   Inner-radius transition seams nevertheless remain visible; the full report,
   CSV/JSON diagnostics, and Plotly figures are under
   `checkpoints/Annulus_poisson/coupling12/analysis/`.
-- A same-checkpoint ablation of the trained `coupling12` pre-projection fuser
+- A same-checkpoint ablation of the trained `coupling12` legacy split
+  linear/nonlinear pre-projection fuser
   confirms that it is functionally important: bypassing only the fuser raises
   mean test canonical energy from `4.050432e-4` to `2.568269e-3` (6.34x) and
   mean `rel_sol` from 5.602% to 12.578% (2.25x), with the enabled path better on
@@ -260,8 +257,9 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   the fuser, but the transition/bulk ratio falls by only 3.65%, so the fuser
   reduces the seam amplitude without eliminating its structural concentration.
   Mean `rel_flux` improves by only 1.02%. This inference-time bypass measures
-  the fuser's contribution inside the co-adapted checkpoint; an architecture
-  claim still requires a separately trained disabled control. The report and
+  the retired fuser's contribution inside the co-adapted checkpoint; an
+  architecture claim still requires a separately trained disabled control.
+  These values do not describe the current single residual MLP. The report and
   paired Plotly artifacts are under
   `checkpoints/Annulus_poisson/coupling12/pre_projection_fuser_ablation/`.
 - Complex disabled features: `cross_consistency`, `smooth_mask`, `balance_loss`, `source_stencil_lift`, and `green_response_feature` are unit-square-only surfaces. Complex trainer/evaluator/artifact paths do not compute, log, serialize, or export cross-related metric keys or placeholder fields.
@@ -410,7 +408,7 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     --device cpu \
     --coefficient-vector-max-points 400
   ```
-  The complex artifact exporter writes `summary.json`, `metrics/per_sample_metrics.csv`, `data/selected_raw_arrays.npz`, and Plotly valid-point scatter figures on `coords_valid`. Primary fields include `rhs`, `sol`, `u_pred=0.5*(u_phi+u_psi)`, `u_phi`, `u_psi`, projected physical `phi`/`psi`, signed solution errors `u_pred_error`, `u_phi_error`, `u_psi_error`, split mismatch `u_split_mismatch`, and optional target flux fields plus signed `phi_error`/`psi_error` when sample flux targets are available. Reference/prediction non-error comparison scatters share color ranges within each selected sample for `sol/u_pred/u_phi/u_psi`, `target_phi/phi`, and `target_psi/psi` when flux targets exist; `rhs` and target-free flux diagnostics keep independent ranges. Error and mismatch figures are signed differences with zero-centered diverging colors. The v6 raw archive stores raw/projected reference responses, pre-projection raw physical fields, projected physical fields, `L_x^2/L_y^2`, response and physical balance residuals, pointwise cross-axis length-context features, and canonical boundary endpoint coordinates, distances, nearest valid indices, and split residuals. It does not store production transition masks or length-jump scores. When optional pre-projection fusion is enabled, it additionally stores base/fused physical proposals and differences, linear/nonlinear/blended corrections, source scale, and learned gate, with matching signed diagnostic figures. Relative split and weak closure retain their existing optional archives.
+  The complex artifact exporter writes `summary.json`, `metrics/per_sample_metrics.csv`, `data/selected_raw_arrays.npz`, and Plotly valid-point scatter figures on `coords_valid`. Primary fields include `rhs`, `sol`, `u_pred=0.5*(u_phi+u_psi)`, `u_phi`, `u_psi`, projected physical `phi`/`psi`, signed solution errors `u_pred_error`, `u_phi_error`, `u_psi_error`, split mismatch `u_split_mismatch`, and optional target flux fields plus signed `phi_error`/`psi_error` when sample flux targets are available. Reference/prediction non-error comparison scatters share color ranges within each selected sample for `sol/u_pred/u_phi/u_psi`, `target_phi/phi`, and `target_psi/psi` when flux targets exist; `rhs` and target-free flux diagnostics keep independent ranges. Error and mismatch figures are signed differences with zero-centered diverging colors. The v6 raw archive stores raw/projected reference responses, pre-projection raw physical fields, projected physical fields, `L_x^2/L_y^2`, response and physical balance residuals, pointwise cross-axis length-context features, and canonical boundary endpoint coordinates, distances, nearest valid indices, and split residuals. It does not store production transition masks or length-jump scores. When optional pre-projection fusion is enabled, it additionally stores `fusion_base_difference`, normalized difference/source inputs, normalized and physical MLP residuals, `fusion_fused_difference`, the constructed pre-projection physical pair, raw/safe source scales, and the pre-projection balance residual. Matching signed figures show the base difference, physical residual, and fused difference. Relative split and weak closure retain their existing optional archives.
 
   Complex export also evaluates the physical PDE coefficients directly at `coords_valid`, without interpolation, pull-back, or segment-length scaling. It writes the run-level archive `data/coefficient_fields.npz` with `a`, `bx`, `by`, `b_magnitude`, `c`, and the deterministic quiver indices. Plotly outputs under `figures/coefficients/` include `diffusion_a`, optional `reaction_c`, and optional `convection_bx`, `convection_by`, `convection_magnitude`, and `convection_vector`; diffusion is always shown, while zero reaction/convection figures are omitted unless their CouplingNet coefficient branch term is enabled. The vector figure overlays a subsampled quiver on the full valid-point convection-magnitude field, and `--coefficient-vector-max-points` sets the arrow limit. `coupling_model.coefficient_terms` controls model branch inputs, not whether a coefficient exists in the physical PDE, so `summary.json` records physical field status and branch activation separately.
 - Complex line-length response diagnostic: use the checkpoint-backed command below to locate the first stage at which annulus transition-line error appears. The diagnostic reruns only inference, never training, and requires test samples with `phi/psi` targets. Under v6 it compares the pre-projection physical proposals, projected physical directional-source errors, projected reference-response errors, predicted-source exact Green reconstruction, production learned-Green reconstruction, and target-source exact closure. The production reconstruction consumes the projected response directly. The diagnostic-only exact path also audits the mathematically equivalent physical-interval and unit-interval integrals at `1e-10` by default.
@@ -444,21 +442,23 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   field: the learned nonlinear gate is only `0.06854`, and the pooled blended
   transition jump is `0.987x` the linear-only jump. Therefore the nonlinear
   artifact is visibly more discontinuous, but this run alone does not show
-  that it increases the final solution seam. The current nonlinear fuser is
+  that it increases the final solution seam. This retired nonlinear fuser is
   transition-aware, not transition-regularizing: it can detect discontinuous
   length features but has no structural continuity constraint. Because the
   physical-symmetric projection preserves the fused physical difference mode,
   any seam that survives blending also survives projection.
-  The current nonlinear path is a shared pointwise MLP: the linear path maps
+  This paragraph describes the retired split-fuser architecture used by that
+  checkpoint, not the current single residual MLP. Its nonlinear path is a
+  shared pointwise MLP: the linear path maps
   normalized `(base_difference, rhs)` from `2` to `1`, while the nonlinear
   path augments those values with six local geometry features and applies
   `8 -> hidden_dim -> 1` for depth one. It has no neighboring-line input,
-  continuity operator, pointwise gate, or coefficient field input. The active
-  implementation supports backward-compatible `residual_correction` and opt-in
+  continuity operator, pointwise gate, or coefficient field input. That legacy
+  implementation supported `residual_correction` and
   `absolute_difference` modes. Absolute mode can combine an identity-initialized
   linear candidate with a scaled nonlinear residual, or take a true convex
   average of two absolute candidates; its artifact metadata distinguishes these
-  component semantics and records whether the outer base residual is used.
+  component semantics and recorded whether the outer base residual was used.
   Internally, the fuser converts base reference responses to physical
   directional sources, applies fusion, and temporarily converts the fused
   values back to reference responses because the model forward contract

@@ -215,18 +215,18 @@ learned fuser는 서로 다른 scale과 correlation을 가진 gradient를 만들
 matrix update geometry가 AdamW의 coordinate-wise diagonal adaptation보다
 유리할 가능성이 있다.
 
-다만 `pre_projection_fusion`의 `(1,2)`, `(16,8)`, `(1,16)` weight는 small
-correction/output head에 가깝다. 공식 AMUSE가 output head를 fallback optimizer로
-처리하는 것과 맞추려면 이 작은 correction block은 SF-AdamW fallback group으로
-두는 것이 보수적이다.
+다만 current `pre_projection_fusion` single residual MLP의 `(16,2)`,
+`(1,16)` weight는 small correction/output head에 가깝다. 공식 AMUSE가 output
+head를 fallback optimizer로 처리하는 것과 맞추려면 이 작은 residual block은
+SF-AdamW fallback group으로 두는 것이 보수적이다.
 
 권장 parameter grouping은 다음과 같다.
 
 | Group | Parameters | AMUSE base update |
 |---|---|---|
 | Muon matrix group | Main branch/trunk/fuser `ndim >= 2` weights | Muon |
-| Fallback group | Bias, rational coefficients, scalar gate | SF-AdamW |
-| Fallback head group | `pre_projection_fusion` correction weights/bias | SF-AdamW |
+| Fallback group | Bias and rational coefficients | SF-AdamW |
+| Fallback head group | `pre_projection_fusion.residual_mlp` weights/bias | SF-AdamW |
 
 이 구분은 parameter name을 명시적으로 검사해야 하며, 단순한
 `parameter.ndim >= 2`만으로 결정해서는 안 된다.

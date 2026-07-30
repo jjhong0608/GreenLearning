@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader
 from greenonet.compile_utils import (
     maybe_compile_model,
     model_state_dict_for_save,
-    unwrap_compiled_model,
 )
 from greenonet.complex_coupling_data import (
     ComplexCouplingBatch,
@@ -83,7 +82,6 @@ class ComplexCouplingTrainer(LoggingMixin):
         "loss_weak_operator_y",
         "rel_sol",
         "rel_flux",
-        "pre_projection_fusion_gate",
         "learning_rate",
         "optimizer_step_time_mean_ms",
         "optimizer_step_time_p95_ms",
@@ -199,9 +197,6 @@ class ComplexCouplingTrainer(LoggingMixin):
                 optimizer=optimizer,
                 optimizer_profiler=optimizer_profiler,
             )
-            fusion_gate = self._current_pre_projection_fusion_gate()
-            if fusion_gate is not None:
-                train_metrics["pre_projection_fusion_gate"] = fusion_gate
             train_metrics["learning_rate"] = learning_rate
             self.loss_history.append(float(train_metrics["loss"]))
             self._record_metrics(epoch, "train", train_metrics)
@@ -209,8 +204,6 @@ class ComplexCouplingTrainer(LoggingMixin):
                 self._log_epoch(epoch, "train", train_metrics)
             if validation_loader is not None:
                 val_metrics = self._evaluate_loader(validation_loader)
-                if fusion_gate is not None:
-                    val_metrics["pre_projection_fusion_gate"] = fusion_gate
                 val_metrics["learning_rate"] = learning_rate
                 self._record_metrics(epoch, "val", val_metrics)
                 if epoch % self.config.log_interval == 0:
@@ -456,33 +449,18 @@ class ComplexCouplingTrainer(LoggingMixin):
         )
 
     def _log_pre_projection_fusion(self, model: ComplexCouplingNet) -> None:
-        gate_value: float | None = None
-        if model.pre_projection_fusion is not None:
-            gate_value = float(
-                torch.sigmoid(model.pre_projection_fusion.gate_logit.detach()).item()
-            )
         self.logger.info(
             "pre-projection fusion enabled=%s space=physical_source "
-            "mode=%s combination=%s hidden_dim=%d depth=%d "
-            "nonlinear_final_init_scale=%.6e initial_gate=%.6f current_gate=%s",
+            "architecture=single_nonlinear_residual_mlp input_dim=2 "
+            "hidden_dim=%d depth=%d activation=%s use_bias=%s "
+            "identity_skip=true final_initialization=zeros "
+            "explicit_geometry_features=false",
             self.pre_projection_fusion_config.enabled,
-            self.pre_projection_fusion_config.mode,
-            self.pre_projection_fusion_config.combination,
-            self.pre_projection_fusion_config.nonlinear_hidden_dim,
-            self.pre_projection_fusion_config.nonlinear_depth,
-            self.pre_projection_fusion_config.nonlinear_final_init_scale,
-            self.pre_projection_fusion_config.gate_initial_value,
-            "disabled" if gate_value is None else f"{gate_value:.6f}",
+            self.pre_projection_fusion_config.hidden_dim,
+            self.pre_projection_fusion_config.depth,
+            model.config.activation,
+            model.config.use_bias,
         )
-
-    def _current_pre_projection_fusion_gate(self) -> float | None:
-        module = unwrap_compiled_model(self.model)
-        if not isinstance(module, ComplexCouplingNet):
-            raise TypeError("Compiled complex trainer model has an invalid origin.")
-        fusion = module.pre_projection_fusion
-        if fusion is None:
-            return None
-        return float(torch.sigmoid(fusion.gate_logit.detach()).cpu().item())
 
     def _save_checkpoint(self, filename: str) -> None:
         save_state_dict_safetensors(

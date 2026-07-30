@@ -476,14 +476,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         "weak_residual_x",
         "weak_residual_y",
         "split_mass_relative_contribution",
-        "base_physical_difference",
-        "fused_physical_difference",
-        "linear_difference_component",
-        "nonlinear_difference_component",
-        "combined_difference_component",
-        "linear_difference_correction",
-        "nonlinear_difference_correction",
-        "blended_difference_correction",
+        "fusion_base_difference",
+        "fusion_residual_physical",
+        "fusion_fused_difference",
     )
     SIGNED_FIGURE_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -495,14 +490,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "psi_error",
             "weak_residual_x",
             "weak_residual_y",
-            "base_physical_difference",
-            "fused_physical_difference",
-            "linear_difference_component",
-            "nonlinear_difference_component",
-            "combined_difference_component",
-            "linear_difference_correction",
-            "nonlinear_difference_correction",
-            "blended_difference_correction",
+            "fusion_base_difference",
+            "fusion_residual_physical",
+            "fusion_fused_difference",
         }
     )
     FIGURE_TITLES: ClassVar[dict[str, str]] = {
@@ -526,14 +516,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         "split_mass_relative_contribution": (
             "Normalized pointwise split value mismatch"
         ),
-        "base_physical_difference": "Base physical difference p - q",
-        "fused_physical_difference": "Fused physical difference",
-        "linear_difference_component": "Linear physical difference component",
-        "nonlinear_difference_component": "Nonlinear physical difference component",
-        "combined_difference_component": "Combined physical difference component",
-        "linear_difference_correction": "Linear physical difference correction",
-        "nonlinear_difference_correction": ("Nonlinear physical difference correction"),
-        "blended_difference_correction": "Blended physical difference correction",
+        "fusion_base_difference": "Base physical difference p - q",
+        "fusion_residual_physical": "Nonlinear physical difference residual",
+        "fusion_fused_difference": "Fused physical difference",
     }
 
     def __init__(
@@ -694,75 +679,26 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             },
             "pre_projection_fusion": {
                 "enabled": pre_projection_fusion.enabled,
+                "architecture": "single_nonlinear_residual_mlp",
                 "space": "physical_directional_source",
-                "mode": pre_projection_fusion.mode,
-                "combination": pre_projection_fusion.combination,
-                "correction_mode": "antisymmetric_difference",
-                "linear_input": ["normalized_difference", "normalized_rhs"],
-                "linear_input_normalization": (
-                    "[d_base/A_safe, rhs/A_safe], output multiplied by A"
-                ),
-                "nonlinear_input": [
-                    "normalized_difference",
-                    "normalized_rhs",
-                    "x_local_t",
-                    "y_local_t",
-                    "log_x_length_over_reference",
-                    "log_y_length_over_reference",
-                    "log_x_over_y_length",
-                    "length_balance_kappa",
+                "input": [
+                    "base_difference_over_safe_source_scale",
+                    "rhs_over_safe_source_scale",
                 ],
-                "nonlinear_hidden_dim": pre_projection_fusion.nonlinear_hidden_dim,
-                "nonlinear_depth": pre_projection_fusion.nonlinear_depth,
-                "linear_initialization": (
-                    "zero_correction"
-                    if pre_projection_fusion.mode == "residual_correction"
-                    else "absolute_identity_weight_[1,0]"
-                ),
-                "nonlinear_final_initialization": (
-                    "zero_correction"
-                    if pre_projection_fusion.mode == "residual_correction"
-                    else "standard_initialization_scaled"
-                ),
-                "nonlinear_final_init_scale": (
-                    0.0
-                    if pre_projection_fusion.mode == "residual_correction"
-                    else pre_projection_fusion.nonlinear_final_init_scale
-                ),
-                "gate_initial_value": pre_projection_fusion.gate_initial_value,
-                "common_mode_preserved": True,
-                "nonlinear_component_semantics": (
-                    "correction"
-                    if pre_projection_fusion.mode == "residual_correction"
-                    else (
-                        "residual"
-                        if pre_projection_fusion.combination == "linear_plus_nonlinear"
-                        else "absolute_candidate"
-                    )
-                ),
-                "outer_base_residual_used": (
-                    pre_projection_fusion.mode == "residual_correction"
-                ),
-                "gate_value": (
-                    None
-                    if coupling_model.pre_projection_fusion is None
-                    else float(
-                        torch.sigmoid(
-                            coupling_model.pre_projection_fusion.gate_logit.detach()
-                        )
-                        .cpu()
-                        .item()
-                    )
-                ),
+                "hidden_dim": pre_projection_fusion.hidden_dim,
+                "depth": pre_projection_fusion.depth,
+                "activation": configs.coupling_model.activation,
+                "use_bias": configs.coupling_model.use_bias,
+                "identity_skip": True,
+                "final_layer_initialization": "zeros",
+                "explicit_geometry_features": False,
+                "learned_linear_branch": False,
+                "learned_gate": False,
                 "source_scale": "sqrt((A_x^2+A_y^2)/2)",
-                "linear_bias": False,
-                "identity_initialized": (
-                    pre_projection_fusion.mode == "residual_correction"
-                    or (
-                        pre_projection_fusion.combination == "linear_plus_nonlinear"
-                        and pre_projection_fusion.nonlinear_final_init_scale == 0.0
-                    )
+                "formula": (
+                    "d_fused=d_base+A_safe*r_theta([d_base/A_safe,rhs/A_safe])"
                 ),
+                "pre_projection_balance_constructed": pre_projection_fusion.enabled,
                 "uses_reference_targets": False,
             },
             "reconstruction_response_input": {
@@ -1091,55 +1027,50 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                             "base_raw_response_psi": (
                                 fusion.base_response[0, 1].detach().cpu().numpy()
                             ),
-                            "base_physical_p": (
+                            "fusion_base_physical_p": (
                                 fusion.base_physical[0, 0].detach().cpu().numpy()
                             ),
-                            "base_physical_q": (
+                            "fusion_base_physical_q": (
                                 fusion.base_physical[0, 1].detach().cpu().numpy()
                             ),
-                            "base_physical_difference": (
+                            "fusion_base_difference": (
                                 fusion.base_difference[0].detach().cpu().numpy()
                             ),
-                            "fused_physical_p": (
-                                fusion.fused_physical[0, 0].detach().cpu().numpy()
+                            "fusion_normalized_difference": (
+                                fusion.normalized_difference[0].detach().cpu().numpy()
                             ),
-                            "fused_physical_q": (
-                                fusion.fused_physical[0, 1].detach().cpu().numpy()
+                            "fusion_normalized_rhs": (
+                                fusion.normalized_rhs[0].detach().cpu().numpy()
                             ),
-                            "fused_physical_difference": (
+                            "fusion_residual_normalized": (
+                                fusion.normalized_residual[0].detach().cpu().numpy()
+                            ),
+                            "fusion_residual_physical": (
+                                fusion.physical_residual[0].detach().cpu().numpy()
+                            ),
+                            "fusion_fused_difference": (
                                 fusion.fused_difference[0].detach().cpu().numpy()
                             ),
-                            "linear_difference_component": (
-                                fusion.linear_component[0].detach().cpu().numpy()
+                            "fusion_pre_projection_phi": (
+                                fusion.fused_physical[0, 0].detach().cpu().numpy()
                             ),
-                            "nonlinear_difference_component": (
-                                fusion.nonlinear_component[0].detach().cpu().numpy()
-                            ),
-                            "combined_difference_component": (
-                                fusion.combined_component[0].detach().cpu().numpy()
+                            "fusion_pre_projection_psi": (
+                                fusion.fused_physical[0, 1].detach().cpu().numpy()
                             ),
                             "fusion_source_scale": (
                                 fusion.source_scale[0].detach().cpu().numpy()
                             ),
-                            "fusion_gate": np.asarray(
-                                float(fusion.gate.detach().cpu().item())
+                            "fusion_safe_source_scale": (
+                                fusion.safe_source_scale[0].detach().cpu().numpy()
+                            ),
+                            "fusion_pre_projection_balance_residual": (
+                                fusion.pre_projection_balance_residual[0]
+                                .detach()
+                                .cpu()
+                                .numpy()
                             ),
                         }
                     )
-                    if fusion.mode == "residual_correction":
-                        arrays.update(
-                            {
-                                "linear_difference_correction": (
-                                    fusion.linear_component[0].detach().cpu().numpy()
-                                ),
-                                "nonlinear_difference_correction": (
-                                    fusion.nonlinear_component[0].detach().cpu().numpy()
-                                ),
-                                "blended_difference_correction": (
-                                    fusion.combined_component[0].detach().cpu().numpy()
-                                ),
-                            }
-                        )
                 if prediction.objective.relative_split is not None:
                     relative = prediction.objective.relative_split
                     split_residual = u_phi - u_psi

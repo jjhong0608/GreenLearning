@@ -93,9 +93,8 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
         pre_projection_fusion=ComplexPreProjectionFusionConfig(
             enabled=True,
-            nonlinear_hidden_dim=8,
-            nonlinear_depth=1,
-            gate_initial_value=0.05,
+            hidden_dim=8,
+            depth=1,
         ),
         coefficient_terms=CouplingCoefficientTermsConfig(
             diffusion=True,
@@ -145,9 +144,8 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     }
     config_payload["coupling_model"]["pre_projection_fusion"] = {
         "enabled": True,
-        "nonlinear_hidden_dim": 8,
-        "nonlinear_depth": 1,
-        "gate_initial_value": 0.05,
+        "hidden_dim": 8,
+        "depth": 1,
         "eps": 1e-12,
     }
     config_payload["coupling_training"]["relative_split_consistency"] = {
@@ -217,14 +215,9 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "weak_residual_x",
         "weak_residual_y",
         "split_mass_relative_contribution",
-        "base_physical_difference",
-        "fused_physical_difference",
-        "linear_difference_component",
-        "nonlinear_difference_component",
-        "combined_difference_component",
-        "linear_difference_correction",
-        "nonlinear_difference_correction",
-        "blended_difference_correction",
+        "fusion_base_difference",
+        "fusion_residual_physical",
+        "fusion_fused_difference",
     }
     assert set(summary["figure_fields"]) == expected_figure_fields
     assert summary["error_convention"] == "signed_difference"
@@ -244,24 +237,21 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert "p=P_raw/Lx^2" in summary["balance_projection"]["formula"]
     assert summary["pre_projection_fusion"]["enabled"] is True
     assert summary["pre_projection_fusion"]["space"] == ("physical_directional_source")
-    assert summary["pre_projection_fusion"]["mode"] == "residual_correction"
-    assert summary["pre_projection_fusion"]["combination"] == "convex_average"
-    assert summary["pre_projection_fusion"]["correction_mode"] == (
-        "antisymmetric_difference"
+    assert summary["pre_projection_fusion"]["architecture"] == (
+        "single_nonlinear_residual_mlp"
     )
-    assert summary["pre_projection_fusion"]["common_mode_preserved"] is True
-    assert summary["pre_projection_fusion"]["linear_initialization"] == (
-        "zero_correction"
-    )
-    assert summary["pre_projection_fusion"]["nonlinear_final_initialization"] == (
-        "zero_correction"
-    )
-    assert summary["pre_projection_fusion"]["nonlinear_final_init_scale"] == 0.0
-    assert summary["pre_projection_fusion"]["nonlinear_component_semantics"] == (
-        "correction"
-    )
-    assert summary["pre_projection_fusion"]["outer_base_residual_used"] is True
-    assert summary["pre_projection_fusion"]["gate_value"] == pytest.approx(0.05)
+    assert summary["pre_projection_fusion"]["input"] == [
+        "base_difference_over_safe_source_scale",
+        "rhs_over_safe_source_scale",
+    ]
+    assert summary["pre_projection_fusion"]["hidden_dim"] == 8
+    assert summary["pre_projection_fusion"]["depth"] == 1
+    assert summary["pre_projection_fusion"]["identity_skip"] is True
+    assert summary["pre_projection_fusion"]["final_layer_initialization"] == ("zeros")
+    assert summary["pre_projection_fusion"]["explicit_geometry_features"] is False
+    assert summary["pre_projection_fusion"]["learned_linear_branch"] is False
+    assert summary["pre_projection_fusion"]["learned_gate"] is False
+    assert summary["pre_projection_fusion"]["pre_projection_balance_constructed"]
     assert summary["pre_projection_fusion"]["uses_reference_targets"] is False
     assert summary["reconstruction_response_input"] == {
         "phi": "projected Phi is used directly",
@@ -404,20 +394,25 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_response_constraint_residual") for key in raw.files)
     assert any(key.endswith("_base_raw_response_phi") for key in raw.files)
     assert any(key.endswith("_base_raw_response_psi") for key in raw.files)
-    assert any(key.endswith("_base_physical_p") for key in raw.files)
-    assert any(key.endswith("_base_physical_q") for key in raw.files)
-    assert any(key.endswith("_base_physical_difference") for key in raw.files)
-    assert any(key.endswith("_fused_physical_p") for key in raw.files)
-    assert any(key.endswith("_fused_physical_q") for key in raw.files)
-    assert any(key.endswith("_fused_physical_difference") for key in raw.files)
-    assert any(key.endswith("_linear_difference_component") for key in raw.files)
-    assert any(key.endswith("_nonlinear_difference_component") for key in raw.files)
-    assert any(key.endswith("_combined_difference_component") for key in raw.files)
-    assert any(key.endswith("_linear_difference_correction") for key in raw.files)
-    assert any(key.endswith("_nonlinear_difference_correction") for key in raw.files)
-    assert any(key.endswith("_blended_difference_correction") for key in raw.files)
+    assert any(key.endswith("_fusion_base_physical_p") for key in raw.files)
+    assert any(key.endswith("_fusion_base_physical_q") for key in raw.files)
+    assert any(key.endswith("_fusion_base_difference") for key in raw.files)
+    assert any(key.endswith("_fusion_normalized_difference") for key in raw.files)
+    assert any(key.endswith("_fusion_normalized_rhs") for key in raw.files)
+    assert any(key.endswith("_fusion_residual_normalized") for key in raw.files)
+    assert any(key.endswith("_fusion_residual_physical") for key in raw.files)
+    assert any(key.endswith("_fusion_fused_difference") for key in raw.files)
+    assert any(key.endswith("_fusion_pre_projection_phi") for key in raw.files)
+    assert any(key.endswith("_fusion_pre_projection_psi") for key in raw.files)
     assert any(key.endswith("_fusion_source_scale") for key in raw.files)
-    assert any(key.endswith("_fusion_gate") for key in raw.files)
+    assert any(key.endswith("_fusion_safe_source_scale") for key in raw.files)
+    assert any(
+        key.endswith("_fusion_pre_projection_balance_residual") for key in raw.files
+    )
+    assert not any(key.endswith("_linear_difference_component") for key in raw.files)
+    assert not any(key.endswith("_nonlinear_difference_component") for key in raw.files)
+    assert not any(key.endswith("_combined_difference_component") for key in raw.files)
+    assert not any(key.endswith("_fusion_gate") for key in raw.files)
     assert not any(key.endswith("_x_length_jump_score") for key in raw.files)
     assert not any(key.endswith("_y_length_jump_score") for key in raw.files)
     assert not any(key.endswith("_x_transition_edge_mask") for key in raw.files)
@@ -547,7 +542,7 @@ def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(
     assert statistics["c"]["figure_exported"] is False
 
 
-def test_complex_artifact_records_absolute_fusion_semantics(
+def test_complex_artifact_records_single_residual_fusion_semantics(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -564,12 +559,8 @@ def test_complex_artifact_records_absolute_fusion_semantics(
         balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
         pre_projection_fusion=ComplexPreProjectionFusionConfig(
             enabled=True,
-            mode="absolute_difference",
-            combination="linear_plus_nonlinear",
-            nonlinear_hidden_dim=8,
-            nonlinear_depth=1,
-            nonlinear_final_init_scale=0.01,
-            gate_initial_value=0.5,
+            hidden_dim=8,
+            depth=1,
         ),
         axis_1d_trunk=Axis1DTrunkConfig(
             enabled=True,
@@ -609,12 +600,8 @@ def test_complex_artifact_records_absolute_fusion_semantics(
     }
     config_payload["coupling_model"]["pre_projection_fusion"] = {
         "enabled": True,
-        "mode": "absolute_difference",
-        "combination": "linear_plus_nonlinear",
-        "nonlinear_hidden_dim": 8,
-        "nonlinear_depth": 1,
-        "nonlinear_final_init_scale": 0.01,
-        "gate_initial_value": 0.5,
+        "hidden_dim": 8,
+        "depth": 1,
         "eps": 1e-12,
     }
     config_path.write_text(json.dumps(config_payload))
@@ -632,26 +619,25 @@ def test_complex_artifact_records_absolute_fusion_semantics(
     )
 
     fusion_summary = summary["pre_projection_fusion"]
-    assert fusion_summary["mode"] == "absolute_difference"
-    assert fusion_summary["combination"] == "linear_plus_nonlinear"
-    assert fusion_summary["linear_initialization"] == ("absolute_identity_weight_[1,0]")
-    assert fusion_summary["nonlinear_final_initialization"] == (
-        "standard_initialization_scaled"
-    )
-    assert fusion_summary["nonlinear_final_init_scale"] == pytest.approx(0.01)
-    assert fusion_summary["gate_initial_value"] == pytest.approx(0.5)
-    assert fusion_summary["nonlinear_component_semantics"] == "residual"
-    assert fusion_summary["outer_base_residual_used"] is False
-    assert fusion_summary["identity_initialized"] is False
+    assert fusion_summary["architecture"] == "single_nonlinear_residual_mlp"
+    assert fusion_summary["identity_skip"] is True
+    assert fusion_summary["final_layer_initialization"] == "zeros"
+    assert fusion_summary["explicit_geometry_features"] is False
+    assert fusion_summary["learned_linear_branch"] is False
+    assert fusion_summary["learned_gate"] is False
     raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
-    assert any(key.endswith("_linear_difference_component") for key in raw.files)
-    assert any(key.endswith("_nonlinear_difference_component") for key in raw.files)
-    assert any(key.endswith("_combined_difference_component") for key in raw.files)
+    assert any(key.endswith("_fusion_residual_normalized") for key in raw.files)
+    assert any(key.endswith("_fusion_residual_physical") for key in raw.files)
+    assert any(key.endswith("_fusion_fused_difference") for key in raw.files)
+    assert not any(key.endswith("_linear_difference_component") for key in raw.files)
+    assert not any(key.endswith("_nonlinear_difference_component") for key in raw.files)
+    assert not any(key.endswith("_combined_difference_component") for key in raw.files)
     assert not any(key.endswith("_linear_difference_correction") for key in raw.files)
     assert not any(
         key.endswith("_nonlinear_difference_correction") for key in raw.files
     )
     assert not any(key.endswith("_blended_difference_correction") for key in raw.files)
+    assert not any(key.endswith("_fusion_gate") for key in raw.files)
 
 
 def test_complex_coefficient_artifacts_export_enabled_zero_fields(

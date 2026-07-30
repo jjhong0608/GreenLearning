@@ -507,9 +507,8 @@ class TestTrainCLIDatasetConfig:
             "coupling_model": {
                 "pre_projection_fusion": {
                     "enabled": True,
-                    "nonlinear_hidden_dim": 12,
-                    "nonlinear_depth": 2,
-                    "gate_initial_value": 0.1,
+                    "hidden_dim": 12,
+                    "depth": 2,
                     "eps": 1e-10,
                 }
             },
@@ -531,17 +530,13 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model.pre_projection_fusion == (
             ComplexPreProjectionFusionConfig(
                 enabled=True,
-                mode="residual_correction",
-                combination="convex_average",
-                nonlinear_hidden_dim=12,
-                nonlinear_depth=2,
-                nonlinear_final_init_scale=0.0,
-                gate_initial_value=0.1,
+                hidden_dim=12,
+                depth=2,
                 eps=1e-10,
             )
         )
 
-    def test_parses_absolute_complex_pre_projection_fusion(self, tmp_path):
+    def test_rejects_legacy_complex_pre_projection_fusion(self, tmp_path):
         config_path = tmp_path / "config.json"
         payload = {
             "dataset": {"geometry_mode": "complex"},
@@ -564,28 +559,8 @@ class TestTrainCLIDatasetConfig:
         }
         config_path.write_text(json.dumps(payload))
 
-        (
-            _dataset,
-            _model,
-            _training,
-            coupling_model,
-            _coupling_training,
-            _pipeline,
-            _terminal,
-        ) = TrainCLI()._build_configs(config_path)
-
-        assert coupling_model.pre_projection_fusion == (
-            ComplexPreProjectionFusionConfig(
-                enabled=True,
-                mode="absolute_difference",
-                combination="linear_plus_nonlinear",
-                nonlinear_hidden_dim=16,
-                nonlinear_depth=1,
-                nonlinear_final_init_scale=0.01,
-                gate_initial_value=0.5,
-                eps=1e-12,
-            )
-        )
+        with pytest.raises(TypeError, match="pre_projection_fusion has unknown keys"):
+            TrainCLI()._build_configs(config_path)
 
     def test_parses_green_validation_dataset_controls(self, tmp_path):
         config_path = tmp_path / "config.json"
