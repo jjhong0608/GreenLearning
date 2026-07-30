@@ -93,8 +93,10 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
         pre_projection_fusion=ComplexPreProjectionFusionConfig(
             enabled=True,
+            mode="residual",
             hidden_dim=8,
             depth=1,
+            final_layer_init_scale=0.0,
         ),
         coefficient_terms=CouplingCoefficientTermsConfig(
             diffusion=True,
@@ -144,9 +146,11 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     }
     config_payload["coupling_model"]["pre_projection_fusion"] = {
         "enabled": True,
+        "mode": "residual",
         "hidden_dim": 8,
         "depth": 1,
         "eps": 1e-12,
+        "final_layer_init_scale": 0.0,
     }
     config_payload["coupling_training"]["relative_split_consistency"] = {
         "enabled": True,
@@ -216,8 +220,10 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "weak_residual_y",
         "split_mass_relative_contribution",
         "fusion_base_difference",
+        "fusion_network_output_physical",
         "fusion_residual_physical",
         "fusion_fused_difference",
+        "fusion_delta_from_base",
     }
     assert set(summary["figure_fields"]) == expected_figure_fields
     assert summary["error_convention"] == "signed_difference"
@@ -238,8 +244,9 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert summary["pre_projection_fusion"]["enabled"] is True
     assert summary["pre_projection_fusion"]["space"] == ("physical_directional_source")
     assert summary["pre_projection_fusion"]["architecture"] == (
-        "single_nonlinear_residual_mlp"
+        "single_nonlinear_fusion_mlp"
     )
+    assert summary["pre_projection_fusion"]["mode"] == "residual"
     assert summary["pre_projection_fusion"]["input"] == [
         "base_difference_over_safe_source_scale",
         "rhs_over_safe_source_scale",
@@ -247,7 +254,10 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert summary["pre_projection_fusion"]["hidden_dim"] == 8
     assert summary["pre_projection_fusion"]["depth"] == 1
     assert summary["pre_projection_fusion"]["identity_skip"] is True
-    assert summary["pre_projection_fusion"]["final_layer_initialization"] == ("zeros")
+    assert summary["pre_projection_fusion"]["final_layer_initialization"] == (
+        "scaled_torch_linear_default"
+    )
+    assert summary["pre_projection_fusion"]["final_layer_init_scale"] == 0.0
     assert summary["pre_projection_fusion"]["explicit_geometry_features"] is False
     assert summary["pre_projection_fusion"]["learned_linear_branch"] is False
     assert summary["pre_projection_fusion"]["learned_gate"] is False
@@ -399,9 +409,12 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert any(key.endswith("_fusion_base_difference") for key in raw.files)
     assert any(key.endswith("_fusion_normalized_difference") for key in raw.files)
     assert any(key.endswith("_fusion_normalized_rhs") for key in raw.files)
+    assert any(key.endswith("_fusion_network_output_normalized") for key in raw.files)
+    assert any(key.endswith("_fusion_network_output_physical") for key in raw.files)
     assert any(key.endswith("_fusion_residual_normalized") for key in raw.files)
     assert any(key.endswith("_fusion_residual_physical") for key in raw.files)
     assert any(key.endswith("_fusion_fused_difference") for key in raw.files)
+    assert any(key.endswith("_fusion_delta_from_base") for key in raw.files)
     assert any(key.endswith("_fusion_pre_projection_phi") for key in raw.files)
     assert any(key.endswith("_fusion_pre_projection_psi") for key in raw.files)
     assert any(key.endswith("_fusion_source_scale") for key in raw.files)
@@ -542,9 +555,11 @@ def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(
     assert statistics["c"]["figure_exported"] is False
 
 
-def test_complex_artifact_records_single_residual_fusion_semantics(
+@pytest.mark.parametrize("mode", ["residual", "absolute"])
+def test_complex_artifact_records_single_fusion_mlp_semantics(
     tmp_path: Path,
     monkeypatch,
+    mode: str,
 ) -> None:
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
@@ -559,8 +574,10 @@ def test_complex_artifact_records_single_residual_fusion_semantics(
         balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
         pre_projection_fusion=ComplexPreProjectionFusionConfig(
             enabled=True,
+            mode=mode,
             hidden_dim=8,
             depth=1,
+            final_layer_init_scale=0.0,
         ),
         axis_1d_trunk=Axis1DTrunkConfig(
             enabled=True,
@@ -600,9 +617,11 @@ def test_complex_artifact_records_single_residual_fusion_semantics(
     }
     config_payload["coupling_model"]["pre_projection_fusion"] = {
         "enabled": True,
+        "mode": mode,
         "hidden_dim": 8,
         "depth": 1,
         "eps": 1e-12,
+        "final_layer_init_scale": 0.0,
     }
     config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
@@ -619,16 +638,29 @@ def test_complex_artifact_records_single_residual_fusion_semantics(
     )
 
     fusion_summary = summary["pre_projection_fusion"]
-    assert fusion_summary["architecture"] == "single_nonlinear_residual_mlp"
-    assert fusion_summary["identity_skip"] is True
-    assert fusion_summary["final_layer_initialization"] == "zeros"
+    assert fusion_summary["architecture"] == "single_nonlinear_fusion_mlp"
+    assert fusion_summary["mode"] == mode
+    assert fusion_summary["identity_skip"] is (mode == "residual")
+    assert fusion_summary["final_layer_initialization"] == "scaled_torch_linear_default"
+    assert fusion_summary["final_layer_init_scale"] == 0.0
+    if mode == "residual":
+        assert fusion_summary["formula"].startswith("d_fused=d_base+")
+    else:
+        assert fusion_summary["formula"].startswith("d_fused=A_safe*")
     assert fusion_summary["explicit_geometry_features"] is False
     assert fusion_summary["learned_linear_branch"] is False
     assert fusion_summary["learned_gate"] is False
     raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
-    assert any(key.endswith("_fusion_residual_normalized") for key in raw.files)
-    assert any(key.endswith("_fusion_residual_physical") for key in raw.files)
+    assert any(key.endswith("_fusion_network_output_normalized") for key in raw.files)
+    assert any(key.endswith("_fusion_network_output_physical") for key in raw.files)
     assert any(key.endswith("_fusion_fused_difference") for key in raw.files)
+    assert any(key.endswith("_fusion_delta_from_base") for key in raw.files)
+    assert any(key.endswith("_fusion_residual_normalized") for key in raw.files) is (
+        mode == "residual"
+    )
+    assert any(key.endswith("_fusion_residual_physical") for key in raw.files) is (
+        mode == "residual"
+    )
     assert not any(key.endswith("_linear_difference_component") for key in raw.files)
     assert not any(key.endswith("_nonlinear_difference_component") for key in raw.files)
     assert not any(key.endswith("_combined_difference_component") for key in raw.files)

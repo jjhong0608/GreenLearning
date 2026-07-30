@@ -25,6 +25,11 @@ from greenonet.complex_coupling_evaluator import (
 )
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geometry
+from greenonet.complex_pre_projection_fusion import (
+    FINAL_LAYER_INITIALIZATION,
+    FUSION_ARCHITECTURE,
+    pre_projection_fusion_formula,
+)
 from greenonet.coupling_artifacts import (
     CouplingArtifactRequest,
     CouplingArtifactConfigs,
@@ -820,8 +825,10 @@ class LengthResponsePlotMixin:
         "raw_response_constraint_residual",
         "response_constraint_residual",
         "fusion_base_difference",
+        "fusion_network_output_physical",
         "fusion_residual_physical",
         "fusion_fused_difference",
+        "fusion_delta_from_base",
     }
 
     def _write_selected_figures(
@@ -857,8 +864,10 @@ class LengthResponsePlotMixin:
             ),
             "pre_projection_fusion": (
                 "fusion_base_difference",
+                "fusion_network_output_physical",
                 "fusion_residual_physical",
                 "fusion_fused_difference",
+                "fusion_delta_from_base",
             ),
         }
         for sample_id, arrays in selected_arrays.items():
@@ -1441,14 +1450,17 @@ class ComplexLengthResponseDiagnostic(
                         "fusion_normalized_rhs": self._numpy(
                             fusion.normalized_rhs[offset]
                         ),
-                        "fusion_residual_normalized": self._numpy(
-                            fusion.normalized_residual[offset]
+                        "fusion_network_output_normalized": self._numpy(
+                            fusion.normalized_network_output[offset]
                         ),
-                        "fusion_residual_physical": self._numpy(
-                            fusion.physical_residual[offset]
+                        "fusion_network_output_physical": self._numpy(
+                            fusion.physical_network_output[offset]
                         ),
                         "fusion_fused_difference": self._numpy(
                             fusion.fused_difference[offset]
+                        ),
+                        "fusion_delta_from_base": self._numpy(
+                            fusion.difference_delta[offset]
                         ),
                         "fusion_pre_projection_phi": self._numpy(
                             fusion.fused_physical[offset, 0]
@@ -1465,6 +1477,17 @@ class ComplexLengthResponseDiagnostic(
                         ),
                     }
                 )
+                if fusion.mode == "residual":
+                    arrays.update(
+                        {
+                            "fusion_residual_normalized": self._numpy(
+                                fusion.normalized_residual[offset]
+                            ),
+                            "fusion_residual_physical": self._numpy(
+                                fusion.physical_residual[offset]
+                            ),
+                        }
+                    )
             selected_arrays[sample_id] = arrays
         return selected_arrays
 
@@ -1566,7 +1589,8 @@ class ComplexLengthResponseDiagnostic(
             },
             "pre_projection_fusion": {
                 "enabled": fusion_config.enabled,
-                "architecture": "single_nonlinear_residual_mlp",
+                "architecture": FUSION_ARCHITECTURE,
+                "mode": fusion_config.mode,
                 "space": "physical_directional_source",
                 "input": [
                     "base_difference_over_safe_source_scale",
@@ -1576,15 +1600,14 @@ class ComplexLengthResponseDiagnostic(
                 "depth": fusion_config.depth,
                 "activation": configs.coupling_model.activation,
                 "use_bias": configs.coupling_model.use_bias,
-                "identity_skip": True,
-                "final_layer_initialization": "zeros",
+                "identity_skip": fusion_config.mode == "residual",
+                "final_layer_initialization": FINAL_LAYER_INITIALIZATION,
+                "final_layer_init_scale": fusion_config.final_layer_init_scale,
                 "explicit_geometry_features": False,
                 "learned_linear_branch": False,
                 "learned_gate": False,
                 "source_scale": "sqrt((A_x^2+A_y^2)/2)",
-                "formula": (
-                    "d_fused=d_base+A_safe*r_theta([d_base/A_safe,rhs/A_safe])"
-                ),
+                "formula": pre_projection_fusion_formula(fusion_config.mode),
                 "pre_projection_balance_constructed": fusion_config.enabled,
                 "uses_reference_targets": False,
             },

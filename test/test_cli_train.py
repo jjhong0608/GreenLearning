@@ -507,9 +507,11 @@ class TestTrainCLIDatasetConfig:
             "coupling_model": {
                 "pre_projection_fusion": {
                     "enabled": True,
+                    "mode": "absolute",
                     "hidden_dim": 12,
                     "depth": 2,
                     "eps": 1e-10,
+                    "final_layer_init_scale": 0.5,
                 }
             },
             "coupling_training": {},
@@ -530,9 +532,11 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model.pre_projection_fusion == (
             ComplexPreProjectionFusionConfig(
                 enabled=True,
+                mode="absolute",
                 hidden_dim=12,
                 depth=2,
                 eps=1e-10,
+                final_layer_init_scale=0.5,
             )
         )
 

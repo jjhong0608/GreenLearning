@@ -49,7 +49,11 @@ from test.complex_fixtures import (
 from greenonet.optimizers import SOAP
 
 
-def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
+@pytest.mark.parametrize("fusion_mode", ["residual", "absolute"])
+def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
+    tmp_path,
+    fusion_mode,
+):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
     data_dir = tmp_path / "data"
@@ -64,8 +68,10 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
             pre_projection_fusion=ComplexPreProjectionFusionConfig(
                 enabled=True,
+                mode=fusion_mode,
                 hidden_dim=8,
                 depth=1,
+                final_layer_init_scale=0.0,
             ),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
@@ -92,7 +98,7 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
             balance_loss=CouplingLossTermConfig(enabled=True, weight=99.0),
         ),
     )
-    work_dir = tmp_path / "single_residual_mlp"
+    work_dir = tmp_path / f"single_fusion_mlp_{fusion_mode}"
     trainer = ComplexCouplingTrainer(
         model=model,
         config=training,
@@ -140,12 +146,14 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(tmp_path):
     assert "kind=fixed" in training_log
     assert "learning_rate=1.000000e-03" in training_log
     assert "pre-projection fusion enabled=True" in training_log
-    assert "architecture=single_nonlinear_residual_mlp" in training_log
+    assert "architecture=single_nonlinear_fusion_mlp" in training_log
+    assert f"mode={fusion_mode}" in training_log
     assert "input_dim=2" in training_log
     assert "hidden_dim=8" in training_log
     assert "depth=1" in training_log
-    assert "identity_skip=true" in training_log
-    assert "final_initialization=zeros" in training_log
+    assert f"identity_skip={str(fusion_mode == 'residual').lower()}" in training_log
+    assert "final_initialization=scaled_torch_linear_default" in training_log
+    assert "final_layer_init_scale=0" in training_log
     assert "explicit_geometry_features=false" in training_log
     assert "pre_projection_fusion_gate" not in training_log
 

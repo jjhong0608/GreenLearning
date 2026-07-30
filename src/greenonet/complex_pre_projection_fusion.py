@@ -11,10 +11,25 @@ from greenonet.config import ComplexPreProjectionFusionConfig
 from greenonet.coupling_model import ActivationFactoryMixin
 
 
+FUSION_ARCHITECTURE = "single_nonlinear_fusion_mlp"
+FINAL_LAYER_INITIALIZATION = "scaled_torch_linear_default"
+
+
+def pre_projection_fusion_formula(mode: str) -> str:
+    """Return the reader-facing physical difference formula for a fusion mode."""
+
+    if mode == "residual":
+        return "d_fused=d_base+A_safe*h_theta([d_base/A_safe,rhs/A_safe])"
+    if mode == "absolute":
+        return "d_fused=A_safe*h_theta([d_base/A_safe,rhs/A_safe])"
+    raise ValueError(f"Unsupported pre-projection fusion mode: {mode}.")
+
+
 @dataclass(frozen=True)
 class ComplexPreProjectionFusionResult:
-    """Audit tensors for the optional physical difference residual."""
+    """Audit tensors for the optional physical difference fusion."""
 
+    mode: str
     base_response: torch.Tensor
     base_physical: torch.Tensor
     fused_response: torch.Tensor
@@ -22,21 +37,28 @@ class ComplexPreProjectionFusionResult:
     base_difference: torch.Tensor
     normalized_difference: torch.Tensor
     normalized_rhs: torch.Tensor
+    normalized_network_output: torch.Tensor
+    physical_network_output: torch.Tensor
     normalized_residual: torch.Tensor
     physical_residual: torch.Tensor
     fused_difference: torch.Tensor
+    difference_delta: torch.Tensor
     source_scale: torch.Tensor
     safe_source_scale: torch.Tensor
     pre_projection_balance_residual: torch.Tensor
 
 
 class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
-    """Apply one normalized nonlinear residual to the physical split difference."""
+    """Fuse a normalized nonlinear output into the physical split difference."""
 
     INPUT_FEATURE_NAMES = (
         "normalized_difference",
         "normalized_rhs",
     )
+    MODE_CODES = {
+        "residual": 0,
+        "absolute": 1,
+    }
 
     def __init__(
         self,
@@ -49,6 +71,13 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
         super().__init__()
         self.config = ComplexPreProjectionFusionConfig.from_raw(config)
         self.eps = float(self.config.eps)
+        self.mode = self.config.mode
+        self._fusion_mode_code: torch.Tensor
+        self.register_buffer(
+            "_fusion_mode_code",
+            torch.tensor(self.MODE_CODES[self.mode], dtype=torch.int64),
+            persistent=True,
+        )
 
         layers: list[nn.Module] = []
         input_dim = len(self.INPUT_FEATURE_NAMES)
@@ -69,9 +98,11 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
 
     def _reset_parameters(self) -> None:
         final_layer = cast(nn.Linear, self.residual_mlp[-1])
-        nn.init.zeros_(final_layer.weight)
-        if final_layer.bias is not None:
-            nn.init.zeros_(final_layer.bias)
+        scale = float(self.config.final_layer_init_scale)
+        with torch.no_grad():
+            final_layer.weight.mul_(scale)
+            if final_layer.bias is not None:
+                final_layer.bias.mul_(scale)
 
     def forward(
         self,
@@ -111,9 +142,12 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             base_difference,
             normalized_difference,
             normalized_rhs,
+            normalized_network_output,
+            physical_network_output,
             normalized_residual,
             physical_residual,
             fused_difference,
+            difference_delta,
             source_scale,
             safe_source_scale,
             pre_projection_balance_residual,
@@ -125,6 +159,7 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             y_source_amplitude=y_source_amplitude,
         )
         return ComplexPreProjectionFusionResult(
+            mode=self.mode,
             base_response=computed_base_response,
             base_physical=base_physical,
             fused_response=fused_response,
@@ -132,9 +167,12 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             base_difference=base_difference,
             normalized_difference=normalized_difference,
             normalized_rhs=normalized_rhs,
+            normalized_network_output=normalized_network_output,
+            physical_network_output=physical_network_output,
             normalized_residual=normalized_residual,
             physical_residual=physical_residual,
             fused_difference=fused_difference,
+            difference_delta=difference_delta,
             source_scale=source_scale,
             safe_source_scale=safe_source_scale,
             pre_projection_balance_residual=pre_projection_balance_residual,
@@ -187,14 +225,24 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             (normalized_difference, normalized_rhs),
             dim=-1,
         )
-        normalized_residual = self.residual_mlp(residual_input).squeeze(-1)
-        physical_residual = safe_source_scale * normalized_residual
-        physical_residual = torch.where(
+        normalized_network_output = self.residual_mlp(residual_input).squeeze(-1)
+        physical_network_output = safe_source_scale * normalized_network_output
+        physical_network_output = torch.where(
             source_scale > 0.0,
-            physical_residual,
-            torch.zeros_like(physical_residual),
+            physical_network_output,
+            torch.zeros_like(physical_network_output),
         )
-        fused_difference = base_difference + physical_residual
+        if self.mode == "residual":
+            fused_difference = base_difference + physical_network_output
+        else:
+            fused_difference = physical_network_output
+        difference_delta = fused_difference - base_difference
+        physical_residual = difference_delta
+        normalized_residual = torch.where(
+            source_scale > 0.0,
+            difference_delta / safe_source_scale,
+            torch.zeros_like(difference_delta),
+        )
 
         fused_physical = torch.stack(
             (
@@ -219,9 +267,12 @@ class ComplexPreProjectionFusion(nn.Module, ActivationFactoryMixin):
             base_difference,
             normalized_difference,
             normalized_rhs,
+            normalized_network_output,
+            physical_network_output,
             normalized_residual,
             physical_residual,
             fused_difference,
+            difference_delta,
             source_scale,
             safe_source_scale,
             pre_projection_balance_residual,

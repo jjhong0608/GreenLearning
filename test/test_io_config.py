@@ -3,6 +3,7 @@ import torch
 
 from greenonet.config import (
     Axis1DTrunkConfig,
+    ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
@@ -22,6 +23,33 @@ def _assert_state_dict_equal(
     assert left.keys() == right.keys()
     for key in left:
         assert torch.equal(left[key], right[key])
+
+
+def test_complex_pre_projection_fusion_config_round_trip():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingModelConfig(
+        pre_projection_fusion=ComplexPreProjectionFusionConfig(
+            enabled=True,
+            mode="absolute",
+            hidden_dim=12,
+            depth=2,
+            eps=1e-10,
+            final_layer_init_scale=0.25,
+        )
+    )
+
+    payload = _serialize_config(config)
+    loaded = _deserialize_config(payload, CouplingModelConfig)
+
+    assert isinstance(loaded, CouplingModelConfig)
+    assert loaded == config
+    assert isinstance(
+        loaded.pre_projection_fusion,
+        ComplexPreProjectionFusionConfig,
+    )
+    assert loaded.pre_projection_fusion.mode == "absolute"
+    assert loaded.pre_projection_fusion.final_layer_init_scale == 0.25
 
 
 def test_save_load_green_model_with_config(tmp_path):

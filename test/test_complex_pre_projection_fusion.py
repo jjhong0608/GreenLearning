@@ -43,15 +43,19 @@ def _inputs(tmp_path):
 
 def _module(
     *,
+    mode: str = "residual",
     hidden_dim: int = 8,
     depth: int = 1,
     use_bias: bool = True,
+    final_layer_init_scale: float = 0.0,
 ) -> ComplexPreProjectionFusion:
     return ComplexPreProjectionFusion(
         ComplexPreProjectionFusionConfig(
             enabled=True,
+            mode=mode,
             hidden_dim=hidden_dim,
             depth=depth,
+            final_layer_init_scale=final_layer_init_scale,
         ),
         activation="tanh",
         use_bias=use_bias,
@@ -102,6 +106,54 @@ def test_pre_projection_fusion_zero_initializes_output_layer():
     torch.testing.assert_close(final_layer.bias, torch.zeros_like(final_layer.bias))
 
 
+def test_pre_projection_fusion_scales_default_final_layer_initialization():
+    torch.manual_seed(20260730)
+    full = _module(final_layer_init_scale=1.0)
+    torch.manual_seed(20260730)
+    half = _module(final_layer_init_scale=0.5)
+    torch.manual_seed(20260730)
+    zero = _module(final_layer_init_scale=0.0)
+
+    full_final = full.residual_mlp[-1]
+    half_final = half.residual_mlp[-1]
+    zero_final = zero.residual_mlp[-1]
+    assert isinstance(full_final, torch.nn.Linear)
+    assert isinstance(half_final, torch.nn.Linear)
+    assert isinstance(zero_final, torch.nn.Linear)
+    assert torch.count_nonzero(full_final.weight) > 0
+    torch.testing.assert_close(half_final.weight, 0.5 * full_final.weight)
+    torch.testing.assert_close(
+        zero_final.weight,
+        torch.zeros_like(zero_final.weight),
+    )
+    assert full_final.bias is not None
+    assert half_final.bias is not None
+    assert zero_final.bias is not None
+    torch.testing.assert_close(half_final.bias, 0.5 * full_final.bias)
+    torch.testing.assert_close(
+        zero_final.bias,
+        torch.zeros_like(zero_final.bias),
+    )
+    for full_value, half_value in zip(
+        list(full.residual_mlp[0].parameters())
+        + list(full.residual_mlp[1].parameters()),
+        list(half.residual_mlp[0].parameters())
+        + list(half.residual_mlp[1].parameters()),
+        strict=True,
+    ):
+        torch.testing.assert_close(half_value, full_value)
+
+
+def test_pre_projection_fusion_scale_one_without_bias_is_finite():
+    module = _module(use_bias=False, final_layer_init_scale=1.0)
+    final_layer = module.residual_mlp[-1]
+
+    assert isinstance(final_layer, torch.nn.Linear)
+    assert final_layer.bias is None
+    assert torch.count_nonzero(final_layer.weight) > 0
+    assert torch.isfinite(final_layer.weight).all()
+
+
 def test_pre_projection_fusion_is_projected_identity_at_initialization(tmp_path):
     inputs = _inputs(tmp_path)
     geometry, base_response, rhs, *_ = inputs
@@ -130,6 +182,14 @@ def test_pre_projection_fusion_is_projected_identity_at_initialization(tmp_path)
     torch.testing.assert_close(
         result.physical_residual,
         torch.zeros_like(result.physical_residual),
+    )
+    torch.testing.assert_close(
+        result.normalized_network_output,
+        torch.zeros_like(result.normalized_network_output),
+    )
+    torch.testing.assert_close(
+        result.physical_network_output,
+        torch.zeros_like(result.physical_network_output),
     )
     torch.testing.assert_close(result.fused_difference, result.base_difference)
     torch.testing.assert_close(
@@ -182,15 +242,68 @@ def test_pre_projection_fusion_applies_fixed_identity_skip(tmp_path):
     )
     torch.testing.assert_close(result.physical_residual, expected_residual)
     torch.testing.assert_close(
+        result.physical_network_output,
+        expected_residual,
+    )
+    torch.testing.assert_close(result.difference_delta, expected_residual)
+    torch.testing.assert_close(
         result.fused_difference,
         result.base_difference + expected_residual,
     )
 
 
-def test_pre_projection_fusion_constructs_balanced_physical_pair(tmp_path):
+def test_pre_projection_fusion_absolute_mode_uses_only_network_output(tmp_path):
+    inputs = _inputs(tmp_path)
+    module = _module(mode="absolute")
+    final_layer = module.residual_mlp[-1]
+    assert isinstance(final_layer, torch.nn.Linear)
+    with torch.no_grad():
+        final_layer.weight.zero_()
+        assert final_layer.bias is not None
+        final_layer.bias.fill_(0.25)
+
+    result = _diagnostics(module, inputs)
+    expected_network_output = 0.25 * result.safe_source_scale
+    expected_delta = expected_network_output - result.base_difference
+
+    torch.testing.assert_close(
+        result.normalized_network_output,
+        torch.full_like(result.normalized_network_output, 0.25),
+    )
+    torch.testing.assert_close(
+        result.physical_network_output,
+        expected_network_output,
+    )
+    torch.testing.assert_close(result.fused_difference, expected_network_output)
+    torch.testing.assert_close(result.difference_delta, expected_delta)
+    torch.testing.assert_close(result.physical_residual, expected_delta)
+    torch.testing.assert_close(
+        result.normalized_residual,
+        expected_delta / result.safe_source_scale,
+    )
+
+
+def test_pre_projection_fusion_absolute_zero_init_starts_from_symmetric_split(
+    tmp_path,
+):
+    inputs = _inputs(tmp_path)
+    _geometry, _base_response, rhs, *_ = inputs
+
+    result = _diagnostics(_module(mode="absolute"), inputs)
+
+    torch.testing.assert_close(
+        result.fused_difference,
+        torch.zeros_like(result.fused_difference),
+    )
+    torch.testing.assert_close(result.fused_physical[:, 0], 0.5 * rhs)
+    torch.testing.assert_close(result.fused_physical[:, 1], 0.5 * rhs)
+
+
+@pytest.mark.parametrize("mode", ["residual", "absolute"])
+def test_pre_projection_fusion_constructs_balanced_physical_pair(tmp_path, mode):
     inputs = _inputs(tmp_path)
     geometry, _base_response, rhs, *_ = inputs
-    module = _module()
+    module = _module(mode=mode)
     final_layer = module.residual_mlp[-1]
     assert isinstance(final_layer, torch.nn.Linear)
     with torch.no_grad():
@@ -220,9 +333,10 @@ def test_pre_projection_fusion_constructs_balanced_physical_pair(tmp_path):
     )
 
 
-def test_pre_projection_fusion_preserves_zero_source_homogeneity(tmp_path):
+@pytest.mark.parametrize("mode", ["residual", "absolute"])
+def test_pre_projection_fusion_preserves_zero_source_homogeneity(tmp_path, mode):
     geometry, base_response, _rhs, x_amplitude, y_amplitude = _inputs(tmp_path)
-    module = _module()
+    module = _module(mode=mode)
     final_layer = module.residual_mlp[-1]
     assert isinstance(final_layer, torch.nn.Linear)
     with torch.no_grad():
@@ -240,6 +354,10 @@ def test_pre_projection_fusion_preserves_zero_source_homogeneity(tmp_path):
     )
 
     torch.testing.assert_close(result.source_scale, torch.zeros_like(zeros))
+    torch.testing.assert_close(
+        result.physical_network_output,
+        torch.zeros_like(zeros),
+    )
     torch.testing.assert_close(result.physical_residual, torch.zeros_like(zeros))
     torch.testing.assert_close(result.fused_difference, torch.zeros_like(zeros))
     torch.testing.assert_close(result.fused_response, torch.zeros_like(base_response))
@@ -295,6 +413,12 @@ def test_pre_projection_fusion_hidden_gradient_follows_zero_head_warm_start(tmp_
         ({"depth": True}, "depth"),
         ({"eps": 0.0}, "eps"),
         ({"eps": math.inf}, "eps"),
+        ({"mode": 1}, "mode"),
+        ({"mode": "unknown"}, "mode"),
+        ({"final_layer_init_scale": True}, "final_layer_init_scale"),
+        ({"final_layer_init_scale": -0.1}, "final_layer_init_scale"),
+        ({"final_layer_init_scale": 1.1}, "final_layer_init_scale"),
+        ({"final_layer_init_scale": math.inf}, "final_layer_init_scale"),
     ],
 )
 def test_pre_projection_fusion_config_rejects_invalid_values(kwargs, message):
@@ -305,7 +429,6 @@ def test_pre_projection_fusion_config_rejects_invalid_values(kwargs, message):
 @pytest.mark.parametrize(
     "legacy_key",
     [
-        "mode",
         "combination",
         "nonlinear_hidden_dim",
         "nonlinear_depth",

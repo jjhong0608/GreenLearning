@@ -170,23 +170,34 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   폐기되었고 v6에서 fail fast한다. Unversioned 및 v5 이하 complex CouplingNet
   checkpoint는 재학습 오류로 거부하며 GreenNet checkpoint는 그대로 재사용한다.
 - Complex CouplingNet의 `coupling_model.pre_projection_fusion`은 optional
-  single nonlinear residual MLP이며 기본값은 disabled이다. Axis network의
+  single nonlinear fusion MLP이며 기본값은 disabled이다. Axis network의
   base response \(P_0,Q_0\)를 \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\)로 옮기고,
   \(d_{\mathrm{base}}=p_0-q_0\),
   \(A=\sqrt{(A_x^2+A_y^2)/2}\), \(A_{\mathrm{safe}}=\max(A,\varepsilon)\)로 둔다.
   유일한 MLP 입력은
-  \([d_{\mathrm{base}}/A_{\mathrm{safe}},f/A_{\mathrm{safe}}]\)이고,
+  \([d_{\mathrm{base}}/A_{\mathrm{safe}},f/A_{\mathrm{safe}}]\)이다.
+  Default `mode="residual"`은
   \(d_{\mathrm{fused}}=d_{\mathrm{base}}+
-  A_{\mathrm{safe}}r_\theta\)를 사용한다. Pre-projection pair는
+  A_{\mathrm{safe}}h_\theta\)로 fixed identity skip을 유지하고, opt-in
+  `mode="absolute"`는
+  \(d_{\mathrm{fused}}=A_{\mathrm{safe}}h_\theta\)로 MLP output만 전체
+  difference로 사용한다. Pre-projection pair는
   \(\phi_{\mathrm{pre}}=(f+d_{\mathrm{fused}})/2\),
   \(\psi_{\mathrm{pre}}=(f-d_{\mathrm{fused}})/2\)로 구성해 balance를 정확히
-  만족한다. Learned linear branch, gate, combination mode, direct coordinate/
+  만족한다. Learned linear branch, gate, convex combination, direct coordinate/
   geometry/length feature는 없다. Final MLP layer는 weight와 bias를 zero
-  initialization하므로 enabled 초기 projected output은 disabled path와 같다.
-  Source amplitude가 zero이면 residual도 정확히 zero다. Config는
-  `enabled`, `hidden_dim`, `depth`, `eps`만 허용한다. 이 block은 새 loss나
+  initialization하는 것이 기본이지만, `final_layer_init_scale`을 `[0,1]`에서
+  설정해 standard `torch.nn.Linear` initialization을 선형 scale한다. Scale
+  `0`은 zero init, scale `1`은 standard init이다. Scale `0`에서 residual
+  mode는 disabled/base path로 시작하고 absolute mode는
+  \(d_{\mathrm{fused}}=0\)인 symmetric split으로 시작한다. Source amplitude가
+  zero이면 physical MLP output과 fused difference도 정확히 zero다. 이 block은 새 loss나
   reference `sol/phi/psi`를 사용하지 않고 output contract v6를 유지한다.
-  Retired split-fuser checkpoint와 config는 호환하지 않으며 재학습한다.
+  Existing marker 없는 v6 single-MLP checkpoint는 residual mode에서만
+  backward-compatible하게 읽는다. Mode marker가 있는 residual/absolute
+  checkpoint는 서로 cross-load하지 않고 fail fast한다. Retired split-fuser
+  checkpoint와 config는 호환하지 않으며 재학습한다. Paired absolute SOAP
+  예시는 `configs/complex_coupling_soap_absolute.json`이다.
 - Complex v6 training의 base split seminorm은 full-domain canonical physical
   energy이다. Residual `r=u_phi-u_psi`에 대해 모든 same-segment `x_edges`와
   `y_edges`의 diffusion face energy를 물리 spacing과 `hx*hy` area weight로 합하고,
@@ -1210,6 +1221,30 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   multiply/divide pair는 대수적으로 상쇄된다. 이것은 projection 이후
   `Phi=L_x^2 phi`, `Psi=L_y^2 psi`를 만들어 Green reconstruction에 전달하는
   필수 pull-back과 구분한다.
+
+## Annulus CDR Single Residual MLP Audit
+
+- `checkpoints/annulus_CDR/coupling3/comparison_analysis/analysis_report.md` is
+  the canonical comparison of `coupling`, `coupling2`, and `coupling3`.
+- The current single nonlinear residual MLP in `coupling3` uses normalized
+  physical `(d_base, rhs)` only and a fixed identity skip. On selected sample 0
+  it reduced correction transition-jump RMS by `33.7%` versus the retired
+  gated split fuser and by `69.3%` versus the retired absolute fuser.
+- A smoother correction did not imply a smoother final difference. The
+  identity skip retained the transition-bearing `d_base`; sample-0 fused
+  transition/regular jump ratio was `2.831`, and the `u_pred_error` edge-jump
+  ratio was `6.850`.
+- On the common 50-sample best-energy artifacts, `coupling3` had mean
+  `rel_sol=5.1411%`, `rel_flux=17.4703%`, and canonical energy `4.5120e-4`.
+  It slightly improved solution mean/tail but did not improve flux or energy.
+  Sample 39 is the main canonical-energy tail failure, especially in the
+  boundary-x term.
+- `artifacts/metrics/per_sample_metrics.csv` is a best-energy checkpoint result;
+  `metrics/test_per_sample_metrics.csv` is a final checkpoint result. Never mix
+  the two when comparing runs.
+- These historical runs do not pin the CouplingNet initialization seed.
+  Architecture claims require data-aligned, initialization-aligned paired
+  repeats, preferably at least three seeds.
 
 ## Verification Defaults
 

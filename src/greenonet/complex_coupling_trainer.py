@@ -33,6 +33,11 @@ from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
 )
+from greenonet.complex_pre_projection_fusion import (
+    FINAL_LAYER_INITIALIZATION,
+    FUSION_ARCHITECTURE,
+    pre_projection_fusion_formula,
+)
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
     reconstruct_from_projected_response,
@@ -449,17 +454,25 @@ class ComplexCouplingTrainer(LoggingMixin):
         )
 
     def _log_pre_projection_fusion(self, model: ComplexCouplingNet) -> None:
+        config = self.pre_projection_fusion_config
         self.logger.info(
             "pre-projection fusion enabled=%s space=physical_source "
-            "architecture=single_nonlinear_residual_mlp input_dim=2 "
+            "architecture=%s mode=%s input_dim=2 "
             "hidden_dim=%d depth=%d activation=%s use_bias=%s "
-            "identity_skip=true final_initialization=zeros "
-            "explicit_geometry_features=false",
-            self.pre_projection_fusion_config.enabled,
-            self.pre_projection_fusion_config.hidden_dim,
-            self.pre_projection_fusion_config.depth,
+            "identity_skip=%s final_initialization=%s "
+            "final_layer_init_scale=%.6g explicit_geometry_features=false "
+            "formula=%s",
+            config.enabled,
+            FUSION_ARCHITECTURE,
+            config.mode,
+            config.hidden_dim,
+            config.depth,
             model.config.activation,
             model.config.use_bias,
+            str(config.mode == "residual").lower(),
+            FINAL_LAYER_INITIALIZATION,
+            config.final_layer_init_scale,
+            pre_projection_fusion_formula(config.mode),
         )
 
     def _save_checkpoint(self, filename: str) -> None:

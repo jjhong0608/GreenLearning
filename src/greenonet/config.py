@@ -584,16 +584,24 @@ class BalanceProjectionConfig:
 
 @dataclass
 class ComplexPreProjectionFusionConfig:
-    """Optional physical difference residual before complex projection."""
+    """Optional physical difference fusion before complex projection."""
 
     enabled: bool = False
+    mode: Literal["residual", "absolute"] = "residual"
     hidden_dim: int = 16
     depth: int = 1
     eps: float = 1.0e-12
+    final_layer_init_scale: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
             raise TypeError("pre_projection_fusion.enabled must be a boolean.")
+        if not isinstance(self.mode, str):
+            raise TypeError("pre_projection_fusion.mode must be a string.")
+        if self.mode not in {"residual", "absolute"}:
+            raise ValueError(
+                "pre_projection_fusion.mode must be 'residual' or 'absolute'."
+            )
         if (
             isinstance(self.hidden_dim, bool)
             or not isinstance(self.hidden_dim, int)
@@ -613,6 +621,22 @@ class ComplexPreProjectionFusionConfig:
         eps = float(self.eps)
         if not math.isfinite(eps) or eps <= 0.0:
             raise ValueError("pre_projection_fusion.eps must be finite and positive.")
+        if isinstance(self.final_layer_init_scale, bool) or not isinstance(
+            self.final_layer_init_scale, (int, float)
+        ):
+            raise TypeError(
+                "pre_projection_fusion.final_layer_init_scale must be numeric."
+            )
+        final_layer_init_scale = float(self.final_layer_init_scale)
+        if (
+            not math.isfinite(final_layer_init_scale)
+            or final_layer_init_scale < 0.0
+            or final_layer_init_scale > 1.0
+        ):
+            raise ValueError(
+                "pre_projection_fusion.final_layer_init_scale must be finite "
+                "and in [0, 1]."
+            )
 
     @classmethod
     def from_raw(
@@ -629,9 +653,11 @@ class ComplexPreProjectionFusionConfig:
                 set(data)
                 - {
                     "enabled",
+                    "mode",
                     "hidden_dim",
                     "depth",
                     "eps",
+                    "final_layer_init_scale",
                 }
             )
             if unknown:

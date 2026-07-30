@@ -1,51 +1,18 @@
-# Complex Pre-Projection Single Nonlinear Residual MLP 구현 계획
+# Complex Pre-Projection Fuser Optional Absolute Mode 구현 계획
 
 ## Summary
 
-Complex CouplingNet의 optional pre-projection fuser를 기존 linear/nonlinear 이중 branch 구조에서 **하나의 nonlinear residual MLP**로 교체한다.
+현재 physical pre-projection fuser의 `residual` 동작을 그대로 보존하면서, 같은 입력과 같은 MLP가 최종 directional difference 전체를 출력하는 `absolute` mode를 추가한다.
 
-각 valid physical point에서 base reference response를 physical directional source proposal로 변환한다.
+```text
+residual:
+d_fused = d_base + A_safe * MLP([d_base / A_safe, f / A_safe])
 
-\[
-p_{\mathrm{base}}=\frac{P_{\mathrm{base}}}{L_x^2},
-\qquad
-q_{\mathrm{base}}=\frac{Q_{\mathrm{base}}}{L_y^2},
-\]
+absolute:
+d_fused = A_safe * MLP([d_base / A_safe, f / A_safe])
+```
 
-\[
-d_{\mathrm{base}}=p_{\mathrm{base}}-q_{\mathrm{base}}.
-\]
-
-Pointwise source scale은 기존 정의를 유지한다.
-
-\[
-A=
-\sqrt{\frac{A_x^2+A_y^2}{2}},
-\qquad
-A_{\mathrm{safe}}=\max(A,\varepsilon).
-\]
-
-새 MLP는 geometry와 length를 직접 받지 않고 normalized physical values만 입력받는다.
-
-\[
-z=
-\left[
-\frac{d_{\mathrm{base}}}{A_{\mathrm{safe}}},
-\frac{f}{A_{\mathrm{safe}}}
-\right],
-\qquad
-r_\theta=\operatorname{MLP}_\theta(z),
-\]
-
-\[
-d_{\mathrm{fused}}
-=
-d_{\mathrm{base}}
-+
-A_{\mathrm{safe}}r_\theta.
-\]
-
-Physical pre-projection pair는 source balance를 사용해 직접 구성한다.
+두 mode 모두 다음 balance-preserving physical pair를 구성한다.
 
 \[
 \phi_{\mathrm{pre}}
@@ -57,218 +24,333 @@ Physical pre-projection pair는 source balance를 사용해 직접 구성한다.
 \frac{f-d_{\mathrm{fused}}}{2}.
 \]
 
-이후 기존 physical symmetric projection과 reference-response pull-back, Green reconstruction, canonical energy loss를 그대로 사용한다. 기존 pre-projection checkpoint/config/artifact 호환이나 migration은 구현하지 않는다.
+따라서 항상
+
+\[
+\phi_{\mathrm{pre}}+\psi_{\mathrm{pre}}=f
+\]
+
+를 만족하며, 이후 physical symmetric projection, reference-response pull-back, Green reconstruction은 변경하지 않는다.
+
+권장 기본 결정은 다음과 같이 고정한다.
+
+- 기존 config 기본값: `mode="residual"`
+- final-layer initialization 기본값: `final_layer_init_scale=0.0`
+- initialization scale 허용 범위: `[0.0, 1.0]`
+- 기존 `coupling3` residual checkpoint: 호환 유지
+- 다음 absolute 실험: 별도 config에서 `mode="absolute"`를 명시
+- Complex CouplingNet output contract: version 6 유지
 
 ## Public Config
 
-기존 `coupling_model.pre_projection_fusion` 위치와 `enabled` switch는 유지하되, config schema를 다음으로 교체한다.
+`coupling_model.pre_projection_fusion`을 다음과 같이 확장한다.
 
 ```json
 "pre_projection_fusion": {
   "enabled": true,
+  "mode": "absolute",
   "hidden_dim": 16,
   "depth": 1,
-  "eps": 1e-12
+  "eps": 1e-12,
+  "final_layer_init_scale": 0.0
 }
 ```
 
-- `enabled=false`이면 fuser를 생성하지 않고 현재 base response를 바로 projection에 전달한다.
-- `hidden_dim=16`, `depth=1`을 기본값으로 사용해 작은 `2 -> 16 -> 1` MLP를 구성한다.
-- `depth`는 hidden layer 개수로 정의한다.
-- hidden activation과 Linear bias 정책은 각각 상위 `coupling_model.activation`, `coupling_model.use_bias`를 재사용한다.
-- output layer weight와 bias는 config와 무관하게 항상 zero-initialize한다.
-- `hidden_dim`과 `depth`는 양의 정수, `eps`는 finite positive float여야 한다.
-- 다음 legacy fields는 완전히 제거하며, 포함된 config는 strict parser에서 unknown-key 오류로 거부한다.
-  - `mode`
-  - `combination`
-  - `nonlinear_hidden_dim`
-  - `nonlinear_depth`
-  - `nonlinear_final_init_scale`
-  - `gate_initial_value`
-- `configs/complex_coupling.json`의 fuser는 기존처럼 disabled 상태를 유지하되 새 schema를 사용한다.
-- `configs/complex_coupling_soap.json`의 fuser는 기존처럼 enabled 상태를 유지하되 새 schema를 사용한다.
+각 field의 의미는 다음으로 고정한다.
 
-## Network Implementation
+- `mode`: `"residual"` 또는 `"absolute"`
+- `final_layer_init_scale=0.0`: final-layer weight와 bias를 모두 zero initialization
+- `final_layer_init_scale=1.0`: `torch.nn.Linear`가 생성할 때 사용하는 기본 initialization을 그대로 유지
+- `0.0 < final_layer_init_scale < 1.0`: 기본 initialization으로 생성된 weight와 bias를 해당 계수로 곱해 축소
+- `use_bias=false`: scale은 final-layer weight에만 적용
+- `pre_projection_fusion` block에 새 field가 없으면 기존 동작과 동일하게 `mode="residual"`, `final_layer_init_scale=0.0`으로 해석
 
-- `ComplexPreProjectionFusionConfig`와 `ComplexPreProjectionFusion` 이름 및 optional model attachment 위치는 유지한다.
-- 내부의 `linear_correction`, geometry-rich `nonlinear_correction`, `gate_logit`, component-combination helper를 모두 제거한다.
-- 새 학습 module은 `residual_mlp` 하나만 갖는다.
-- MLP input dimension은 항상 2이고 output dimension은 항상 1이다.
-- `x_local_t`, `y_local_t`, `log L_x`, `log L_y`, `log(L_x/L_y)`, \(\kappa\)를 계산하거나 MLP에 전달하는 코드를 제거한다.
-- Final layer zero initialization으로 초기 상태에서
-  \[
-  r_\theta=0,\qquad d_{\mathrm{fused}}=d_{\mathrm{base}}
-  \]
-  를 정확히 만족시킨다.
-- Zero-initialized final layer 특성상 첫 backward에서는 final layer가 먼저 학습되고 hidden layer gradient는 0일 수 있음을 정상 동작으로 테스트에 고정한다.
-- \(A=0\)인 point에서는 correction을 명시적으로 0으로 mask해 exact zero-source homogeneity를 유지한다. \(A>0\)에서는 요청한 \(A_{\mathrm{safe}}r_\theta\) 공식을 그대로 적용한다.
-- Fuser가 만드는 physical pair는 base common mode가 아니라 \(f\)를 common mode로 사용하므로
-  \[
-  \phi_{\mathrm{pre}}+\psi_{\mathrm{pre}}=f
-  \]
-  를 construction으로 만족한다.
-- `fused_response`는
-  \[
-  P_{\mathrm{fused}}=L_x^2\phi_{\mathrm{pre}},
-  \qquad
-  Q_{\mathrm{fused}}=L_y^2\psi_{\mathrm{pre}}
-  \]
-  로 구성해 기존 projection API에 전달한다.
-- 기존 physical symmetric projection은 제거하지 않는다. 새 pre-projection output에 대해서는 수치적으로 idempotent한 balance contract 검증 단계가 된다.
-- Complex CouplingNet output contract version은 `6`으로 유지한다. Fuser 외부의 tensor 의미가 바뀌지 않기 때문이다.
-- Legacy fuser checkpoint는 새 `residual_mlp` state key와 맞지 않으므로 strict load에서 실패하게 하며 별도 migration을 제공하지 않는다.
-- Fuser가 disabled인 기존 v6 checkpoint는 architecture가 동일하면 계속 load될 수 있지만 이를 위한 별도 compatibility code는 추가하지 않는다.
+Validation은 다음과 같이 구현한다.
 
-## Diagnostic Result Contract
+- `mode`가 string이 아니면 `TypeError`
+- 지원하지 않는 mode는 `ValueError`
+- scale이 boolean 또는 numeric이 아니면 `TypeError`
+- scale이 non-finite이거나 `[0,1]` 밖이면 `ValueError`
+- unknown config key는 기존처럼 fail fast
 
-`ComplexPreProjectionFusionResult`는 다음 field로 재구성한다.
+## Implementation Changes
 
-- `base_response`
-- `base_physical`
-- `fused_response`
-- `fused_physical`
-- `base_difference`
-- `normalized_difference`
-- `normalized_rhs`
-- `normalized_residual`
-- `physical_residual`
-- `fused_difference`
-- `source_scale`
-- `safe_source_scale`
-- `pre_projection_balance_residual`
+### 1. Config와 Initialization
 
-다음 legacy field와 alias는 제거한다.
+`ComplexPreProjectionFusionConfig`에 다음 field를 추가한다.
 
-- `mode`
-- `combination`
-- `linear_component`
-- `nonlinear_component`
-- `combined_component`
-- `gate`
-- `linear_correction`
-- `nonlinear_correction`
-- `blended_correction`
-
-Evaluator는 새 result contract를 전달하되 projection, reconstruction, objective, evaluation metric 계산은 변경하지 않는다.
-
-## Training And Logging
-
-- Trainer에서 `pre_projection_fusion_gate` metric과 gate 추출 helper를 제거한다.
-- `complex_training_metrics.csv`에서 `pre_projection_fusion_gate` column을 제거한다.
-- 학습 시작 로그에는 다음 static architecture metadata만 한 번 기록한다.
-  - enabled 여부
-  - `architecture=single_nonlinear_residual_mlp`
-  - `space=physical_directional_source`
-  - `input_dim=2`
-  - hidden dimension
-  - depth
-  - activation
-  - bias 사용 여부
-  - `final_initialization=zeros`
-  - `identity_skip=true`
-  - `explicit_geometry_features=false`
-- Loss, optimizer, scheduler, checkpoint 선택, reference diagnostic 정책은 수정하지 않는다.
-
-## Artifact Changes
-
-Complex CouplingNet artifact summary의 `pre_projection_fusion` section을 새 구조로 교체한다.
-
-```text
-enabled
-architecture = single_nonlinear_residual_mlp
-space = physical_directional_source
-input = [base_difference_over_safe_source_scale, rhs_over_safe_source_scale]
-hidden_dim
-depth
-activation
-use_bias
-identity_skip = true
-final_layer_initialization = zeros
-explicit_geometry_features = false
-learned_linear_branch = false
-learned_gate = false
-source_scale = sqrt((A_x^2+A_y^2)/2)
-formula = d_fused=d_base+A_safe*r_theta(z)
-pre_projection_balance_constructed = true
-uses_reference_targets = false
+```python
+mode: Literal["residual", "absolute"] = "residual"
+final_layer_init_scale: float = 0.0
 ```
 
-`selected_raw_arrays.npz`에서는 기존 linear/nonlinear decomposition field를 제거하고 다음 per-sample diagnostic suffix를 저장한다.
+MLP topology는 현재와 동일하게 유지한다.
 
-- `fusion_base_physical_p`
-- `fusion_base_physical_q`
-- `fusion_base_difference`
-- `fusion_normalized_difference`
-- `fusion_normalized_rhs`
-- `fusion_residual_normalized`
-- `fusion_residual_physical`
-- `fusion_fused_difference`
-- `fusion_pre_projection_phi`
-- `fusion_pre_projection_psi`
-- `fusion_source_scale`
-- `fusion_safe_source_scale`
-- `fusion_pre_projection_balance_residual`
+```text
+2 inputs
+-> hidden_dim
+-> configured activation
+-> 1 output
+```
 
-다음 legacy artifact field와 해당 figure를 제거한다.
+Final layer는 `nn.Linear` 생성 시 이미 적용된 PyTorch 기본 initialization을 기준으로 scale한다.
 
-- `linear_difference_component`
-- `nonlinear_difference_component`
-- `combined_difference_component`
-- `linear_difference_correction`
-- `nonlinear_difference_correction`
-- `blended_difference_correction`
-- `fusion_gate`
+```python
+with torch.no_grad():
+    final_layer.weight.mul_(final_layer_init_scale)
+    if final_layer.bias is not None:
+        final_layer.bias.mul_(final_layer_init_scale)
+```
 
-새 signed Plotly diagnostic figure는 다음 세 field에 대해 생성한다.
+따라서 scale `0`은 현재 zero initialization과 정확히 같고, scale `1`은 생성 시 기본 initialization을 보존한다. 별도의 random draw나 custom initializer는 추가하지 않는다.
 
-- `fusion_base_difference`
-- `fusion_residual_physical`
-- `fusion_fused_difference`
+### 2. Mode별 Fuser 계산
 
-기존 solution, flux, coefficient, error, energy artifact와 figure contract는 그대로 유지한다.
+현재 normalized input은 변경하지 않는다.
 
-## Documentation
+\[
+A
+=
+\sqrt{\frac{A_x^2+A_y^2}{2}},
+\qquad
+A_{\mathrm{safe}}=\max(A,\varepsilon),
+\]
 
-다음 문서의 기존 linear/nonlinear split 설명을 single nonlinear residual MLP contract로 교체한다.
+\[
+z=
+\left[
+\frac{d_{\mathrm{base}}}{A_{\mathrm{safe}}},
+\frac{f}{A_{\mathrm{safe}}}
+\right].
+\]
 
-- `README.md`
-- `docs/memory.md`
-- complex geometry instruction/design 문서
-- complex GreenNet/CouplingNet technical report
-- optimizer applicability 문서에서 기존 fuser parameter shape를 참조하는 부분
+MLP output을 공통으로
 
-문서에는 다음 사항을 명시한다.
+\[
+h_\theta=\operatorname{MLP}_\theta(z),
+\qquad
+d_{\mathrm{network}}=A_{\mathrm{safe}}h_\theta
+\]
 
-- fuser는 physical directional-source space에서 작동한다.
-- 입력은 normalized physical difference와 RHS뿐이다.
-- geometry/length feature는 fuser에 직접 들어가지 않는다.
-- geometry dependence는 upstream axis-conditioned CouplingNet의 \(d_{\mathrm{base}}\)를 통해 간접 전달된다.
-- identity skip은 deterministic하며 학습되는 linear branch가 아니다.
-- final layer zero initialization으로 초기 projected output이 fuser-disabled path와 같다.
-- reference `sol/phi/psi`를 사용하지 않는다.
-- legacy fuser config와 enabled checkpoint는 호환하지 않는다.
+로 계산한 뒤 mode만 분기한다.
 
-`PLAN.md`는 사용자가 이 계획을 바탕으로 project root에 직접 작성하며, 이번 계획 단계에서는 파일을 생성하거나 수정하지 않는다.
+```python
+if mode == "residual":
+    fused_difference = base_difference + network_output_physical
+else:
+    fused_difference = network_output_physical
+```
+
+Source amplitude가 정확히 zero인 point에서는 기존 정책을 확장해 network physical output과 absolute fused difference를 `0`으로 강제한다.
+
+`absolute + final_layer_init_scale=0`의 초기 상태는 다음과 같다.
+
+\[
+d_{\mathrm{fused}}=0,
+\qquad
+\phi_{\mathrm{pre}}=\psi_{\mathrm{pre}}=\frac{f}{2}.
+\]
+
+`residual + final_layer_init_scale=0`의 초기 상태는 현재와 같다.
+
+\[
+d_{\mathrm{fused}}=d_{\mathrm{base}}.
+\]
+
+### 3. Checkpoint Contract
+
+Response tensor의 의미와 shape는 변경되지 않으므로 global output-contract version은 `6`으로 유지한다.
+
+기존 checkpoint compatibility를 위해 현재 state-dict prefix인
+
+```text
+pre_projection_fusion.residual_mlp.*
+```
+
+는 내부 명칭이 다소 좁더라도 그대로 유지한다. 이를 `fusion_mlp`로 rename하지 않는다.
+
+Residual checkpoint를 absolute config로 조용히 재해석하는 것은 금지한다. Fuser module에 persistent mode marker를 추가한다.
+
+```text
+residual -> 0
+absolute -> 1
+```
+
+Checkpoint load 정책은 다음과 같다.
+
+- 기존 v6 single-residual checkpoint에 mode marker가 없으면 legacy current-fuser checkpoint로 인식
+- target config가 `mode="residual"`이면 residual marker를 주입하고 load 허용
+- target config가 `mode="absolute"`이면 명확한 mode mismatch 오류 발생
+- marker가 있는 새 checkpoint는 checkpoint mode와 target config mode가 같아야 함
+- `final_layer_init_scale`은 fresh initialization 설정이므로 checkpoint load compatibility 조건에 포함하지 않음
+- retired split linear/nonlinear checkpoint rejection은 그대로 유지
+
+### 4. Diagnostics와 Artifacts
+
+기존 residual 전용 용어를 mode-independent audit 정보로 확장한다.
+
+공통 raw field:
+
+```text
+fusion_base_difference
+fusion_network_output_normalized
+fusion_network_output_physical
+fusion_fused_difference
+fusion_delta_from_base
+fusion_pre_projection_phi
+fusion_pre_projection_psi
+fusion_pre_projection_balance_residual
+```
+
+여기서
+
+\[
+\mathrm{fusion\_delta\_from\_base}
+=
+d_{\mathrm{fused}}-d_{\mathrm{base}}.
+\]
+
+Residual mode에서는 `network_output_physical == delta_from_base`다. Absolute mode에서는 둘이 다르므로 반드시 별도 저장한다.
+
+기존 residual artifact reader를 위해 residual mode에서는 현재의 다음 key를 alias로 유지한다.
+
+```text
+fusion_residual_normalized
+fusion_residual_physical
+```
+
+Absolute mode에서는 residual이라는 이름으로 MLP absolute output을 잘못 저장하지 않는다.
+
+Artifact summary와 training log에는 다음을 기록한다.
+
+- `mode`
+- mode별 formula
+- `identity_skip`: residual이면 `true`, absolute이면 `false`
+- `final_layer_init_scale`
+- `final_layer_initialization="scaled_torch_linear_default"`
+- `input=["base_difference_over_safe_source_scale", "rhs_over_safe_source_scale"]`
+- `explicit_geometry_features=false`
+- `learned_gate=false`
+- `pre_projection_balance_constructed=true`
+
+Length-response diagnostic도 동일한 generic field와 mode formula를 사용하도록 갱신한다.
+
+### 5. Config와 Documentation
+
+기존 canonical complex config는 backward compatibility를 위해 다음 설정을 사용한다.
+
+```json
+"pre_projection_fusion": {
+  "enabled": true,
+  "mode": "residual",
+  "hidden_dim": 16,
+  "depth": 1,
+  "eps": 1e-12,
+  "final_layer_init_scale": 0.0
+}
+```
+
+다음 실험용 paired config는 별도 파일로 둔다.
+
+```text
+configs/complex_coupling_soap_absolute.json
+```
+
+이 파일은 residual baseline과 다음 두 값만 다르게 한다.
+
+```json
+"mode": "absolute",
+"final_layer_init_scale": 0.0
+```
+
+README와 `docs/memory.md`에는 다음 내용을 기록한다.
+
+- residual과 absolute mode의 수식
+- scale `0`, 중간값, `1`의 의미
+- absolute zero-init이 symmetric split `f/2, f/2`에서 시작한다는 점
+- absolute mode는 continuity를 구조적으로 보장하지 않지만 `d_base` seam을 강제 전달하지 않는다는 점
+- reference target은 여전히 training에 사용하지 않는다는 점
+- residual과 absolute checkpoint mode mismatch는 거부된다는 점
+
+## Affected Files
+
+주요 변경 영역은 다음과 같다.
+
+- Config 및 core computation:
+  `src/greenonet/config.py`,
+  `src/greenonet/complex_pre_projection_fusion.py`,
+  `src/greenonet/complex_coupling_model.py`
+- Runtime provenance와 export:
+  `src/greenonet/complex_coupling_trainer.py`,
+  `src/greenonet/complex_coupling_artifacts.py`,
+  `src/greenonet/complex_length_response_diagnostics.py`
+- Config와 문서:
+  `configs/complex_coupling.json`,
+  `configs/complex_coupling_soap.json`,
+  새 absolute pilot config,
+  `README.md`,
+  `docs/memory.md`
+- Tests:
+  pre-projection fuser, complex model, trainer, artifact, config/CLI tests
+
+Dataset, GreenNet, projection helper, reconstruction, canonical energy loss, SOAP optimizer, scheduler와 geometry/sample NPZ schema는 변경하지 않는다.
 
 ## Test Plan
 
-- **Config:** 새 schema default/JSON round-trip, positive `hidden_dim/depth`, finite positive `eps`, strict unknown-key rejection을 검증한다.
-- **Legacy rejection:** 기존 `mode`, `combination`, `nonlinear_*`, `gate_initial_value`가 포함된 config가 fail fast하는지 확인한다.
-- **Architecture:** state dict에 `residual_mlp`만 존재하고 `linear_correction`, `nonlinear_correction`, `gate_logit`이 없는지 확인한다.
-- **Input contract:** first layer input dimension이 2이며 explicit geometry feature helper가 존재하지 않는지 확인한다.
-- **Initialization:** final weight/bias가 정확히 0이고 initial residual이 0인지 확인한다.
-- **Initial equivalence:** fuser-enabled와 disabled model이 동일한 base weights를 가질 때 physical projection 이후 output이 동일한지 확인한다.
-- **Math:** \(d_{\mathrm{fused}}=d_{\mathrm{base}}+A_{\mathrm{safe}}r_\theta\), \(\phi_{\mathrm{pre}}-\psi_{\mathrm{pre}}=d_{\mathrm{fused}}\), \(\phi_{\mathrm{pre}}+\psi_{\mathrm{pre}}=f\)를 검증한다.
-- **Scaling:** source와 base difference를 같은 상수로 scale했을 때 normalized input과 residual scaling이 일관되는지 확인한다.
-- **Zero source:** \(A=0\)에서 correction과 fused response가 finite하고 zero-source homogeneity를 보존하는지 확인한다.
-- **Gradient:** 첫 backward에서 final layer gradient가 finite/nonzero이고, optimizer update 후 hidden layer까지 gradient가 전달되는지 확인한다.
-- **Model integration:** output shape `(B,2,P)`, physical symmetric projection, `torch.compile`, trainer one-step smoke를 검증한다.
-- **Logging:** gate metric이 console, `training.log`, CSV에서 제거되고 새 architecture metadata가 기록되는지 확인한다.
-- **Artifacts:** 새 summary/raw/figure field가 생성되고 모든 legacy linear/nonlinear/gate field가 없는지 확인한다.
-- **Checkpoint:** legacy enabled-fuser state dict가 strict load에서 실패하고 새 checkpoint가 save/load 되는지 확인한다.
-- **Regression:** projection, reconstruction, canonical energy, source provider, SOAP/AdamW, GreenNet, unit-square CouplingNet 동작이 변하지 않는지 확인한다.
+### Config Tests
 
-검증 순서는 다음과 같이 고정한다.
+- 새 field가 없는 config가 `residual + scale=0`으로 parse되는지 확인
+- residual/absolute round-trip 확인
+- scale `0`, `0.5`, `1` 허용 확인
+- invalid mode, boolean scale, NaN, infinity, 음수, `1` 초과, unknown key 거부 확인
+- embedded checkpoint config load에서도 nested field가 복원되는지 확인
+
+### Initialization Tests
+
+동일한 `torch.manual_seed`로 module을 생성해 다음을 검증한다.
+
+- scale `0`: final weight/bias가 정확히 zero
+- scale `1`: final weight/bias가 PyTorch 기본 initialization 값
+- scale `0.5`: scale `1`과 동일한 initial draw의 정확히 절반
+- hidden-layer initialization은 scale에 따라 바뀌지 않음
+- `use_bias=false` 동작 확인
+
+### Forward Math Tests
+
+- residual scale `0`이 현재 identity-initialized behavior와 정확히 일치
+- absolute scale `0`이 `d_fused=0`, `phi_pre=psi_pre=f/2` 생성
+- manually fixed MLP output에서 residual mode가 `d_base+A*h`를 반환
+- 같은 MLP output에서 absolute mode가 `A*h`만 반환
+- 두 mode 모두 `phi_pre+psi_pre=rhs`를 float64 tolerance 내에서 만족
+- zero source amplitude에서 absolute fused difference가 zero
+- output shape `(B,2,P)`와 output-contract v6 유지
+- 두 mode 모두 `torch.compile` forward/backward 통과
+- zero-init absolute mode에서 final layer가 gradient를 받고, final layer update 이후 upstream gradient가 전달되는지 확인
+
+### Checkpoint Tests
+
+- 기존 unmarked v6 single-residual checkpoint를 residual config가 load
+- 기존 residual checkpoint를 absolute config가 거부
+- 새 residual checkpoint는 residual config에서 load
+- 새 absolute checkpoint는 absolute config에서 load
+- residual/absolute cross-load 모두 fail fast
+- 기존 `residual_mlp` parameter key 유지
+- retired split-fuser checkpoint rejection 유지
+
+### Trainer와 Artifact Tests
+
+- residual one-step regression
+- absolute one-step training smoke
+- log에 mode, scale, identity-skip 상태 기록
+- artifact summary의 mode별 formula 확인
+- generic raw fields 존재 확인
+- residual alias는 residual mode에서만 기존 의미로 유지
+- absolute artifact에서 network output과 delta-from-base를 구분
+- pre-projection balance residual이 round-off 수준인지 확인
+- solution/flux figures와 canonical energy metric contract 유지
+- reference `sol/phi/psi`가 loss 또는 checkpoint selection에 들어가지 않는지 확인
+
+### Verification
 
 ```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
@@ -276,9 +358,11 @@ PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
   test/test_complex_coupling_model.py \
   test/test_complex_coupling_trainer.py \
   test/test_complex_coupling_artifacts.py \
-  test/test_cli_train.py \
-  test/test_io_config.py
+  test/test_io_config.py \
+  test/test_cli_train.py
+```
 
+```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
 
 ruff check src cli test
@@ -289,19 +373,15 @@ git diff --check
 
 ## Rollback Strategy
 
-- Runtime rollback은 `pre_projection_fusion.enabled=false`로 fuser를 비활성화하는 것이다.
-- Code rollback은 새 `residual_mlp` 구현과 config/artifact 변경을 함께 되돌리는 단일 commit revert로 수행한다.
-- Projection, reconstruction, loss, optimizer, scheduler, dataset 및 GreenNet에는 rollback 변경이 없어야 한다.
-- 기존 enabled-fuser checkpoint는 호환 대상으로 삼지 않으므로 rollback 또는 migration artifact를 만들지 않는다.
-- 새 fuser가 성능을 개선하지 못해도 fuser-disabled base architecture는 영향을 받지 않아야 한다.
+Runtime rollback은 config만 다음과 같이 되돌리면 된다.
 
-## Acceptance Criteria
+```json
+"mode": "residual",
+"final_layer_init_scale": 0.0
+```
 
-- 학습 가능한 pre-projection module은 하나의 nonlinear `residual_mlp`뿐이다.
-- MLP는 오직 \([d_{\mathrm{base}}/A_{\mathrm{safe}},f/A_{\mathrm{safe}}]\)만 입력받는다.
-- Linear branch, geometry feature input, combination mode 및 learned gate가 코드와 config에서 제거된다.
-- 초기화 시 projection 이후 결과가 fuser-disabled path와 동일하다.
-- 모든 valid point에서 pre-projection pair와 최종 projection이 physical balance를 만족한다.
-- Artifact에 새 residual decomposition만 남고 기존 linear/nonlinear/gate field는 없다.
-- Pre-projection 이외의 output contract v6, projection, Green reconstruction, objective와 checkpoint selection은 변경되지 않는다.
-- Legacy enabled-fuser checkpoint/config migration은 제공하지 않는다.
+이는 현재 `coupling3` behavior를 정확히 복원한다.
+
+Code rollback이 필요하면 absolute formula branch, mode marker, generic absolute artifact fields와 absolute pilot config만 제거한다. Residual computation, current `residual_mlp` state keys, projection, reconstruction, loss와 existing checkpoint load path는 그대로 남아야 한다.
+
+Absolute checkpoint는 rollback 이후 지원하지 않아도 된다. 실험 checkpoint directory는 삭제하지 않고, unsupported mode checkpoint라는 명확한 오류를 출력한다.

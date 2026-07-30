@@ -26,6 +26,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
     """Source-conditioned response predictor for complex geometries."""
 
     OUTPUT_CONTRACT_VERSION = 6
+    PRE_PROJECTION_FUSION_MODE_KEY = "pre_projection_fusion._fusion_mode_code"
 
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
@@ -269,6 +270,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             )
         version = int(version_tensor.detach().cpu().item())
         if version == self.OUTPUT_CONTRACT_VERSION:
+            self._prepare_pre_projection_fusion_checkpoint(prepared)
             return prepared
         raise ValueError(
             "Incompatible complex CouplingNet output contract version "
@@ -300,6 +302,62 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             raise ValueError(
                 "Incompatible complex CouplingNet output contract version "
                 f"{version}; expected {self.OUTPUT_CONTRACT_VERSION}."
+            )
+        self._validate_pre_projection_fusion_checkpoint(state_dict)
+
+    def _prepare_pre_projection_fusion_checkpoint(
+        self,
+        state_dict: dict[str, torch.Tensor],
+    ) -> None:
+        """Upgrade unmarked v6 single-residual fuser checkpoints safely."""
+
+        if self.pre_projection_fusion is None:
+            return
+        key = self.PRE_PROJECTION_FUSION_MODE_KEY
+        if key in state_dict:
+            self._validate_pre_projection_fusion_checkpoint(state_dict)
+            return
+        if self.pre_projection_fusion.mode != "residual":
+            raise ValueError(
+                "The complex CouplingNet checkpoint has no pre-projection "
+                "fusion mode marker and is treated as a legacy residual-mode "
+                "checkpoint. It cannot be loaded with "
+                "pre_projection_fusion.mode='absolute'. Train the absolute "
+                "mode from scratch."
+            )
+        state_dict[key] = (
+            self.pre_projection_fusion._fusion_mode_code.detach().cpu().clone()
+        )
+
+    def _validate_pre_projection_fusion_checkpoint(
+        self,
+        state_dict: Mapping[str, torch.Tensor],
+    ) -> None:
+        """Reject checkpoints whose fuser semantics differ from the config."""
+
+        if self.pre_projection_fusion is None:
+            return
+        key = self.PRE_PROJECTION_FUSION_MODE_KEY
+        if key not in state_dict:
+            raise ValueError(
+                "Complex CouplingNet checkpoint has no pre-projection fusion "
+                "mode marker after checkpoint preparation."
+            )
+        marker = state_dict[key]
+        if marker.numel() != 1:
+            raise ValueError(
+                "Invalid pre-projection fusion mode marker: expected exactly one value."
+            )
+        checkpoint_code = int(marker.detach().cpu().item())
+        expected_code = int(
+            self.pre_projection_fusion._fusion_mode_code.detach().cpu().item()
+        )
+        if checkpoint_code != expected_code:
+            raise ValueError(
+                "Incompatible pre-projection fusion mode checkpoint: "
+                f"checkpoint code {checkpoint_code}, expected {expected_code} "
+                f"for mode '{self.pre_projection_fusion.mode}'. Residual and "
+                "absolute fuser checkpoints cannot be cross-loaded."
             )
 
     def forward(

@@ -20,6 +20,11 @@ from greenonet.complex_coupling_data import (
 from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geometry
+from greenonet.complex_pre_projection_fusion import (
+    FINAL_LAYER_INITIALIZATION,
+    FUSION_ARCHITECTURE,
+    pre_projection_fusion_formula,
+)
 from greenonet.coupling_artifacts import (
     CouplingArtifactConfigs,
     CouplingArtifactRequest,
@@ -477,8 +482,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         "weak_residual_y",
         "split_mass_relative_contribution",
         "fusion_base_difference",
+        "fusion_network_output_physical",
         "fusion_residual_physical",
         "fusion_fused_difference",
+        "fusion_delta_from_base",
     )
     SIGNED_FIGURE_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -491,8 +498,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "weak_residual_x",
             "weak_residual_y",
             "fusion_base_difference",
+            "fusion_network_output_physical",
             "fusion_residual_physical",
             "fusion_fused_difference",
+            "fusion_delta_from_base",
         }
     )
     FIGURE_TITLES: ClassVar[dict[str, str]] = {
@@ -517,8 +526,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "Normalized pointwise split value mismatch"
         ),
         "fusion_base_difference": "Base physical difference p - q",
+        "fusion_network_output_physical": "Physical MLP difference output",
         "fusion_residual_physical": "Nonlinear physical difference residual",
         "fusion_fused_difference": "Fused physical difference",
+        "fusion_delta_from_base": "Fused difference minus base difference",
     }
 
     def __init__(
@@ -679,7 +690,8 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             },
             "pre_projection_fusion": {
                 "enabled": pre_projection_fusion.enabled,
-                "architecture": "single_nonlinear_residual_mlp",
+                "architecture": FUSION_ARCHITECTURE,
+                "mode": pre_projection_fusion.mode,
                 "space": "physical_directional_source",
                 "input": [
                     "base_difference_over_safe_source_scale",
@@ -689,15 +701,16 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 "depth": pre_projection_fusion.depth,
                 "activation": configs.coupling_model.activation,
                 "use_bias": configs.coupling_model.use_bias,
-                "identity_skip": True,
-                "final_layer_initialization": "zeros",
+                "identity_skip": pre_projection_fusion.mode == "residual",
+                "final_layer_initialization": FINAL_LAYER_INITIALIZATION,
+                "final_layer_init_scale": (
+                    pre_projection_fusion.final_layer_init_scale
+                ),
                 "explicit_geometry_features": False,
                 "learned_linear_branch": False,
                 "learned_gate": False,
                 "source_scale": "sqrt((A_x^2+A_y^2)/2)",
-                "formula": (
-                    "d_fused=d_base+A_safe*r_theta([d_base/A_safe,rhs/A_safe])"
-                ),
+                "formula": pre_projection_fusion_formula(pre_projection_fusion.mode),
                 "pre_projection_balance_constructed": pre_projection_fusion.enabled,
                 "uses_reference_targets": False,
             },
@@ -1042,14 +1055,20 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                             "fusion_normalized_rhs": (
                                 fusion.normalized_rhs[0].detach().cpu().numpy()
                             ),
-                            "fusion_residual_normalized": (
-                                fusion.normalized_residual[0].detach().cpu().numpy()
+                            "fusion_network_output_normalized": (
+                                fusion.normalized_network_output[0]
+                                .detach()
+                                .cpu()
+                                .numpy()
                             ),
-                            "fusion_residual_physical": (
-                                fusion.physical_residual[0].detach().cpu().numpy()
+                            "fusion_network_output_physical": (
+                                fusion.physical_network_output[0].detach().cpu().numpy()
                             ),
                             "fusion_fused_difference": (
                                 fusion.fused_difference[0].detach().cpu().numpy()
+                            ),
+                            "fusion_delta_from_base": (
+                                fusion.difference_delta[0].detach().cpu().numpy()
                             ),
                             "fusion_pre_projection_phi": (
                                 fusion.fused_physical[0, 0].detach().cpu().numpy()
@@ -1071,6 +1090,17 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                             ),
                         }
                     )
+                    if fusion.mode == "residual":
+                        arrays.update(
+                            {
+                                "fusion_residual_normalized": (
+                                    fusion.normalized_residual[0].detach().cpu().numpy()
+                                ),
+                                "fusion_residual_physical": (
+                                    fusion.physical_residual[0].detach().cpu().numpy()
+                                ),
+                            }
+                        )
                 if prediction.objective.relative_split is not None:
                     relative = prediction.objective.relative_split
                     split_residual = u_phi - u_psi
