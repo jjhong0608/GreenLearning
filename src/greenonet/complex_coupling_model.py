@@ -15,6 +15,7 @@ from greenonet.complex_pre_projection_fusion import (
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingModelConfig,
@@ -204,6 +205,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
 
     @staticmethod
     def _validate_complex_config(config: CouplingModelConfig) -> None:
+        ComplexCrossAxisReconstructionConfig.from_raw(config.cross_axis_reconstruction)
         if config.trunk_positional_encoding.enabled:
             raise ValueError(
                 "ComplexCouplingNet uses local 1D trunk coordinates; "
@@ -217,11 +219,15 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             raise ValueError(
                 "ComplexCouplingNet requires balance_projection.enabled=true."
             )
-        if balance_projection.mode != "physical_symmetric":
+        if balance_projection.mode not in {
+            "physical_symmetric",
+            "column_diagonal_green_response",
+        }:
             raise ValueError(
                 "ComplexCouplingNet output-contract version 6 requires "
-                "balance_projection.mode='physical_symmetric'. Response-space and "
-                "earlier complex checkpoints require retraining."
+                "balance_projection.mode='physical_symmetric' or "
+                "'column_diagonal_green_response'. Response-space and earlier "
+                "complex checkpoints require retraining."
             )
         axis_cfg = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
         if not axis_cfg.enabled:

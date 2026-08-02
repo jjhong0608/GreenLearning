@@ -5,6 +5,7 @@ import torch
 from greenonet.coefficients import load_coefficient_functions
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.complex_weak_closure import (
+    assemble_directional_weak_residuals,
     build_directional_weak_context,
     directional_weak_operator_closure_loss,
 )
@@ -85,6 +86,37 @@ def test_zero_trial_and_zero_directional_source_have_zero_weak_residual(tmp_path
     torch.testing.assert_close(
         result.y_residual,
         torch.zeros_like(result.y_residual),
+    )
+
+
+def test_public_directional_residual_helper_matches_weak_loss_residuals(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    context = build_directional_weak_context(geometry, coeffs)
+    u_pred = torch.tensor([[1.0, -0.5, 2.0]], dtype=torch.float64)
+    projected_physical = torch.tensor(
+        [[[0.5, 1.0, 1.5], [1.5, 1.0, 0.5]]],
+        dtype=torch.float64,
+    )
+
+    residuals = assemble_directional_weak_residuals(
+        u_valid=u_pred,
+        projected_physical=projected_physical,
+        context=context,
+    )
+    loss_result = directional_weak_operator_closure_loss(
+        u_pred_valid=u_pred,
+        projected_physical=projected_physical,
+        rhs_valid=projected_physical.sum(dim=1),
+        context=context,
+        eps=1.0e-12,
+    )
+
+    torch.testing.assert_close(residuals.x, loss_result.x_residual)
+    torch.testing.assert_close(residuals.y, loss_result.y_residual)
+    torch.testing.assert_close(
+        residuals.full,
+        loss_result.x_residual + loss_result.y_residual,
     )
 
 

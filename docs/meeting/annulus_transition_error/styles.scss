@@ -1,0 +1,1177 @@
+/*-- scss:defaults --*/
+$body-bg: #f5f7f6;
+$body-color: #172026;
+$link-color: #0a7c86;
+$presentation-heading-color: #172026;
+$presentation-heading-font: "Aptos Display", "Segoe UI", sans-serif;
+$presentation-font-size-root: 30px;
+$presentation-line-height: 1.25;
+$presentation-h1-font-size: 2.0em;
+$presentation-h2-font-size: 1.45em;
+$presentation-h3-font-size: 1.02em;
+
+/*-- scss:rules --*/
+:root {
+  --ink: #172026;
+  --muted: #617078;
+  --paper: #f5f7f6;
+  --panel: #ffffff;
+  --line: #d6dedb;
+  --teal: #0a7c86;
+  --coral: #d95f49;
+  --amber: #c9851e;
+  --steel: #4d6f80;
+  --green: #477a56;
+  --retired: #80898d;
+  --pale-teal: #e4f1f0;
+  --pale-coral: #f7e9e5;
+  --pale-amber: #f7efdf;
+  --pale-steel: #e9eef1;
+}
+
+.reveal {
+  font-family: "Aptos", "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+
+.reveal .slides {
+  text-align: left;
+}
+
+.reveal .slides section {
+  box-sizing: border-box;
+  padding: 24px 44px 26px;
+}
+
+.reveal h2 {
+  margin: 0 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--line);
+  font-size: 36pt;
+  font-weight: 650;
+  line-height: 1.08;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.reveal h3 {
+  margin: 0 0 8px;
+  font-size: 21pt;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.reveal p,
+.reveal li,
+.reveal td,
+.reveal th {
+  font-size: 18pt;
+  line-height: 1.28;
+}
+
+.reveal strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.reveal .slide-number {
+  right: 22px;
+  bottom: 16px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--muted);
+  font-size: 11pt;
+}
+
+.reveal .progress {
+  height: 4px;
+  color: var(--teal);
+}
+
+.eyebrow {
+  margin-bottom: 6px;
+  color: var(--teal);
+  font-size: 12pt;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.status-row,
+.metric-row,
+.formula-row,
+.method-grid,
+.timeline,
+.stage-grid,
+.two-column,
+.three-column,
+.result-grid {
+  display: grid;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.status-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.metric-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.formula-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.method-grid,
+.three-column {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.timeline {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  position: relative;
+}
+
+.timeline::before {
+  content: "";
+  position: absolute;
+  top: 42px;
+  right: 8%;
+  left: 8%;
+  height: 3px;
+  background: var(--line);
+  z-index: -1;
+}
+
+.stage-grid {
+  grid-template-columns: 0.82fr 1.14fr 1.04fr;
+}
+
+.two-column {
+  grid-template-columns: 1.45fr 0.9fr;
+}
+
+.result-grid {
+  grid-template-columns: minmax(0, 1fr) 330px;
+}
+
+.metric-card,
+.method-card,
+.timeline-card,
+.stage-card,
+.formula-card,
+.note-card,
+.comparison-card {
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.metric-card {
+  min-height: 88px;
+  padding: 11px 14px;
+}
+
+.metric-card .value {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--teal);
+  font-size: 25pt;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.metric-card .label {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5pt;
+  line-height: 1.2;
+}
+
+.metric-card.coral .value {
+  color: var(--coral);
+}
+
+.metric-card.amber .value {
+  color: var(--amber);
+}
+
+.metric-card.steel .value {
+  color: var(--steel);
+}
+
+.method-card,
+.stage-card,
+.formula-card,
+.comparison-card {
+  padding: 14px 16px;
+}
+
+.method-card {
+  min-height: 320px;
+  border-top-width: 6px;
+}
+
+.method-card {
+  display: flex;
+  min-height: 402px;
+  flex-direction: column;
+}
+
+.method-card.geometry {
+  border-top-color: var(--amber);
+}
+
+.method-card.mismatch {
+  border-top-color: var(--coral);
+}
+
+.method-card.weak {
+  border-top-color: var(--teal);
+}
+
+.method-card p,
+.stage-card p,
+.formula-card p,
+.comparison-card p {
+  margin: 6px 0;
+  font-size: 14pt;
+}
+
+.method-card .constraint,
+.timeline-card .status,
+.status-pill,
+.qualifier {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--pale-steel);
+  color: var(--muted);
+  font-size: 10.5pt;
+  font-weight: 650;
+}
+
+.method-card .constraint {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.method-facts {
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  margin: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.method-facts dt,
+.method-facts dd {
+  margin: 0;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5pt;
+  line-height: 1.2;
+}
+
+.method-facts dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.method-facts dd {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.method-common-invariant {
+  display: grid;
+  grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--steel);
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.method-common-invariant > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  font-size: 12.5pt;
+  font-weight: 650;
+  text-align: center;
+}
+
+.method-common-invariant .katex {
+  font-size: 0.88em;
+}
+
+.method-invariant {
+  margin-bottom: 11px;
+}
+
+.method-invariant > p {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.method-invariant span {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #ffffff;
+  font-size: 11.5pt;
+  font-weight: 650;
+  text-align: center;
+}
+
+.method-invariant.geometry span {
+  border-top: 4px solid var(--amber);
+}
+
+.method-invariant.mismatch span {
+  border-top: 4px solid var(--coral);
+}
+
+.method-invariant.weak span {
+  border-top: 4px solid var(--teal);
+}
+
+.method-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.58fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.method-detail-copy {
+  box-sizing: border-box;
+  height: 516px;
+  padding: 13px 15px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-top-width: 6px;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.method-detail-copy.geometry {
+  border-top-color: var(--amber);
+}
+
+.method-detail-copy.mismatch {
+  border-top-color: var(--coral);
+}
+
+.method-detail-copy.weak {
+  border-top-color: var(--teal);
+}
+
+.method-detail-copy h3 {
+  font-size: 17pt;
+}
+
+.method-detail-copy p {
+  margin: 8px 0;
+  font-size: 13pt;
+}
+
+.method-detail-copy .katex-display {
+  margin: 0.78em 0;
+}
+
+.method-detail-copy .katex {
+  font-size: 0.78em;
+}
+
+.method-detail-visual {
+  min-width: 0;
+}
+
+.plotly-shell.method-detail {
+  height: 516px;
+}
+
+.method-detail-takeaway {
+  box-sizing: border-box;
+  min-height: 60px;
+  margin-top: 10px;
+  padding: 8px 13px;
+  border-left: 6px solid var(--teal);
+  border-radius: 4px;
+  background: var(--pale-teal);
+  font-size: 12.5pt;
+  line-height: 1.2;
+}
+
+.method-detail-takeaway.geometry {
+  border-left-color: var(--amber);
+  background: var(--pale-amber);
+}
+
+.method-detail-takeaway.mismatch {
+  border-left-color: var(--coral);
+  background: var(--pale-coral);
+}
+
+.method-detail-takeaway .katex-display {
+  margin: 0.25em 0;
+}
+
+.method-detail-takeaway .katex {
+  font-size: 0.78em;
+}
+
+.timeline-card {
+  display: flex;
+  min-height: 510px;
+  padding: 16px 14px 12px;
+  border-top: 6px solid var(--retired);
+  flex-direction: column;
+}
+
+.timeline-card.current {
+  border-top-color: var(--teal);
+  box-shadow: inset 0 0 0 2px var(--pale-teal);
+}
+
+.timeline-card h3 {
+  font-size: 17pt;
+}
+
+.timeline-card p {
+  margin: 7px 0;
+  font-size: 13pt;
+}
+
+.timeline-card .status {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.timeline-card.current .status {
+  background: var(--pale-teal);
+  color: var(--teal);
+}
+
+.timeline + .takeaway {
+  display: flex;
+  min-height: 70px;
+  align-items: center;
+}
+
+.timeline-card .timeline-coordinate {
+  min-height: 43px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--pale-steel);
+  color: var(--muted);
+  font-size: 11.5pt;
+  line-height: 1.18;
+}
+
+.rps-definitions {
+  display: grid;
+  gap: 3px;
+  margin: 4px 0 5px;
+  padding: 7px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.rps-definitions > div {
+  min-width: 0;
+  font-size: 11.5pt;
+  line-height: 1.25;
+}
+
+.rps-definitions .katex {
+  font-size: 0.82em;
+}
+
+.timeline-card .rps-meaning {
+  margin: 4px 0;
+  font-size: 10.5pt;
+  line-height: 1.18;
+}
+
+.takeaway {
+  box-sizing: border-box;
+  margin-top: 12px;
+  padding: 10px 15px;
+  border-left: 6px solid var(--teal);
+  background: var(--pale-teal);
+  color: var(--ink);
+  font-size: 16pt;
+  font-weight: 650;
+  line-height: 1.22;
+}
+
+.warning-strip {
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 8px 13px;
+  border-left: 5px solid var(--amber);
+  background: var(--pale-amber);
+  color: var(--ink);
+  font-size: 13pt;
+}
+
+.plotly-shell {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.plotly-shell.compact {
+  height: 565px;
+}
+
+.plotly-shell.result {
+  height: 610px;
+}
+
+.plotly-shell.error {
+  height: 620px;
+}
+
+.plotly-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.plotly-stack {
+  display: grid;
+}
+
+.plotly-stack > * {
+  grid-area: 1 / 1;
+}
+
+.plotly-stack .fragment {
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+}
+
+.plotly-stack .fragment.visible {
+  opacity: 1;
+}
+
+.marker-state {
+  position: relative;
+}
+
+.overlay-takeaway {
+  position: absolute;
+  right: 28px;
+  bottom: 18px;
+  left: 28px;
+  box-sizing: border-box;
+  padding: 8px 13px;
+  border-left: 6px solid var(--teal);
+  background: rgba(228, 241, 240, 0.96);
+  color: var(--ink);
+  font-size: 13pt;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.figure-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11pt;
+}
+
+.equation-band {
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.equation-band .katex {
+  font-size: 1.08em;
+}
+
+.dominant-number {
+  color: var(--coral);
+  font-size: 45pt;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.small-label {
+  color: var(--muted);
+  font-size: 11.5pt;
+}
+
+.geometry-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr 210px;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.geometry-strip.line-length-geometry {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 260px;
+  margin-bottom: 16px;
+}
+
+.line-length-geometry .slice-card {
+  min-width: 0;
+  min-height: 170px;
+  padding-top: 14px;
+}
+
+.line-length-geometry .ratio-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+.ratio-card .dominant-number {
+  font-size: 40pt;
+}
+
+.length-ratio {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5pt;
+}
+
+.length-ratio strong {
+  flex: 0 0 auto;
+  color: var(--steel);
+  font-size: 17pt;
+}
+
+.slice-card {
+  box-sizing: border-box;
+  min-height: 114px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.slice-line {
+  position: relative;
+  height: 24px;
+  margin: 20px 8px 10px;
+}
+
+.slice-line::before,
+.slice-line::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--steel);
+}
+
+.slice-line.split::before {
+  left: 2%;
+  width: 35%;
+}
+
+.slice-line.split::after {
+  right: 2%;
+  width: 35%;
+}
+
+.slice-line.single::before {
+  left: 2%;
+  width: 96%;
+}
+
+.slice-line.single::after {
+  display: none;
+}
+
+.pipeline {
+  display: grid;
+  grid-template-columns: 1fr 42px 1fr 42px 1.25fr 42px 1fr;
+  gap: 6px;
+  align-items: center;
+}
+
+.line-length-pipeline .formula-card {
+  min-height: 184px;
+}
+
+.pipeline .arrow,
+.response-flow .arrow {
+  color: var(--muted);
+  font-size: 28pt;
+  text-align: center;
+}
+
+.formula-card {
+  min-height: 128px;
+  text-align: center;
+}
+
+.formula-card.physical {
+  border-top: 5px solid var(--coral);
+}
+
+.formula-card.reference {
+  border-top: 5px solid var(--teal);
+}
+
+.formula-card.raw {
+  border-top: 5px solid var(--steel);
+}
+
+.formula-card .katex {
+  font-size: 0.9em;
+}
+
+.expanded-equations {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 12px;
+}
+
+.expanded-equations > div {
+  padding: 9px 12px;
+  border: 2px solid var(--pale-coral);
+  border-radius: 6px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.line-length-expanded > div {
+  display: flex;
+  min-height: 110px;
+  align-items: center;
+  justify-content: center;
+}
+
+.line-length-takeaway {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+}
+
+.ratio-table,
+.compact-table {
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  background: #ffffff;
+}
+
+.ratio-table th,
+.ratio-table td,
+.compact-table th,
+.compact-table td {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14pt;
+}
+
+.ratio-table th,
+.compact-table th {
+  color: var(--muted);
+  font-size: 11.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.ratio-table tr.emphasis td,
+.compact-table tr.emphasis td {
+  background: var(--pale-teal);
+  color: var(--teal);
+  font-weight: 750;
+}
+
+.stage-card {
+  min-height: 185px;
+  border-top: 6px solid var(--steel);
+}
+
+.stage-card h3 {
+  min-height: 38px;
+  margin-top: 8px;
+  line-height: 1.3;
+}
+
+.stage-card.scaled {
+  border-top-color: var(--coral);
+}
+
+.stage-card.exact {
+  border-top-color: var(--amber);
+}
+
+.stage-card.learned {
+  border-top-color: var(--teal);
+}
+
+.stage-card .ratio {
+  margin-top: 10px;
+  font-size: 27pt;
+  font-weight: 760;
+}
+
+.rule-chip {
+  display: inline-block;
+  min-width: 110px;
+  padding: 5px 9px;
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 11pt;
+  font-weight: 700;
+  text-align: center;
+}
+
+.rule-chip.geometry {
+  background: var(--amber);
+}
+
+.rule-chip.mismatch {
+  background: var(--coral);
+}
+
+.rule-chip.weak {
+  background: var(--teal);
+}
+
+.series-key {
+  display: inline-block;
+  margin-right: 7px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 10.5pt;
+  font-weight: 700;
+}
+
+.series-key.poisson {
+  background: var(--teal);
+}
+
+.series-key.cdr {
+  background: var(--coral);
+}
+
+.result-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.result-side .metric-card {
+  min-height: 82px;
+}
+
+.result-formula-card {
+  box-sizing: border-box;
+  min-height: 76px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--teal);
+  border-radius: 5px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.result-formula-card .katex-display {
+  margin: 0;
+}
+
+.result-formula-card .katex {
+  font-size: 0.76em;
+}
+
+.operator-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 11px;
+}
+
+.operator-strip > div {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #ffffff;
+  text-align: center;
+  font-size: 13pt;
+}
+
+.response-problem-grid {
+  display: grid;
+  grid-template-columns: 0.9fr 1fr 1.1fr;
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.response-card {
+  box-sizing: border-box;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-top: 6px solid var(--steel);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.response-problem-grid .response-card {
+  min-height: 422px;
+  min-width: 0;
+}
+
+.response-card.source-space {
+  border-top-color: var(--coral);
+}
+
+.response-card.operator-space,
+.response-card.gain-definition {
+  border-top-color: var(--steel);
+}
+
+.response-card.consequence,
+.response-card.gain-contract,
+.response-card.closed-form {
+  border-top-color: var(--teal);
+}
+
+.response-card.consequence .katex {
+  font-size: 0.8em;
+}
+
+.response-card h3 {
+  margin: 12px 0 20px;
+  font-size: 20pt;
+  line-height: 1.16;
+}
+
+.response-card p {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 13pt;
+  line-height: 1.28;
+}
+
+.response-card .katex-display {
+  margin: 0.72em 0;
+}
+
+.response-card .katex {
+  font-size: 0.88em;
+}
+
+.response-equation {
+  font-size: 17pt;
+  text-align: center;
+}
+
+.response-equation.compact {
+  font-size: 15pt;
+}
+
+.response-equation.balance {
+  font-size: 15pt;
+}
+
+.response-equation math[display="block"] {
+  margin: 0.48em auto;
+}
+
+.response-factor-list {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.response-factor {
+  grid-column: span 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border-radius: 4px;
+  background: var(--pale-steel);
+  color: var(--steel);
+  font-size: 11pt;
+  font-weight: 700;
+  line-height: 1.08;
+  text-align: center;
+}
+
+.response-factor.context {
+  grid-column: span 3;
+  background: var(--pale-amber);
+  color: #71521a;
+}
+
+.response-question-takeaway {
+  margin-top: 18px;
+}
+
+.response-gain-strip {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.response-gain-strip .response-card {
+  min-height: 196px;
+}
+
+.response-gain-strip .katex {
+  font-size: 0.86em;
+}
+
+.response-equation.column-gain {
+  margin-top: 10px;
+  font-size: 13pt;
+}
+
+.response-equation.column-gain math[display="block"] {
+  margin: 0.34em auto;
+}
+
+.response-equation.global-response-system {
+  margin: 2px 0;
+  font-size: 12.5pt;
+}
+
+.response-contract-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12pt;
+  line-height: 1.24;
+}
+
+.response-contract-row:last-child {
+  border-bottom: 0;
+}
+
+.response-contract-row strong {
+  color: var(--teal);
+}
+
+.response-projection-grid {
+  display: grid;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.response-projection-grid .response-card {
+  min-height: 252px;
+}
+
+.response-projection-grid .katex {
+  font-size: 0.82em;
+}
+
+.response-intuition-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.response-intuition-strip > div {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--pale-teal);
+  text-align: center;
+}
+
+.response-intuition-strip strong,
+.response-intuition-strip span {
+  display: block;
+}
+
+.response-intuition-strip strong {
+  margin-bottom: 3px;
+  color: var(--teal);
+  font-size: 15pt;
+}
+
+.response-intuition-strip span {
+  color: var(--muted);
+  font-size: 11.5pt;
+}
+
+.backup-label {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 11pt;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.fragment.fade-in-then-semi-out.current-fragment {
+  opacity: 1;
+}
+
+.reveal .notes {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .reveal h2 {
+    font-size: 32pt;
+  }
+
+  .reveal p,
+  .reveal li,
+  .reveal td,
+  .reveal th {
+    font-size: 16pt;
+  }
+}

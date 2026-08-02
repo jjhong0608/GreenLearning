@@ -477,6 +477,71 @@ class Axis1DTrunkConfig:
 
 
 @dataclass
+class ColumnDiagonalGreenResponseProjectionConfig:
+    """Column-diagonal Green-response projection settings."""
+
+    gain_squared_eps: float = 1.0e-12
+    gain_exponent: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.gain_squared_eps, (int, float)) or isinstance(
+            self.gain_squared_eps,
+            bool,
+        ):
+            raise TypeError(
+                "balance_projection.column_diagonal_green_response."
+                "gain_squared_eps must be numeric."
+            )
+        if (
+            not math.isfinite(float(self.gain_squared_eps))
+            or float(self.gain_squared_eps) <= 0.0
+        ):
+            raise ValueError(
+                "balance_projection.column_diagonal_green_response."
+                "gain_squared_eps must be finite and positive."
+            )
+        if not isinstance(self.gain_exponent, (int, float)) or isinstance(
+            self.gain_exponent,
+            bool,
+        ):
+            raise TypeError(
+                "balance_projection.column_diagonal_green_response."
+                "gain_exponent must be numeric."
+            )
+        if (
+            not math.isfinite(float(self.gain_exponent))
+            or float(self.gain_exponent) < 0.0
+            or float(self.gain_exponent) > 1.0
+        ):
+            raise ValueError(
+                "balance_projection.column_diagonal_green_response."
+                "gain_exponent must be finite and in [0, 1]."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ColumnDiagonalGreenResponseProjectionConfig | dict[str, Any] | None,
+    ) -> ColumnDiagonalGreenResponseProjectionConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"gain_squared_eps", "gain_exponent"})
+            if unknown:
+                raise TypeError(
+                    "balance_projection.column_diagonal_green_response has unknown "
+                    f"keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError(
+            "balance_projection.column_diagonal_green_response must be an object."
+        )
+
+
+@dataclass
 class BalanceProjectionConfig:
     """CouplingNet output balance projection settings."""
 
@@ -486,12 +551,21 @@ class BalanceProjectionConfig:
         "smooth_mask",
         "response_space",
         "physical_symmetric",
+        "column_diagonal_green_response",
     ] = "symmetric"
     mask: Literal["quadratic", "sin"] = "quadratic"
+    column_diagonal_green_response: (
+        ColumnDiagonalGreenResponseProjectionConfig | dict[str, Any]
+    ) = field(default_factory=ColumnDiagonalGreenResponseProjectionConfig)
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
             raise TypeError("balance_projection.enabled must be a boolean.")
+        self.column_diagonal_green_response = (
+            ColumnDiagonalGreenResponseProjectionConfig.from_raw(
+                self.column_diagonal_green_response
+            )
+        )
         mode = str(self.mode)
         if mode in {"geometry_weighted", "response_preconditioned"}:
             raise ValueError(
@@ -499,15 +573,23 @@ class BalanceProjectionConfig:
                 "complex output-contract path. Retrain ComplexCouplingNet "
                 "with mode='physical_symmetric'."
             )
+        if mode in {"row_norm", "green_response_row_norm", "row_norm_green_response"}:
+            raise ValueError(
+                "Row-norm Green-response projection is not supported. Use "
+                "mode='column_diagonal_green_response', which measures source-column "
+                "response cost."
+            )
         if mode not in {
             "symmetric",
             "smooth_mask",
             "response_space",
             "physical_symmetric",
+            "column_diagonal_green_response",
         }:
             raise ValueError(
                 "balance_projection.mode must be 'symmetric', 'smooth_mask', "
-                "'response_space', or 'physical_symmetric'."
+                "'response_space', 'physical_symmetric', or "
+                "'column_diagonal_green_response'."
             )
         if self.mask not in {"quadratic", "sin"}:
             raise ValueError("balance_projection.mask must be 'quadratic' or 'sin'.")
@@ -530,6 +612,7 @@ class BalanceProjectionConfig:
                         "smooth_mask",
                         "response_space",
                         "physical_symmetric",
+                        "column_diagonal_green_response",
                     ],
                     raw,
                 ),
@@ -551,6 +634,7 @@ class BalanceProjectionConfig:
                     "enabled",
                     "mode",
                     "mask",
+                    "column_diagonal_green_response",
                 }
             )
             if unknown:
@@ -560,6 +644,7 @@ class BalanceProjectionConfig:
             enabled = data.get("enabled", True)
             mode = data.get("mode", "symmetric")
             mask = data.get("mask", "quadratic")
+            column_diagonal = data.get("column_diagonal_green_response")
             if not isinstance(enabled, bool):
                 raise TypeError("balance_projection.enabled must be a boolean.")
             if not isinstance(mode, str):
@@ -574,10 +659,16 @@ class BalanceProjectionConfig:
                         "smooth_mask",
                         "response_space",
                         "physical_symmetric",
+                        "column_diagonal_green_response",
                     ],
                     mode,
                 ),
                 mask=cast(Literal["quadratic", "sin"], mask),
+                column_diagonal_green_response=(
+                    ColumnDiagonalGreenResponseProjectionConfig.from_raw(
+                        column_diagonal
+                    )
+                ),
             )
         raise TypeError("balance_projection must be a string or an object.")
 
@@ -669,6 +760,101 @@ class ComplexPreProjectionFusionConfig:
 
 
 @dataclass
+class ComplexCrossAxisReconstructionConfig:
+    """Optional final-solution blend for complex CouplingNet inference."""
+
+    enabled: bool = False
+    mode: Literal["local_weak_residual_reliability"] = "local_weak_residual_reliability"
+    gamma: float = 0.5
+    smoothing_steps: int = 2
+    smoothing_relaxation: float = 0.5
+    relative_floor: float = 0.1
+    eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        prefix = "cross_axis_reconstruction"
+        if not isinstance(self.enabled, bool):
+            raise TypeError(f"{prefix}.enabled must be a boolean.")
+        if not isinstance(self.mode, str):
+            raise TypeError(f"{prefix}.mode must be a string.")
+        if self.mode != "local_weak_residual_reliability":
+            raise ValueError(
+                f"{prefix}.mode must be 'local_weak_residual_reliability'. "
+                "Geometry-only and mismatch-detected reconstruction modes are not "
+                "available in production inference."
+            )
+        if isinstance(self.gamma, bool) or not isinstance(self.gamma, (int, float)):
+            raise TypeError(f"{prefix}.gamma must be numeric.")
+        if not math.isfinite(float(self.gamma)) or not 0.0 <= float(self.gamma) <= 1.0:
+            raise ValueError(f"{prefix}.gamma must be finite and in [0, 1].")
+        if (
+            isinstance(self.smoothing_steps, bool)
+            or not isinstance(self.smoothing_steps, int)
+            or self.smoothing_steps < 0
+        ):
+            raise ValueError(
+                f"{prefix}.smoothing_steps must be a non-negative integer."
+            )
+        if isinstance(self.smoothing_relaxation, bool) or not isinstance(
+            self.smoothing_relaxation,
+            (int, float),
+        ):
+            raise TypeError(f"{prefix}.smoothing_relaxation must be numeric.")
+        if not math.isfinite(float(self.smoothing_relaxation)) or not (
+            0.0 < float(self.smoothing_relaxation) <= 1.0
+        ):
+            raise ValueError(
+                f"{prefix}.smoothing_relaxation must be finite and in (0, 1]."
+            )
+        if isinstance(self.relative_floor, bool) or not isinstance(
+            self.relative_floor,
+            (int, float),
+        ):
+            raise TypeError(f"{prefix}.relative_floor must be numeric.")
+        if (
+            not math.isfinite(float(self.relative_floor))
+            or float(self.relative_floor) < 0.0
+        ):
+            raise ValueError(
+                f"{prefix}.relative_floor must be finite and non-negative."
+            )
+        if isinstance(self.eps, bool) or not isinstance(self.eps, (int, float)):
+            raise TypeError(f"{prefix}.eps must be numeric.")
+        if not math.isfinite(float(self.eps)) or float(self.eps) <= 0.0:
+            raise ValueError(f"{prefix}.eps must be finite and positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexCrossAxisReconstructionConfig | dict[str, Any] | None,
+    ) -> ComplexCrossAxisReconstructionConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "mode",
+                    "gamma",
+                    "smoothing_steps",
+                    "smoothing_relaxation",
+                    "relative_floor",
+                    "eps",
+                }
+            )
+            if unknown:
+                raise TypeError(
+                    f"cross_axis_reconstruction has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("cross_axis_reconstruction must be an object.")
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -687,6 +873,7 @@ class CouplingModelConfig:
             "smooth_mask",
             "response_space",
             "physical_symmetric",
+            "column_diagonal_green_response",
         ]
         | dict[str, Any]
     ) = field(default_factory=BalanceProjectionConfig)
@@ -718,6 +905,9 @@ class CouplingModelConfig:
     pre_projection_fusion: ComplexPreProjectionFusionConfig | dict[str, Any] = field(
         default_factory=ComplexPreProjectionFusionConfig
     )
+    cross_axis_reconstruction: ComplexCrossAxisReconstructionConfig | dict[str, Any] = (
+        field(default_factory=ComplexCrossAxisReconstructionConfig)
+    )
 
     def __post_init__(self) -> None:
         self.balance_projection = BalanceProjectionConfig.from_raw(
@@ -727,6 +917,9 @@ class CouplingModelConfig:
         self.axis_1d_trunk = Axis1DTrunkConfig.from_raw(self.axis_1d_trunk)
         self.pre_projection_fusion = ComplexPreProjectionFusionConfig.from_raw(
             self.pre_projection_fusion
+        )
+        self.cross_axis_reconstruction = ComplexCrossAxisReconstructionConfig.from_raw(
+            self.cross_axis_reconstruction
         )
 
 

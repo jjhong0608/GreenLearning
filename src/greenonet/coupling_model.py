@@ -10,6 +10,7 @@ from greenonet.activations import RationalActivation
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
@@ -321,8 +322,20 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
                 "pre_projection_fusion.enabled=true is available only for "
                 "ComplexCouplingNet."
             )
+        cross_axis_reconstruction = ComplexCrossAxisReconstructionConfig.from_raw(
+            config.cross_axis_reconstruction
+        )
+        if cross_axis_reconstruction.enabled:
+            raise ValueError(
+                "cross_axis_reconstruction.enabled=true is available only for "
+                "ComplexCouplingNet."
+            )
         balance_projection = BalanceProjectionConfig.from_raw(config.balance_projection)
-        if balance_projection.mode in {"response_space", "physical_symmetric"}:
+        if balance_projection.mode in {
+            "response_space",
+            "physical_symmetric",
+            "column_diagonal_green_response",
+        }:
             raise ValueError(
                 f"balance_projection.mode='{balance_projection.mode}' is available "
                 "only for ComplexCouplingNet."

@@ -1,0 +1,512 @@
+{
+  "assets": {
+    "annulus_transition_sample47_error_matrix.html": {
+      "field_keys": [
+        "phi_error",
+        "psi_error",
+        "u_phi_error",
+        "u_pred_error",
+        "u_psi_error"
+      ],
+      "generated_sha256": "df11990f56a4273f1fe6717f67f693ef7634122f7155d3a4c3ae450f8300ed5c",
+      "generated_size_bytes": 2771784,
+      "sample_id": 47,
+      "slides": [
+        1
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling/artifacts/data/selected_raw_arrays.npz"
+      ]
+    },
+    "annulus_transition_sample47_error_matrix_marked.html": {
+      "animation_state": "cardinal transition markers visible",
+      "field_keys": [
+        "phi_error",
+        "psi_error",
+        "u_phi_error",
+        "u_pred_error",
+        "u_psi_error"
+      ],
+      "generated_sha256": "96af6cd56df3573d572465626149fef830dc921eb002f7f16baa15229b58b318",
+      "generated_size_bytes": 2772323,
+      "sample_id": 47,
+      "slides": [
+        1
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling/artifacts/data/selected_raw_arrays.npz"
+      ]
+    },
+    "cdr_weak_result_errors_sample9.html": {
+      "error_convention": "signed_difference",
+      "field_keys": [
+        "phi_error",
+        "psi_error",
+        "u_phi",
+        "u_psi",
+        "sol",
+        "u_weak_residual_reliability"
+      ],
+      "final_prediction_contract": "u_weak_residual_reliability",
+      "generated_sha256": "bd5c93c7bc76a74d68a53f4b70e08b4e72c729659f183220bf4d96dd4dbce146",
+      "generated_size_bytes": 2771499,
+      "sample_id": 9,
+      "slides": [
+        14
+      ],
+      "source_files": [
+        "checkpoints/annulus_CDR/coupling5/artifacts/data/selected_raw_arrays.npz",
+        "checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz"
+      ]
+    },
+    "cdr_weak_result_fields_sample9.html": {
+      "field_keys": [
+        "rhs",
+        "phi",
+        "psi",
+        "sol",
+        "u_phi",
+        "u_psi",
+        "u_weak_residual_reliability",
+        "weak_w_phi",
+        "a",
+        "bx",
+        "by",
+        "b_magnitude",
+        "c",
+        "quiver_indices"
+      ],
+      "final_prediction_contract": "u_weak_residual_reliability",
+      "generated_sha256": "88b2c9d1db0fc94ef5dc87390bccbf90dd89198ad2c34eaa73ee3b41fd82366b",
+      "generated_size_bytes": 6221865,
+      "sample_id": 9,
+      "slides": [
+        13
+      ],
+      "source_files": [
+        "checkpoints/annulus_CDR/coupling5/artifacts/data/selected_raw_arrays.npz",
+        "checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz",
+        "checkpoints/annulus_CDR/coupling5/artifacts/data/coefficient_fields.npz"
+      ]
+    },
+    "geometry_c2_method_sample0.html": {
+      "construction": "known topology compact C2",
+      "field_keys": [
+        "distance_phi",
+        "distance_psi",
+        "influence_phi",
+        "influence_psi",
+        "theta",
+        "w_phi",
+        "w_psi"
+      ],
+      "generated_sha256": "5daa2531750b5020fd5d307eabec631ab82d62f9bf79c45d9d045dc6ace29abc",
+      "generated_size_bytes": 2056476,
+      "sample_id": 0,
+      "slides": [
+        6
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/compact_c2_cross_axis_blend/data/selected_fixed_smooth_blend_arrays.npz",
+        "checkpoints/Annulus_poisson/coupling15/compact_c2_cross_axis_blend/summary.json"
+      ]
+    },
+    "mismatch_seam_c2_method_sample0.html": {
+      "construction": "prediction mismatch detected seam compact C2",
+      "field_keys": [
+        "u_phi",
+        "u_psi",
+        "mismatch",
+        "x_edge_profile",
+        "y_edge_profile",
+        "x_seam_coordinates",
+        "y_seam_coordinates",
+        "theta",
+        "w_phi"
+      ],
+      "generated_sha256": "248118f41ae0926f2a09e87d485d518a02b2bd57481e4b0407ee04ebc1c6fc80",
+      "generated_size_bytes": 1657847,
+      "sample_id": 0,
+      "slides": [
+        7
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz",
+        "data/geometry/annulus_02_05_1_128.npz",
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/summary.json"
+      ]
+    },
+    "poisson_cdr_rule_comparison.html": {
+      "field_keys": [
+        "rel_sol_change_vs_equal"
+      ],
+      "generated_sha256": "28c3dca79c3b89dd6671fd255bc669e4e2e19ba78df6064c2b38bb319904c20d",
+      "generated_size_bytes": 8511,
+      "sample_id": null,
+      "slides": [
+        10
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/metrics/per_sample_weak_residual_blend_comparison.csv",
+        "checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison/metrics/per_sample_weak_residual_blend_comparison.csv"
+      ]
+    },
+    "poisson_four_way_rel_sol.html": {
+      "field_keys": [
+        "equal_mean_rel_sol",
+        "geometry_c2_rel_sol",
+        "mismatch_seam_c2_rel_sol",
+        "weak_residual_reliability_rel_sol"
+      ],
+      "generated_sha256": "7d406c66b7edf0981c014776c6e0bdfd6f9e032b6c13572a0939fa40ad46374e",
+      "generated_size_bytes": 12968,
+      "sample_id": null,
+      "slides": [
+        9
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/metrics/per_sample_weak_residual_blend_comparison.csv"
+      ]
+    },
+    "poisson_weak_result_errors_sample0.html": {
+      "error_convention": "signed_difference",
+      "field_keys": [
+        "phi_error",
+        "psi_error",
+        "u_phi",
+        "u_psi",
+        "sol",
+        "u_weak_residual_reliability"
+      ],
+      "final_prediction_contract": "u_weak_residual_reliability",
+      "generated_sha256": "19b9653e174a567c90b3c5fee9e0f56ff4f4731ff37aa76e75d8a4bec8d96ba2",
+      "generated_size_bytes": 2763293,
+      "sample_id": 0,
+      "slides": [
+        12
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/artifacts/data/selected_raw_arrays.npz",
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz"
+      ]
+    },
+    "poisson_weak_result_fields_sample0.html": {
+      "field_keys": [
+        "rhs",
+        "phi",
+        "psi",
+        "sol",
+        "u_phi",
+        "u_psi",
+        "u_weak_residual_reliability",
+        "weak_w_phi"
+      ],
+      "final_prediction_contract": "u_weak_residual_reliability",
+      "generated_sha256": "f15b0f44b4a05b11b5426a22a6316f5916ba5633b18fd97749dfced7a8983424",
+      "generated_size_bytes": 4469570,
+      "sample_id": 0,
+      "slides": [
+        11
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/artifacts/data/selected_raw_arrays.npz",
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz"
+      ]
+    },
+    "poisson_weak_sample47_inset.html": {
+      "field_keys": [
+        "weak_w_phi",
+        "u_equal_mean",
+        "u_weak_residual_reliability",
+        "sol"
+      ],
+      "generated_sha256": "0862d4b994752695f5e097d22e045889d7109b483a5d6a4a1e7714c8ef070079",
+      "generated_size_bytes": 1666023,
+      "sample_id": 47,
+      "slides": [
+        9
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz"
+      ]
+    },
+    "weak_residual_reliability_method_sample0.html": {
+      "construction": "local full PDE weak residual reliability",
+      "field_keys": [
+        "weak_phi_indicator",
+        "weak_psi_indicator",
+        "weak_theta",
+        "weak_w_phi",
+        "weak_w_psi"
+      ],
+      "generated_sha256": "1d439a67c5b03de192fc083d9cc8fbf14c2a3b4895160860741d4b62c3067109",
+      "generated_size_bytes": 2142291,
+      "sample_id": 0,
+      "slides": [
+        8
+      ],
+      "source_files": [
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz",
+        "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/summary.json"
+      ]
+    }
+  },
+  "builder_version": 3,
+  "cdr": {
+    "coefficient_statistics": {
+      "a": {
+        "max": 1.5,
+        "mean": 1.0,
+        "min": 0.5
+      },
+      "b_magnitude": {
+        "max": 0.3919469665226594,
+        "mean": 0.25073055745179446,
+        "min": 0.00014885447312350594
+      },
+      "bx": {
+        "max": 0.39160245757068507,
+        "mean": 0.0,
+        "min": -0.39160245757068507
+      },
+      "by": {
+        "max": 0.39160245757068507,
+        "mean": 0.0,
+        "min": -0.39160245757068507
+      },
+      "c": {
+        "max": 0.5982118697983878,
+        "mean": 0.4402984387248109,
+        "min": 0.2503011359487069
+      }
+    },
+    "comparison": {
+      "estimators": {
+        "equal_mean": {
+          "mean_rel_sol": 0.05156246100856862,
+          "median_rel_sol": 0.0504255777052553,
+          "rel_sol_change_vs_equal": 0.0,
+          "trace_jump_rms_change_vs_equal": 0.0,
+          "transition_rms_change_vs_equal": 0.0,
+          "win_count_vs_equal": 0
+        },
+        "geometry_c2": {
+          "mean_rel_sol": 0.05054176965721961,
+          "median_rel_sol": 0.04923659079224215,
+          "rel_sol_change_vs_equal": -0.01979524117709186,
+          "trace_jump_rms_change_vs_equal": -0.44956351168579345,
+          "transition_rms_change_vs_equal": -0.042246681485008764,
+          "win_count_vs_equal": 36
+        },
+        "mismatch_seam_c2": {
+          "mean_rel_sol": 0.04943156562240727,
+          "median_rel_sol": 0.0460767960887545,
+          "rel_sol_change_vs_equal": -0.04132648722502297,
+          "trace_jump_rms_change_vs_equal": -0.22425231685562363,
+          "transition_rms_change_vs_equal": -0.07391487669862817,
+          "win_count_vs_equal": 41
+        },
+        "weak_residual_reliability": {
+          "mean_rel_sol": 0.045647218381933176,
+          "median_rel_sol": 0.042059085652222244,
+          "rel_sol_change_vs_equal": -0.1147199437523444,
+          "trace_jump_rms_change_vs_equal": -0.48784641956296826,
+          "transition_rms_change_vs_equal": -0.09870283732243534,
+          "win_count_vs_equal": 49
+        }
+      },
+      "num_samples": 50
+    },
+    "quiver_point_count": 309,
+    "rel_flux": 0.2014731929882452,
+    "representative_sample": {
+      "balance_max_abs": 4.0245584642661925e-16,
+      "phi_error_rms": 0.12124607569374901,
+      "phi_relative_diagnostic": 0.1858635166100055,
+      "psi_error_rms": 0.12161385805405836,
+      "psi_relative_diagnostic": 0.21708286936648527,
+      "sample_id": 9.0,
+      "u_phi_error_rms": 0.0006756256787151016,
+      "u_phi_rel_sol": 0.11989277142696539,
+      "u_psi_error_rms": 0.0005908865163417355,
+      "u_psi_rel_sol": 0.10485543145394373,
+      "weak_error_rms": 0.0002577296476707944,
+      "weak_rel_sol": 0.04573526837658398
+    }
+  },
+  "final_prediction_contract": "u_weak_residual_reliability; standard artifact u_pred is equal mean",
+  "legacy_sample_47": {
+    "field_rms": {
+      "phi_error": 0.10714839440465772,
+      "psi_error": 0.1067361167119476,
+      "u_phi_error": 0.0005189851440751877,
+      "u_pred_error": 0.0002902151070055124,
+      "u_psi_error": 0.0004923510499344179
+    },
+    "sample_id": 47,
+    "solution_error_limit": 0.002403450119946706,
+    "source_error_limit": 1.2686799967180011
+  },
+  "length_response_diagnostic": {
+    "source_files": [
+      "checkpoints/Annulus_poisson/coupling4/length_response_diagnostics/summary.json",
+      "checkpoints/Annulus_poisson/coupling4/length_response_diagnostics/diagnosis_report.md"
+    ],
+    "transition": {
+      "cardinal_radius": 0.015625,
+      "horizontal_length_jump_ratio": 2.190077501195546,
+      "horizontal_length_squared_jump_ratio": 4.796439461242927,
+      "horizontal_one_segment_coordinate": 0.203125,
+      "horizontal_split_coordinate": 0.1953125,
+      "inner_radius": 0.2,
+      "vertical_length_jump_ratio": 2.190077501195546,
+      "vertical_length_squared_jump_ratio": 4.796439461242927,
+      "vertical_one_segment_coordinate": 0.203125,
+      "vertical_split_coordinate": 0.1953125
+    },
+    "unit_physical_equivalence": {
+      "max_absolute_difference": 1.5612511283791264e-17,
+      "max_relative_difference": 7.178477553117139e-16,
+      "passed": true,
+      "tolerance": 1e-10
+    }
+  },
+  "method_detail_contract": {
+    "geometry_c2": "known topology; sample independent",
+    "mismatch_seam_c2": "u_phi-u_psi only; no reference target",
+    "sample_id": 0,
+    "weak_residual_reliability": "local full PDE defect; no reference target or global solve"
+  },
+  "offline_plotly": true,
+  "plotly_bundle": "plotly.min.js",
+  "plotly_bundle_provenance": {
+    "sha256": "28498fa2ea4ba45c8633218088eb223436ca0ca02fc57027fd6fa841ad1901f9",
+    "size_bytes": 4847499
+  },
+  "poisson": {
+    "comparison": {
+      "estimators": {
+        "equal_mean": {
+          "mean_rel_sol": 0.05569824639926191,
+          "median_rel_sol": 0.053388203896450104,
+          "rel_sol_change_vs_equal": 0.0,
+          "trace_jump_rms_change_vs_equal": 0.0,
+          "transition_rms_change_vs_equal": 0.0,
+          "win_count_vs_equal": 0
+        },
+        "geometry_c2": {
+          "mean_rel_sol": 0.05470165327384828,
+          "median_rel_sol": 0.0531650714172949,
+          "rel_sol_change_vs_equal": -0.017892719965898807,
+          "trace_jump_rms_change_vs_equal": -0.4530831308132591,
+          "transition_rms_change_vs_equal": -0.034122026247537796,
+          "win_count_vs_equal": 35
+        },
+        "mismatch_seam_c2": {
+          "mean_rel_sol": 0.05312817594754923,
+          "median_rel_sol": 0.050847470635352096,
+          "rel_sol_change_vs_equal": -0.04614275345923158,
+          "trace_jump_rms_change_vs_equal": -0.23552722938906634,
+          "transition_rms_change_vs_equal": -0.06953922112633593,
+          "win_count_vs_equal": 44
+        },
+        "weak_residual_reliability": {
+          "mean_rel_sol": 0.0486057936124251,
+          "median_rel_sol": 0.04822651893284325,
+          "rel_sol_change_vs_equal": -0.12733709309258967,
+          "trace_jump_rms_change_vs_equal": -0.4827953566184585,
+          "transition_rms_change_vs_equal": -0.08359454746730965,
+          "win_count_vs_equal": 50
+        }
+      },
+      "num_samples": 50
+    },
+    "rel_flux": 0.1839824372887029,
+    "representative_sample": {
+      "balance_max_abs": 2.220446049250313e-16,
+      "phi_error_rms": 0.07224871059672348,
+      "phi_relative_diagnostic": 0.14910622602035387,
+      "psi_error_rms": 0.07269581239425946,
+      "psi_relative_diagnostic": 0.21885864855705195,
+      "sample_id": 0.0,
+      "u_phi_error_rms": 0.0005141675887957607,
+      "u_phi_rel_sol": 0.12465236797971886,
+      "u_psi_error_rms": 0.00035829748181335786,
+      "u_psi_rel_sol": 0.08686395354831739,
+      "weak_error_rms": 0.0001989916458709952,
+      "weak_rel_sol": 0.04824259717361187
+    }
+  },
+  "project_root": "/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry",
+  "reference_fields_role": "evaluation_only",
+  "source_provenance": {
+    "checkpoints/Annulus_poisson/coupling/artifacts/data/selected_raw_arrays.npz": {
+      "sha256": "8210ad20cf56368c4fecd331a61f42b71ac5c1fa71899746b19556dc23f01b60",
+      "size_bytes": 8225982
+    },
+    "checkpoints/Annulus_poisson/coupling/artifacts/metrics/per_sample_metrics.csv": {
+      "sha256": "22408e928d7d3fae540652693e02ca2c30d13f1f3520e2e5116e23ab5f1711fe",
+      "size_bytes": 5183
+    },
+    "checkpoints/Annulus_poisson/coupling15/artifacts/data/selected_raw_arrays.npz": {
+      "sha256": "57b93b8eab946ca73b173927c7f7377bad9eded66eb555fe8485f101de517480",
+      "size_bytes": 17521852
+    },
+    "checkpoints/Annulus_poisson/coupling15/artifacts/metrics/per_sample_metrics.csv": {
+      "sha256": "8ca739b7f090e3c12a319972561cf6346ee693eef1ff5940e03cdd27c4d2143e",
+      "size_bytes": 9727
+    },
+    "checkpoints/Annulus_poisson/coupling15/compact_c2_cross_axis_blend/data/selected_fixed_smooth_blend_arrays.npz": {
+      "sha256": "c0247e5d256d2fd0e1af6edfe89d8966eedddd8b085237d7eda56d9607868b82",
+      "size_bytes": 4343998
+    },
+    "checkpoints/Annulus_poisson/coupling15/compact_c2_cross_axis_blend/summary.json": {
+      "sha256": "68795fda506be47842d3268d913839bc1f5526b6def34ed9684fd23f15672440",
+      "size_bytes": 6212
+    },
+    "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz": {
+      "sha256": "d55d713de079a98004e6e602cf4f95e4338e8fc552c194dd094bb6a7f322714b",
+      "size_bytes": 10191330
+    },
+    "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/metrics/per_sample_weak_residual_blend_comparison.csv": {
+      "sha256": "3e80fea49a34924bbf8fea4da298088c42f09c8e72b6d5f64d8cbaac7e7c9568",
+      "size_bytes": 26430
+    },
+    "checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/summary.json": {
+      "sha256": "d059ccc9759e6080c7a5c9fce172421cfc5c3a98fc13f5da818b13713ffa18e2",
+      "size_bytes": 5136
+    },
+    "checkpoints/Annulus_poisson/coupling4/length_response_diagnostics/diagnosis_report.md": {
+      "sha256": "7e98671f2c3c4083f5f35f5383cfe8b5d7128bd8d0a82a178a20a3fc35eb3a53",
+      "size_bytes": 4806
+    },
+    "checkpoints/Annulus_poisson/coupling4/length_response_diagnostics/summary.json": {
+      "sha256": "c6fc64aca46fe17855a1a2933846532f699ba461fb1cc29693cbba9535dcb96c",
+      "size_bytes": 4669
+    },
+    "checkpoints/annulus_CDR/coupling5/artifacts/data/coefficient_fields.npz": {
+      "sha256": "359176973d1b88f535639c59481c9a32538e17648cbebff9229e40b339355f51",
+      "size_bytes": 608332
+    },
+    "checkpoints/annulus_CDR/coupling5/artifacts/data/selected_raw_arrays.npz": {
+      "sha256": "21be2603378ee1919e5818367b0702a5062fe0a7f31f4cad26ce674af14ea7f4",
+      "size_bytes": 17521852
+    },
+    "checkpoints/annulus_CDR/coupling5/artifacts/metrics/per_sample_metrics.csv": {
+      "sha256": "8fd59474c89b94d27ecee81c6d1707d32bdb4b83f70f54dbe42a8d95f978a69d",
+      "size_bytes": 9741
+    },
+    "checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz": {
+      "sha256": "2bfdae0d8881e814b0c5b15c5cc0afa2439140f9592be3840729fe8860850cf7",
+      "size_bytes": 10191330
+    },
+    "checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison/metrics/per_sample_weak_residual_blend_comparison.csv": {
+      "sha256": "b28a2ffdba9a25e673ed40c8285fe32ca9fea241b79867bc8684104fad49498c",
+      "size_bytes": 26408
+    },
+    "data/geometry/annulus_02_05_1_128.npz": {
+      "sha256": "969650bf1ad0d1dfe0cfc3c63596eaa1907b0750b9a10751935b322e090e6a56",
+      "size_bytes": 1590218
+    }
+  }
+}

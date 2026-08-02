@@ -19,6 +19,7 @@ from greenonet.complex_coupling_trainer import (
     complex_metric_keys_are_safe,
 )
 from greenonet.complex_geometry import load_complex_geometry
+from greenonet.complex_losses import relative_l2_valid
 from greenonet.complex_sources import (
     GeometryGridLoader,
     IndexedGpComplexSourceProvider,
@@ -28,6 +29,7 @@ from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CompileConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -158,6 +160,96 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
     assert "pre_projection_fusion_gate" not in training_log
 
 
+def test_column_diagonal_green_response_context_is_cached_in_train_and_eval(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="column_diagonal_green_response",
+                column_diagonal_green_response={"gain_exponent": 0.25},
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                num_frequencies=1,
+                max_frequency=1.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    training = CouplingTrainingConfig(
+        epochs=1,
+        batch_size=1,
+        log_interval=1,
+        learning_rate=1e-3,
+        device="cpu",
+        compile=CompileConfig(enabled=False),
+    )
+    work_dir = tmp_path / "column_train"
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=training,
+        work_dir=work_dir,
+        green_model=ConstantGreen(1.0),
+    )
+
+    trainer.train(dataset, dataset)
+
+    assert trainer.column_diagonal_green_response_context_build_count == 1
+    context = trainer.column_diagonal_green_response_context
+    assert context is not None
+    assert not context.gamma_x_squared.requires_grad
+    assert context.gain_exponent == 0.25
+    training_log = (work_dir / "training.log").read_text()
+    assert "column-diagonal Green-response context" in training_log
+    assert "gain_exponent=0.250000" in training_log
+    assert "row_norm_used=false" in training_log
+
+    evaluator = ComplexCouplingEvaluator(
+        model=model,
+        green_model=ConstantGreen(1.0),
+        config=training,
+        device=torch.device("cpu"),
+        work_dir=tmp_path / "column_eval",
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+    first = evaluator.predict_batch(batch)
+    second = evaluator.predict_batch(batch)
+
+    assert evaluator.column_diagonal_green_response_context_build_count == 1
+    evaluator_context = evaluator.column_diagonal_green_response_context
+    assert evaluator_context is not None
+    assert evaluator_context.gain_exponent == 0.25
+    torch.testing.assert_close(
+        evaluator_context.correction_weight_phi,
+        context.correction_weight_phi,
+    )
+    evaluation_log = (tmp_path / "column_eval" / "training.log").read_text()
+    assert "gain_exponent=0.250000" in evaluation_log
+    torch.testing.assert_close(
+        first.projection.projected_physical,
+        second.projection.projected_physical,
+    )
+    torch.testing.assert_close(
+        first.projection.physical_balance_residual,
+        torch.zeros_like(first.projection.physical_balance_residual),
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+
 def test_complex_trainer_omits_reference_metrics_for_rhs_only_data(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
@@ -177,6 +269,9 @@ def test_complex_trainer_omits_reference_metrics_for_rhs_only_data(tmp_path):
             depth=1,
             dtype=torch.float64,
             balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            cross_axis_reconstruction=ComplexCrossAxisReconstructionConfig(
+                enabled=True
+            ),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
                 transverse_trunk=TransverseTrunkConfig(
@@ -213,6 +308,87 @@ def test_complex_trainer_omits_reference_metrics_for_rhs_only_data(tmp_path):
     log = (work_dir / "training.log").read_text()
     assert "rel_sol=" not in log
     assert "rel_flux=" not in log
+    assert trainer.cross_axis_reconstructor.context_build_count == 0
+
+
+def test_cross_axis_reconstruction_changes_only_detached_solution_diagnostic(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+
+    def build_model(enabled: bool) -> ComplexCouplingNet:
+        return ComplexCouplingNet(
+            CouplingModelConfig(
+                branch_input_dim=4,
+                hidden_dim=4,
+                depth=1,
+                dtype=torch.float64,
+                balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+                cross_axis_reconstruction=(
+                    ComplexCrossAxisReconstructionConfig(enabled=enabled)
+                ),
+                axis_1d_trunk=Axis1DTrunkConfig(
+                    enabled=True,
+                    transverse_trunk=TransverseTrunkConfig(
+                        enabled=True,
+                        length_context=True,
+                    ),
+                ),
+            )
+        )
+
+    disabled_model = build_model(False)
+    enabled_model = build_model(True)
+    enabled_model.load_state_dict(disabled_model.state_dict())
+    training = CouplingTrainingConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        compile=CompileConfig(enabled=False),
+    )
+    disabled_trainer = ComplexCouplingTrainer(
+        model=disabled_model,
+        config=training,
+        work_dir=tmp_path / "disabled",
+        green_model=ConstantGreen(1.0),
+    )
+    enabled_trainer = ComplexCouplingTrainer(
+        model=enabled_model,
+        config=training,
+        work_dir=tmp_path / "enabled",
+        green_model=ConstantGreen(1.0),
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+
+    disabled = disabled_trainer._forward_batch(batch)
+    enabled = enabled_trainer._forward_batch(batch)
+
+    torch.testing.assert_close(enabled.loss, disabled.loss)
+    torch.testing.assert_close(
+        enabled.projection.projected_physical,
+        disabled.projection.projected_physical,
+    )
+    torch.testing.assert_close(
+        enabled.reconstruction.u_phi_valid,
+        disabled.reconstruction.u_phi_valid,
+    )
+    torch.testing.assert_close(
+        enabled.reconstruction.u_psi_valid,
+        disabled.reconstruction.u_psi_valid,
+    )
+    assert enabled.cross_axis_reconstruction is not None
+    assert enabled.cross_axis_reconstruction.reliability is not None
+    expected_rel_sol = relative_l2_valid(
+        enabled.cross_axis_reconstruction.u_pred_valid,
+        batch.sol_valid,
+    )
+    torch.testing.assert_close(enabled.metrics["rel_sol"], expected_rel_sol)
+    assert enabled.metrics["rel_sol"].requires_grad is False
+    assert enabled_trainer.cross_axis_reconstructor.context_build_count == 1
 
 
 def test_complex_evaluator_omits_reference_metrics_for_rhs_only_data(tmp_path):
@@ -276,6 +452,66 @@ def test_complex_evaluator_omits_reference_metrics_for_rhs_only_data(tmp_path):
     )
     assert "rel_sol" not in csv_header
     assert "rel_flux" not in csv_header
+
+
+def test_complex_evaluator_reports_official_and_equal_mean_solution_metrics(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            cross_axis_reconstruction=ComplexCrossAxisReconstructionConfig(
+                enabled=True
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    evaluator = ComplexCouplingEvaluator(
+        model=model,
+        green_model=ConstantGreen(1.0),
+        config=CouplingTrainingConfig(batch_size=1, device="cpu"),
+        device=torch.device("cpu"),
+        work_dir=tmp_path / "evaluation_reliability",
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+
+    prediction = evaluator.predict_batch(batch)
+    row = evaluator._sample_metric_row(prediction, 0)
+    evaluator.predict_batch(batch)
+
+    reconstruction = prediction.cross_axis_reconstruction
+    expected_official = relative_l2_valid(
+        reconstruction.u_pred_valid,
+        batch.sol_valid,
+    )
+    expected_equal = relative_l2_valid(
+        reconstruction.u_equal_mean_valid,
+        batch.sol_valid,
+    )
+    assert float(row["rel_sol"]) == pytest.approx(float(expected_official.item()))
+    assert float(row["rel_sol_equal_mean"]) == pytest.approx(
+        float(expected_equal.item())
+    )
+    assert "weak_weight_phi_mean" in row
+    assert "weak_weight_phi_min" in row
+    assert "weak_weight_phi_max" in row
+    assert "weak_support_fraction" in row
+    assert evaluator.cross_axis_reconstructor.context_build_count == 1
 
 
 def test_complex_trainer_accepts_fixed_indexed_gp_provider(tmp_path):

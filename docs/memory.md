@@ -157,11 +157,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `fusion`은 `product` 또는 `product_fuser`이다.
   `trunk_positional_encoding`은 unit-square 2D trunk coordinate encoding이므로
   complex mode에서는 사용하지 않는다.
-- Complex CouplingNet v6 balance projection은
-  `enabled=true, mode="physical_symmetric"`만 허용한다. Network raw output은
+- Complex CouplingNet v6 balance projection은 `enabled=true`에서
+  backward-compatible default `physical_symmetric`와 complex-only opt-in
+  `column_diagonal_green_response`를 허용한다. Network raw output은
   reference response `P,Q`이고 `sigma_x=Lx^2`, `sigma_y=Ly^2`를 사용해 먼저
   `p=P/sigma_x`, `q=Q/sigma_y`로 physical directional-source proposal을 만든다.
-  Physical raw difference `d=p-q`를 보존하면서
+  Default mode는 physical raw difference `d=p-q`를 보존하면서
   `phi=(rhs+d)/2`, `psi=(rhs-d)/2`로 symmetric projection을 적용한 뒤에만
   `Phi=sigma_x*phi`, `Psi=sigma_y*psi`로 reference response에 pull-back한다.
   Green reconstruction은 projected response `Phi/Psi`를 직접 사용하며 추가
@@ -169,6 +170,24 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `response_preconditioned`, `symmetric`, `smooth_mask`, geometry-weighted mode는
   폐기되었고 v6에서 fail fast한다. Unversioned 및 v5 이하 complex CouplingNet
   checkpoint는 재학습 오류로 거부하며 GreenNet checkpoint는 그대로 재사용한다.
+- Optional column-diagonal Green-response mode는 production reconstruction과 동일한
+  connected-segment operator `H_s=K_s W_s L_s^2`와
+  `M_Omega=(hx*hy)I_valid`를 사용해
+  `gamma_s^2=diag(H_s^T M_Omega H_s)`를 계산한다. 이는 source column 하나가
+  전체 directional solution을 움직이는 비용이며 evaluation row norm이 아니다.
+  `gx_bar=gamma_x^2+eps`, `gy_bar=gamma_y^2+eps`와 fixed
+  `gain_exponent=alpha`에 대해
+  `w_phi=sigmoid(alpha*(log(gy_bar)-log(gx_bar)))`, `w_psi=1-w_phi`로
+  correction을 나누고 마지막에 `psi=rhs-phi`로 exact balance를 유지한다.
+  기본 exponent는 `1.0`이고 기존 direct ratio path를 그대로 사용한다. `alpha=0`은
+  physical symmetric correction이며 `0<alpha<1`은 column anisotropy만 완화한다.
+  Exponent는 fixed sample-independent scalar이고 learnable/sample-dependent alpha는
+  지원하지 않는다. Frozen GreenNet gain과 tempered weight는 trainer/evaluator
+  instance당 한 번 segment-wise 계산해 cache하며 full response/Gram matrix와 global
+  solve는 만들지 않는다.
+  Canonical config는 계속 symmetric이고, 성능 비교는 같은 초기화와 학습 조건으로
+  두 mode 및 각 exponent를 각각 재학습해야 한다. 기존 checkpoint의 post-hoc
+  projection/exponent 비교는 공정한 학습 비교로 해석하지 않는다.
 - Complex CouplingNet의 `coupling_model.pre_projection_fusion`은 optional
   single nonlinear fusion MLP이며 기본값은 disabled이다. Axis network의
   base response \(P_0,Q_0\)를 \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\)로 옮기고,
@@ -1245,6 +1264,489 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 - These historical runs do not pin the CouplingNet initialization seed.
   Architecture claims require data-aligned, initialization-aligned paired
   repeats, preferably at least three seeds.
+
+## Annulus CDR Absolute Fuser Audit
+
+- `checkpoints/annulus_CDR/coupling4/comparison_analysis/analysis_report.md` is
+  the canonical residual-versus-absolute comparison for `coupling3` and
+  `coupling4`.
+- Both runs use the same fixed indexed-GP data, 384-width backbone, coefficient
+  branches, SOAP settings, learning-rate schedule, and 50-sample test set.
+  CouplingNet initialization is not pinned, so the result is not a strict
+  paired-seed architecture proof.
+- Absolute mode's best validation canonical energy was `1.791162e-3` at epoch
+  99, `4.110x` the residual mode's `4.358221e-4` at epoch 72. Validation was
+  still slowly improving, so classic late overfitting is not the dominant
+  failure.
+- On the same 50 final-checkpoint test samples, absolute mode increased mean
+  canonical energy from `4.580003e-4` to `1.823562e-3` (`+298.2%`), mean
+  `rel_sol` from `5.1637%` to `9.0922%` (`+76.1%`), and mean `rel_flux` from
+  `16.9882%` to `37.8301%` (`+122.7%`). All 50 samples were worse for each
+  primary metric.
+- Absolute mode with `final_layer_init_scale=0` initially has
+  `d_fused=0` and zero derivative from the fuser output to `d_base`; unlike the
+  residual identity skip, it does not pass the first-step difference gradient
+  directly to the axis networks.
+- Because absolute output does not directly use `d_base`, the base difference
+  became an unanchored latent. Across the common artifact samples 0 and 37,
+  mean base RMS was `9.219` for absolute versus `0.675` for residual, while
+  fused-to-target relative error was `0.586` versus `0.234`. Triangular/spoke
+  structure in the oversized base latent remained visible in absolute
+  directional-source and solution errors.
+- Keep residual mode as the production baseline. Do not interpret
+  `final_layer_init_scale=1` as identity initialization; it is only standard
+  random `Linear` initialization. A future absolute experiment needs an
+  identity-preserving initialization or another direct gradient path and
+  fixed-seed paired repeats.
+
+## Annulus CDR Fuser-Off Audit
+
+- `checkpoints/annulus_CDR/coupling5/comparison_analysis/analysis_report.md` is
+  the canonical comparison of the fuser-disabled control against
+  `coupling3` residual, `coupling4` absolute, and the two retired split-fuser
+  runs.
+- `coupling3`, `coupling4`, and `coupling5` match in geometry, CDR
+  coefficients, fixed indexed-GP sources, test set, 384-width backbone, SOAP,
+  and scheduler. Their config differences are limited to
+  `pre_projection_fusion.enabled`, `mode`, and
+  `final_layer_init_scale`. The model initialization seed is not pinned.
+- `coupling5` reaches best validation canonical energy `4.277555e-4` at epoch
+  69. Its best-energy 50-sample test means are canonical energy
+  `4.459290e-4`, `rel_sol=5.1562%`, and `rel_flux=17.8986%`.
+- Disabling the fuser fully recovers the `coupling4` absolute failure:
+  `coupling5` lowers mean energy by 75.5%, `rel_sol` by 43.3%, and `rel_flux`
+  by 52.7%, winning all 50 samples on each primary metric.
+- Against `coupling3` residual, fuser-off energy is 1.17% lower and `rel_sol`
+  is 0.29% higher, with sample wins near 50/50 and paired Wilcoxon
+  `p>=0.625`. The energy improvement is tail-sensitive: sample 39 accounts for
+  65.8% of the summed energy delta. These differences do not establish an
+  energy/solution advantage.
+- Directional flux is different: fuser-off mean `rel_flux` is 2.45% higher
+  than residual and is worse on 45/50 best-energy samples
+  (`p=1.35e-11`). The same direction remains at the final checkpoint. Treat
+  the residual fuser as a possible directional-split refinement, not a proven
+  solution/energy improvement.
+- Fuser-off does not remove the annulus transition seam. Across its five
+  selected samples, `u_pred_error` transition/regular edge-jump ratios are
+  `5.01` to `6.04` with mean `5.44`. The seam therefore also exists in the
+  axis-conditioned base response and is not caused solely by the
+  pre-projection MLP.
+- A production architecture decision requires at least three fixed-model-seed
+  paired repeats of residual versus disabled. Use best-validation canonical
+  energy as primary, `rel_sol` as secondary, and `rel_flux` plus transition
+  edge-jump as diagnostics.
+
+## Annulus Transition Meeting Slide Plan
+
+- `docs/meeting/annulus_transition_error_slide_plan.md` is the approved content
+  contract for the collaborator-meeting block. The implemented canonical source
+  is `docs/meeting/annulus_transition_error/annulus_transition_error.qmd`, its
+  deck-local style is `docs/meeting/annulus_transition_error/styles.scss`, and
+  the rendered offline Reveal.js entry point is
+  `docs/meeting/annulus_transition_error/annulus_transition_error.html`.
+- The implemented meeting deck has exactly 18 logical slides: main Slides 1-16
+  plus Backup A/B. Overall presentation time is intentionally not fixed; timing
+  labels in speaker notes are advisory only. Visible slide text is
+  English; each slide has exactly one Korean `::: {.notes}` script. Reveal
+  fragments expose one claim, formula stage, or figure comparison per click.
+  Poisson must precede CDR, and Slides 11-14 must use
+  `u_weak_residual_reliability`, never the equal-mean artifact `u_pred`.
+- `docs/meeting/annulus_transition_error/build_assets.py` is an artifact-only
+  presentation builder. It reads frozen NPZ/CSV/JSON outputs, never loads a
+  CouplingNet checkpoint or runs model inference, and writes offline Plotly HTML plus local `plotly.min.js`, a
+  Rich log, and `assets/manifest.json` with source paths, sample ids, field keys,
+  metrics, and SHA-256 provenance. The final delivery is HTML-only; no final
+  presentation PDF is stored.
+- Run `docs/meeting/annulus_transition_error/qa_reveal.js` after every render.
+  It checks 1600x900 and 1280x720, exact slide count, overflow, visible
+  layout-region overlap, page errors, and external HTTP requests for every
+  final state and every requested intermediate fragment state. It also captures
+  all 18 final states at both viewports. This deck's QA path does not require or
+  store a presentation PDF.
+- The main block contains sixteen slides: previously observed transition
+  error; the two-short-segment to one-long-segment representation together with
+  the exact raw-reference, physical-projection, and reference-pull-back
+  transformation; and the stagewise error diagnosis showing strong
+  amplification at the mandatory \(L^2\) pull-back; followed by a compact
+  projection/output-space history from original physical-symmetric through
+  geometry-weighted/RPS and response-space to current physical-symmetric;
+  one method slide defining three post-hoc blend rules; three detailed
+  construction slides for geometry-only compact C2, mismatch-detected seam C2,
+  and local weak-residual reliability; a Poisson-first clean comparison; a CDR
+  broader-operator consistency check; four final-result
+  slides for Poisson/CDR fields and signed errors; one slide explaining why
+  equal source correction does not imply equal Green response; and one slide
+  defining the proposed column-diagonal Green-response projection.
+- In Slide 15, the directional-response factors are block-level labels in a
+  balanced 3+2 grid: Green kernel, coefficient, and quadrature on the first
+  row; evaluation position and segment length on the second. Do not use inline
+  spans here because Quarto can wrap them into one irregular paragraph.
+- Slide 1 is locked to sample 47 from
+  `checkpoints/Annulus_poisson/coupling/artifacts`. Generate one artifact-only
+  Plotly composite directly from `data/selected_raw_arrays.npz`; do not load the
+  historical checkpoint or current model/config contract. The top row contains
+  signed `phi_error` and `psi_error`, and the bottom row contains
+  `u_phi_error`, `u_pred_error`, and `u_psi_error`.
+- The Slide 1 source-error row and solution-error row use separate
+  zero-centered `RdBu` ranges and one colorbar per row. All five panels share
+  the same physical extent and one-to-one aspect ratio. The implemented deck
+  uses the standalone offline Plotly HTML directly; PNG or repository PDF
+  copies are not presentation inputs. Artifact summary provenance identifies
+  sample 47 as the maximum-\(\mathrm{rel\_sol}\) selected test sample.
+- The optional FEniCSx `target_phi/target_psi` fields are numerical diagnostics,
+  not exact balance labels. The slide may use `phi_error/psi_error` to locate
+  directional mismatch, but speaker notes must state that their nonzero sum
+  contains the target balance residual and does not imply failure of the
+  prediction's exact balance projection.
+- Slide 2 uses the historical notation
+  \(P_0=\texttt{raw\_unit\_phi}\),
+  \(Q_0=\texttt{raw\_unit\_psi}\). It defines physical raw proposals
+  \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\), applies the pointwise physical
+  symmetric projection
+  \(\phi=(f+p_0-q_0)/2\), \(\psi=(f-p_0+q_0)/2\), and then pulls back
+  \(\Phi=L_x^2\phi\), \(\Psi=L_y^2\psi\) for unit-interval Green
+  reconstruction.
+- Slide 2 displays the measured geometry change as two separate indicators:
+  `line-length ratio 2.19x` and dominant neighboring `L^2` response-scale ratio
+  `4.80x`. The ratio card has a dedicated third grid track, and slide-local
+  geometry, pipeline, equation, and takeaway heights use the lower slide area
+  without hiding overflow.
+- The expanded Slide 2 equations retain the cross-axis terms
+  \(-(L_x^2/L_y^2)Q_0/2\) in \(\Phi\) and
+  \(-(L_y^2/L_x^2)P_0/2\) in \(\Psi\). The historical sample-47 stored `phi`
+  is reproduced by this formula with maximum discrepancy
+  \(4.44\times10^{-16}\), so the slide formula is artifact-verified rather
+  than inferred from the current checkpoint contract.
+- Slide 3 does not repeat the full transformation. It maps physical
+  directional-source errors through
+  \(E_\Phi=L_x^2e_\phi\), \(E_\Psi=L_y^2e_\psi\), then compares exact-Green and
+  learned-Green solution responses using the existing one-segment/split-line
+  RMS ratios.
+- Slide 4 is a four-card horizontal timeline. It includes original
+  physical-symmetric projection, length-aware geometry-weighted/RPS variants,
+  response-space, and current physical-symmetric. Presentation titles and
+  Korean notes do not use formulation version numbers. Its claim is limited to
+  the observation that all variants enforce balance, alter directional-error
+  distribution, and nevertheless leave the transition pattern unresolved.
+  The length-aware card defines
+  \(d_0=(\sigma_y-\sigma_x)f/(\sigma_x+\sigma_y)\),
+  \(\kappa=4\sigma_x\sigma_y/(\sigma_x+\sigma_y)^2\), and
+  \(d_{\mathrm{RPS}}=d_0+\kappa d\): \(d_0\) is the equal-response baseline
+  and \(\kappa\) attenuates raw difference under length imbalance.
+  Response-space may report source/flux improvement with unchanged solution
+  error, but existing runs must not be described as a controlled single-factor
+  paired ablation.
+- A compact Slide 4 note may state that transition-specific edge weighting was
+  tested and removed because local improvement did not lower global solution
+  error. Do not show its loss formula or metrics.
+- Slide 5 defines the common post-reconstruction estimator
+  \(u_{\mathrm{blend}}=w_\phi u_\phi+w_\psi u_\psi\),
+  \(w_\phi+w_\psi=1\), and three fixed information contracts: known topology
+  for geometry-only compact C2, prediction mismatch for detected-seam C2, and
+  local full-PDE defect for weak-residual reliability. The three rules do not
+  alter \(\phi,\psi,u_\phi,u_\psi\), training, GreenNet, or CouplingNet, and no
+  reference target enters weight construction.
+- Slide 5 compares every rule with the same `Signal`, `Sample adaptive`, and
+  `Operator aware` rows. Geometry C2 is known-geometry/no/no, mismatch C2 is
+  mismatch-jump/yes/no, and weak reliability is local-full-PDE-defect/yes/yes.
+  A full-width invariant band states that
+  \(\phi,\psi,u_\phi,u_\psi\) remain frozen and only the final partition changes.
+- Slides 6-8 expand the three weight constructions with a common
+  input/sensor-to-weight visual grammar. Slide 6 derives known-transition
+  distances and the compact quintic bump; Slide 7 derives normalized mismatch
+  edge profiles, smoothing/NMS, and a separately prescribed C2 ramp; Slide 8
+  defines the weak rule by
+  \(R_\phi=R_x(u_\phi;\phi)+R_y(u_\phi;\psi)\) and
+  \(R_\psi=R_x(u_\psi;\phi)+R_y(u_\psi;\psi)\) from local P1 weak defects.
+  The rule uses no `sol`, target flux, known transition coordinate, or global
+  matrix solve and changes only the final reconstruction blend.
+- Slide 9 presents the frozen Poisson `coupling15` comparison first. Equal mean,
+  geometry C2, mismatch seam C2, and weak residual have mean `rel_sol`
+  `5.569825%`, `5.470165%`, `5.312818%`, and `4.860579%`. Their changes versus
+  equal mean are `-1.789%`, `-4.614%`, and `-12.734%`, with `35/50`, `44/50`,
+  and `50/50` wins. Weak transition RMS changes by `-8.360%` and trace jump by
+  `-48.280%`; its maximum neighboring weight jump remains `0.302343`.
+- Slide 10 presents the frozen CDR `coupling5` consistency check. The four mean
+  `rel_sol` values are `5.156246%`, `5.054177%`, `4.943157%`, and `4.564722%`,
+  giving changes `-1.980%`, `-4.133%`, and `-11.472%`. The estimator ordering
+  is identical to Poisson. Poisson and CDR use independent sources but the same
+  Annulus geometry, so the result is cross-equation consistency rather than
+  cross-domain validation.
+- Poisson is presented before CDR to isolate geometry/reconstruction behavior
+  from convection and reaction. Speaker notes must preserve the experimental
+  provenance: fixed presets originated in CDR exploratory diagnostics and were
+  transferred to Poisson without a Poisson sweep. Presentation order is not
+  tuning chronology.
+- Slides 11-12 present the Poisson weak-result calculation for selected q50-role
+  sample 0. Slides 13-14 use the same field/error grammar for CDR sample 9 and
+  include physical direct-at-`coords_valid` coefficient fields. The result
+  contract is
+  \(u_{\mathrm{pred}}^{\mathrm{weak}}
+  =w_\phi^{\mathrm{weak}}u_\phi
+  +(1-w_\phi^{\mathrm{weak}})u_\psi\). The weak rule changes only the final
+  blend, so \(\phi,\psi,u_\phi,u_\psi\) remain the frozen-checkpoint fields.
+  Figure builders must load the final solution from
+  `u_weak_residual_reliability`; standard artifact `u_pred` is equal mean and
+  must not be relabeled as the weak result.
+- Slide 11 uses a dedicated two-line sidebar formula card for
+  \(u_{\mathrm{pred}}^{\mathrm{weak}}\), rather than the generic equation band.
+  The result-field builder places the shared `f` and `u` colorbar titles on the
+  right side of the bars with explicit thickness, padding, tick font, and figure
+  right margin; the same layout is used for the CDR result-field slide.
+- Slides 11-14 report signed `phi/psi` differences against numerical FEniCSx
+  directional targets and signed solution errors against `sol`. References are
+  evaluation-only, `rel_flux` remains an unchanged directional-source
+  diagnostic, and these result slides omit transition markers, line-length
+  maps, trace-jump metrics, and causal-diagnosis language.
+- Slide 15 starts from the symmetric correction
+  \(\delta\phi=\delta\psi=(f-p-q)/2\), defines
+  \(\delta u_\phi=H_x\delta\phi\), \(\delta u_\psi=H_y\delta\psi\), and makes
+  explicit that equal source corrections can produce unequal reconstructed
+  responses when \(H_x\ne H_y\). Slide 16 then defines fixed source-point gains
+  \(\gamma_{s,j}^2=[H_s^\top M_\Omega H_s]_{jj}\), the column-diagonal
+  constrained minimization, and its exact-balance closed form. This is the
+  squared output-mass-weighted norm of column \(j\), so it measures how one
+  source-point correction moves the whole directional solution field. The gain
+  is derived from geometry, prescribed coefficients, quadrature, and the frozen
+  GreenNet; it is not learned. Off-diagonal source-response correlations and
+  full response-matrix solves are excluded. The visible Slide 16 method card
+  must show the full system
+  \((A_x+A_y)\delta\phi=A_y r\) before replacing \(A_s\) by its diagonal, so
+  the reason for the no-solve approximation is explicit rather than confined
+  to speaker notes. This method changes
+  the directional split and therefore requires a controlled paired retraining
+  experiment.
+- Green-Response Preconditioning is not a revival of the retired response-space
+  formulation: that formulation used analytic length scales, while the new proposal uses a
+  fixed gain derived from the full axial response
+  \(H_s=K_sW_sL_s^2\). Its column-diagonal definition must pass discarded
+  off-diagonal-energy, positivity, grid-refinement, and boundary audits before
+  implementation.
+- This meeting block excludes all pre-projection fuser experiments and the
+  discussion about weakening \(u_\phi,u_\psi\in H_0^1(\Omega)\). It also
+  excludes relative split consistency, training-time weak operator closure,
+  self-trace gluing, cross-axis carrier, null-space analysis, and
+  boundary-energy development from the main slides, backups, and speaker
+  notes. Slides 5-14 retain weak residual only as a post-hoc reliability
+  indicator. Learned reconstruction weights/gates, Multi-Orientation Axial
+  Charts, and full Green-response matrix solves are also excluded.
+- The slide claim must distinguish verified diagnostics from the working
+  hypothesis: exact and learned Green reconstructions propagate essentially the
+  same transition structure, while insufficient inverse-\(L^2\) compensation
+  by the predicted physical source split is the leading interpretation rather
+  than a completed theorem.
+- Slides 9-14 are measured post-hoc results and must not be described as
+  production remedies. Slides 15-16 explain a proposed, unvalidated method. The
+  presentation order is method definition, Poisson clean evidence, CDR
+  broader-operator consistency, Poisson/CDR result fields and errors, then
+  response-gain audit and paired
+  preconditioned retraining. Independent geometry validation remains required
+  before production integration.
+- The fixed Smooth Cross-Axis Reconstruction Blend now has a standalone
+  diagnostic implementation in
+  `cli/diagnose_fixed_smooth_cross_axis_blend.py` and
+  `src/greenonet/complex_smooth_blend_diagnostics.py`. It must remain outside
+  production inference until a later explicit decision. The geometry-only
+  fields use `y_edges` for
+  \(J_\phi=\mathcal S(|\Delta\log L_x^2|)\), `x_edges` for
+  \(J_\psi=\mathcal S(|\Delta\log L_y^2|)\), positive exponential
+  reliabilities, and a partition of unity. The default preset is fixed before
+  test evaluation: `alpha=1/log(2)`, two 50:50 neighbor-smoothing passes,
+  reliability floor `1e-6`, transition threshold `log(2)`, and two graph-ring
+  transition dilation steps.
+- On the full 50-sample `coupling5` test set, the fixed preset changes mean
+  `rel_sol` from `5.156246%` to `5.116388%` and wins on `30/50` samples. It
+  reduces transition trace-error jump RMS from `2.174435e-4` to
+  `9.931488e-5` (`-54.326%`) on average and improves that trace diagnostic on
+  all 50 samples, but increases broad transition-zone error RMS from
+  `3.680150e-4` to `3.715199e-4` (`+0.952%`). The result is
+  `promising_but_mixed`, not sufficient evidence to change the production
+  estimator. Test `sol` is evaluation-only and must not be used to retune the
+  same preset. Canonical evidence is under
+  `checkpoints/annulus_CDR/coupling5/fixed_smooth_cross_axis_blend/`.
+- The standalone diagnostic also supports
+  `weight_construction="compact_c2_ramp"`. It detects each axial family’s
+  split/merge interface as the midpoint between neighboring fixed coordinates
+  whose connected-segment multiplicities differ. For each point it computes
+  the absolute transverse-coordinate distance to that interface and uses
+  `B(s)=1-10*s^3+15*s^4-6*s^5` for `0 <= s < 1`, with zero influence outside
+  the configured physical width. With
+  `theta=gamma*(B_psi-B_phi)`, the final weights are
+  `w_phi=(1+theta)/2`, `w_psi=(1-theta)/2`. Thus the estimator is exactly the
+  equal mean outside compact support, favors `u_psi` near horizontal-chart
+  transitions, favors `u_phi` near vertical-chart transitions, and cancels
+  back to equal weights where both transition bands overlap.
+- On the same frozen `coupling5` checkpoint, the predeclared compact preset
+  `gamma=0.5`, physical width `0.03125=4h` changes mean `rel_sol` from
+  `5.156246%` to `5.054177%` (`-1.980%` relative), transition-zone error RMS
+  from `3.680150e-4` to `3.524676e-4` (`-4.225%`), and transition trace-error
+  jump RMS from `2.174435e-4` to `1.196888e-4` (`-44.956%`). It wins global
+  `rel_sol` on `36/50` samples. The weight range is
+  `[0.254013,0.745987]`, the maximum neighboring weight jump is `0.112396`,
+  partition residual and outside-support correction are exactly zero, and
+  paired-bootstrap 95% intervals for all three aggregate relative changes lie
+  below zero.
+- The same fixed compact C2 preset was run post-hoc on the Poisson
+  `checkpoints/Annulus_poisson/coupling15` best-energy checkpoint and all 50
+  full-reference test samples. Mean `rel_sol` changes from `5.569825%` to
+  `5.470165%` (`-1.789%`), transition-zone RMS from `3.310015e-4` to
+  `3.197070e-4` (`-3.412%`), and transition trace-error jump RMS from
+  `1.923231e-4` to `1.051847e-4` (`-45.308%`). It improves `rel_sol` on
+  `35/50`, transition RMS on `31/50`, and trace jump on `50/50` samples; all
+  three paired-bootstrap aggregate 95% intervals are below zero.
+- The Poisson and CDR checks share the exact annulus geometry, so their compact
+  C2 transition coordinates, support, and weight fields are identical:
+  \(w_\phi,w_\psi\in[0.254013,0.745987]\), support size `3192`, and maximum
+  neighboring weight jump `0.112396`. Their test forcing realizations are not
+  paired: the Poisson generator uses seed `2732`, while CDR uses seed `2222`,
+  and none of the 50 same-index `rhs` arrays matches exactly. Treat the result
+  as evidence of cross-equation reuse on one geometry, not cross-domain or
+  same-source paired validation. Canonical evidence is under
+  `checkpoints/Annulus_poisson/coupling15/compact_c2_cross_axis_blend/`.
+- The compact-ramp parameter sweep is evaluation-only sensitivity analysis.
+  A broad sweep shows that `gamma=0.25` and `0.5` improve all three aggregate
+  diagnostics for widths `2h,4h,6h,8h`, while `gamma>=0.75` reduces trace jump
+  more aggressively but worsens solution metrics. A finer sweep over
+  `gamma=0.2..0.5` and widths `2h..10h` improves all three metrics in all 30
+  tested combinations; its best mean `rel_sol` occurs at
+  `gamma=0.3,width=10h` and its best transition RMS at
+  `gamma=0.3,width=6h`. The exact linear-plus-quadratic MSE decomposition
+  estimates a target-derived optimum near `gamma=0.29..0.33`. These selected
+  values are not independent confirmation and must not silently become
+  production defaults. Canonical exploratory evidence is under
+  `checkpoints/annulus_CDR/coupling5/compact_c2_cross_axis_blend_fine_sweep/`.
+- The prediction-only mismatch-gradient comparison is implemented in
+  `cli/compare_cross_axis_blend_estimators.py` and
+  `src/greenonet/complex_mismatch_blend_diagnostics.py`. It compares the equal
+  mean, the fixed geometry-only compact ramp, and a sample-dependent estimator
+  built from normalized axial-edge jumps of `u_phi-u_psi`. The mismatch
+  estimator uses
+  `theta=gamma*activation*(Jx-Jy)/(Jx+Jy+eps)` and a smooth C2 activation; it
+  reads axial adjacency and grid spacing but not segment lengths, transition
+  coordinates, `sol`, or flux targets. Geometry-derived transition masks are
+  used only to audit localization and evaluation metrics.
+- On the frozen `coupling5` checkpoint, the prediction-only fixed exploratory
+  preset `gamma=0.5`, two 50:50 graph-smoothing steps, and normalized activation
+  interval `[0.15,0.35]` changes mean `rel_sol` from `5.156246%` to
+  `4.999177%` (`-3.046%` relative), transition-zone error RMS by `-7.345%`,
+  and transition trace-error jump RMS by `-28.278%`; it wins `rel_sol` on
+  `43/50` samples. The geometry-only compact ramp gives `5.054177%`,
+  `-4.225%`, and `-44.956%`, respectively. The prediction-only method is
+  therefore better for mean solution and broad transition error in this run,
+  while geometry-only remains the stronger trace-jump suppressor. Its mean
+  transition activation is `0.427486` versus `0.086350` in the regular zone,
+  and the transition zone contains `56.517%` of sensor energy.
+- The mismatch-gradient result remains post-hoc exploratory. The activation
+  thresholds were chosen from prediction-only scale inspection on the same
+  test run, so they must not become production defaults without a frozen
+  calibration policy and independent checkpoint/dataset confirmation.
+  Canonical evidence is under
+  `checkpoints/annulus_CDR/coupling5/cross_axis_blend_estimator_comparison/`.
+- The mismatch-detected seam C2 estimator is implemented in the same
+  `cli/compare_cross_axis_blend_estimators.py` and
+  `src/greenonet/complex_mismatch_blend_diagnostics.py` path. It intentionally
+  separates sample-dependent detection from weight construction. For each
+  sample, normalized axial-edge jumps of `u_phi-u_psi` are reduced to x/y RMS
+  profiles; after one-dimensional smoothing, physical non-maximum suppression
+  selects at most two seam coordinates per axis. Only these coordinates and
+  their directions survive into the weight builder.
+- The seam weight builder uses a separate compact quintic C2 influence
+  `B(s)=1-10*s^3+15*s^4-6*s^5` on each detected seam and
+  `theta=gamma*(B_x-B_y)`. It never uses segment lengths, known topology
+  transition coordinates, `sol`, or target fluxes. The annulus transition
+  metadata enters only the post-hoc detection-accuracy and error audits.
+  Default non-maximum separation resolves to four ramp widths, which avoids
+  selecting two nearby peaks from one transition side in the tested annulus.
+- The canonical frozen-`coupling5` exploratory candidate uses
+  `gamma=0.3`, width `0.09375=12h`, two seams per axis, relative peak
+  threshold `0.25`, and one profile-smoothing step. It changes mean `rel_sol`
+  from equal-mean `5.156246%` and direct-mismatch `4.999177%` to
+  `4.943157%`. Relative to equal mean, transition-zone RMS changes by
+  `-7.391%`, trace jump by `-22.425%`, and global `rel_sol` by `-4.133%`.
+  The maximum neighboring weight jump is `0.023329`, about one tenth of the
+  direct sensor's `0.242220`.
+- The detected-seam C2 estimator is not uniformly superior. Relative to direct
+  mismatch it improves mean `rel_sol` by `1.121%` with paired-bootstrap 95%
+  interval `[-2.196%,-0.070%]`, leaves broad transition RMS effectively tied
+  at `-0.051%`, and worsens trace jump by `8.160%`. The 80-combination sweep
+  chooses different candidates for mean solution (`gamma=0.3,width=12h`),
+  broad transition RMS (`gamma=0.3,width=6h`), and trace jump
+  (`gamma=0.5,width=6h`). Thresholds `0.15..0.30` do not change the selected
+  top-two seams in this run. These are same-test exploratory results, not
+  independent calibration or a production estimator decision. Canonical
+  evidence is under
+  `checkpoints/annulus_CDR/coupling5/cross_axis_blend_detected_seam_c2_comparison/`.
+- The general local weak-residual reliability diagnostic is implemented in
+  `cli/compare_weak_residual_reliability_blend.py` and
+  `src/greenonet/complex_weak_residual_blend_diagnostics.py`. It compares four
+  frozen-checkpoint reconstructions: equal mean, geometry-only compact C2,
+  mismatch-detected seam C2, and local weak-residual reliability. For each
+  directional candidate `u_phi` or `u_psi`, it applies the existing x/y P1
+  weak operators and assembles the full defect
+  `R=Rx(u;phi)+Ry(u;psi)` by local element gather/scatter. It never solves a
+  global matrix equation and never uses reference `sol` or target fluxes to
+  construct weights. Smoothed mass-normalized squared residuals select the
+  lower-defect candidate through a partition of unity; equal evidence returns
+  `w_phi=w_psi=0.5`.
+- On frozen `annulus_CDR/coupling5`, the fixed weak preset `gamma=0.5`, two
+  50:50 graph-smoothing steps, and `relative_floor=0.1` changes mean `rel_sol`
+  from `5.156246%` to `4.564722%` (`-11.472%` relative), broad transition RMS
+  by `-9.870%`, and transition trace-jump RMS by `-48.785%`. It wins `rel_sol`
+  on `49/50` samples and trace jump on `50/50`; the paired-bootstrap 95% CI for
+  aggregate `rel_sol` change is `[-12.736%,-10.261%]`. The pointwise weight
+  field remains axially striped and its maximum neighboring jump is
+  `0.315646`, so the result supports the reliability signal but does not prove
+  transverse regularity or justify production integration. The optional
+  36-case sweep is same-test target sensitivity analysis and must not define a
+  default without an independent frozen calibration/validation protocol.
+  Canonical evidence is under
+  `checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison/`.
+- The same fixed four-way comparison was run without a sweep on all 50 Poisson
+  test samples from frozen `Annulus_poisson/coupling15`. Mean `rel_sol` is
+  `5.569825%` for equal mean, `5.470165%` for geometry-only compact C2,
+  `5.312818%` for mismatch-detected seam C2, and `4.860579%` for local
+  weak-residual reliability. Their relative changes versus equal mean are
+  `-1.789%`, `-4.614%`, and `-12.734%`, with `35/50`, `44/50`, and `50/50`
+  sample wins. Broad transition RMS changes by `-3.412%`, `-6.954%`, and
+  `-8.360%`; transition trace-jump RMS changes by `-45.308%`, `-23.553%`, and
+  `-48.280%`. Thus the Poisson ordering matches the independent-source CDR
+  run: weak residual is strongest globally, geometry-only C2 is the more
+  controlled topology-specific trace smoother, and detected-seam C2 occupies
+  the middle ground. The weak weights still have axial stripe structure and a
+  maximum neighboring jump of `0.302343`, so this remains post-hoc evidence,
+  not structural regularity or a production-estimator decision. Canonical
+  evidence is under
+  `checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/`.
+- Complex CouplingNet supports an optional production final reconstruction at
+  `coupling_model.cross_axis_reconstruction`. The absent/disabled default
+  remains exact equal mean. The only supported production mode is
+  `local_weak_residual_reliability`; geometry-only compact C2 and
+  mismatch-detected seam C2 remain post-hoc-only. The production mode reuses
+  the existing full directional axial P1 weak operator, combined nodal mass,
+  and the valid-point graph `x_edges union y_edges`. It uses the locked preset
+  `gamma=0.5`, two 50:50 smoothing steps, and `relative_floor=0.1` unless the
+  config explicitly overrides them. It changes only detached trainer
+  `rel_sol`, evaluator official `u_pred`, and complex artifacts. Canonical loss,
+  checkpoint selection, projection, `phi/psi`, `u_phi/u_psi`, `rel_flux`, model
+  state keys, and the output contract remain unchanged. Reliability weights
+  use no `sol/target_phi/target_psi` and require no global matrix assembly or
+  solve. Source-only train/validation skips the optional reconstruction.
+- `annulus_CDR/coupling6` uses both column-diagonal Green-response projection
+  and production local weak-residual final reconstruction, with the
+  pre-projection fuser disabled. The best-energy checkpoint is exactly epoch
+  50; validation energy then rises `15.87%` by epoch 100, driven mainly by an
+  `87.34%` boundary-energy increase. On the frozen 50-sample test set, weak
+  reconstruction changes mean `rel_sol` from `5.225503%` to `4.680390%`
+  (`-10.432%`, 50/50 wins), transition RMS by `-9.161%` (38/50 wins), and
+  transition trace-jump RMS by `-49.401%` (50/50 wins). Versus the separately
+  trained physical-symmetric `coupling5`, `coupling6` has `-15.409%` boundary
+  energy but `+22.924%` mean `rel_flux`, with all 50 flux samples worse. The
+  projection weights are extreme (`w_phi<0.1` on `22.29%`, `w_phi>0.9` on
+  `21.85%`) and transition-edge weight-jump RMS is `0.247887`. This supports
+  the weak final estimator but leaves column-diagonal projection as an
+  unresolved boundary/flux tradeoff requiring paired seeded retraining.
+  Canonical report:
+  `checkpoints/annulus_CDR/coupling6/weak_residual_reliability_analysis/diagnosis_report.md`.
 
 ## Verification Defaults
 

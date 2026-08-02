@@ -9,6 +9,7 @@ from greenonet.coefficients import load_coefficient_functions
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     ComplexCouplingSourceConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     ComplexReferenceDiagnosticsConfig,
     CouplingBranchFusionConfig,
@@ -540,6 +541,49 @@ class TestTrainCLIDatasetConfig:
             )
         )
 
+    def test_parses_optional_complex_cross_axis_reconstruction(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"geometry_mode": "complex"},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "cross_axis_reconstruction": {
+                    "enabled": True,
+                    "mode": "local_weak_residual_reliability",
+                    "gamma": 0.75,
+                    "smoothing_steps": 3,
+                    "smoothing_relaxation": 0.25,
+                    "relative_floor": 0.2,
+                    "eps": 1e-10,
+                }
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": False, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        (
+            _dataset,
+            _model,
+            _training,
+            coupling_model,
+            _coupling_training,
+            _pipeline,
+            _terminal,
+        ) = TrainCLI()._build_configs(config_path)
+
+        assert coupling_model.cross_axis_reconstruction == (
+            ComplexCrossAxisReconstructionConfig(
+                enabled=True,
+                gamma=0.75,
+                smoothing_steps=3,
+                smoothing_relaxation=0.25,
+                relative_floor=0.2,
+                eps=1e-10,
+            )
+        )
+
     def test_rejects_legacy_complex_pre_projection_fusion(self, tmp_path):
         config_path = tmp_path / "config.json"
         payload = {
@@ -749,6 +793,43 @@ class TestTrainCLIDatasetConfig:
         assert coupling_model_cfg.balance_projection.enabled is True
         assert coupling_model_cfg.balance_projection.mode == "symmetric"
         assert coupling_training_cfg.losses.balance_loss.enabled is False
+
+    def test_parses_column_diagonal_green_response_projection_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "balance_projection": {
+                    "enabled": True,
+                    "mode": "column_diagonal_green_response",
+                    "column_diagonal_green_response": {
+                        "gain_squared_eps": 3.0e-10,
+                        "gain_exponent": 0.25,
+                    },
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        configs = TrainCLI()._build_configs(config_path)
+        coupling_model_cfg = configs[3]
+
+        assert (
+            coupling_model_cfg.balance_projection.mode
+            == "column_diagonal_green_response"
+        )
+        assert (
+            coupling_model_cfg.balance_projection.column_diagonal_green_response.gain_squared_eps
+            == 3.0e-10
+        )
+        assert (
+            coupling_model_cfg.balance_projection.column_diagonal_green_response.gain_exponent
+            == 0.25
+        )
 
     def test_parses_branch_fusion_object_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -1463,6 +1544,29 @@ class TestComplexPhysicsLossTrainingConfig:
 
         assert cfg.enabled is True
         assert cfg.mode == "symmetric"
+
+    def test_eval_cli_parses_column_diagonal_green_response_config(self):
+        cfg = EvalCouplingCLI._build_balance_projection_config(
+            {
+                "enabled": True,
+                "mode": "column_diagonal_green_response",
+                "column_diagonal_green_response": {
+                    "gain_squared_eps": 7.0e-11,
+                    "gain_exponent": 0.5,
+                },
+            },
+            "coupling_model",
+        )
+
+        assert cfg.mode == "column_diagonal_green_response"
+        assert (
+            cfg.column_diagonal_green_response.gain_squared_eps  # type: ignore[union-attr]
+            == 7.0e-11
+        )
+        assert (
+            cfg.column_diagonal_green_response.gain_exponent  # type: ignore[union-attr]
+            == 0.5
+        )
 
     def test_eval_cli_parses_source_stencil_lift_config(self):
         config_kwargs = {

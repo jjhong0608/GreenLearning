@@ -12,6 +12,7 @@ from greenonet.coupling_trainer import CouplingTrainer
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingBranchFusionConfig,
@@ -2290,12 +2291,39 @@ def test_physical_symmetric_config_is_complex_only():
         CouplingNet(config)
 
 
+def test_column_diagonal_green_response_config_is_complex_only():
+    config = CouplingModelConfig(
+        balance_projection={
+            "enabled": True,
+            "mode": "column_diagonal_green_response",
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="column_diagonal_green_response.*ComplexCouplingNet",
+    ):
+        CouplingNet(config)
+
+
 def test_pre_projection_fusion_is_complex_only():
     config = CouplingModelConfig(
         pre_projection_fusion={"enabled": True},
     )
 
     with pytest.raises(ValueError, match="pre_projection_fusion.*ComplexCouplingNet"):
+        CouplingNet(config)
+
+
+def test_cross_axis_reconstruction_is_complex_only():
+    config = CouplingModelConfig(
+        cross_axis_reconstruction=ComplexCrossAxisReconstructionConfig(enabled=True),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cross_axis_reconstruction.*ComplexCouplingNet",
+    ):
         CouplingNet(config)
 
 

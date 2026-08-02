@@ -19,6 +19,7 @@ from greenonet.complex_geometry import load_complex_geometry
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
@@ -196,7 +197,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "validation": True,
     }
     assert summary["artifact_dataset_contract"] == "full_reference_test_npz"
-    assert "cross" not in json.dumps(summary)
+    assert "cross_consistency" not in json.dumps(summary)
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_sample_metrics.csv").exists()
     assert (outdir / "data" / "selected_raw_arrays.npz").exists()
@@ -306,7 +307,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "enabled": True,
         "weight": 4.0,
         "eps": 1e-12,
-        "trial_solution": "u_pred=0.5*(u_phi+u_psi)",
+        "trial_solution": "u_equal_mean=0.5*(u_phi+u_psi)",
         "test_space": "directional_segment_p1_nodal",
         "coefficient_evaluation": "direct_at_physical_element_midpoints",
         "reaction_split": "c/2_per_direction",
@@ -453,7 +454,6 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     ):
         assert any(key.endswith(suffix) for key in raw.files)
     assert all("cross" not in key for key in raw.files)
-
     coefficient_raw = np.load(outdir / "data" / "coefficient_fields.npz")
     assert set(coefficient_raw.files) == {
         "coords_valid",
@@ -518,6 +518,293 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         _marker_for_field(outdir, "psi")["cmin"],
         _marker_for_field(outdir, "psi")["cmax"],
     )
+
+
+def test_column_diagonal_green_response_artifact_provenance_and_fields(
+    tmp_path,
+    monkeypatch,
+):
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coeff_path = write_coefficients(tmp_path / "coeffs.py")
+    data_dir = tmp_path / "test_data"
+    write_sample_npz(data_dir)
+    coupling_cfg = CouplingModelConfig(
+        branch_input_dim=4,
+        hidden_dim=4,
+        depth=1,
+        dtype=torch.float64,
+        balance_projection=BalanceProjectionConfig(
+            mode="column_diagonal_green_response",
+            column_diagonal_green_response={
+                "gain_squared_eps": 2.0e-12,
+                "gain_exponent": 0.25,
+            },
+        ),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            num_frequencies=2,
+            max_frequency=2.0,
+            transverse_trunk=TransverseTrunkConfig(
+                enabled=True,
+                fusion="product",
+                length_context=True,
+            ),
+        ),
+    )
+    green_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        branch_input_dim=4,
+        use_green=False,
+        dtype=torch.float64,
+    )
+    coupling_path = tmp_path / "complex_coupling.safetensors"
+    green_path = tmp_path / "green.safetensors"
+    save_state_dict_safetensors(
+        ComplexCouplingNet(coupling_cfg).state_dict(), coupling_path
+    )
+    save_model_with_config(GreenONetModel(green_cfg), green_cfg, green_path)
+    config_path = write_complex_config(
+        tmp_path / "config.json",
+        geometry_path=geometry_path,
+        train_path=None,
+        test_path=data_dir,
+        coefficient_path=coeff_path,
+    )
+    config_payload = json.loads(config_path.read_text())
+    config_payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "column_diagonal_green_response",
+        "column_diagonal_green_response": {
+            "gain_squared_eps": 2.0e-12,
+            "gain_exponent": 0.25,
+        },
+    }
+    config_path.write_text(json.dumps(config_payload))
+    outdir = tmp_path / "artifacts"
+
+    summary = export_complex_coupling_artifacts(
+        CouplingArtifactRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_path,
+            green_checkpoint=green_path,
+            outdir=outdir,
+            selected_samples=(0,),
+            device="cpu",
+            theme="plotly_white",
+        )
+    )
+
+    projection = summary["balance_projection"]
+    response = projection["column_diagonal_green_response"]
+    assert projection["mode"] == "column_diagonal_green_response"
+    assert projection["raw_physical_difference_preserved"] is False
+    assert response["active"] is True
+    assert response["gain_squared_eps"] == 2.0e-12
+    assert response["gain_exponent"] == 0.25
+    assert response["fixed_exponent"] is True
+    assert response["learnable_exponent"] is False
+    assert "alpha=0.25" in projection["formula"]
+    assert "sigmoid" in response["weight_formula"]
+    assert response["gain_definition"] == "diag(H_s^T M_Omega H_s)"
+    assert response["summation_axis"] == "output_rows_for_each_source_column"
+    assert response["row_norm_used"] is False
+    assert response["full_gram_solve"] is False
+    assert response["global_response_matrix_materialized"] is False
+    assert response["context_build_count"] == 1
+    assert response["raw_archive"] == ("data/column_diagonal_green_response_fields.npz")
+    assert summary["projection_figure_fields"] == [
+        "gamma_x_squared",
+        "gamma_y_squared",
+        "correction_weight_phi",
+    ]
+    assert summary["projection_figure_count"] == 3
+
+    response_fields = np.load(
+        outdir / "data" / "column_diagonal_green_response_fields.npz"
+    )
+    assert set(response_fields.files) == {
+        "gamma_x_squared",
+        "gamma_y_squared",
+        "regularized_gamma_x_squared",
+        "regularized_gamma_y_squared",
+        "correction_weight_phi",
+        "correction_weight_psi",
+        "gain_exponent",
+    }
+    assert response_fields["gain_exponent"].shape == ()
+    assert response_fields["gain_exponent"].item() == 0.25
+    np.testing.assert_allclose(
+        response_fields["correction_weight_phi"]
+        + response_fields["correction_weight_psi"],
+        1.0,
+    )
+    for field in summary["projection_figure_fields"]:
+        assert (outdir / "figures" / "balance_projection" / f"{field}.json").is_file()
+    weight_figure = json.loads(
+        (
+            outdir / "figures" / "balance_projection" / "correction_weight_phi.json"
+        ).read_text()
+    )
+    assert "gain exponent=0.25" in weight_figure["layout"]["title"]["text"]
+
+    selected = np.load(outdir / "data" / "selected_raw_arrays.npz")
+    for suffix in (
+        "_projection_balance_residual_before",
+        "_projection_correction_phi",
+        "_projection_correction_psi",
+        "_projection_correction_weight_phi",
+        "_projection_correction_weight_psi",
+        "_projection_difference_update",
+    ):
+        assert any(key.endswith(suffix) for key in selected.files)
+
+
+def test_local_weak_reliability_artifact_uses_weighted_official_prediction(
+    tmp_path,
+    monkeypatch,
+):
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coefficient_path = write_coefficients(tmp_path / "coefficients.py")
+    data_dir = tmp_path / "test_data"
+    write_sample_npz(data_dir)
+    coupling_cfg = CouplingModelConfig(
+        branch_input_dim=4,
+        hidden_dim=4,
+        depth=1,
+        dtype=torch.float64,
+        balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+        cross_axis_reconstruction=ComplexCrossAxisReconstructionConfig(
+            enabled=True,
+            gamma=0.5,
+            smoothing_steps=2,
+            smoothing_relaxation=0.5,
+            relative_floor=0.1,
+        ),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            num_frequencies=2,
+            max_frequency=2.0,
+            transverse_trunk=TransverseTrunkConfig(
+                enabled=True,
+                length_context=True,
+            ),
+        ),
+    )
+    green_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        branch_input_dim=4,
+        use_green=False,
+        dtype=torch.float64,
+    )
+    coupling_path = tmp_path / "complex_coupling.safetensors"
+    green_path = tmp_path / "green.safetensors"
+    save_state_dict_safetensors(
+        ComplexCouplingNet(coupling_cfg).state_dict(),
+        coupling_path,
+    )
+    save_model_with_config(GreenONetModel(green_cfg), green_cfg, green_path)
+    config_path = write_complex_config(
+        tmp_path / "config.json",
+        geometry_path=geometry_path,
+        train_path=None,
+        test_path=data_dir,
+        coefficient_path=coefficient_path,
+    )
+    config_payload = json.loads(config_path.read_text())
+    config_payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "physical_symmetric",
+    }
+    config_payload["coupling_model"]["cross_axis_reconstruction"] = {
+        "enabled": True,
+        "mode": "local_weak_residual_reliability",
+        "gamma": 0.5,
+        "smoothing_steps": 2,
+        "smoothing_relaxation": 0.5,
+        "relative_floor": 0.1,
+        "eps": 1e-12,
+    }
+    config_path.write_text(json.dumps(config_payload))
+    outdir = tmp_path / "artifacts"
+
+    summary = export_complex_coupling_artifacts(
+        CouplingArtifactRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_path,
+            green_checkpoint=green_path,
+            outdir=outdir,
+            selected_samples=(0,),
+            device="cpu",
+            theme="plotly_white",
+        )
+    )
+
+    reliability = summary["cross_axis_reconstruction"]
+    assert reliability["enabled"] is True
+    assert reliability["mode"] == "local_weak_residual_reliability"
+    assert reliability["uses_reference_targets"] is False
+    assert reliability["affects_training_objective"] is False
+    assert reliability["uses_global_matrix_solve"] is False
+    assert reliability["requires_global_matrix_solve"] is False
+    assert reliability["geometry_only_and_mismatch_modes_available"] is False
+    assert reliability["geometry_only_mode_available"] is False
+    assert reliability["mismatch_detected_mode_available"] is False
+    assert reliability["context_build_count"] == 1
+    assert summary["solution_prediction"] == ("u_pred=w_phi*u_phi+(1-w_phi)*u_psi")
+    expected_figures = {
+        "u_equal_mean_error",
+        "weak_reliability_eta_phi_squared",
+        "weak_reliability_eta_psi_squared",
+        "weak_reliability_theta",
+        "weak_reliability_weight_phi",
+    }
+    assert expected_figures.issubset(set(summary["figure_fields"]))
+    for field in expected_figures:
+        assert (
+            outdir / "figures" / field / f"sample_0000_sample_0000_{field}.json"
+        ).is_file()
+
+    raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
+    prefix = "sample_0000_sample_0000_"
+    u_phi = raw[f"{prefix}u_phi"]
+    u_psi = raw[f"{prefix}u_psi"]
+    weight_phi = raw[f"{prefix}weak_reliability_weight_phi"]
+    weight_psi = raw[f"{prefix}weak_reliability_weight_psi"]
+    np.testing.assert_allclose(weight_phi + weight_psi, 1.0)
+    np.testing.assert_allclose(
+        raw[f"{prefix}u_pred"],
+        weight_phi * u_phi + weight_psi * u_psi,
+    )
+    np.testing.assert_allclose(
+        raw[f"{prefix}u_equal_mean"],
+        0.5 * (u_phi + u_psi),
+    )
+    for field in (
+        "weak_reliability_residual_phi_x",
+        "weak_reliability_residual_phi_y",
+        "weak_reliability_residual_phi_full",
+        "weak_reliability_residual_psi_x",
+        "weak_reliability_residual_psi_y",
+        "weak_reliability_residual_psi_full",
+        "weak_reliability_eta_phi_squared_raw",
+        "weak_reliability_eta_psi_squared_raw",
+        "weak_reliability_eta_phi_squared",
+        "weak_reliability_eta_psi_squared",
+        "weak_reliability_sample_floor",
+        "weak_reliability_theta",
+    ):
+        assert f"{prefix}{field}" in raw.files
+
+    with (outdir / "metrics" / "per_sample_metrics.csv").open() as fp:
+        row = next(csv.DictReader(fp))
+    assert "rel_sol" in row
+    assert "rel_sol_equal_mean" in row
+    assert "weak_weight_phi_mean" in row
+    assert "weak_support_fraction" in row
 
 
 def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(

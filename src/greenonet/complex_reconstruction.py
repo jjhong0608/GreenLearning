@@ -19,6 +19,43 @@ class ComplexReconstructionResult:
         return 0.5 * (self.u_phi_valid + self.u_psi_valid)
 
 
+@torch.no_grad()
+def evaluate_segment_green_kernel(
+    *,
+    green_model: torch.nn.Module,
+    green_branch: torch.Tensor,
+    segment_index: int,
+    node_t: torch.Tensor,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    """Evaluate one frozen segment kernel for reconstruction or response gains."""
+
+    if green_branch.dim() != 4 or green_branch.shape[2] != 4:
+        raise ValueError("green_branch must have shape (B, S, 4, M).")
+    if segment_index < 0 or segment_index >= green_branch.shape[1]:
+        raise ValueError("segment_index is outside the Green branch segment range.")
+    branch = green_branch[0, segment_index]
+    kernel = evaluate_green_pairs(
+        green_model,
+        a_unit=branch[0],
+        ap_unit=branch[1],
+        b_unit=branch[2],
+        c_unit=branch[3],
+        t_eval=node_t,
+        eta_eval=node_t,
+    ).to(device=device, dtype=dtype)
+    expected_shape = (int(node_t.numel()), int(node_t.numel()))
+    if kernel.shape != expected_shape:
+        raise ValueError(
+            "Green segment kernel must have shape "
+            f"{expected_shape}, received {tuple(kernel.shape)}."
+        )
+    if not torch.all(torch.isfinite(kernel)):
+        raise ValueError("Green segment kernel contains non-finite values.")
+    return kernel
+
+
 def reconstruct_from_projected_response(
     *,
     green_model: torch.nn.Module,
@@ -99,17 +136,14 @@ def _reconstruct_axis(
         interior = node_valid_index >= 0
         if torch.any(interior):
             node_source[:, interior] = source_valid[:, node_valid_index[interior]]
-        with torch.no_grad():
-            branch = green_branch[0, segment_index]
-            kernel = evaluate_green_pairs(
-                green_model,
-                a_unit=branch[0],
-                ap_unit=branch[1],
-                b_unit=branch[2],
-                c_unit=branch[3],
-                t_eval=node_t,
-                eta_eval=node_t,
-            ).to(device=device, dtype=source_valid.dtype)
+        kernel = evaluate_segment_green_kernel(
+            green_model=green_model,
+            green_branch=green_branch,
+            segment_index=segment_index,
+            node_t=node_t,
+            dtype=source_valid.dtype,
+            device=device,
+        )
         node_solution = torch.matmul(node_source * node_weight.unsqueeze(0), kernel.T)
         if torch.any(interior):
             output_valid[:, node_valid_index[interior]] = node_solution[:, interior]

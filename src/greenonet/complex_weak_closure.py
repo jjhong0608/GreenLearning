@@ -62,6 +62,20 @@ class ComplexWeakClosureResult:
     rhs_l2_squared_per_sample: torch.Tensor
 
 
+@dataclass(frozen=True)
+class ComplexDirectionalWeakResiduals:
+    """Assembled x/y weak residuals for one candidate solution field."""
+
+    x: torch.Tensor
+    y: torch.Tensor
+
+    @property
+    def full(self) -> torch.Tensor:
+        """Return the full-operator weak residual on the shared valid nodes."""
+
+        return self.x + self.y
+
+
 def build_directional_weak_context(
     geometry: ComplexGeometryMetadata,
     coeffs: CoefficientFunctions,
@@ -104,16 +118,13 @@ def directional_weak_operator_closure_loss(
         raise ValueError("eps must be positive.")
 
     context = context.to(u_pred_valid.device)
-    x_residual = _assemble_axis_residual(
+    residuals = assemble_directional_weak_residuals(
         u_valid=u_pred_valid,
-        source_valid=projected_physical[:, 0],
-        context=context.x,
+        projected_physical=projected_physical,
+        context=context,
     )
-    y_residual = _assemble_axis_residual(
-        u_valid=u_pred_valid,
-        source_valid=projected_physical[:, 1],
-        context=context.y,
-    )
+    x_residual = residuals.x
+    y_residual = residuals.y
     x_dual_per_sample = (x_residual.square() / (context.x.nodal_mass + float(eps))).sum(
         dim=-1
     )
@@ -138,6 +149,43 @@ def directional_weak_operator_closure_loss(
         y_residual=y_residual,
         rhs_l2_squared_per_sample=rhs_l2_squared_per_sample,
     )
+
+
+def assemble_directional_weak_residuals(
+    *,
+    u_valid: torch.Tensor,
+    projected_physical: torch.Tensor,
+    context: ComplexDirectionalWeakContext,
+) -> ComplexDirectionalWeakResiduals:
+    """Apply both axial weak operators without solving a global system."""
+
+    if u_valid.dim() != 2:
+        raise ValueError("u_valid must have shape (B, P).")
+    if u_valid.shape[-1] != context.num_points:
+        raise ValueError("u_valid point count does not match weak context.")
+    if projected_physical.shape != (
+        u_valid.shape[0],
+        2,
+        context.num_points,
+    ):
+        raise ValueError("projected_physical must have shape (B, 2, P).")
+    if not torch.all(torch.isfinite(u_valid)):
+        raise ValueError("u_valid must contain only finite values.")
+    if not torch.all(torch.isfinite(projected_physical)):
+        raise ValueError("projected_physical must contain only finite values.")
+
+    context = context.to(u_valid.device)
+    x_residual = _assemble_axis_residual(
+        u_valid=u_valid,
+        source_valid=projected_physical[:, 0],
+        context=context.x,
+    )
+    y_residual = _assemble_axis_residual(
+        u_valid=u_valid,
+        source_valid=projected_physical[:, 1],
+        context=context.y,
+    )
+    return ComplexDirectionalWeakResiduals(x=x_residual, y=y_residual)
 
 
 def _build_axis_context(

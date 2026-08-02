@@ -3,6 +3,7 @@ import torch
 
 from greenonet.config import (
     Axis1DTrunkConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
@@ -50,6 +51,69 @@ def test_complex_pre_projection_fusion_config_round_trip():
     )
     assert loaded.pre_projection_fusion.mode == "absolute"
     assert loaded.pre_projection_fusion.final_layer_init_scale == 0.25
+
+
+def test_complex_cross_axis_reconstruction_config_round_trip():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingModelConfig(
+        cross_axis_reconstruction=ComplexCrossAxisReconstructionConfig(
+            enabled=True,
+            gamma=0.75,
+            smoothing_steps=3,
+            smoothing_relaxation=0.25,
+            relative_floor=0.2,
+            eps=1.0e-10,
+        )
+    )
+
+    payload = _serialize_config(config)
+    loaded = _deserialize_config(payload, CouplingModelConfig)
+
+    assert isinstance(loaded, CouplingModelConfig)
+    assert loaded == config
+    assert isinstance(
+        loaded.cross_axis_reconstruction,
+        ComplexCrossAxisReconstructionConfig,
+    )
+    assert loaded.cross_axis_reconstruction.enabled is True
+    assert loaded.cross_axis_reconstruction.gamma == pytest.approx(0.75)
+
+
+def test_complex_cross_axis_reconstruction_rejects_unknown_key() -> None:
+    with pytest.raises(TypeError, match="cross_axis_reconstruction has unknown keys"):
+        ComplexCrossAxisReconstructionConfig.from_raw(
+            {"enabled": True, "geometry_ramp": True}
+        )
+
+
+def test_column_diagonal_green_response_config_round_trip():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingModelConfig(
+        balance_projection={
+            "enabled": True,
+            "mode": "column_diagonal_green_response",
+            "column_diagonal_green_response": {
+                "gain_squared_eps": 2.5e-11,
+                "gain_exponent": 0.25,
+            },
+        }
+    )
+
+    payload = _serialize_config(config)
+    loaded = _deserialize_config(payload, CouplingModelConfig)
+
+    assert isinstance(loaded, CouplingModelConfig)
+    assert loaded == config
+    assert loaded.balance_projection.mode == "column_diagonal_green_response"
+    assert (
+        loaded.balance_projection.column_diagonal_green_response.gain_squared_eps
+        == 2.5e-11
+    )
+    assert (
+        loaded.balance_projection.column_diagonal_green_response.gain_exponent == 0.25
+    )
 
 
 def test_save_load_green_model_with_config(tmp_path):

@@ -6,13 +6,17 @@ from typing import Any
 import torch
 
 from greenonet.complex_geometry import ComplexGeometryMetadata
+from greenonet.complex_green_response_projection import (
+    ColumnDiagonalGreenResponseContext,
+)
 from greenonet.config import BalanceProjectionConfig
 
 
 @dataclass(frozen=True)
 class ComplexProjectionResult:
-    """Physical symmetric split with explicit reference pull-back diagnostics."""
+    """Physical split with explicit correction and reference pull-back diagnostics."""
 
+    mode: str
     raw_response: torch.Tensor
     raw_physical: torch.Tensor
     projected_response: torch.Tensor
@@ -22,8 +26,14 @@ class ComplexProjectionResult:
     physical_balance_residual: torch.Tensor
     raw_difference: torch.Tensor
     projected_difference: torch.Tensor
+    correction_phi: torch.Tensor
+    correction_psi: torch.Tensor
+    correction_weight_phi: torch.Tensor
+    correction_weight_psi: torch.Tensor
+    difference_update: torch.Tensor
     sigma_x: torch.Tensor
     sigma_y: torch.Tensor
+    column_diagonal_context: ColumnDiagonalGreenResponseContext | None
 
 
 def apply_complex_balance_projection(
@@ -31,16 +41,21 @@ def apply_complex_balance_projection(
     rhs_phys: torch.Tensor,
     geometry: ComplexGeometryMetadata,
     config: BalanceProjectionConfig | str | dict[str, Any],
+    column_diagonal_context: ColumnDiagonalGreenResponseContext | None = None,
 ) -> ComplexProjectionResult:
     """Project in physical source space and pull back to reference responses."""
 
     projection = BalanceProjectionConfig.from_raw(config)
     if not projection.enabled:
         raise ValueError("Complex balance projection must be enabled.")
-    if projection.mode != "physical_symmetric":
+    if projection.mode not in {
+        "physical_symmetric",
+        "column_diagonal_green_response",
+    }:
         raise ValueError(
             "Complex output-contract version 6 requires "
-            "balance_projection.mode='physical_symmetric'."
+            "balance_projection.mode='physical_symmetric' or "
+            "'column_diagonal_green_response'."
         )
 
     sigma_x, sigma_y = _validate_inputs(
@@ -53,13 +68,38 @@ def apply_complex_balance_projection(
         dim=1,
     )
     raw_physical_difference = raw_physical[:, 0] - raw_physical[:, 1]
-    projected_physical = torch.stack(
-        (
-            0.5 * (rhs_phys + raw_physical_difference),
-            0.5 * (rhs_phys - raw_physical_difference),
-        ),
-        dim=1,
-    )
+    raw_balance_residual = rhs_phys - raw_physical[:, 0] - raw_physical[:, 1]
+    if projection.mode == "physical_symmetric":
+        projected_difference = raw_physical_difference
+        projected_physical = torch.stack(
+            (
+                0.5 * (rhs_phys + projected_difference),
+                0.5 * (rhs_phys - projected_difference),
+            ),
+            dim=1,
+        )
+        correction_weight_phi = torch.full_like(rhs_phys, 0.5)
+        correction_weight_psi = torch.full_like(rhs_phys, 0.5)
+        difference_update = torch.zeros_like(rhs_phys)
+    else:
+        if column_diagonal_context is None:
+            raise ValueError(
+                "column_diagonal_green_response projection requires a frozen "
+                "column-diagonal Green-response context."
+            )
+        column_diagonal_context.validate_for(rhs_phys)
+        correction_weight_phi = column_diagonal_context.correction_weight_phi.unsqueeze(
+            0
+        ).expand_as(rhs_phys)
+        correction_weight_psi = 1.0 - correction_weight_phi
+        difference_update = (
+            correction_weight_phi - correction_weight_psi
+        ) * raw_balance_residual
+        projected_difference = raw_physical_difference + difference_update
+        phi = 0.5 * (rhs_phys + projected_difference)
+        projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
+    correction_phi = projected_physical[:, 0] - raw_physical[:, 0]
+    correction_psi = projected_physical[:, 1] - raw_physical[:, 1]
     projected_response = torch.stack(
         (
             sigma_x * projected_physical[:, 0],
@@ -79,6 +119,7 @@ def apply_complex_balance_projection(
         rhs_phys - projected_physical[:, 0] - projected_physical[:, 1]
     )
     return ComplexProjectionResult(
+        mode=projection.mode,
         raw_response=raw_response,
         raw_physical=raw_physical,
         projected_response=projected_response,
@@ -88,8 +129,14 @@ def apply_complex_balance_projection(
         physical_balance_residual=physical_balance_residual,
         raw_difference=raw_physical_difference,
         projected_difference=(projected_physical[:, 0] - projected_physical[:, 1]),
+        correction_phi=correction_phi,
+        correction_psi=correction_psi,
+        correction_weight_phi=correction_weight_phi,
+        correction_weight_psi=correction_weight_psi,
+        difference_update=difference_update,
         sigma_x=sigma_x.expand_as(rhs_phys),
         sigma_y=sigma_y.expand_as(rhs_phys),
+        column_diagonal_context=column_diagonal_context,
     )
 
 

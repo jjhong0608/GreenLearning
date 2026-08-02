@@ -11,6 +11,7 @@ from greenonet.complex_projection import apply_complex_balance_projection
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
+    ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
@@ -108,6 +109,34 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
     assert model.transverse_feature_dim == 4
     assert not hasattr(model, "axis_one_hot")
     assert int(model._output_contract_version.item()) == 6
+
+
+def test_cross_axis_reconstruction_does_not_change_model_state_or_contract() -> None:
+    disabled = _model()
+    enabled = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=8,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            cross_axis_reconstruction=ComplexCrossAxisReconstructionConfig(
+                enabled=True
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                num_frequencies=2,
+                max_frequency=2.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+
+    assert enabled.state_dict().keys() == disabled.state_dict().keys()
+    assert enabled.OUTPUT_CONTRACT_VERSION == disabled.OUTPUT_CONTRACT_VERSION == 6
 
 
 def test_complex_pre_projection_fusion_disabled_preserves_state_surface(tmp_path):
@@ -586,6 +615,66 @@ def test_complex_model_accepts_physical_symmetric_projection():
     )
 
     assert model.config.balance_projection.mode == "physical_symmetric"
+
+
+def test_complex_model_accepts_column_diagonal_green_response_projection():
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="column_diagonal_green_response",
+                column_diagonal_green_response={"gain_exponent": 0.25},
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+
+    assert model.config.balance_projection.mode == "column_diagonal_green_response"
+    assert model.OUTPUT_CONTRACT_VERSION == 6
+
+
+def test_column_diagonal_projection_does_not_change_model_state_dict_surface():
+    torch.manual_seed(123)
+    symmetric = _model()
+    torch.manual_seed(123)
+    column = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=8,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="column_diagonal_green_response",
+                column_diagonal_green_response={"gain_exponent": 0.25},
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                num_frequencies=2,
+                max_frequency=2.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+
+    assert symmetric.state_dict().keys() == column.state_dict().keys()
+    assert (
+        column.config.balance_projection.column_diagonal_green_response.gain_exponent
+        == 0.25
+    )
+    for key, value in symmetric.state_dict().items():
+        assert value.shape == column.state_dict()[key].shape
 
 
 def test_complex_model_rejects_legacy_raw_unit_checkpoint(tmp_path):
