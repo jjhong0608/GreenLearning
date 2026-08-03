@@ -307,12 +307,15 @@ class ComplexCouplingEvaluator(LoggingMixin):
             stats = context.statistics()
             self.logger.info(
                 "symmetric-tangent Green-response context build_seconds=%.6f "
-                "eta=%.6e relative_lambda=%.6e denominator_relative_eps=%.6e "
+                "eta=%.6e eta_strategy=%s line_search_relative_eps=%.6e "
+                "relative_lambda=%.6e denominator_relative_eps=%.6e "
                 "gain_scale=%.6e denominator=[%.6e, %.6e] "
                 "x_blocks=%d y_blocks=%d row_norm_used=false "
                 "global_matrix_materialized=false full_gram_solve=false",
                 self._tangent_context_cache.build_seconds,
                 context.eta,
+                context.eta_strategy,
+                context.line_search_relative_eps,
                 context.relative_lambda,
                 context.denominator_relative_eps,
                 stats["gain_scale"],
@@ -396,6 +399,33 @@ class ComplexCouplingEvaluator(LoggingMixin):
                     ),
                 }
             )
+            if tangent.eta_star is not None:
+                if (
+                    tangent.eta_capped is None
+                    or tangent.line_search_numerator is None
+                    or tangent.line_search_denominator is None
+                ):
+                    raise RuntimeError("Adaptive tangent diagnostics are incomplete.")
+                row.update(
+                    {
+                        "tangent_eta_cap": tangent.eta_cap,
+                        "tangent_eta_star": float(
+                            tangent.eta_star[sample_offset].item()
+                        ),
+                        "tangent_eta_applied": float(
+                            tangent.eta_applied[sample_offset].item()
+                        ),
+                        "tangent_eta_capped": int(
+                            tangent.eta_capped[sample_offset].item()
+                        ),
+                        "tangent_line_search_numerator": float(
+                            tangent.line_search_numerator[sample_offset].item()
+                        ),
+                        "tangent_line_search_denominator": float(
+                            tangent.line_search_denominator[sample_offset].item()
+                        ),
+                    }
+                )
         if bool(prediction.batch.has_solution[sample_offset].item()):
             row["rel_sol"] = float(
                 relative_l2_valid(

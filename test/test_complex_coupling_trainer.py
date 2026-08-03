@@ -907,6 +907,83 @@ def test_complex_tangent_projection_smoke_reuses_context_and_preserves_autograd(
     assert second.projection.symmetric_tangent_diagnostics is not None
 
 
+def test_complex_adaptive_tangent_uses_scheduled_training_cap_and_final_validation_cap(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={
+                    "eta": 0.01,
+                    "eta_strategy": "closed_loop_exact_line_search",
+                    "line_search_relative_eps": 1e-12,
+                    "relative_lambda": 0.01,
+                },
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    work_dir = tmp_path / "adaptive_tangent_training"
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=3,
+            batch_size=1,
+            log_interval=1,
+            learning_rate=1e-3,
+            use_lr_schedule=True,
+            warmup_epochs=2,
+            min_lr=1e-4,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+        ),
+        work_dir=work_dir,
+        green_model=ConstantGreen(1.0),
+    )
+
+    trainer.train(dataset, dataset)
+
+    train_rows = [row for row in trainer.metric_rows if row["split"] == "train"]
+    val_rows = [row for row in trainer.metric_rows if row["split"] == "val"]
+    assert [float(row["tangent_eta_cap"]) for row in train_rows] == pytest.approx(
+        [0.005, 0.01, 0.01]
+    )
+    assert [float(row["tangent_eta_cap"]) for row in val_rows] == pytest.approx(
+        [0.01, 0.01, 0.01]
+    )
+    for row in (*train_rows, *val_rows):
+        assert "tangent_eta_star_mean" in row
+        assert "tangent_eta_applied_mean" in row
+        assert "tangent_eta_cap_fraction" in row
+        assert float(row["tangent_eta_applied_mean"]) <= float(row["tangent_eta_cap"])
+    assert trainer.symmetric_tangent_green_response_context_build_count == 1
+    training_log = (work_dir / "training.log").read_text()
+    assert "strategy=closed_loop_exact_line_search" in training_log
+    assert "kind=closed_loop_half_cosine_warmup_hold" in training_log
+    assert "training_cap=scheduled validation_cap=final" in training_log
+    with (work_dir / "complex_training_metrics.csv").open(newline="") as fp:
+        csv_rows = list(csv.DictReader(fp))
+    assert "tangent_eta_star_mean" in csv_rows[0]
+    assert "tangent_eta_applied_mean" in csv_rows[0]
+    assert "tangent_eta_cap_fraction" in csv_rows[0]
+
+
 def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))

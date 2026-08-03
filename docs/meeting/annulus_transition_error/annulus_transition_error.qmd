@@ -727,23 +727,28 @@ CDR도 Poisson과 같은 순서와 color contract를 사용합니다. 위쪽 sou
 **Transition:** post-hoc blend 이후의 다음 source-space candidate를 제안하며 마무리하겠습니다.
 :::
 
-## Why Equal Source Correction Is Not Equal Response
+## Exact Balance Does Not Imply Directional Response Consistency
 
 <div class="response-problem-grid">
 <div class="response-card source-space">
-<div class="small-label">Exact balance correction</div>
-<h3>Symmetric in source space</h3>
-$$r=f-p-q$$
-$$\delta\phi_{\mathrm{sym}}=\delta\psi_{\mathrm{sym}}=\frac{r}{2}$$
-$$\phi=p+\delta\phi_{\mathrm{sym}},\qquad \psi=q+\delta\psi_{\mathrm{sym}}$$
-<p>The residual is split equally, independent of directional response.</p>
+<div class="small-label">Physical raw proposals</div>
+<h3>Orthogonal projection to the balance plane</h3>
+<div class="response-equation compact">$$p=\frac{P}{L_x^2},\qquad q=\frac{Q}{L_y^2},\qquad d=p-q$$</div>
+<div class="response-equation compact">$$\mathcal C_f=\{(\phi,\psi):\phi+\psi=f\}$$</div>
+<div class="response-equation compact">$$\widetilde\phi=\frac{f+d}{2},\qquad
+\widetilde\psi=\frac{f-d}{2}$$</div>
+<div class="response-basis-list">
+<div><strong>normal / common</strong><span>$(1,1)$</span></div>
+<div><strong>tangent / difference</strong><span>$(1,-1)$</span></div>
+</div>
 </div>
 
 <div class="fragment response-card operator-space" data-fragment-index="0">
-<div class="small-label">What reconstruction actually sees</div>
-<h3>Directional response operators</h3>
-$$\delta u_\phi=H_x\delta\phi,\qquad H_x=K_xW_xL_x^2$$
-$$\delta u_\psi=H_y\delta\psi,\qquad H_y=K_yW_yL_y^2$$
+<div class="small-label">Directional reconstruction</div>
+<h3>Exact balance leaves a response mismatch</h3>
+<div class="response-equation compact">$$\widetilde u_\phi=H_x\widetilde\phi,\qquad
+\widetilde u_\psi=H_y\widetilde\psi$$</div>
+<div class="response-equation compact">$$m_0=H_x\widetilde\phi-H_y\widetilde\psi$$</div>
 <div class="response-factor-list" aria-label="Directional response factors">
 <div class="response-factor operator">Green kernel</div>
 <div class="response-factor operator">coefficient</div>
@@ -754,96 +759,98 @@ $$\delta u_\psi=H_y\delta\psi,\qquad H_y=K_yW_yL_y^2$$
 </div>
 
 <div class="fragment response-card consequence" data-fragment-index="1">
-<div class="small-label">Annulus transition consequence</div>
-<h3>Equal source correction ≠ equal solution response</h3>
-$$\delta\phi=\delta\psi=\frac r2$$
-$$\|H_x\|\gg\|H_y\|$$
-$$\Longrightarrow\quad\|\delta u_\phi\|\gg\|\delta u_\psi\|$$
-<p>A pointwise balanced split can still create a strongly imbalanced perturbation after Green reconstruction.</p>
+<div class="small-label">What remains unresolved</div>
+<h3>Feasible does not mean response-consistent</h3>
+<div class="response-equation compact">$$\widetilde\phi+\widetilde\psi=f$$</div>
+<div class="response-equation compact">$$\not\Longrightarrow\quad
+H_x\widetilde\phi=H_y\widetilde\psi$$</div>
+<div class="response-mismatch-flow">
+<div><strong>Projection</strong><span>removes the common-mode balance defect</span></div>
+<div><strong>Energy training</strong><span>reduces mismatch along the feasible plane</span></div>
+</div>
+<p>The balance constraint fixes feasibility, but leaves one pointwise tangent degree of freedom.</p>
 </div>
 </div>
 
-<div class="takeaway response-question-takeaway">The projection constraint belongs to physical source space, but the correction cost should reflect the downstream Green response.</div>
+<div class="takeaway response-question-takeaway">Exact source balance selects a feasible split, but not necessarily the response-consistent point on the balance plane.</div>
 
 ::: {.notes}
 **Target: 2분 20초**
 
-먼저 현재 symmetric projection의 한계를 분리해서 보겠습니다. raw proposal p와 q가 balance를 만족하지 않으면 residual r을 계산하고, phi와 psi에 정확히 절반씩 더합니다. 따라서 phi plus psi equals f는 정확히 만족하지만 두 방향의 correction cost가 같다고 가정합니다.
+먼저 network response P와 Q를 line length squared로 나누어 physical raw proposal p와 q를 만듭니다. 그 차이 d를 보존한 symmetric projection은 phi plus psi equals f라는 affine balance plane에 대한 Euclidean orthogonal projection입니다. Common 방향인 1 comma 1이 plane의 normal이고, difference 방향인 1 comma minus 1이 plane의 tangent입니다.
 
-**Click:** 실제 solution perturbation은 source correction 자체가 아니라 Hx delta phi와 Hy delta psi입니다. H에는 Green kernel, prescribed coefficient, quadrature, evaluation position, segment length 제곱이 함께 들어갑니다. H는 projection이 아니라 projected source를 reconstructed solution으로 보내는 directional response operator입니다.
+**Click:** exact-balanced source를 Hx와 Hy로 reconstruction하면 u phi tilde와 u psi tilde를 얻습니다. 두 결과의 차이 m zero는 balance가 맞은 뒤에도 남는 directional response mismatch입니다. H에는 Green kernel, prescribed coefficient, quadrature, evaluation position, segment length가 함께 들어가며, source split을 만드는 projection이 아니라 source를 solution으로 보내는 directional response operator입니다.
 
-**Click:** 따라서 같은 r over 2를 두 방향에 넣어도 response norm이 다르면 solution perturbation은 같지 않습니다. Annulus transition에서는 axial line length와 kernel row가 급격하게 바뀌므로 이 차이가 커질 수 있습니다. 이것이 source-space balance만으로 transition response를 제어할 수 없는 이유입니다.
+**Click:** 따라서 exact source balance만으로 Hx phi tilde equals Hy psi tilde를 결론낼 수 없습니다. Projection은 common-mode balance defect를 제거하지만, balance plane 내부의 tangent degree of freedom은 남깁니다. 현재 canonical energy loss와 optimizer는 이 feasible plane 위에서 mismatch를 줄이려고 합니다. 다음 장에서는 balance를 깨지 않고 response mismatch의 국소 감소 방향을 명시적으로 한 번 적용합니다.
 
-**If timing is tight:** equal source correction과 equal solution response가 같지 않다는 마지막 부등식만 설명합니다.
+**If timing is tight:** symmetric projection은 exact balance를 만들지만 balance plane 위의 response-consistent split까지 정하지는 않는다는 점만 설명합니다.
 
-**Transition:** 다음 장에서는 이 response 차이를 fixed diagonal metric으로 projection에 넣는 방법을 정의합니다.
+**Transition:** 다음 장에서는 symmetric-balanced source를 시작점으로 하는 feasible tangent correction을 정의합니다.
 :::
 
-## Next Candidate: Allocate Balance Correction by Green Response
+## Next Candidate: Tangent Correction Within the Balance Plane
 
 <div class="response-gain-strip">
 <div class="response-card gain-definition">
-<div class="small-label">Fixed source-to-global-response gain</div>
-<div class="response-equation column-gain">$$\begin{aligned}
-\gamma_{x,j}^2&=\left[H_x^\top M_\Omega H_x\right]_{jj}
-=\left\|M_\Omega^{1/2}H_x(:,j)\right\|_2^2,\\
-\gamma_{y,j}^2&=\left[H_y^\top M_\Omega H_y\right]_{jj}
-=\left\|M_\Omega^{1/2}H_y(:,j)\right\|_2^2.
-\end{aligned}$$</div>
+<div class="small-label">Start from the symmetric-balanced source</div>
+<div class="response-equation">$$\phi(\delta)=\widetilde\phi+\delta,\qquad
+\psi(\delta)=\widetilde\psi-\delta$$</div>
+<div class="response-equation compact">$$\phi(\delta)+\psi(\delta)=f
+\qquad\text{for every }\delta$$</div>
 </div>
 <div class="response-card gain-contract">
 <div class="small-label">Information contract</div>
-<div class="response-contract-row"><strong>Fixed</strong><span>geometry + prescribed coefficients + quadrature + frozen GreenNet</span></div>
-<div class="response-contract-row"><strong>Meaning</strong><span>source point $j$ $\rightarrow$ whole directional solution field</span></div>
-<div class="response-contract-row"><strong>Excluded</strong><span>solution targets, learned gate, full Gram matrix or solve</span></div>
+<div class="response-contract-row"><strong>Fixed</strong><span>$\eta$, damping, geometry, coefficients, quadrature, frozen GreenNet</span></div>
+<div class="response-contract-row"><strong>Uses</strong><span>response-operator forward and transpose actions</span></div>
+<div class="response-contract-row"><strong>Excluded</strong><span>reference targets, learned step, row norm, full Gram solve</span></div>
 </div>
 </div>
 
 <div class="response-projection-grid">
 <div class="fragment response-card" data-fragment-index="0">
-<div class="small-label">Full response cost $\rightarrow$ column diagonal</div>
-<div class="response-equation compact global-response-system">$$A_s=H_s^\top M_\Omega H_s,
-\qquad (A_x+A_y)\,\delta\boldsymbol\phi=A_y\mathbf r
-\quad\text{(full coupled solve)}$$</div>
-<div class="response-equation compact">$$A_s\mapsto D_s=\operatorname{diag}(A_s),
-\qquad \bar\gamma_{s,j}^2=\gamma_{s,j}^2+\varepsilon$$</div>
-<div class="response-equation compact">$$\min_{\delta\phi_j+\delta\psi_j=r_j}
-\left(\bar\gamma_{x,j}^2\delta\phi_j^2
-+\bar\gamma_{y,j}^2\delta\psi_j^2\right)$$</div>
-<p>Diagonalize to decouple source points; preserve exact pointwise balance.</p>
+<div class="small-label">Directional response objective</div>
+<div class="response-equation compact">$$m_0=H_x\widetilde\phi-H_y\widetilde\psi$$</div>
+<div class="response-equation compact tangent-objective">$$J(\delta)=\frac12
+\left\|m_0+(H_x+H_y)\delta\right\|_{M_\Omega}^2$$</div>
+<div class="response-equation compact">$$g=\nabla J(0)
+=(H_x+H_y)^\top M_\Omega m_0$$</div>
+<p>The gradient asks how a feasible difference-mode update changes the reconstructed mismatch.</p>
 </div>
 
 <div class="fragment response-card closed-form" data-fragment-index="1">
-<div class="small-label">Closed-form correction</div>
-<div class="response-equation">$$\delta\phi_j=\frac{\bar\gamma_{y,j}^2}{\bar\gamma_{x,j}^2+\bar\gamma_{y,j}^2}r_j$$</div>
-<div class="response-equation">$$\delta\psi_j=\frac{\bar\gamma_{x,j}^2}{\bar\gamma_{x,j}^2+\bar\gamma_{y,j}^2}r_j$$</div>
-<div class="response-equation balance">$$\phi_j=p_j+\delta\phi_j,\quad
-\psi_j=q_j+\delta\psi_j
-\quad\Longrightarrow\quad\phi_j+\psi_j=f_j$$</div>
+<div class="small-label">One fixed Jacobi-preconditioned step</div>
+<div class="response-equation compact">$$\gamma_{s,j}^2
+=\left[H_s^\top M_\Omega H_s\right]_{jj},\qquad
+G_j=\gamma_{x,j}^2+\gamma_{y,j}^2$$</div>
+<div class="response-equation compact">$$\overline G=\frac1N\sum_jG_j,\qquad
+D_j=G_j+(\lambda_{\mathrm{rel}}+\varepsilon_{\mathrm{rel}})\overline G$$</div>
+<div class="response-equation compact">$$\delta_j=-\eta\frac{g_j}{D_j},\qquad
+\phi=\widetilde\phi+\delta,\quad\psi=\widetilde\psi-\delta$$</div>
+<p>The column diagonal scales the tangent step; it does not allocate the raw residual $f-p-q$.</p>
 </div>
 </div>
 
 ::: {.fragment data-fragment-index="2"}
 <div class="response-intuition-strip">
-<div><strong>$\gamma_{x,j}^2>\gamma_{y,j}^2$</strong><span>x-source point moves the field more</span></div>
-<div><strong>$\delta\phi_j<\delta\psi_j$</strong><span>send less correction through x</span></div>
-<div><strong>No matrix solve</strong><span>precompute the Gram diagonals</span></div>
+<div><strong>Exact balance</strong><span>$\phi+\psi=f$ after every tangent step</span></div>
+<div><strong>Local descent direction</strong><span>$g^\top(-D^{-1}g)\leq 0$ at $\delta=0$</span></div>
+<div><strong>Existing training stays</strong><span>tangent correction $\rightarrow$ canonical energy $\rightarrow$ optimizer</span></div>
 </div>
-<div class="takeaway">This is a column-diagonal approximation to global Green-response cost, not optimizer preconditioning. Audit discarded off-diagonal energy before paired retraining.</div>
+<div class="takeaway">First enforce balance exactly, then take one response-informed feasible descent step before the existing energy optimization.</div>
 :::
 
 ::: {.notes}
 **Target: 3분**
 
-후보 방법은 source point j의 correction이 directional solution field 전체에 주는 영향을 측정합니다. gamma x squared는 Hx transpose M Omega Hx의 j번째 diagonal이며, M Omega weighted Hx의 j번째 column norm과 같습니다. 따라서 기존 row sensitivity가 아니라 correction이 놓이는 source point와 global response를 직접 연결합니다. 이 gain은 geometry, prescribed coefficient, quadrature와 frozen GreenNet만 사용하며 solution target이나 learned gate를 사용하지 않습니다.
+후보 방법은 raw p와 q를 개별 directional source candidate로 다시 신뢰하지 않습니다. 먼저 symmetric-balanced phi tilde와 psi tilde를 만들고, 여기에 같은 delta를 반대 부호로 더합니다. 그러면 delta가 어떤 값이어도 phi plus psi equals f가 정확히 유지되므로 update는 balance plane의 tangent 방향 안에만 있습니다. Eta와 damping은 fixed config이고, geometry, prescribed coefficient, quadrature와 frozen GreenNet만 사용합니다.
 
-**Click:** exact global objective는 A s equals H s transpose M Omega H s라는 full Gram matrix를 사용합니다. Balance constraint를 대입하면 A x plus A y times delta phi equals A y r이라는 coupled system이 되므로 모든 source correction을 함께 풀어야 합니다. 여기서는 A s를 그 diagonal D s로 바꿉니다. 따라서 서로 다른 source point 사이의 cancellation과 reinforcement는 버리지만, source point별 impact는 유지하고 matrix solve 없이 local constrained problem을 구성할 수 있습니다.
+**Click:** tangent objective J는 corrected x response와 y response의 L2 mismatch를 측정합니다. Delta가 zero일 때 mismatch m zero를 계산하고, Hx plus Hy의 transpose action으로 gradient g를 얻습니다. 이 gradient는 balance를 이미 만족하는 pair에서 difference mode를 어느 방향으로 움직여야 response mismatch가 국소적으로 감소하는지를 나타냅니다. Reference solution이나 target phi와 psi는 사용하지 않습니다.
 
-**Click:** point j의 constrained minimization closed form에서는 phi correction에 반대 방향 column gain인 gamma y j squared가 들어갑니다. 두 weight의 합은 1이므로 physical balance는 각 point에서 정확히 유지됩니다.
+**Click:** gamma squared는 기존과 같은 response column diagonal이지만 역할이 달라졌습니다. 이제 raw residual의 allocation weight가 아니라 gradient step의 Jacobi denominator입니다. Gamma x squared와 gamma y squared를 합친 G에 relative damping을 더하고, delta equals minus eta g over D를 한 번 적용합니다. Forward와 transpose action은 segment-local frozen response block으로 계산하므로 global matrix나 full Gram solve가 필요하지 않습니다.
 
-**Click:** gamma x j squared가 크다는 것은 point j의 x-source correction이 전체 x-directional solution field를 더 크게 움직인다는 뜻이므로 delta phi j를 더 작게 배정합니다. Gram diagonal은 geometry와 frozen GreenNet에서 한 번 precompute할 수 있습니다. 이 방법은 optimizer preconditioning이 아니라 projection cost의 diagonal approximation입니다. 먼저 버린 off-diagonal energy, positivity, grid refinement, boundary behavior를 audit하고, 이후 symmetric baseline과 같은 initialization과 data로 paired retraining해야 합니다. 기존 checkpoint에 post-hoc으로 바꾸는 비교는 공정하지 않습니다.
+**Click:** 최종 phi와 psi는 반대 부호의 같은 delta를 사용하므로 exact balance를 보존합니다. Minus D inverse g는 delta equals zero에서 J의 descent direction이지만, finite eta에서 실제 mismatch가 반드시 감소한다고 여기서 주장하지는 않습니다. Pre와 post mismatch를 audit하고 symmetric baseline과 같은 initialization과 data로 paired retraining해야 합니다. 이 correction은 새로운 loss나 optimizer step이 아니며, corrected reconstruction 뒤에서 기존 canonical energy와 SOAP 또는 AdamW 학습이 그대로 동작합니다.
 
-**If timing is tight:** source point j의 global x-response impact가 클수록 delta phi j를 작게 배정하며, full matrix solve 없이 exact balance를 유지한다는 점만 설명합니다.
+**If timing is tight:** symmetric balance를 먼저 정확히 맞춘 뒤, response mismatch gradient를 따라 balance plane 안에서 한 번 이동한다는 점만 설명합니다.
 
 **Transition:** 여기까지가 main discussion이며, 다음 두 장은 질문에 대비한 numerical audit입니다.
 :::

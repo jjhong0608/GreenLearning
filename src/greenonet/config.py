@@ -543,31 +543,36 @@ class ColumnDiagonalGreenResponseProjectionConfig:
 
 @dataclass
 class SymmetricTangentGreenResponseProjectionConfig:
-    """Fixed one-step tangent Green-response correction settings."""
+    """One-step tangent Green-response correction settings."""
 
     eta: float = 0.01
+    eta_strategy: Literal["fixed", "closed_loop_exact_line_search"] = "fixed"
+    line_search_relative_eps: float = 1.0e-12
     relative_lambda: float = 0.01
     denominator_relative_eps: float = 1.0e-12
 
     def __post_init__(self) -> None:
         self._validate_nonnegative("eta", self.eta)
-        self._validate_nonnegative("relative_lambda", self.relative_lambda)
-        if not isinstance(self.denominator_relative_eps, (int, float)) or isinstance(
-            self.denominator_relative_eps,
-            bool,
-        ):
+        if not isinstance(self.eta_strategy, str):
             raise TypeError(
                 "balance_projection.symmetric_tangent_green_response."
-                "denominator_relative_eps must be numeric."
+                "eta_strategy must be a string."
             )
-        if (
-            not math.isfinite(float(self.denominator_relative_eps))
-            or float(self.denominator_relative_eps) <= 0.0
-        ):
+        if self.eta_strategy not in {"fixed", "closed_loop_exact_line_search"}:
             raise ValueError(
                 "balance_projection.symmetric_tangent_green_response."
-                "denominator_relative_eps must be finite and positive."
+                "eta_strategy must be 'fixed' or "
+                "'closed_loop_exact_line_search'."
             )
+        self._validate_positive(
+            "line_search_relative_eps",
+            self.line_search_relative_eps,
+        )
+        self._validate_nonnegative("relative_lambda", self.relative_lambda)
+        self._validate_positive(
+            "denominator_relative_eps",
+            self.denominator_relative_eps,
+        )
 
     @staticmethod
     def _validate_nonnegative(name: str, value: float) -> None:
@@ -582,6 +587,19 @@ class SymmetricTangentGreenResponseProjectionConfig:
                 f"{name} must be finite and non-negative."
             )
 
+    @staticmethod
+    def _validate_positive(name: str, value: float) -> None:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                f"{name} must be numeric."
+            )
+        if not math.isfinite(float(value)) or float(value) <= 0.0:
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                f"{name} must be finite and positive."
+            )
+
     @classmethod
     def from_raw(
         cls,
@@ -594,7 +612,14 @@ class SymmetricTangentGreenResponseProjectionConfig:
         if isinstance(raw, dict):
             data = dict(raw)
             unknown = sorted(
-                set(data) - {"eta", "relative_lambda", "denominator_relative_eps"}
+                set(data)
+                - {
+                    "eta",
+                    "eta_strategy",
+                    "line_search_relative_eps",
+                    "relative_lambda",
+                    "denominator_relative_eps",
+                }
             )
             if unknown:
                 raise TypeError(

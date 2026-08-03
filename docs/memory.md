@@ -239,6 +239,45 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Segment-local Green blocks로 forward/transpose action만 수행하며 full Gram matrix,
   global matrix, solve는 만들지 않는다. 모든 후보는 `phi+psi=rhs`를 정확히 보존하고,
   reference `sol/phi/psi`는 update나 method selection이 아니라 evaluation에만 쓴다.
+- Production symmetric-tangent projection은 optional
+  `eta_strategy="closed_loop_exact_line_search"`를 지원한다. Sample별로
+  `z=D^{-1}g`, `v=(H_x+H_y)z`,
+  `eta_star=(g^T z)/(<v,v>_M+eps_sample)`를 계산하고
+  `eta_applied=min(eta_star,eta_cap)`을 적용한다. 이 eta는 deterministic하고
+  differentiable한 physics correction이며 reference target, batch composition,
+  learnable parameter 또는 linear solve를 사용하지 않는다. Training cap은 LR
+  schedule이 활성화된 경우 그 warmup 길이만 공유해 half-cosine으로 증가하고,
+  LR cosine decay는 공유하지 않는다. Validation, best-checkpoint selection,
+  standalone evaluation과 artifact export는 항상 final cap을 사용한다.
+  `eta_strategy`를 생략하면 기존 fixed eta update가 유지된다.
+- Frozen symmetric-tangent audit CLI도 `--closed-loop` opt-in으로 production과
+  같은 sample-wise exact-line-search helper를 재사용한다. Post-hoc evaluation은
+  warmup schedule 없이 final cap을 적용하며, 같은 checkpoint raw output에서
+  symmetric, fixed tangent와 closed-loop tangent를 비교한다. Per-sample CSV와
+  selected NPZ에는 `eta_star`, applied eta, cap hit와 line-search
+  numerator/denominator를 기록한다. 이 결과는 projection 재학습을 대체하지 않는다.
+- `annulus_CDR/coupling5` symmetric-trained best-energy checkpoint의 50-sample
+  post-hoc 비교에서 closed-loop (`eta_cap=0.01`, `lambda_rel=0.01`)는 symmetric
+  대비 mean response mismatch `-45.95%`, canonical energy `-4.84%`, `rel_sol`
+  `5.15625% -> 3.72929%`, `rel_flux` `17.89856% -> 17.77140%`였다. 하지만
+  eta cap은 46/50 sample에서 활성화되어 fixed eta=0.01과 거의 같았고,
+  split transition jump RMS는 `+3.77%`, transition solution-error jump RMS는
+  `+4.80%` 악화됐다. Regular jump는 각각 `-15.04%`, `-20.31%` 개선됐다.
+  따라서 closed-loop는 global response correction으로는 유효하지만 Annulus
+  transition discontinuity 해결책은 아니며 paired retraining이 필요하다.
+- 같은 frozen checkpoint에서 `eta_cap in {0.01,0.0125,0.015,0.02,uncapped}`를
+  동일 response context와 `eta_star`로 비교한 결과, cap hit 비율은 각각
+  `92%,60%,12%,4%,0%`였다. Uncapped는 symmetric 대비 response mismatch를
+  `48.55%` 줄였지만 canonical energy `+2.69%`, boundary energy `+76.92%`,
+  transition solution-error jump `+14.44%`로 악화됐다. Cap `0.01`은 response
+  mismatch `-45.95%`, canonical energy `-4.84%`, transition solution-error jump
+  `+4.80%`였고 tested cap 중 canonical energy와 `rel_flux`가 가장 좋았다.
+  `rel_sol` 최저는 cap `0.015`의 `3.68211%`였으나 cap `0.0125`보다 개선은
+  `0.00144` percentage point뿐이고 transition/boundary 악화가 더 컸다. 따라서
+  `0.01`은 sample adaptivity 관점에서는 작지만 현재 tangent objective의 safety
+  cap으로는 유지하며, cap 증가만으로 Annulus transition을 해결하지 않는다.
+  다중 cap audit는 `--closed-loop-eta-caps ... inf`를 지원하고 response operator와
+  tangent direction을 한 번만 구성한다.
 - `annulus_CDR/coupling7`의 50-sample, 72-combination frozen sweep에서 mean absolute
   response mismatch와 canonical energy를 함께 최소화한 tangent 설정은
   `eta=0.015`, `lambda_rel=0.1`이었다. Symmetric 대비 mean per-sample response ratio는
@@ -1494,9 +1533,9 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   construction slides for geometry-only compact C2, mismatch-detected seam C2,
   and local weak-residual reliability; a Poisson-first clean comparison; a CDR
   broader-operator consistency check; four final-result
-  slides for Poisson/CDR fields and signed errors; one slide explaining why
-  equal source correction does not imply equal Green response; and one slide
-  defining the proposed column-diagonal Green-response projection.
+  slides for Poisson/CDR fields and signed errors; one slide separating exact
+  source balance from directional response consistency; and one slide defining
+  a fixed Jacobi-preconditioned tangent correction inside the balance plane.
 - In Slide 15, the directional-response factors are block-level labels in a
   balanced 3+2 grid: Green kernel, coefficient, and quadrature on the first
   row; evaluation position and segment length on the second. Do not use inline
@@ -1618,30 +1657,28 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   evaluation-only, `rel_flux` remains an unchanged directional-source
   diagnostic, and these result slides omit transition markers, line-length
   maps, trace-jump metrics, and causal-diagnosis language.
-- Slide 15 starts from the symmetric correction
-  \(\delta\phi=\delta\psi=(f-p-q)/2\), defines
-  \(\delta u_\phi=H_x\delta\phi\), \(\delta u_\psi=H_y\delta\psi\), and makes
-  explicit that equal source corrections can produce unequal reconstructed
-  responses when \(H_x\ne H_y\). Slide 16 then defines fixed source-point gains
-  \(\gamma_{s,j}^2=[H_s^\top M_\Omega H_s]_{jj}\), the column-diagonal
-  constrained minimization, and its exact-balance closed form. This is the
-  squared output-mass-weighted norm of column \(j\), so it measures how one
-  source-point correction moves the whole directional solution field. The gain
-  is derived from geometry, prescribed coefficients, quadrature, and the frozen
-  GreenNet; it is not learned. Off-diagonal source-response correlations and
-  full response-matrix solves are excluded. The visible Slide 16 method card
-  must show the full system
-  \((A_x+A_y)\delta\phi=A_y r\) before replacing \(A_s\) by its diagonal, so
-  the reason for the no-solve approximation is explicit rather than confined
-  to speaker notes. This method changes
-  the directional split and therefore requires a controlled paired retraining
-  experiment.
-- Green-Response Preconditioning is not a revival of the retired response-space
-  formulation: that formulation used analytic length scales, while the new proposal uses a
-  fixed gain derived from the full axial response
-  \(H_s=K_sW_sL_s^2\). Its column-diagonal definition must pass discarded
-  off-diagonal-energy, positivity, grid-refinement, and boundary audits before
-  implementation.
+- Slide 15 converts raw responses to physical proposals
+  \(p=P/L_x^2,q=Q/L_y^2\), defines the balance plane
+  \(\mathcal C_f=\{(\phi,\psi):\phi+\psi=f\}\), and presents the symmetric pair
+  \(\widetilde\phi=(f+p-q)/2\),
+  \(\widetilde\psi=(f-p+q)/2\) as its Euclidean orthogonal projection. The
+  common direction \((1,1)\) is normal to the plane and the difference
+  direction \((1,-1)\) is tangent. Exact balance does not force
+  \(m_0=H_x\widetilde\phi-H_y\widetilde\psi=0\).
+- Slide 16 parameterizes a feasible tangent update as
+  \(\phi=\widetilde\phi+\delta\),
+  \(\psi=\widetilde\psi-\delta\), defines
+  \(J(\delta)=\tfrac12\|m_0+(H_x+H_y)\delta\|_{M_\Omega}^2\) and
+  \(g=(H_x+H_y)^\top M_\Omega m_0\), then applies one fixed step
+  \(\delta=-\eta D^{-1}g\). The fixed column gains
+  \(\gamma_s^2=\operatorname{diag}(H_s^\top M_\Omega H_s)\) are used only in
+  the Jacobi denominator
+  \(D=\gamma_x^2+\gamma_y^2+
+  (\lambda_{\mathrm{rel}}+\varepsilon_{\mathrm{rel}})\overline G\); they do not
+  allocate the raw residual. The update preserves \(\phi+\psi=f\), uses no
+  reference targets or global solve, leaves canonical-energy/optimizer training
+  unchanged, and is presented without a performance claim until paired
+  retraining.
 - This meeting block excludes all pre-projection fuser experiments and the
   discussion about weakening \(u_\phi,u_\psi\in H_0^1(\Omega)\). It also
   excludes relative split consistency, training-time weak operator closure,

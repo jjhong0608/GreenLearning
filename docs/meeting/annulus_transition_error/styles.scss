@@ -54,6 +54,10 @@ $presentation-h3-font-size: 1.02em;
   text-transform: none;
 }
 
+.reveal #next-candidate-tangent-correction-within-the-balance-plane h2 {
+  font-size: 30pt;
+}
+
 .reveal h3 {
   margin: 0 0 8px;
   font-size: 21pt;
@@ -1045,6 +1049,50 @@ $presentation-h3-font-size: 1.02em;
   color: #71521a;
 }
 
+.response-basis-list,
+.response-mismatch-flow {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.response-basis-list > div,
+.response-mismatch-flow > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--pale-amber);
+  font-size: 11.5pt;
+  line-height: 1.16;
+}
+
+.response-basis-list strong,
+.response-mismatch-flow strong {
+  color: #71521a;
+}
+
+.response-basis-list span,
+.response-mismatch-flow span {
+  color: var(--muted);
+  text-align: right;
+}
+
+.response-mismatch-flow > div {
+  grid-template-columns: 105px minmax(0, 1fr);
+  background: var(--pale-teal);
+}
+
+.response-mismatch-flow strong {
+  color: var(--teal);
+}
+
+.response-mismatch-flow span {
+  text-align: left;
+}
+
 .response-question-takeaway {
   margin-top: 18px;
 }
@@ -1076,6 +1124,10 @@ $presentation-h3-font-size: 1.02em;
 .response-equation.global-response-system {
   margin: 2px 0;
   font-size: 12.5pt;
+}
+
+.response-equation.tangent-objective {
+  font-size: 14pt;
 }
 
 .response-contract-row {

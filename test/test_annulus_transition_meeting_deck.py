@@ -9,6 +9,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DECK_ROOT = PROJECT_ROOT / "docs" / "meeting" / "annulus_transition_error"
 QMD_PATH = DECK_ROOT / "annulus_transition_error.qmd"
 HTML_PATH = DECK_ROOT / "annulus_transition_error.html"
+STYLES_PATH = DECK_ROOT / "styles.scss"
+SLIDE_PLAN_PATH = (
+    PROJECT_ROOT / "docs" / "meeting" / ("annulus_transition_error_slide_plan.md")
+)
 QA_REPORT_PATH = DECK_ROOT / "screenshots" / "qa" / "qa_report.json"
 
 EXPECTED_TITLES = [
@@ -26,8 +30,8 @@ EXPECTED_TITLES = [
     "Pure Poisson: Signed Errors and Test-Set Accuracy",
     "CDR: Physical Coefficients, Directional Sources, and Reconstruction",
     "CDR: Signed Errors and Test-Set Accuracy",
-    "Why Equal Source Correction Is Not Equal Response",
-    "Next Candidate: Allocate Balance Correction by Green Response",
+    "Exact Balance Does Not Imply Directional Response Consistency",
+    "Next Candidate: Tangent Correction Within the Balance Plane",
     "Backup A: Unit and Physical Green Integrals Are Equivalent",
     "Backup B: Exact Green Error Decomposition",
 ]
@@ -119,6 +123,7 @@ def test_qmd_locks_slide_order_animation_and_language_contract() -> None:
 
 def test_revision_content_contract_is_versionless_and_layout_ready() -> None:
     source = QMD_PATH.read_text(encoding="utf-8")
+    styles = STYLES_PATH.read_text(encoding="utf-8")
     slides = dict(_slides(source))
 
     assert not re.search(r"\b(?:v4|v5|v6)\b", source, flags=re.IGNORECASE)
@@ -148,26 +153,40 @@ def test_revision_content_contract_is_versionless_and_layout_ready() -> None:
     assert "result-formula-card" in poisson
     assert "\\begin{aligned}" in poisson
 
-    response_problem = slides["Why Equal Source Correction Is Not Equal Response"]
-    assert "\\delta\\phi_{\\mathrm{sym}}" in response_problem
-    assert "H_x=K_xW_xL_x^2" in response_problem
-    assert "Equal source correction ≠ equal solution response" in response_problem
+    response_problem = slides[
+        "Exact Balance Does Not Imply Directional Response Consistency"
+    ]
+    assert "p=\\frac{P}{L_x^2}" in response_problem
+    assert "\\mathcal C_f" in response_problem
+    assert "\\widetilde\\phi=\\frac{f+d}{2}" in response_problem
+    assert "normal / common" in response_problem
+    assert "tangent / difference" in response_problem
+    assert "m_0=H_x\\widetilde\\phi-H_y\\widetilde\\psi" in response_problem
+    assert "Feasible does not mean response-consistent" in response_problem
     assert response_problem.count('class="response-factor operator"') == 3
     assert response_problem.count('class="response-factor context"') == 2
 
     response_projection = slides[
-        "Next Candidate: Allocate Balance Correction by Green Response"
+        "Next Candidate: Tangent Correction Within the Balance Plane"
     ]
-    assert "\\gamma_{x,j}^2" in response_projection
-    assert "H_x^\\top M_\\Omega H_x" in response_projection
-    assert "H_x(:,j)" in response_projection
-    assert "A_s=H_s^\\top M_\\Omega H_s" in response_projection
-    assert "(A_x+A_y)\\,\\delta\\boldsymbol\\phi=A_y\\mathbf r" in response_projection
-    assert "full coupled solve" in response_projection
-    assert "\\min_{\\delta\\phi_j+\\delta\\psi_j=r_j}" in response_projection
-    assert "Diagonalize to decouple source points" in response_projection
-    assert "No matrix solve" in response_projection
-    assert "not optimizer preconditioning" in response_projection
+    assert "\\phi(\\delta)=\\widetilde\\phi+\\delta" in response_projection
+    assert "J(\\delta)=\\frac12" in response_projection
+    assert "g=\\nabla J(0)" in response_projection
+    assert "(H_x+H_y)^\\top M_\\Omega m_0" in response_projection
+    assert "\\gamma_{s,j}^2" in response_projection
+    assert "H_s^\\top M_\\Omega H_s" in response_projection
+    assert "D_j=G_j+(\\lambda_{\\mathrm{rel}}" in response_projection
+    assert "\\delta_j=-\\eta\\frac{g_j}{D_j}" in response_projection
+    assert "The column diagonal scales the tangent step" in response_projection
+    assert "it does not allocate the raw residual" in response_projection
+    assert "g^\\top(-D^{-1}g)\\leq 0" in response_projection
+    assert "\\phi+\\psi=f" in response_projection
+    assert "A_s=H_s^\\top M_\\Omega H_s" not in response_projection
+    assert "full coupled solve" not in response_projection
+    assert "\\min_{\\delta\\phi_j+\\delta\\psi_j=r_j}" not in response_projection
+    assert "\\delta\\phi_j=\\frac{\\bar\\gamma_{y,j}^2}" not in response_projection
+    assert "#next-candidate-tangent-correction-within-the-balance-plane h2" in styles
+    assert "font-size: 30pt;" in styles
 
 
 def test_main_deck_timing_is_advisory_not_a_fixed_total() -> None:
@@ -177,6 +196,18 @@ def test_main_deck_timing_is_advisory_not_a_fixed_total() -> None:
     assert len(main_slides) == 16
     assert "25-minute" not in source
     assert "25분" not in source
+
+
+def test_slide_plan_matches_the_tangent_method_contract() -> None:
+    plan = SLIDE_PLAN_PATH.read_text(encoding="utf-8")
+
+    assert "### Slide 15: Exact Balance Does Not Imply" in plan
+    assert "### Slide 16: Tangent Correction Within the Balance Plane" in plan
+    assert "g=\\nabla J(0)=(H_x+H_y)^\\top M_\\Omega m_0" in plan
+    assert "\\delta_j=-\\eta\\frac{g_j}{D_j}" in plan
+    assert "The column diagonal scales the tangent gradient" in plan
+    assert "Why Equal Source Correction Is Not Equal Response" not in plan
+    assert "Column-Diagonal Green-Response Projection" not in plan
 
 
 def test_deck_uses_only_local_presentation_assets() -> None:
@@ -203,6 +234,10 @@ def test_rendered_reveal_html_is_offline_and_structurally_complete() -> None:
     assert "assets/plotly.min.js" not in html
     assert not re.search(r"\b(?:v4|v5|v6)\b", html, flags=re.IGNORECASE)
     assert not re.search(r"output[- ]contract", html, flags=re.IGNORECASE)
+    assert "Exact Balance Does Not Imply Directional Response Consistency" in html
+    assert "Next Candidate: Tangent Correction Within the Balance Plane" in html
+    assert "Why Equal Source Correction Is Not Equal Response" not in html
+    assert "Next Candidate: Allocate Balance Correction by Green Response" not in html
     assert '<div class="response-factor-list"' in html
     assert (
         '<div class="response-factor-list" aria-label="Directional response factors">\n<p>'

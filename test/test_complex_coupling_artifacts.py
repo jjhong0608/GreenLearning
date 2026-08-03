@@ -661,9 +661,14 @@ def test_column_diagonal_green_response_artifact_provenance_and_fields(
         assert any(key.endswith(suffix) for key in selected.files)
 
 
+@pytest.mark.parametrize(
+    "eta_strategy",
+    ["fixed", "closed_loop_exact_line_search"],
+)
 def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     tmp_path,
     monkeypatch,
+    eta_strategy,
 ):
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
@@ -679,6 +684,8 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
             mode="symmetric_tangent_green_response",
             symmetric_tangent_green_response={
                 "eta": 0.01,
+                "eta_strategy": eta_strategy,
+                "line_search_relative_eps": 3.0e-12,
                 "relative_lambda": 0.1,
                 "denominator_relative_eps": 2.0e-12,
             },
@@ -720,6 +727,8 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         "mode": "symmetric_tangent_green_response",
         "symmetric_tangent_green_response": {
             "eta": 0.01,
+            "eta_strategy": eta_strategy,
+            "line_search_relative_eps": 3.0e-12,
             "relative_lambda": 0.1,
             "denominator_relative_eps": 2.0e-12,
         },
@@ -745,9 +754,15 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert projection["uses_reference_targets"] is False
     assert tangent["active"] is True
     assert tangent["eta"] == pytest.approx(0.01)
+    assert tangent["eta_strategy"] == eta_strategy
+    assert tangent["line_search_relative_eps"] == pytest.approx(3.0e-12)
     assert tangent["relative_lambda"] == pytest.approx(0.1)
     assert tangent["denominator_relative_eps"] == pytest.approx(2.0e-12)
-    assert tangent["fixed_parameters"] is True
+    adaptive = eta_strategy == "closed_loop_exact_line_search"
+    assert tangent["fixed_parameters"] is (not adaptive)
+    assert tangent["sample_adaptive"] is adaptive
+    assert tangent["batch_independent"] is True
+    assert tangent["differentiable_eta"] is adaptive
     assert tangent["learnable_parameters"] is False
     assert tangent["row_norm_used"] is False
     assert tangent["global_response_matrix_materialized"] is False
@@ -772,10 +787,14 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         "denominator",
         "point_mass",
         "eta",
+        "eta_strategy",
+        "line_search_relative_eps",
         "relative_lambda",
         "denominator_relative_eps",
     }
     assert context_fields["eta"].item() == pytest.approx(0.01)
+    assert context_fields["eta_strategy"].item() == eta_strategy
+    assert context_fields["line_search_relative_eps"].item() == pytest.approx(3.0e-12)
     assert np.all(context_fields["denominator"] > 0.0)
     for field in summary["projection_figure_fields"]:
         assert (outdir / "figures" / "balance_projection" / f"{field}.json").is_file()
@@ -799,6 +818,29 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     )
     assert "tangent_response_mismatch_pre" in metric_rows[0]
     assert "tangent_response_mismatch_post" in metric_rows[0]
+    if adaptive:
+        assert tangent["eta_role"] == "final_safety_cap"
+        assert tangent["eta_cap_schedule"]["validation_policy"] == "final_cap"
+        assert tangent["eta_cap_schedule"]["post_warmup_behavior"] == ("hold_final_eta")
+        assert "eta_star_statistics" in tangent
+        assert "eta_applied_statistics" in tangent
+        assert "eta_cap_hit_fraction" in tangent
+        for suffix in (
+            "_tangent_response_direction",
+            "_tangent_line_search_numerator",
+            "_tangent_line_search_denominator",
+            "_tangent_eta_star",
+            "_tangent_eta_applied",
+            "_tangent_eta_cap",
+            "_tangent_eta_capped",
+        ):
+            assert any(key.endswith(suffix) for key in selected.files)
+        assert "tangent_eta_star" in metric_rows[0]
+        assert "tangent_eta_applied" in metric_rows[0]
+        assert "tangent_eta_capped" in metric_rows[0]
+    else:
+        assert tangent["eta_role"] == "fixed_step"
+        assert "eta_star_statistics" not in tangent
 
 
 def test_local_weak_reliability_artifact_uses_weighted_official_prediction(

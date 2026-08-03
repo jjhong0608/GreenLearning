@@ -125,6 +125,8 @@ def test_symmetric_tangent_green_response_config_round_trip():
             "mode": "symmetric_tangent_green_response",
             "symmetric_tangent_green_response": {
                 "eta": 0.025,
+                "eta_strategy": "closed_loop_exact_line_search",
+                "line_search_relative_eps": 4.0e-12,
                 "relative_lambda": 0.2,
                 "denominator_relative_eps": 2.5e-11,
             },
@@ -139,6 +141,8 @@ def test_symmetric_tangent_green_response_config_round_trip():
     assert loaded.balance_projection.mode == "symmetric_tangent_green_response"
     tangent = loaded.balance_projection.symmetric_tangent_green_response
     assert tangent.eta == pytest.approx(0.025)
+    assert tangent.eta_strategy == "closed_loop_exact_line_search"
+    assert tangent.line_search_relative_eps == pytest.approx(4.0e-12)
     assert tangent.relative_lambda == pytest.approx(0.2)
     assert tangent.denominator_relative_eps == pytest.approx(2.5e-11)
 
@@ -148,6 +152,10 @@ def test_symmetric_tangent_green_response_config_round_trip():
     [
         ("eta", -0.1, ValueError),
         ("eta", True, TypeError),
+        ("eta_strategy", "adaptive", ValueError),
+        ("eta_strategy", True, TypeError),
+        ("line_search_relative_eps", 0.0, ValueError),
+        ("line_search_relative_eps", "1e-12", TypeError),
         ("relative_lambda", float("inf"), ValueError),
         ("denominator_relative_eps", 0.0, ValueError),
         ("denominator_relative_eps", "1e-12", TypeError),
@@ -173,6 +181,19 @@ def test_symmetric_tangent_green_response_rejects_invalid_config(
                 "symmetric_tangent_green_response": {"learnable_eta": True},
             }
         )
+
+
+def test_symmetric_tangent_green_response_defaults_to_fixed_eta_strategy():
+    config = CouplingModelConfig(
+        balance_projection={
+            "mode": "symmetric_tangent_green_response",
+            "symmetric_tangent_green_response": {"eta": 0.015},
+        }
+    )
+
+    tangent = config.balance_projection.symmetric_tangent_green_response
+    assert tangent.eta_strategy == "fixed"
+    assert tangent.line_search_relative_eps == pytest.approx(1.0e-12)
 
 
 def test_save_load_green_model_with_config(tmp_path):

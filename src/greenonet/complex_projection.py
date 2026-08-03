@@ -32,6 +32,14 @@ class SymmetricTangentProjectionDiagnostics:
     delta: torch.Tensor
     projected_solution: torch.Tensor
     mismatch_post: torch.Tensor
+    eta_strategy: str
+    eta_applied: torch.Tensor
+    eta_cap: float
+    eta_star: torch.Tensor | None
+    eta_capped: torch.Tensor | None
+    line_search_numerator: torch.Tensor | None
+    line_search_denominator: torch.Tensor | None
+    response_direction: torch.Tensor | None
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,7 @@ def apply_complex_balance_projection(
     config: BalanceProjectionConfig | str | dict[str, Any],
     column_diagonal_context: ColumnDiagonalGreenResponseContext | None = None,
     symmetric_tangent_context: SymmetricTangentGreenResponseContext | None = None,
+    symmetric_tangent_eta_cap: float | None = None,
 ) -> ComplexProjectionResult:
     """Project in physical source space and pull back to reference responses."""
 
@@ -138,15 +147,42 @@ def apply_complex_balance_projection(
         )
         mismatch_pre = symmetric_solution[:, 0] - symmetric_solution[:, 1]
         gradient = symmetric_tangent_context.tangent_gradient(mismatch_pre)
-        delta = symmetric_tangent_context.tangent_delta(gradient)
-        if symmetric_tangent_context.eta == 0.0:
+        tangent_step = symmetric_tangent_context.tangent_step(
+            mismatch=mismatch_pre,
+            gradient=gradient,
+            eta_cap=symmetric_tangent_eta_cap,
+        )
+        delta = tangent_step.delta
+        if (
+            symmetric_tangent_context.eta_strategy == "fixed"
+            or tangent_step.directional_response is None
+        ):
+            if symmetric_tangent_context.eta == 0.0:
+                projected_physical = symmetric_physical
+            else:
+                phi = symmetric_physical[:, 0] + delta
+                projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
+            projected_solution = (
+                symmetric_tangent_context.response_operator.forward_pair(
+                    projected_physical
+                )
+            )
+        elif tangent_step.eta_cap == 0.0:
             projected_physical = symmetric_physical
+            projected_solution = symmetric_solution
         else:
             phi = symmetric_physical[:, 0] + delta
             projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
-        projected_solution = symmetric_tangent_context.response_operator.forward_pair(
-            projected_physical
-        )
+            applied = tangent_step.eta_applied.unsqueeze(1)
+            projected_solution = torch.stack(
+                (
+                    symmetric_solution[:, 0]
+                    - applied * tangent_step.directional_response[:, 0],
+                    symmetric_solution[:, 1]
+                    + applied * tangent_step.directional_response[:, 1],
+                ),
+                dim=1,
+            )
         mismatch_post = projected_solution[:, 0] - projected_solution[:, 1]
         projected_difference = projected_physical[:, 0] - projected_physical[:, 1]
         correction_weight_phi = torch.full_like(rhs_phys, 0.5)
@@ -162,6 +198,14 @@ def apply_complex_balance_projection(
             delta=delta,
             projected_solution=projected_solution,
             mismatch_post=mismatch_post,
+            eta_strategy=symmetric_tangent_context.eta_strategy,
+            eta_applied=tangent_step.eta_applied,
+            eta_cap=tangent_step.eta_cap,
+            eta_star=tangent_step.eta_star,
+            eta_capped=tangent_step.eta_capped,
+            line_search_numerator=tangent_step.line_search_numerator,
+            line_search_denominator=tangent_step.line_search_denominator,
+            response_direction=tangent_step.response_direction,
         )
     correction_phi = projected_physical[:, 0] - raw_physical[:, 0]
     correction_psi = projected_physical[:, 1] - raw_physical[:, 1]
@@ -247,7 +291,7 @@ def symmetric_tangent_metric_tensors(
         torch.stack((tangent.delta, -tangent.delta), dim=1)
     )
     symmetric_pair_norm = torch.linalg.vector_norm(tangent.symmetric_physical)
-    return {
+    metrics = {
         "tangent_response_mismatch_pre": mismatch_pre_rms,
         "tangent_response_mismatch_post": mismatch_post_rms,
         "tangent_response_mismatch_ratio": (
@@ -260,6 +304,30 @@ def symmetric_tangent_metric_tensors(
             correction_pair_norm / symmetric_pair_norm.clamp_min(eps)
         ),
     }
+    if tangent.eta_star is not None:
+        if (
+            tangent.eta_capped is None
+            or tangent.line_search_numerator is None
+            or tangent.line_search_denominator is None
+        ):
+            raise RuntimeError("Adaptive tangent diagnostics are incomplete.")
+        metrics.update(
+            {
+                "tangent_eta_cap": tangent.mismatch_pre.new_tensor(tangent.eta_cap),
+                "tangent_eta_star_mean": tangent.eta_star.mean(),
+                "tangent_eta_applied_mean": tangent.eta_applied.mean(),
+                "tangent_eta_cap_fraction": tangent.eta_capped.to(
+                    tangent.mismatch_pre.dtype
+                ).mean(),
+                "tangent_line_search_numerator_mean": (
+                    tangent.line_search_numerator.mean()
+                ),
+                "tangent_line_search_denominator_mean": (
+                    tangent.line_search_denominator.mean()
+                ),
+            }
+        )
+    return metrics
 
 
 def _validate_inputs(

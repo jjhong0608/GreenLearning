@@ -52,6 +52,7 @@ from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
 )
 from greenonet.complex_tangent_projection import (
+    SymmetricTangentEtaCapSchedule,
     SymmetricTangentGreenResponseContext,
     SymmetricTangentGreenResponseContextCache,
 )
@@ -109,6 +110,12 @@ class ComplexCouplingTrainer(LoggingMixin):
         "tangent_delta_rms",
         "tangent_delta_max_abs",
         "tangent_correction_rel_symmetric_pair",
+        "tangent_eta_cap",
+        "tangent_eta_star_mean",
+        "tangent_eta_applied_mean",
+        "tangent_eta_cap_fraction",
+        "tangent_line_search_numerator_mean",
+        "tangent_line_search_denominator_mean",
         "learning_rate",
         "optimizer_step_time_mean_ms",
         "optimizer_step_time_p95_ms",
@@ -237,17 +244,26 @@ class ComplexCouplingTrainer(LoggingMixin):
             device=self.device,
         )
         scheduler = schedule_config.build(optimizer)
+        tangent_eta_schedule = self._build_tangent_eta_schedule(schedule_config)
         self._log_optimizer()
         self._write_optimizer_provenance()
         self._log_learning_rate_schedule(schedule_config)
+        if tangent_eta_schedule is not None:
+            self._log_tangent_eta_schedule(tangent_eta_schedule)
         best_val_energy: float | None = None
         best_val_physics: float | None = None
         for epoch in range(1, self.config.epochs + 1):
             learning_rate = float(optimizer.param_groups[0]["lr"])
+            tangent_eta_cap = (
+                None
+                if tangent_eta_schedule is None
+                else tangent_eta_schedule.cap_for_epoch_index(epoch - 1)
+            )
             train_metrics = self._run_epoch(
                 train_loader,
                 optimizer=optimizer,
                 optimizer_profiler=optimizer_profiler,
+                tangent_eta_cap=tangent_eta_cap,
             )
             train_metrics["learning_rate"] = learning_rate
             self.loss_history.append(float(train_metrics["loss"]))
@@ -298,6 +314,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         *,
         optimizer: optim.Optimizer,
         optimizer_profiler: OptimizerStepProfiler,
+        tangent_eta_cap: float | None,
     ) -> dict[str, float]:
         self.model.train()
         totals: dict[str, float] = {}
@@ -306,7 +323,10 @@ class ComplexCouplingTrainer(LoggingMixin):
         for batch in loader:
             batch = batch.to(self.device)
             optimizer.zero_grad(set_to_none=True)
-            result = self._forward_batch(batch)
+            result = self._forward_batch(
+                batch,
+                symmetric_tangent_eta_cap=tangent_eta_cap,
+            )
             result.loss.backward()  # type: ignore[no-untyped-call]
             if self.config.gradient_clip_max_norm is not None:
                 torch.nn.utils.clip_grad_norm_(
@@ -340,7 +360,12 @@ class ComplexCouplingTrainer(LoggingMixin):
             self.model.train()
         return self._average(totals, samples)
 
-    def _forward_batch(self, batch: ComplexCouplingBatch) -> ComplexForwardResult:
+    def _forward_batch(
+        self,
+        batch: ComplexCouplingBatch,
+        *,
+        symmetric_tangent_eta_cap: float | None = None,
+    ) -> ComplexForwardResult:
         projection_context = self._projection_context(batch)
         tangent_context = self._tangent_projection_context(batch)
         raw_response = self.model(
@@ -360,6 +385,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             config=self.balance_projection,
             column_diagonal_context=projection_context,
             symmetric_tangent_context=tangent_context,
+            symmetric_tangent_eta_cap=symmetric_tangent_eta_cap,
         )
         reconstruction = reconstruct_complex_projection(
             projection=projection,
@@ -470,12 +496,15 @@ class ComplexCouplingTrainer(LoggingMixin):
             stats = context.statistics()
             self.logger.info(
                 "symmetric-tangent Green-response context build_seconds=%.6f "
-                "eta=%.6e relative_lambda=%.6e denominator_relative_eps=%.6e "
+                "eta=%.6e eta_strategy=%s line_search_relative_eps=%.6e "
+                "relative_lambda=%.6e denominator_relative_eps=%.6e "
                 "gain_scale=%.6e denominator=[%.6e, %.6e] "
                 "x_blocks=%d y_blocks=%d row_norm_used=false "
                 "global_matrix_materialized=false full_gram_solve=false",
                 self._tangent_context_cache.build_seconds,
                 context.eta,
+                context.eta_strategy,
+                context.line_search_relative_eps,
                 context.relative_lambda,
                 context.denominator_relative_eps,
                 stats["gain_scale"],
@@ -485,6 +514,17 @@ class ComplexCouplingTrainer(LoggingMixin):
                 stats["y_segment_block_count"],
             )
         return context
+
+    def _build_tangent_eta_schedule(
+        self,
+        learning_rate_schedule: CouplingLearningRateSchedule,
+    ) -> SymmetricTangentEtaCapSchedule | None:
+        if self.balance_projection.mode != "symmetric_tangent_green_response":
+            return None
+        return SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
+            config=self.balance_projection.symmetric_tangent_green_response,
+            learning_rate_schedule=learning_rate_schedule,
+        )
 
     @property
     def column_diagonal_green_response_context(
@@ -575,6 +615,24 @@ class ComplexCouplingTrainer(LoggingMixin):
             schedule.kind,
             schedule.base_learning_rate,
             schedule.min_learning_rate,
+            schedule.configured_warmup_epochs,
+            schedule.effective_warmup_epochs,
+            schedule.total_epochs,
+        )
+
+    def _log_tangent_eta_schedule(
+        self,
+        schedule: SymmetricTangentEtaCapSchedule,
+    ) -> None:
+        self.logger.info(
+            "tangent-eta schedule strategy=%s kind=%s final_eta=%.6e "
+            "shared_with_lr_warmup=%s configured_warmup_epochs=%d "
+            "effective_warmup_epochs=%d total_epochs=%d "
+            "training_cap=scheduled validation_cap=final",
+            schedule.eta_strategy,
+            schedule.kind,
+            schedule.final_eta,
+            schedule.enabled,
             schedule.configured_warmup_epochs,
             schedule.effective_warmup_epochs,
             schedule.total_epochs,

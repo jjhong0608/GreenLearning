@@ -14,7 +14,7 @@ from greenonet.complex_symmetric_tangent_audit import (
 
 
 class AuditSymmetricTangentResponseCLI:
-    """Sweep fixed matrix-free tangent corrections on a frozen checkpoint."""
+    """Compare fixed and optional closed-loop tangent corrections post-hoc."""
 
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(
@@ -75,6 +75,41 @@ class AuditSymmetricTangentResponseCLI:
             default=1.0e-10,
         )
         parser.add_argument(
+            "--closed-loop",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Add the production-equivalent sample-wise exact-line-search "
+                "candidate to the frozen-checkpoint comparison."
+            ),
+        )
+        parser.add_argument(
+            "--closed-loop-eta-cap",
+            type=self._nonnegative_float,
+            default=0.01,
+        )
+        parser.add_argument(
+            "--closed-loop-eta-caps",
+            type=self._eta_cap,
+            nargs="+",
+            default=None,
+            help=(
+                "Evaluate several final caps in one frozen-context run. Use "
+                "'inf' or 'uncapped' for eta_applied=eta_star. When supplied, "
+                "this list overrides --closed-loop-eta-cap."
+            ),
+        )
+        parser.add_argument(
+            "--closed-loop-relative-lambda",
+            type=self._nonnegative_float,
+            default=0.01,
+        )
+        parser.add_argument(
+            "--line-search-relative-eps",
+            type=self._positive_float,
+            default=1.0e-12,
+        )
+        parser.add_argument(
             "--save-generated-data",
             action=argparse.BooleanOptionalAction,
             default=True,
@@ -101,6 +136,12 @@ class AuditSymmetricTangentResponseCLI:
         if not math.isfinite(parsed) or parsed < 0.0:
             raise argparse.ArgumentTypeError("value must be finite and non-negative")
         return parsed
+
+    @staticmethod
+    def _eta_cap(value: str) -> float:
+        if value.strip().lower() in {"inf", "infinity", "uncapped"}:
+            return math.inf
+        return AuditSymmetricTangentResponseCLI._nonnegative_float(value)
 
     @staticmethod
     def _build_logger(outdir: Path) -> logging.Logger:
@@ -157,6 +198,15 @@ class AuditSymmetricTangentResponseCLI:
                 ),
                 batch_size=args.batch_size,
                 denominator_relative_eps=args.denominator_relative_eps,
+                closed_loop_enabled=args.closed_loop,
+                closed_loop_eta_cap=args.closed_loop_eta_cap,
+                closed_loop_eta_caps=(
+                    None
+                    if args.closed_loop_eta_caps is None
+                    else tuple(args.closed_loop_eta_caps)
+                ),
+                closed_loop_relative_lambda=args.closed_loop_relative_lambda,
+                line_search_relative_eps=args.line_search_relative_eps,
                 operator_equivalence_tol=args.operator_equivalence_tol,
                 save_generated_data=args.save_generated_data,
             ),

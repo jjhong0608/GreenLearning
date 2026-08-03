@@ -31,7 +31,7 @@
       vertical-align: middle;
     }
   </style>
-  <link rel="stylesheet" href="annulus_transition_error_files/libs/revealjs/dist/theme/quarto-0df5b87b6dd88a3ac8ddbfda88f51c17.css">
+  <link rel="stylesheet" href="annulus_transition_error_files/libs/revealjs/dist/theme/quarto-be931b78f0842e47c504142bda819203.css">
   <link href="annulus_transition_error_files/libs/revealjs/plugin/quarto-line-highlight/line-highlight.css" rel="stylesheet">
   <link href="annulus_transition_error_files/libs/revealjs/plugin/reveal-menu/menu.css" rel="stylesheet">
   <link href="annulus_transition_error_files/libs/revealjs/plugin/reveal-menu/quarto-menu.css" rel="stylesheet">
@@ -1138,29 +1138,49 @@ same signed-error grammar as Poisson
           display:block!important;
       }</style></aside>
 </section>
-<section id="why-equal-source-correction-is-not-equal-response" class="slide level2">
-<h2>Why Equal Source Correction Is Not Equal Response</h2>
+<section id="exact-balance-does-not-imply-directional-response-consistency" class="slide level2">
+<h2>Exact Balance Does Not Imply Directional Response Consistency</h2>
 <div class="response-problem-grid">
 <div class="response-card source-space">
 <div class="small-label">
-Exact balance correction
+Physical raw proposals
 </div>
 <h3>
-Symmetric in source space
+Orthogonal projection to the balance plane
 </h3>
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>r</mi><mo>=</mo><mi>f</mi><mo>−</mo><mi>p</mi><mo>−</mo><mi>q</mi></mrow><annotation encoding="application/x-tex">r=f-p-q</annotation></semantics></math> <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><msub><mi>ϕ</mi><mrow><mi mathvariant="normal">s</mi><mi mathvariant="normal">y</mi><mi mathvariant="normal">m</mi></mrow></msub><mo>=</mo><mi>δ</mi><msub><mi>ψ</mi><mrow><mi mathvariant="normal">s</mi><mi mathvariant="normal">y</mi><mi mathvariant="normal">m</mi></mrow></msub><mo>=</mo><mfrac><mi>r</mi><mn>2</mn></mfrac></mrow><annotation encoding="application/x-tex">\delta\phi_{\mathrm{sym}}=\delta\psi_{\mathrm{sym}}=\frac{r}{2}</annotation></semantics></math> <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>ϕ</mi><mo>=</mo><mi>p</mi><mo>+</mo><mi>δ</mi><msub><mi>ϕ</mi><mrow><mi mathvariant="normal">s</mi><mi mathvariant="normal">y</mi><mi mathvariant="normal">m</mi></mrow></msub><mo>,</mo><mspace width="2.0em"></mspace><mi>ψ</mi><mo>=</mo><mi>q</mi><mo>+</mo><mi>δ</mi><msub><mi>ψ</mi><mrow><mi mathvariant="normal">s</mi><mi mathvariant="normal">y</mi><mi mathvariant="normal">m</mi></mrow></msub></mrow><annotation encoding="application/x-tex">\phi=p+\delta\phi_{\mathrm{sym}},\qquad \psi=q+\delta\psi_{\mathrm{sym}}</annotation></semantics></math>
-<p>
-The residual is split equally, independent of directional response.
-</p>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mfrac><mi>P</mi><msubsup><mi>L</mi><mi>x</mi><mn>2</mn></msubsup></mfrac><mo>,</mo><mspace width="2.0em"></mspace><mi>q</mi><mo>=</mo><mfrac><mi>Q</mi><msubsup><mi>L</mi><mi>y</mi><mn>2</mn></msubsup></mfrac><mo>,</mo><mspace width="2.0em"></mspace><mi>d</mi><mo>=</mo><mi>p</mi><mo>−</mo><mi>q</mi></mrow><annotation encoding="application/x-tex">p=\frac{P}{L_x^2},\qquad q=\frac{Q}{L_y^2},\qquad d=p-q</annotation></semantics></math>
+</div>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>𝒞</mi><mi>f</mi></msub><mo>=</mo><mo stretchy="false" form="prefix">{</mo><mo stretchy="false" form="prefix">(</mo><mi>ϕ</mi><mo>,</mo><mi>ψ</mi><mo stretchy="false" form="postfix">)</mo><mo>:</mo><mi>ϕ</mi><mo>+</mo><mi>ψ</mi><mo>=</mo><mi>f</mi><mo stretchy="false" form="postfix">}</mo></mrow><annotation encoding="application/x-tex">\mathcal C_f=\{(\phi,\psi):\phi+\psi=f\}</annotation></semantics></math>
+</div>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>=</mo><mfrac><mrow><mi>f</mi><mo>+</mo><mi>d</mi></mrow><mn>2</mn></mfrac><mo>,</mo><mspace width="2.0em"></mspace><mover><mi>ψ</mi><mo accent="true">̃</mo></mover><mo>=</mo><mfrac><mrow><mi>f</mi><mo>−</mo><mi>d</mi></mrow><mn>2</mn></mfrac></mrow><annotation encoding="application/x-tex">\widetilde\phi=\frac{f+d}{2},\qquad
+\widetilde\psi=\frac{f-d}{2}</annotation></semantics></math>
+</div>
+<div class="response-basis-list">
+<div>
+<strong>normal / common</strong><span><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">(</mo><mn>1</mn><mo>,</mo><mn>1</mn><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">(1,1)</annotation></semantics></math></span>
+</div>
+<div>
+<strong>tangent / difference</strong><span><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">(</mo><mn>1</mn><mo>,</mo><mi>−</mi><mn>1</mn><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">(1,-1)</annotation></semantics></math></span>
+</div>
+</div>
 </div>
 <div class="fragment response-card operator-space" data-fragment-index="0">
 <div class="small-label">
-What reconstruction actually sees
+Directional reconstruction
 </div>
 <h3>
-Directional response operators
+Exact balance leaves a response mismatch
 </h3>
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><msub><mi>u</mi><mi>ϕ</mi></msub><mo>=</mo><msub><mi>H</mi><mi>x</mi></msub><mi>δ</mi><mi>ϕ</mi><mo>,</mo><mspace width="2.0em"></mspace><msub><mi>H</mi><mi>x</mi></msub><mo>=</mo><msub><mi>K</mi><mi>x</mi></msub><msub><mi>W</mi><mi>x</mi></msub><msubsup><mi>L</mi><mi>x</mi><mn>2</mn></msubsup></mrow><annotation encoding="application/x-tex">\delta u_\phi=H_x\delta\phi,\qquad H_x=K_xW_xL_x^2</annotation></semantics></math> <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><msub><mi>u</mi><mi>ψ</mi></msub><mo>=</mo><msub><mi>H</mi><mi>y</mi></msub><mi>δ</mi><mi>ψ</mi><mo>,</mo><mspace width="2.0em"></mspace><msub><mi>H</mi><mi>y</mi></msub><mo>=</mo><msub><mi>K</mi><mi>y</mi></msub><msub><mi>W</mi><mi>y</mi></msub><msubsup><mi>L</mi><mi>y</mi><mn>2</mn></msubsup></mrow><annotation encoding="application/x-tex">\delta u_\psi=H_y\delta\psi,\qquad H_y=K_yW_yL_y^2</annotation></semantics></math>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mover><mi>u</mi><mo accent="true">̃</mo></mover><mi>ϕ</mi></msub><mo>=</mo><msub><mi>H</mi><mi>x</mi></msub><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>,</mo><mspace width="2.0em"></mspace><msub><mover><mi>u</mi><mo accent="true">̃</mo></mover><mi>ψ</mi></msub><mo>=</mo><msub><mi>H</mi><mi>y</mi></msub><mover><mi>ψ</mi><mo accent="true">̃</mo></mover></mrow><annotation encoding="application/x-tex">\widetilde u_\phi=H_x\widetilde\phi,\qquad
+\widetilde u_\psi=H_y\widetilde\psi</annotation></semantics></math>
+</div>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>m</mi><mn>0</mn></msub><mo>=</mo><msub><mi>H</mi><mi>x</mi></msub><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>−</mo><msub><mi>H</mi><mi>y</mi></msub><mover><mi>ψ</mi><mo accent="true">̃</mo></mover></mrow><annotation encoding="application/x-tex">m_0=H_x\widetilde\phi-H_y\widetilde\psi</annotation></semantics></math>
+</div>
 <div class="response-factor-list" aria-label="Directional response factors">
 <div class="response-factor operator">
 Green kernel
@@ -1181,27 +1201,41 @@ segment length
 </div>
 <div class="fragment response-card consequence" data-fragment-index="1">
 <div class="small-label">
-Annulus transition consequence
+What remains unresolved
 </div>
 <h3>
-Equal source correction ≠ equal solution response
+Feasible does not mean response-consistent
 </h3>
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><mi>ϕ</mi><mo>=</mo><mi>δ</mi><mi>ψ</mi><mo>=</mo><mfrac><mi>r</mi><mn>2</mn></mfrac></mrow><annotation encoding="application/x-tex">\delta\phi=\delta\psi=\frac r2</annotation></semantics></math> <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="postfix">∥</mo><msub><mi>H</mi><mi>x</mi></msub><mo stretchy="false" form="postfix">∥</mo><mo>≫</mo><mo stretchy="false" form="postfix">∥</mo><msub><mi>H</mi><mi>y</mi></msub><mo stretchy="false" form="postfix">∥</mo></mrow><annotation encoding="application/x-tex">\|H_x\|\gg\|H_y\|</annotation></semantics></math> <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>⇒</mo><mspace width="1.0em"></mspace><mo stretchy="false" form="postfix">∥</mo><mi>δ</mi><msub><mi>u</mi><mi>ϕ</mi></msub><mo stretchy="false" form="postfix">∥</mo><mo>≫</mo><mo stretchy="false" form="postfix">∥</mo><mi>δ</mi><msub><mi>u</mi><mi>ψ</mi></msub><mo stretchy="false" form="postfix">∥</mo></mrow><annotation encoding="application/x-tex">\Longrightarrow\quad\|\delta u_\phi\|\gg\|\delta u_\psi\|</annotation></semantics></math>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>+</mo><mover><mi>ψ</mi><mo accent="true">̃</mo></mover><mo>=</mo><mi>f</mi></mrow><annotation encoding="application/x-tex">\widetilde\phi+\widetilde\psi=f</annotation></semantics></math>
+</div>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>⇏</mo><mspace width="1.0em"></mspace><msub><mi>H</mi><mi>x</mi></msub><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>=</mo><msub><mi>H</mi><mi>y</mi></msub><mover><mi>ψ</mi><mo accent="true">̃</mo></mover></mrow><annotation encoding="application/x-tex">\not\Longrightarrow\quad
+H_x\widetilde\phi=H_y\widetilde\psi</annotation></semantics></math>
+</div>
+<div class="response-mismatch-flow">
+<div>
+<strong>Projection</strong><span>removes the common-mode balance defect</span>
+</div>
+<div>
+<strong>Energy training</strong><span>reduces mismatch along the feasible plane</span>
+</div>
+</div>
 <p>
-A pointwise balanced split can still create a strongly imbalanced perturbation after Green reconstruction.
+The balance constraint fixes feasibility, but leaves one pointwise tangent degree of freedom.
 </p>
 </div>
 </div>
 <div class="takeaway response-question-takeaway">
-The projection constraint belongs to physical source space, but the correction cost should reflect the downstream Green response.
+Exact source balance selects a feasible split, but not necessarily the response-consistent point on the balance plane.
 </div>
 <aside class="notes">
 <p><strong>Target: 2분 20초</strong></p>
-<p>먼저 현재 symmetric projection의 한계를 분리해서 보겠습니다. raw proposal p와 q가 balance를 만족하지 않으면 residual r을 계산하고, phi와 psi에 정확히 절반씩 더합니다. 따라서 phi plus psi equals f는 정확히 만족하지만 두 방향의 correction cost가 같다고 가정합니다.</p>
-<p><strong>Click:</strong> 실제 solution perturbation은 source correction 자체가 아니라 Hx delta phi와 Hy delta psi입니다. H에는 Green kernel, prescribed coefficient, quadrature, evaluation position, segment length 제곱이 함께 들어갑니다. H는 projection이 아니라 projected source를 reconstructed solution으로 보내는 directional response operator입니다.</p>
-<p><strong>Click:</strong> 따라서 같은 r over 2를 두 방향에 넣어도 response norm이 다르면 solution perturbation은 같지 않습니다. Annulus transition에서는 axial line length와 kernel row가 급격하게 바뀌므로 이 차이가 커질 수 있습니다. 이것이 source-space balance만으로 transition response를 제어할 수 없는 이유입니다.</p>
-<p><strong>If timing is tight:</strong> equal source correction과 equal solution response가 같지 않다는 마지막 부등식만 설명합니다.</p>
-<p><strong>Transition:</strong> 다음 장에서는 이 response 차이를 fixed diagonal metric으로 projection에 넣는 방법을 정의합니다.</p>
+<p>먼저 network response P와 Q를 line length squared로 나누어 physical raw proposal p와 q를 만듭니다. 그 차이 d를 보존한 symmetric projection은 phi plus psi equals f라는 affine balance plane에 대한 Euclidean orthogonal projection입니다. Common 방향인 1 comma 1이 plane의 normal이고, difference 방향인 1 comma minus 1이 plane의 tangent입니다.</p>
+<p><strong>Click:</strong> exact-balanced source를 Hx와 Hy로 reconstruction하면 u phi tilde와 u psi tilde를 얻습니다. 두 결과의 차이 m zero는 balance가 맞은 뒤에도 남는 directional response mismatch입니다. H에는 Green kernel, prescribed coefficient, quadrature, evaluation position, segment length가 함께 들어가며, source split을 만드는 projection이 아니라 source를 solution으로 보내는 directional response operator입니다.</p>
+<p><strong>Click:</strong> 따라서 exact source balance만으로 Hx phi tilde equals Hy psi tilde를 결론낼 수 없습니다. Projection은 common-mode balance defect를 제거하지만, balance plane 내부의 tangent degree of freedom은 남깁니다. 현재 canonical energy loss와 optimizer는 이 feasible plane 위에서 mismatch를 줄이려고 합니다. 다음 장에서는 balance를 깨지 않고 response mismatch의 국소 감소 방향을 명시적으로 한 번 적용합니다.</p>
+<p><strong>If timing is tight:</strong> symmetric projection은 exact balance를 만들지만 balance plane 위의 response-consistent split까지 정하지는 않는다는 점만 설명합니다.</p>
+<p><strong>Transition:</strong> 다음 장에서는 symmetric-balanced source를 시작점으로 하는 feasible tangent correction을 정의합니다.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;
@@ -1214,20 +1248,20 @@ The projection constraint belongs to physical source space, but the correction c
           display:block!important;
       }</style></aside>
 </section>
-<section id="next-candidate-allocate-balance-correction-by-green-response" class="slide level2">
-<h2>Next Candidate: Allocate Balance Correction by Green Response</h2>
+<section id="next-candidate-tangent-correction-within-the-balance-plane" class="slide level2">
+<h2>Next Candidate: Tangent Correction Within the Balance Plane</h2>
 <div class="response-gain-strip">
 <div class="response-card gain-definition">
 <div class="small-label">
-Fixed source-to-global-response gain
+Start from the symmetric-balanced source
 </div>
-<div class="response-equation column-gain">
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mtable><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"><msubsup><mi>γ</mi><mrow><mi>x</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup></mtd><mtd columnalign="left" style="text-align: left; padding-left: 0"><mo>=</mo><msub><mrow><mo stretchy="true" form="prefix">[</mo><msubsup><mi>H</mi><mi>x</mi><mi>⊤</mi></msubsup><msub><mi>M</mi><mi mathvariant="normal">Ω</mi></msub><msub><mi>H</mi><mi>x</mi></msub><mo stretchy="true" form="postfix">]</mo></mrow><mrow><mi>j</mi><mi>j</mi></mrow></msub><mo>=</mo><msubsup><mrow><mo stretchy="true" form="prefix">∥</mo><msubsup><mi>M</mi><mi mathvariant="normal">Ω</mi><mrow><mn>1</mn><mi>/</mi><mn>2</mn></mrow></msubsup><msub><mi>H</mi><mi>x</mi></msub><mo stretchy="false" form="prefix">(</mo><mo>:</mo><mo>,</mo><mi>j</mi><mo stretchy="false" form="postfix">)</mo><mo stretchy="true" form="postfix">∥</mo></mrow><mn>2</mn><mn>2</mn></msubsup><mo>,</mo></mtd></mtr><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"><msubsup><mi>γ</mi><mrow><mi>y</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup></mtd><mtd columnalign="left" style="text-align: left; padding-left: 0"><mo>=</mo><msub><mrow><mo stretchy="true" form="prefix">[</mo><msubsup><mi>H</mi><mi>y</mi><mi>⊤</mi></msubsup><msub><mi>M</mi><mi mathvariant="normal">Ω</mi></msub><msub><mi>H</mi><mi>y</mi></msub><mo stretchy="true" form="postfix">]</mo></mrow><mrow><mi>j</mi><mi>j</mi></mrow></msub><mo>=</mo><msubsup><mrow><mo stretchy="true" form="prefix">∥</mo><msubsup><mi>M</mi><mi mathvariant="normal">Ω</mi><mrow><mn>1</mn><mi>/</mi><mn>2</mn></mrow></msubsup><msub><mi>H</mi><mi>y</mi></msub><mo stretchy="false" form="prefix">(</mo><mo>:</mo><mo>,</mo><mi>j</mi><mo stretchy="false" form="postfix">)</mo><mo stretchy="true" form="postfix">∥</mo></mrow><mn>2</mn><mn>2</mn></msubsup><mi>.</mi></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned}
-\gamma_{x,j}^2&amp;=\left[H_x^\top M_\Omega H_x\right]_{jj}
-=\left\|M_\Omega^{1/2}H_x(:,j)\right\|_2^2,\\
-\gamma_{y,j}^2&amp;=\left[H_y^\top M_\Omega H_y\right]_{jj}
-=\left\|M_\Omega^{1/2}H_y(:,j)\right\|_2^2.
-\end{aligned}</annotation></semantics></math>
+<div class="response-equation">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>ϕ</mi><mo stretchy="false" form="prefix">(</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo><mo>=</mo><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>+</mo><mi>δ</mi><mo>,</mo><mspace width="2.0em"></mspace><mi>ψ</mi><mo stretchy="false" form="prefix">(</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo><mo>=</mo><mover><mi>ψ</mi><mo accent="true">̃</mo></mover><mo>−</mo><mi>δ</mi></mrow><annotation encoding="application/x-tex">\phi(\delta)=\widetilde\phi+\delta,\qquad
+\psi(\delta)=\widetilde\psi-\delta</annotation></semantics></math>
+</div>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>ϕ</mi><mo stretchy="false" form="prefix">(</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo><mo>+</mo><mi>ψ</mi><mo stretchy="false" form="prefix">(</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo><mo>=</mo><mi>f</mi><mspace width="2.0em"></mspace><mrow><mtext mathvariant="normal">for every </mtext><mspace width="0.333em"></mspace></mrow><mi>δ</mi></mrow><annotation encoding="application/x-tex">\phi(\delta)+\psi(\delta)=f
+\qquad\text{for every }\delta</annotation></semantics></math>
 </div>
 </div>
 <div class="response-card gain-contract">
@@ -1235,79 +1269,81 @@ Fixed source-to-global-response gain
 Information contract
 </div>
 <div class="response-contract-row">
-<strong>Fixed</strong><span>geometry + prescribed coefficients + quadrature + frozen GreenNet</span>
+<strong>Fixed</strong><span><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>η</mi><annotation encoding="application/x-tex">\eta</annotation></semantics></math>, damping, geometry, coefficients, quadrature, frozen GreenNet</span>
 </div>
 <div class="response-contract-row">
-<strong>Meaning</strong><span>source point <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>j</mi><annotation encoding="application/x-tex">j</annotation></semantics></math> <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>→</mo><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math> whole directional solution field</span>
+<strong>Uses</strong><span>response-operator forward and transpose actions</span>
 </div>
 <div class="response-contract-row">
-<strong>Excluded</strong><span>solution targets, learned gate, full Gram matrix or solve</span>
+<strong>Excluded</strong><span>reference targets, learned step, row norm, full Gram solve</span>
 </div>
 </div>
 </div>
 <div class="response-projection-grid">
 <div class="fragment response-card" data-fragment-index="0">
 <div class="small-label">
-Full response cost <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>→</mo><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math> column diagonal
-</div>
-<div class="response-equation compact global-response-system">
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>A</mi><mi>s</mi></msub><mo>=</mo><msubsup><mi>H</mi><mi>s</mi><mi>⊤</mi></msubsup><msub><mi>M</mi><mi mathvariant="normal">Ω</mi></msub><msub><mi>H</mi><mi>s</mi></msub><mo>,</mo><mspace width="2.0em"></mspace><mo stretchy="false" form="prefix">(</mo><msub><mi>A</mi><mi>x</mi></msub><mo>+</mo><msub><mi>A</mi><mi>y</mi></msub><mo stretchy="false" form="postfix">)</mo><mspace width="0.167em"></mspace><mi>δ</mi><mi>𝛟</mi><mo>=</mo><msub><mi>A</mi><mi>y</mi></msub><mi>𝐫</mi><mspace width="1.0em"></mspace><mtext mathvariant="normal">(full coupled solve)</mtext></mrow><annotation encoding="application/x-tex">A_s=H_s^\top M_\Omega H_s,
-\qquad (A_x+A_y)\,\delta\boldsymbol\phi=A_y\mathbf r
-\quad\text{(full coupled solve)}</annotation></semantics></math>
+Directional response objective
 </div>
 <div class="response-equation compact">
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>A</mi><mi>s</mi></msub><mo>↦</mo><msub><mi>D</mi><mi>s</mi></msub><mo>=</mo><mrow><mi mathvariant="normal">diag</mi><mo>⁡</mo></mrow><mo stretchy="false" form="prefix">(</mo><msub><mi>A</mi><mi>s</mi></msub><mo stretchy="false" form="postfix">)</mo><mo>,</mo><mspace width="2.0em"></mspace><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>s</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>=</mo><msubsup><mi>γ</mi><mrow><mi>s</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>+</mo><mi>ε</mi></mrow><annotation encoding="application/x-tex">A_s\mapsto D_s=\operatorname{diag}(A_s),
-\qquad \bar\gamma_{s,j}^2=\gamma_{s,j}^2+\varepsilon</annotation></semantics></math>
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>m</mi><mn>0</mn></msub><mo>=</mo><msub><mi>H</mi><mi>x</mi></msub><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>−</mo><msub><mi>H</mi><mi>y</mi></msub><mover><mi>ψ</mi><mo accent="true">̃</mo></mover></mrow><annotation encoding="application/x-tex">m_0=H_x\widetilde\phi-H_y\widetilde\psi</annotation></semantics></math>
+</div>
+<div class="response-equation compact tangent-objective">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>J</mi><mo stretchy="false" form="prefix">(</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo><mo>=</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><msubsup><mrow><mo stretchy="true" form="prefix">∥</mo><msub><mi>m</mi><mn>0</mn></msub><mo>+</mo><mo stretchy="false" form="prefix">(</mo><msub><mi>H</mi><mi>x</mi></msub><mo>+</mo><msub><mi>H</mi><mi>y</mi></msub><mo stretchy="false" form="postfix">)</mo><mi>δ</mi><mo stretchy="true" form="postfix">∥</mo></mrow><msub><mi>M</mi><mi mathvariant="normal">Ω</mi></msub><mn>2</mn></msubsup></mrow><annotation encoding="application/x-tex">J(\delta)=\frac12
+\left\|m_0+(H_x+H_y)\delta\right\|_{M_\Omega}^2</annotation></semantics></math>
 </div>
 <div class="response-equation compact">
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><munder><mi mathvariant="normal">min</mi><mrow><mi>δ</mi><msub><mi>ϕ</mi><mi>j</mi></msub><mo>+</mo><mi>δ</mi><msub><mi>ψ</mi><mi>j</mi></msub><mo>=</mo><msub><mi>r</mi><mi>j</mi></msub></mrow></munder><mrow><mo stretchy="true" form="prefix">(</mo><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>x</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mi>δ</mi><msubsup><mi>ϕ</mi><mi>j</mi><mn>2</mn></msubsup><mo>+</mo><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>y</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mi>δ</mi><msubsup><mi>ψ</mi><mi>j</mi><mn>2</mn></msubsup><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">\min_{\delta\phi_j+\delta\psi_j=r_j}
-\left(\bar\gamma_{x,j}^2\delta\phi_j^2
-+\bar\gamma_{y,j}^2\delta\psi_j^2\right)</annotation></semantics></math>
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>g</mi><mo>=</mo><mi>∇</mi><mi>J</mi><mo stretchy="false" form="prefix">(</mo><mn>0</mn><mo stretchy="false" form="postfix">)</mo><mo>=</mo><mo stretchy="false" form="prefix">(</mo><msub><mi>H</mi><mi>x</mi></msub><mo>+</mo><msub><mi>H</mi><mi>y</mi></msub><msup><mo stretchy="false" form="postfix">)</mo><mi>⊤</mi></msup><msub><mi>M</mi><mi mathvariant="normal">Ω</mi></msub><msub><mi>m</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">g=\nabla J(0)
+=(H_x+H_y)^\top M_\Omega m_0</annotation></semantics></math>
 </div>
 <p>
-Diagonalize to decouple source points; preserve exact pointwise balance.
+The gradient asks how a feasible difference-mode update changes the reconstructed mismatch.
 </p>
 </div>
 <div class="fragment response-card closed-form" data-fragment-index="1">
 <div class="small-label">
-Closed-form correction
+One fixed Jacobi-preconditioned step
 </div>
-<div class="response-equation">
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><msub><mi>ϕ</mi><mi>j</mi></msub><mo>=</mo><mfrac><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>y</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mrow><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>x</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>+</mo><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>y</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup></mrow></mfrac><msub><mi>r</mi><mi>j</mi></msub></mrow><annotation encoding="application/x-tex">\delta\phi_j=\frac{\bar\gamma_{y,j}^2}{\bar\gamma_{x,j}^2+\bar\gamma_{y,j}^2}r_j</annotation></semantics></math>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msubsup><mi>γ</mi><mrow><mi>s</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>=</mo><msub><mrow><mo stretchy="true" form="prefix">[</mo><msubsup><mi>H</mi><mi>s</mi><mi>⊤</mi></msubsup><msub><mi>M</mi><mi mathvariant="normal">Ω</mi></msub><msub><mi>H</mi><mi>s</mi></msub><mo stretchy="true" form="postfix">]</mo></mrow><mrow><mi>j</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="2.0em"></mspace><msub><mi>G</mi><mi>j</mi></msub><mo>=</mo><msubsup><mi>γ</mi><mrow><mi>x</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>+</mo><msubsup><mi>γ</mi><mrow><mi>y</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup></mrow><annotation encoding="application/x-tex">\gamma_{s,j}^2
+=\left[H_s^\top M_\Omega H_s\right]_{jj},\qquad
+G_j=\gamma_{x,j}^2+\gamma_{y,j}^2</annotation></semantics></math>
 </div>
-<div class="response-equation">
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><msub><mi>ψ</mi><mi>j</mi></msub><mo>=</mo><mfrac><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>x</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mrow><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>x</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>+</mo><msubsup><mover><mi>γ</mi><mo accent="true">‾</mo></mover><mrow><mi>y</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup></mrow></mfrac><msub><mi>r</mi><mi>j</mi></msub></mrow><annotation encoding="application/x-tex">\delta\psi_j=\frac{\bar\gamma_{x,j}^2}{\bar\gamma_{x,j}^2+\bar\gamma_{y,j}^2}r_j</annotation></semantics></math>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mover><mi>G</mi><mo accent="true">¯</mo></mover><mo>=</mo><mfrac><mn>1</mn><mi>N</mi></mfrac><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>G</mi><mi>j</mi></msub><mo>,</mo><mspace width="2.0em"></mspace><msub><mi>D</mi><mi>j</mi></msub><mo>=</mo><msub><mi>G</mi><mi>j</mi></msub><mo>+</mo><mo stretchy="false" form="prefix">(</mo><msub><mi>λ</mi><mrow><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">l</mi></mrow></msub><mo>+</mo><msub><mi>ε</mi><mrow><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">l</mi></mrow></msub><mo stretchy="false" form="postfix">)</mo><mover><mi>G</mi><mo accent="true">¯</mo></mover></mrow><annotation encoding="application/x-tex">\overline G=\frac1N\sum_jG_j,\qquad
+D_j=G_j+(\lambda_{\mathrm{rel}}+\varepsilon_{\mathrm{rel}})\overline G</annotation></semantics></math>
 </div>
-<div class="response-equation balance">
-<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>ϕ</mi><mi>j</mi></msub><mo>=</mo><msub><mi>p</mi><mi>j</mi></msub><mo>+</mo><mi>δ</mi><msub><mi>ϕ</mi><mi>j</mi></msub><mo>,</mo><mspace width="1.0em"></mspace><msub><mi>ψ</mi><mi>j</mi></msub><mo>=</mo><msub><mi>q</mi><mi>j</mi></msub><mo>+</mo><mi>δ</mi><msub><mi>ψ</mi><mi>j</mi></msub><mspace width="1.0em"></mspace><mo>⇒</mo><mspace width="1.0em"></mspace><msub><mi>ϕ</mi><mi>j</mi></msub><mo>+</mo><msub><mi>ψ</mi><mi>j</mi></msub><mo>=</mo><msub><mi>f</mi><mi>j</mi></msub></mrow><annotation encoding="application/x-tex">\phi_j=p_j+\delta\phi_j,\quad
-\psi_j=q_j+\delta\psi_j
-\quad\Longrightarrow\quad\phi_j+\psi_j=f_j</annotation></semantics></math>
+<div class="response-equation compact">
+<math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>δ</mi><mi>j</mi></msub><mo>=</mo><mi>−</mi><mi>η</mi><mfrac><msub><mi>g</mi><mi>j</mi></msub><msub><mi>D</mi><mi>j</mi></msub></mfrac><mo>,</mo><mspace width="2.0em"></mspace><mi>ϕ</mi><mo>=</mo><mover><mi>ϕ</mi><mo accent="true">̃</mo></mover><mo>+</mo><mi>δ</mi><mo>,</mo><mspace width="1.0em"></mspace><mi>ψ</mi><mo>=</mo><mover><mi>ψ</mi><mo accent="true">̃</mo></mover><mo>−</mo><mi>δ</mi></mrow><annotation encoding="application/x-tex">\delta_j=-\eta\frac{g_j}{D_j},\qquad
+\phi=\widetilde\phi+\delta,\quad\psi=\widetilde\psi-\delta</annotation></semantics></math>
 </div>
+<p>
+The column diagonal scales the tangent step; it does not allocate the raw residual <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>f</mi><mo>−</mo><mi>p</mi><mo>−</mo><mi>q</mi></mrow><annotation encoding="application/x-tex">f-p-q</annotation></semantics></math>.
+</p>
 </div>
 </div>
 <div class="fragment" data-fragment-index="2">
 <div class="response-intuition-strip">
 <div>
-<strong><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msubsup><mi>γ</mi><mrow><mi>x</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>&gt;</mo><msubsup><mi>γ</mi><mrow><mi>y</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup></mrow><annotation encoding="application/x-tex">\gamma_{x,j}^2&gt;\gamma_{y,j}^2</annotation></semantics></math></strong><span>x-source point moves the field more</span>
+<strong>Exact balance</strong><span><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>ϕ</mi><mo>+</mo><mi>ψ</mi><mo>=</mo><mi>f</mi></mrow><annotation encoding="application/x-tex">\phi+\psi=f</annotation></semantics></math> after every tangent step</span>
 </div>
 <div>
-<strong><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><msub><mi>ϕ</mi><mi>j</mi></msub><mo>&lt;</mo><mi>δ</mi><msub><mi>ψ</mi><mi>j</mi></msub></mrow><annotation encoding="application/x-tex">\delta\phi_j&lt;\delta\psi_j</annotation></semantics></math></strong><span>send less correction through x</span>
+<strong>Local descent direction</strong><span><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>g</mi><mi>⊤</mi></msup><mo stretchy="false" form="prefix">(</mo><mi>−</mi><msup><mi>D</mi><mrow><mi>−</mi><mn>1</mn></mrow></msup><mi>g</mi><mo stretchy="false" form="postfix">)</mo><mo>≤</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">g^\top(-D^{-1}g)\leq 0</annotation></semantics></math> at <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>δ</mi><mo>=</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\delta=0</annotation></semantics></math></span>
 </div>
 <div>
-<strong>No matrix solve</strong><span>precompute the Gram diagonals</span>
+<strong>Existing training stays</strong><span>tangent correction <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>→</mo><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math> canonical energy <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>→</mo><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math> optimizer</span>
 </div>
 </div>
 <div class="takeaway">
-This is a column-diagonal approximation to global Green-response cost, not optimizer preconditioning. Audit discarded off-diagonal energy before paired retraining.
+First enforce balance exactly, then take one response-informed feasible descent step before the existing energy optimization.
 </div>
 </div>
 <aside class="notes">
 <p><strong>Target: 3분</strong></p>
-<p>후보 방법은 source point j의 correction이 directional solution field 전체에 주는 영향을 측정합니다. gamma x squared는 Hx transpose M Omega Hx의 j번째 diagonal이며, M Omega weighted Hx의 j번째 column norm과 같습니다. 따라서 기존 row sensitivity가 아니라 correction이 놓이는 source point와 global response를 직접 연결합니다. 이 gain은 geometry, prescribed coefficient, quadrature와 frozen GreenNet만 사용하며 solution target이나 learned gate를 사용하지 않습니다.</p>
-<p><strong>Click:</strong> exact global objective는 A s equals H s transpose M Omega H s라는 full Gram matrix를 사용합니다. Balance constraint를 대입하면 A x plus A y times delta phi equals A y r이라는 coupled system이 되므로 모든 source correction을 함께 풀어야 합니다. 여기서는 A s를 그 diagonal D s로 바꿉니다. 따라서 서로 다른 source point 사이의 cancellation과 reinforcement는 버리지만, source point별 impact는 유지하고 matrix solve 없이 local constrained problem을 구성할 수 있습니다.</p>
-<p><strong>Click:</strong> point j의 constrained minimization closed form에서는 phi correction에 반대 방향 column gain인 gamma y j squared가 들어갑니다. 두 weight의 합은 1이므로 physical balance는 각 point에서 정확히 유지됩니다.</p>
-<p><strong>Click:</strong> gamma x j squared가 크다는 것은 point j의 x-source correction이 전체 x-directional solution field를 더 크게 움직인다는 뜻이므로 delta phi j를 더 작게 배정합니다. Gram diagonal은 geometry와 frozen GreenNet에서 한 번 precompute할 수 있습니다. 이 방법은 optimizer preconditioning이 아니라 projection cost의 diagonal approximation입니다. 먼저 버린 off-diagonal energy, positivity, grid refinement, boundary behavior를 audit하고, 이후 symmetric baseline과 같은 initialization과 data로 paired retraining해야 합니다. 기존 checkpoint에 post-hoc으로 바꾸는 비교는 공정하지 않습니다.</p>
-<p><strong>If timing is tight:</strong> source point j의 global x-response impact가 클수록 delta phi j를 작게 배정하며, full matrix solve 없이 exact balance를 유지한다는 점만 설명합니다.</p>
+<p>후보 방법은 raw p와 q를 개별 directional source candidate로 다시 신뢰하지 않습니다. 먼저 symmetric-balanced phi tilde와 psi tilde를 만들고, 여기에 같은 delta를 반대 부호로 더합니다. 그러면 delta가 어떤 값이어도 phi plus psi equals f가 정확히 유지되므로 update는 balance plane의 tangent 방향 안에만 있습니다. Eta와 damping은 fixed config이고, geometry, prescribed coefficient, quadrature와 frozen GreenNet만 사용합니다.</p>
+<p><strong>Click:</strong> tangent objective J는 corrected x response와 y response의 L2 mismatch를 측정합니다. Delta가 zero일 때 mismatch m zero를 계산하고, Hx plus Hy의 transpose action으로 gradient g를 얻습니다. 이 gradient는 balance를 이미 만족하는 pair에서 difference mode를 어느 방향으로 움직여야 response mismatch가 국소적으로 감소하는지를 나타냅니다. Reference solution이나 target phi와 psi는 사용하지 않습니다.</p>
+<p><strong>Click:</strong> gamma squared는 기존과 같은 response column diagonal이지만 역할이 달라졌습니다. 이제 raw residual의 allocation weight가 아니라 gradient step의 Jacobi denominator입니다. Gamma x squared와 gamma y squared를 합친 G에 relative damping을 더하고, delta equals minus eta g over D를 한 번 적용합니다. Forward와 transpose action은 segment-local frozen response block으로 계산하므로 global matrix나 full Gram solve가 필요하지 않습니다.</p>
+<p><strong>Click:</strong> 최종 phi와 psi는 반대 부호의 같은 delta를 사용하므로 exact balance를 보존합니다. Minus D inverse g는 delta equals zero에서 J의 descent direction이지만, finite eta에서 실제 mismatch가 반드시 감소한다고 여기서 주장하지는 않습니다. Pre와 post mismatch를 audit하고 symmetric baseline과 같은 initialization과 data로 paired retraining해야 합니다. 이 correction은 새로운 loss나 optimizer step이 아니며, corrected reconstruction 뒤에서 기존 canonical energy와 SOAP 또는 AdamW 학습이 그대로 동작합니다.</p>
+<p><strong>If timing is tight:</strong> symmetric balance를 먼저 정확히 맞춘 뒤, response mismatch gradient를 따라 balance plane 안에서 한 번 이동한다는 점만 설명합니다.</p>
 <p><strong>Transition:</strong> 여기까지가 main discussion이며, 다음 두 장은 질문에 대비한 numerical audit입니다.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {

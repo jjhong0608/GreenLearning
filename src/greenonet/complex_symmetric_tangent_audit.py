@@ -44,6 +44,9 @@ from greenonet.complex_projection_response_audit import (
     ProjectionTransitionEdges,
 )
 from greenonet.complex_reconstruction import reconstruct_from_projected_response
+from greenonet.complex_tangent_projection import (
+    SymmetricTangentGreenResponseContext,
+)
 from greenonet.config import BalanceProjectionConfig
 from greenonet.coupling_artifacts import (
     CouplingArtifactConfigs,
@@ -92,6 +95,11 @@ class SymmetricTangentAuditRequest:
     selected_samples: tuple[int, ...] | None = None
     batch_size: int = 10
     denominator_relative_eps: float = 1.0e-12
+    closed_loop_enabled: bool = False
+    closed_loop_eta_cap: float = 0.01
+    closed_loop_eta_caps: tuple[float, ...] | None = None
+    closed_loop_relative_lambda: float = 0.01
+    line_search_relative_eps: float = 1.0e-12
     metric_eps: float = 1.0e-30
     operator_equivalence_tol: float = 1.0e-10
     save_generated_data: bool = True
@@ -110,9 +118,18 @@ class SymmetricTangentAuditRequest:
             or self.batch_size < 1
         ):
             raise ValueError("batch_size must be a positive integer.")
+        if not isinstance(self.closed_loop_enabled, bool):
+            raise TypeError("closed_loop_enabled must be a boolean.")
         for name, value, allow_zero in (
             ("transition_log_threshold", self.transition_log_threshold, True),
             ("denominator_relative_eps", self.denominator_relative_eps, False),
+            ("closed_loop_eta_cap", self.closed_loop_eta_cap, True),
+            (
+                "closed_loop_relative_lambda",
+                self.closed_loop_relative_lambda,
+                True,
+            ),
+            ("line_search_relative_eps", self.line_search_relative_eps, False),
             ("metric_eps", self.metric_eps, False),
             ("operator_equivalence_tol", self.operator_equivalence_tol, False),
         ):
@@ -127,6 +144,33 @@ class SymmetricTangentAuditRequest:
             self.selected_samples
         ):
             raise ValueError("selected_samples must not contain duplicates.")
+        if self.closed_loop_eta_caps is not None:
+            self._validate_eta_caps(self.closed_loop_eta_caps)
+
+    @property
+    def resolved_closed_loop_eta_caps(self) -> tuple[float, ...]:
+        if self.closed_loop_eta_caps is None:
+            return (self.closed_loop_eta_cap,)
+        return self.closed_loop_eta_caps
+
+    @staticmethod
+    def _validate_eta_caps(values: tuple[float, ...]) -> None:
+        if not values:
+            raise ValueError("closed_loop_eta_caps must not be empty.")
+        normalized: list[float] = []
+        for value in values:
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or math.isnan(float(value))
+                or float(value) < 0.0
+            ):
+                raise ValueError(
+                    "closed_loop_eta_caps must contain non-negative values or +inf."
+                )
+            normalized.append(float(value))
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("closed_loop_eta_caps must not contain duplicates.")
 
     @staticmethod
     def _validate_unique_numeric(
@@ -165,6 +209,19 @@ class TangentMethod:
 
 
 @dataclass(frozen=True)
+class ClosedLoopTangentBatchDiagnostics:
+    """Per-sample exact-line-search values for the optional closed-loop method."""
+
+    method_id: str
+    eta_cap: float | None
+    eta_star: torch.Tensor
+    eta_applied: torch.Tensor
+    eta_capped: torch.Tensor
+    line_search_numerator: torch.Tensor
+    line_search_denominator: torch.Tensor
+
+
+@dataclass(frozen=True)
 class TangentBatchEvaluation:
     methods: tuple[TangentMethod, ...]
     raw_physical: torch.Tensor
@@ -180,6 +237,7 @@ class TangentBatchEvaluation:
     canonical_energy: torch.Tensor
     canonical_bulk_energy: torch.Tensor
     canonical_boundary_energy: torch.Tensor
+    closed_loop: tuple[ClosedLoopTangentBatchDiagnostics, ...] = ()
 
 
 class SymmetricTangentMetricMixin:
@@ -267,6 +325,9 @@ class SymmetricTangentMetricMixin:
         )
         transition_edges = edges.transition.to(mismatch.device)
         regular_edges = edges.regular.to(mismatch.device)
+        closed_loop_by_method = {
+            diagnostics.method_id: diagnostics for diagnostics in evaluation.closed_loop
+        }
         rows: list[dict[str, float | int | str]] = []
         for method_index, method in enumerate(evaluation.methods):
             for sample_offset, sample_id in enumerate(batch.sample_indices.tolist()):
@@ -356,6 +417,40 @@ class SymmetricTangentMetricMixin:
                         )[0].item()
                     ),
                 }
+                closed_loop = closed_loop_by_method.get(method.method_id)
+                if closed_loop is not None:
+                    row.update(
+                        {
+                            "eta_strategy": "closed_loop_exact_line_search",
+                            "eta_cap": (
+                                math.nan
+                                if closed_loop.eta_cap is None
+                                else closed_loop.eta_cap
+                            ),
+                            "eta_cap_label": (
+                                "uncapped"
+                                if closed_loop.eta_cap is None
+                                else f"{closed_loop.eta_cap:g}"
+                            ),
+                            "eta_star": float(
+                                closed_loop.eta_star[sample_offset].item()
+                            ),
+                            "eta_applied": float(
+                                closed_loop.eta_applied[sample_offset].item()
+                            ),
+                            "eta_capped": int(
+                                closed_loop.eta_capped[sample_offset].item()
+                            ),
+                            "line_search_numerator": float(
+                                closed_loop.line_search_numerator[sample_offset].item()
+                            ),
+                            "line_search_denominator": float(
+                                closed_loop.line_search_denominator[
+                                    sample_offset
+                                ].item()
+                            ),
+                        }
+                    )
                 if bool(batch.has_solution[sample_offset].item()):
                     solution = batch.sol_valid[sample_offset]
                     row["rel_sol"] = float(
@@ -439,6 +534,7 @@ class SymmetricTangentMetricMixin:
             "method_kind",
             "eta",
             "relative_lambda",
+            "eta_strategy",
         }
         for method in methods:
             selected = [row for row in rows if row["method_id"] == method.method_id]
@@ -594,6 +690,138 @@ class SymmetricTangentPlotMixin:
         save_plotly_figure(fig, path, logger)
         return path.with_suffix(".json")
 
+    def write_closed_loop_cap_figure(
+        self,
+        *,
+        aggregate: dict[str, dict[str, float | int | str]],
+        methods: tuple[TangentMethod, ...],
+        request: SymmetricTangentAuditRequest,
+        logger: logging.Logger | None,
+    ) -> Path:
+        closed_loop = tuple(
+            method
+            for method in methods
+            if method.kind == "closed_loop_exact_line_search"
+        )
+        if len(closed_loop) < 2:
+            raise ValueError("A closed-loop cap figure requires at least two caps.")
+        baseline = aggregate["symmetric"]
+        cap_labels = [
+            "uncapped" if method.eta is None else f"{method.eta:g}"
+            for method in closed_loop
+        ]
+        panels = (
+            (
+                ("response_mismatch_cost_mean",),
+                ("response mismatch",),
+                "Response mismatch / symmetric",
+            ),
+            (
+                (
+                    "canonical_energy_mean",
+                    "canonical_bulk_energy_mean",
+                    "canonical_boundary_energy_mean",
+                ),
+                ("total", "bulk", "boundary"),
+                "Canonical energy / symmetric",
+            ),
+            (
+                ("rel_sol_mean", "rel_flux_mean"),
+                ("rel_sol", "rel_flux"),
+                "Evaluation error / symmetric",
+            ),
+            (
+                ("split_regular_jump_rms_mean", "split_transition_jump_rms_mean"),
+                ("split regular", "split transition"),
+                "Split jump RMS / symmetric",
+            ),
+            (
+                (
+                    "regular_solution_error_jump_rms_mean",
+                    "transition_solution_error_jump_rms_mean",
+                ),
+                ("error regular", "error transition"),
+                "Solution-error jump RMS / symmetric",
+            ),
+        )
+        fig = make_subplots(
+            rows=2,
+            cols=3,
+            subplot_titles=[panel[2] for panel in panels]
+            + ["Closed-loop cap activity"],
+            horizontal_spacing=0.1,
+            vertical_spacing=0.16,
+        )
+        for panel_index, (metrics, labels, _title) in enumerate(panels):
+            row = panel_index // 3 + 1
+            col = panel_index % 3 + 1
+            for metric, label in zip(metrics, labels, strict=True):
+                baseline_value = float(baseline[metric])
+                ratios = [
+                    float(aggregate[method.method_id][metric]) / baseline_value
+                    for method in closed_loop
+                ]
+                fig.add_trace(
+                    go.Scatter(
+                        x=cap_labels,
+                        y=ratios,
+                        mode="lines+markers",
+                        name=label,
+                        legendgroup=f"panel-{panel_index}",
+                        hovertemplate=(
+                            "cap=%{x}<br>ratio=%{y:.6f}<extra>" + label + "</extra>"
+                        ),
+                    ),
+                    row=row,
+                    col=col,
+                )
+            fig.add_hline(
+                y=1.0,
+                line_dash="dot",
+                line_color="#64748b",
+                row=row,
+                col=col,
+            )
+        capped_fraction = [
+            float(aggregate[method.method_id]["eta_capped_mean"])
+            for method in closed_loop
+        ]
+        applied_fraction = [
+            float(aggregate[method.method_id]["eta_applied_mean"])
+            / float(aggregate[method.method_id]["eta_star_mean"])
+            for method in closed_loop
+        ]
+        for values, label in (
+            (capped_fraction, "cap-hit fraction"),
+            (applied_fraction, "mean applied / eta_star"),
+        ):
+            fig.add_trace(
+                go.Scatter(
+                    x=cap_labels,
+                    y=values,
+                    mode="lines+markers",
+                    name=label,
+                    hovertemplate=(
+                        "cap=%{x}<br>fraction=%{y:.6f}<extra>" + label + "</extra>"
+                    ),
+                ),
+                row=2,
+                col=3,
+            )
+        fig.update_layout(
+            template=request.theme,
+            title="Closed-loop exact-line-search cap sweep",
+            width=1500,
+            height=850,
+            margin={"l": 80, "r": 40, "t": 100, "b": 80},
+        )
+        fig.update_xaxes(title_text="eta cap", type="category")
+        fig.update_yaxes(title_text="ratio")
+        fig.update_yaxes(range=[0.0, 1.05], row=2, col=3)
+        path = request.outdir / "figures" / "aggregate" / "closed_loop_cap_sweep"
+        save_plotly_figure(fig, path, logger)
+        return path.with_suffix(".json")
+
     def write_selected_figure(
         self,
         *,
@@ -706,6 +934,7 @@ class ComplexSymmetricTangentAudit(
         self.geometry: ComplexGeometryMetadata
         self.response_operator: FrozenBidirectionalResponseOperator
         self.response_context: ColumnDiagonalGreenResponseContext
+        self.closed_loop_context: SymmetricTangentGreenResponseContext | None = None
         self.methods: tuple[TangentMethod, ...]
         self._coupling_model: ComplexCouplingNet
         self._green_model: torch.nn.Module
@@ -813,6 +1042,21 @@ class ComplexSymmetricTangentAudit(
                 logger=self.logger,
             )
         ]
+        if (
+            sum(
+                method.kind == "closed_loop_exact_line_search"
+                for method in self.methods
+            )
+            > 1
+        ):
+            figure_paths.append(
+                self.write_closed_loop_cap_figure(
+                    aggregate=aggregate,
+                    methods=self.methods,
+                    request=self.request,
+                    logger=self.logger,
+                )
+            )
         selected_batch = complex_coupling_collate_fn(
             [dataset[dataset_offset_by_sample[sample_id]] for sample_id in selected]
         ).to(self._device)
@@ -920,6 +1164,29 @@ class ComplexSymmetricTangentAudit(
             y_green_branch=batch.y_green_branch,
         )
         self._operator_build_count += 1
+        if self.request.closed_loop_enabled:
+            caps = self.request.resolved_closed_loop_eta_caps
+            finite_caps = tuple(cap for cap in caps if math.isfinite(cap))
+            context_eta = max(finite_caps, default=0.0)
+            if any(math.isinf(cap) for cap in caps):
+                context_eta = max(context_eta, 1.0)
+            self.closed_loop_context = (
+                SymmetricTangentGreenResponseContext.from_response_operator(
+                    response_operator=self.response_operator,
+                    point_mass=self.response_context.point_mass,
+                    config={
+                        "eta": context_eta,
+                        "eta_strategy": "closed_loop_exact_line_search",
+                        "line_search_relative_eps": (
+                            self.request.line_search_relative_eps
+                        ),
+                        "relative_lambda": (self.request.closed_loop_relative_lambda),
+                        "denominator_relative_eps": (
+                            self.request.denominator_relative_eps
+                        ),
+                    },
+                )
+            )
         self.methods = self._build_methods(
             configured_mode=projection.mode,
             configured_alpha=self.response_context.gain_exponent,
@@ -997,6 +1264,27 @@ class ComplexSymmetricTangentAudit(
                         relative_lambda=relative_lambda,
                     )
                 )
+        if self.request.closed_loop_enabled:
+            for cap in self.request.resolved_closed_loop_eta_caps:
+                uncapped = math.isinf(cap)
+                cap_id = "uncapped" if uncapped else self._number_label(cap)
+                cap_label = "uncapped" if uncapped else f"{cap:g}"
+                methods.append(
+                    TangentMethod(
+                        method_id=(
+                            f"closed_loop_eta_cap_{cap_id}_lambda_"
+                            f"{self._number_label(self.request.closed_loop_relative_lambda)}"
+                        ),
+                        label=(
+                            "closed-loop exact line search "
+                            f"cap={cap_label}, "
+                            f"lambda_rel={self.request.closed_loop_relative_lambda:g}"
+                        ),
+                        kind="closed_loop_exact_line_search",
+                        eta=None if uncapped else cap,
+                        relative_lambda=self.request.closed_loop_relative_lambda,
+                    )
+                )
         return tuple(methods)
 
     @staticmethod
@@ -1047,6 +1335,9 @@ class ComplexSymmetricTangentAudit(
                 "The tangent preconditioner gain scale must be positive."
             )
         deltas: list[torch.Tensor] = []
+        closed_loop_diagnostics: list[ClosedLoopTangentBatchDiagnostics] = []
+        closed_loop_step = None
+        closed_loop_direction = None
         for method in self.methods:
             if method.kind == "symmetric":
                 deltas.append(torch.zeros_like(gradient))
@@ -1061,6 +1352,49 @@ class ComplexSymmetricTangentAudit(
                     * gain_scale
                 )
                 deltas.append(-method.eta * gradient / denominator.unsqueeze(0))
+            elif method.kind == "closed_loop_exact_line_search":
+                if self.closed_loop_context is None:
+                    raise RuntimeError(
+                        "Closed-loop audit method requires its frozen context."
+                    )
+                if closed_loop_step is None:
+                    closed_loop_step = self.closed_loop_context.tangent_step(
+                        mismatch=mismatch,
+                        gradient=gradient,
+                        eta_cap=self.closed_loop_context.eta,
+                    )
+                    closed_loop_direction = (
+                        gradient / self.closed_loop_context.denominator.unsqueeze(0)
+                    )
+                step = closed_loop_step
+                if (
+                    step.eta_star is None
+                    or step.line_search_numerator is None
+                    or step.line_search_denominator is None
+                    or closed_loop_direction is None
+                ):
+                    raise RuntimeError(
+                        "Closed-loop exact-line-search diagnostics are incomplete."
+                    )
+                if method.eta is None:
+                    eta_applied = step.eta_star
+                    eta_capped = torch.zeros_like(step.eta_star, dtype=torch.bool)
+                else:
+                    cap = step.eta_star.new_full(step.eta_star.shape, method.eta)
+                    eta_applied = torch.minimum(step.eta_star, cap)
+                    eta_capped = step.eta_star > cap
+                deltas.append(-eta_applied.unsqueeze(1) * closed_loop_direction)
+                closed_loop_diagnostics.append(
+                    ClosedLoopTangentBatchDiagnostics(
+                        method_id=method.method_id,
+                        eta_cap=method.eta,
+                        eta_star=step.eta_star,
+                        eta_applied=eta_applied,
+                        eta_capped=eta_capped,
+                        line_search_numerator=step.line_search_numerator,
+                        line_search_denominator=step.line_search_denominator,
+                    )
+                )
             else:
                 raise RuntimeError(f"Unsupported tangent method kind: {method.kind}.")
         tangent_delta = torch.stack(deltas, dim=0)
@@ -1132,6 +1466,7 @@ class ComplexSymmetricTangentAudit(
                 method_count,
                 batch_count,
             ),
+            closed_loop=tuple(closed_loop_diagnostics),
         )
 
     @staticmethod
@@ -1139,12 +1474,12 @@ class ComplexSymmetricTangentAudit(
         aggregate: dict[str, dict[str, float | int | str]],
         *,
         metric: str,
-        kind: str | None = None,
+        kinds: frozenset[str] | None = None,
     ) -> str | None:
         candidates = [
             (method_id, float(payload[metric]))
             for method_id, payload in aggregate.items()
-            if metric in payload and (kind is None or payload["method_kind"] == kind)
+            if metric in payload and (kinds is None or payload["method_kind"] in kinds)
         ]
         return min(candidates, key=lambda item: item[1])[0] if candidates else None
 
@@ -1152,6 +1487,12 @@ class ComplexSymmetricTangentAudit(
         self,
         aggregate: dict[str, dict[str, float | int | str]],
     ) -> dict[str, str | None]:
+        tangent_kinds = frozenset({"tangent_gradient", "closed_loop_exact_line_search"})
+        closed_loop_method = self._best_method(
+            aggregate,
+            metric="response_mismatch_cost_mean",
+            kinds=frozenset({"closed_loop_exact_line_search"}),
+        )
         return {
             "configured_projection_method": (
                 "configured_column" if "configured_column" in aggregate else "symmetric"
@@ -1163,13 +1504,13 @@ class ComplexSymmetricTangentAudit(
             "lowest_mean_response_mismatch_tangent_method": self._best_method(
                 aggregate,
                 metric="response_mismatch_cost_mean",
-                kind="tangent_gradient",
+                kinds=tangent_kinds,
             ),
             "lowest_mean_normalized_response_ratio_tangent_method": (
                 self._best_method(
                     aggregate,
                     metric="response_mismatch_ratio_vs_symmetric_mean",
-                    kind="tangent_gradient",
+                    kinds=tangent_kinds,
                 )
             ),
             "lowest_mean_canonical_energy_method": self._best_method(
@@ -1179,7 +1520,7 @@ class ComplexSymmetricTangentAudit(
             "lowest_mean_canonical_energy_tangent_method": self._best_method(
                 aggregate,
                 metric="canonical_energy_mean",
-                kind="tangent_gradient",
+                kinds=tangent_kinds,
             ),
             "lowest_mean_rel_sol_method_evaluation_only": self._best_method(
                 aggregate,
@@ -1189,6 +1530,7 @@ class ComplexSymmetricTangentAudit(
                 aggregate,
                 metric="rel_flux_mean",
             ),
+            "closed_loop_method": closed_loop_method,
         }
 
     def _select_samples(
@@ -1229,11 +1571,18 @@ class ComplexSymmetricTangentAudit(
                 )
         return tuple(selected), roles
 
-    @staticmethod
-    def _selected_method_ids(findings: dict[str, str | None]) -> tuple[str, ...]:
+    def _selected_method_ids(
+        self,
+        findings: dict[str, str | None],
+    ) -> tuple[str, ...]:
         ordered = [
             "symmetric",
             findings["configured_projection_method"],
+            *(
+                method.method_id
+                for method in self.methods
+                if method.kind == "closed_loop_exact_line_search"
+            ),
             findings["lowest_mean_response_mismatch_tangent_method"],
             findings["lowest_mean_normalized_response_ratio_tangent_method"],
             findings["lowest_mean_canonical_energy_tangent_method"],
@@ -1272,15 +1621,14 @@ class ComplexSymmetricTangentAudit(
     ) -> None:
         data_dir = self.request.outdir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            data_dir / "selected_symmetric_tangent_audit.npz",
-            coords_valid=self.geometry.coords_valid.detach().cpu().numpy(),
-            selected_sample_ids=batch.sample_indices.detach().cpu().numpy(),
-            selected_file_stems=np.asarray(batch.file_stems),
-            selected_method_ids=np.asarray(
+        payload: dict[str, Any] = {
+            "coords_valid": self.geometry.coords_valid.detach().cpu().numpy(),
+            "selected_sample_ids": batch.sample_indices.detach().cpu().numpy(),
+            "selected_file_stems": np.asarray(batch.file_stems),
+            "selected_method_ids": np.asarray(
                 [evaluation.methods[index].method_id for index in method_indices]
             ),
-            selected_method_eta=np.asarray(
+            "selected_method_eta": np.asarray(
                 [
                     math.nan
                     if evaluation.methods[index].eta is None
@@ -1289,7 +1637,7 @@ class ComplexSymmetricTangentAudit(
                 ],
                 dtype=np.float64,
             ),
-            selected_method_relative_lambda=np.asarray(
+            "selected_method_relative_lambda": np.asarray(
                 [
                     math.nan
                     if evaluation.methods[index].relative_lambda is None
@@ -1298,42 +1646,138 @@ class ComplexSymmetricTangentAudit(
                 ],
                 dtype=np.float64,
             ),
-            rhs=batch.rhs_valid.detach().cpu().numpy(),
-            sol=batch.sol_valid.detach().cpu().numpy(),
-            has_solution=batch.has_solution.detach().cpu().numpy(),
-            flux_target=batch.flux_valid.detach().cpu().numpy(),
-            has_flux=batch.has_flux.detach().cpu().numpy(),
-            raw_physical=evaluation.raw_physical.detach().cpu().numpy(),
-            symmetric_physical=evaluation.symmetric_physical.detach().cpu().numpy(),
-            configured_physical=evaluation.configured_physical.detach().cpu().numpy(),
-            tangent_gradient=evaluation.tangent_gradient.detach().cpu().numpy(),
-            tangent_preconditioner_base=(
+            "rhs": batch.rhs_valid.detach().cpu().numpy(),
+            "sol": batch.sol_valid.detach().cpu().numpy(),
+            "has_solution": batch.has_solution.detach().cpu().numpy(),
+            "flux_target": batch.flux_valid.detach().cpu().numpy(),
+            "has_flux": batch.has_flux.detach().cpu().numpy(),
+            "raw_physical": evaluation.raw_physical.detach().cpu().numpy(),
+            "symmetric_physical": evaluation.symmetric_physical.detach().cpu().numpy(),
+            "configured_physical": evaluation.configured_physical.detach()
+            .cpu()
+            .numpy(),
+            "tangent_gradient": evaluation.tangent_gradient.detach().cpu().numpy(),
+            "tangent_preconditioner_base": (
                 evaluation.tangent_preconditioner_base.detach().cpu().numpy()
             ),
-            tangent_delta=evaluation.tangent_delta[list(method_indices)]
+            "tangent_delta": evaluation.tangent_delta[list(method_indices)]
             .detach()
             .cpu()
             .numpy(),
-            candidate_physical=evaluation.candidate_physical[list(method_indices)]
+            "candidate_physical": evaluation.candidate_physical[list(method_indices)]
             .detach()
             .cpu()
             .numpy(),
-            candidate_solution=evaluation.candidate_solution[list(method_indices)]
+            "candidate_solution": evaluation.candidate_solution[list(method_indices)]
             .detach()
             .cpu()
             .numpy(),
-            candidate_equal_prediction=evaluation.candidate_equal_prediction[
+            "candidate_equal_prediction": evaluation.candidate_equal_prediction[
                 list(method_indices)
             ]
             .detach()
             .cpu()
             .numpy(),
-            candidate_prediction=evaluation.candidate_prediction[list(method_indices)]
+            "candidate_prediction": evaluation.candidate_prediction[
+                list(method_indices)
+            ]
             .detach()
             .cpu()
             .numpy(),
-            phi_transition_edges=edges.phi_transition.detach().cpu().numpy(),
-            psi_transition_edges=edges.psi_transition.detach().cpu().numpy(),
+            "phi_transition_edges": edges.phi_transition.detach().cpu().numpy(),
+            "psi_transition_edges": edges.psi_transition.detach().cpu().numpy(),
+        }
+        if evaluation.closed_loop:
+            closed_loop = evaluation.closed_loop
+            payload.update(
+                {
+                    "closed_loop_method_ids": np.asarray(
+                        [diagnostics.method_id for diagnostics in closed_loop]
+                    ),
+                    "closed_loop_eta_caps": np.asarray(
+                        [
+                            math.nan
+                            if diagnostics.eta_cap is None
+                            else diagnostics.eta_cap
+                            for diagnostics in closed_loop
+                        ],
+                        dtype=np.float64,
+                    ),
+                    "closed_loop_cap_is_unbounded": np.asarray(
+                        [diagnostics.eta_cap is None for diagnostics in closed_loop],
+                        dtype=np.bool_,
+                    ),
+                    "closed_loop_eta_star": torch.stack(
+                        [diagnostics.eta_star for diagnostics in closed_loop]
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy(),
+                    "closed_loop_eta_applied": torch.stack(
+                        [diagnostics.eta_applied for diagnostics in closed_loop]
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy(),
+                    "closed_loop_eta_capped": torch.stack(
+                        [diagnostics.eta_capped for diagnostics in closed_loop]
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy(),
+                    "closed_loop_line_search_numerator": (
+                        torch.stack(
+                            [
+                                diagnostics.line_search_numerator
+                                for diagnostics in closed_loop
+                            ]
+                        )
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    ),
+                    "closed_loop_line_search_denominator": (
+                        torch.stack(
+                            [
+                                diagnostics.line_search_denominator
+                                for diagnostics in closed_loop
+                            ]
+                        )
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    ),
+                }
+            )
+            if len(closed_loop) == 1:
+                diagnostics = closed_loop[0]
+                payload.update(
+                    {
+                        "closed_loop_method_id": np.asarray(diagnostics.method_id),
+                        "closed_loop_eta_cap": np.asarray(
+                            diagnostics.eta_cap,
+                            dtype=np.float64,
+                        ),
+                        "closed_loop_eta_star": diagnostics.eta_star.detach()
+                        .cpu()
+                        .numpy(),
+                        "closed_loop_eta_applied": diagnostics.eta_applied.detach()
+                        .cpu()
+                        .numpy(),
+                        "closed_loop_eta_capped": diagnostics.eta_capped.detach()
+                        .cpu()
+                        .numpy(),
+                        "closed_loop_line_search_numerator": (
+                            diagnostics.line_search_numerator.detach().cpu().numpy()
+                        ),
+                        "closed_loop_line_search_denominator": (
+                            diagnostics.line_search_denominator.detach().cpu().numpy()
+                        ),
+                    }
+                )
+        np.savez_compressed(
+            data_dir / "selected_symmetric_tangent_audit.npz",
+            **payload,
         )
 
     def _build_summary(
@@ -1351,6 +1795,26 @@ class ComplexSymmetricTangentAudit(
         edges: ProjectionTransitionEdges,
         figure_paths: Sequence[Path],
     ) -> dict[str, Any]:
+        closed_loop_summary: dict[str, Any] = {
+            "enabled": self.request.closed_loop_enabled,
+            "eta_cap": self.request.closed_loop_eta_cap,
+            "relative_lambda": self.request.closed_loop_relative_lambda,
+            "line_search_relative_eps": self.request.line_search_relative_eps,
+            "cap_policy": "final_cap_posthoc_evaluation",
+            "sample_adaptive": True,
+            "batch_independent": True,
+            "reference_targets_used": False,
+        }
+        if self.request.closed_loop_eta_caps is not None:
+            caps = self.request.resolved_closed_loop_eta_caps
+            closed_loop_summary.update(
+                {
+                    "eta_cap": None,
+                    "eta_caps": [None if math.isinf(cap) else cap for cap in caps],
+                    "uncapped_included": any(math.isinf(cap) for cap in caps),
+                    "shared_eta_star_and_direction": True,
+                }
+            )
         return {
             "diagnostic": "symmetric_tangent_response_gradient_posthoc_audit",
             "status": "frozen_checkpoint_posthoc",
@@ -1365,6 +1829,7 @@ class ComplexSymmetricTangentAudit(
             "sample_count": len(dataset),
             "etas": list(self.request.etas),
             "relative_lambdas": list(self.request.relative_lambdas),
+            "closed_loop_exact_line_search": closed_loop_summary,
             "configured_projection_mode": self._configured_projection_mode,
             "damping_formula": (
                 "D=gamma_x_squared+gamma_y_squared+"
@@ -1375,6 +1840,11 @@ class ComplexSymmetricTangentAudit(
                 "mismatch": "m0=H_x*p_tilde-H_y*q_tilde",
                 "gradient": "g=(H_x+H_y)^T*M_Omega*m0",
                 "update": "delta=-eta*D^{-1}*g",
+                "closed_loop_update": (
+                    "z=D^{-1}g; v=(H_x+H_y)z; "
+                    "eta_star=(g^T z)/(<v,v>_M+eps_sample); "
+                    "eta_applied=min(eta_star,eta_cap); delta=-eta_applied*z"
+                ),
                 "balanced_pair": "phi=p_tilde+delta; psi=q_tilde-delta",
             },
             "matrix_policy": {
@@ -1447,8 +1917,12 @@ class ComplexSymmetricTangentAudit(
             "",
             "`m0=H_x*p_tilde-H_y*q_tilde`,",
             "`g=(H_x+H_y)^T*M_Omega*m0`, and",
-            "`delta=-eta*D^{-1}*g` with `phi=p_tilde+delta`,",
-            "`psi=q_tilde-delta`. No global matrix or solve is used.",
+            "fixed candidates use `delta=-eta*D^{-1}*g`. The optional closed-loop",
+            "candidate uses `z=D^{-1}g`, `v=(H_x+H_y)z`,",
+            "`eta_star=(g^T*z)/(<v,v>_M+eps)`, and",
+            "`delta=-min(eta_star,eta_cap)*z`. Every candidate uses",
+            "`phi=p_tilde+delta`, `psi=q_tilde-delta`. No global matrix or solve",
+            "is used.",
             "",
             "## Selected Aggregate Results",
             "",
@@ -1490,7 +1964,8 @@ class ComplexSymmetricTangentAudit(
                 "",
                 "## Interpretation Boundary",
                 "",
-                "This audit tests one fixed Jacobi-preconditioned tangent step on one",
+                "This audit tests fixed and optional sample-adaptive",
+                "Jacobi-preconditioned tangent steps on one",
                 "frozen checkpoint. It can reject unstable eta/lambda regions and show",
                 "whether the reference-free surrogate improves the intended response",
                 "metric. It does not replace paired retraining if the production",

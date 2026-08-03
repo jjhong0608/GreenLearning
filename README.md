@@ -60,17 +60,19 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   sample adaptivity, and operator awareness; and Slide 11 uses a two-line
   sidebar formula for the weak prediction. Shared Poisson/CDR result-field
   colorbar titles are placed to the right of the bars with explicit padding and
-  right margin. Slides 15-16 separate the Green-response candidate into the
-  unequal-response problem and a column-diagonal exact-balance projection. The
-  Slide 16 gain is `diag(H_s^T M_Omega H_s)`: it measures how one source-point
-  correction moves the whole directional solution field, while discarding
-  off-diagonal source correlations to avoid a global matrix solve. Its visible
-  method card explicitly contrasts the full coupled system
-  `(A_x+A_y) delta_phi = A_y r` with the column-diagonal pointwise reduction. The
-  Slide 15 presents the five directional-response factors in a balanced 3+2
-  block grid so Quarto cannot collapse them into one irregular inline row.
-  These are presentation-only changes: frozen artifacts and numerical values
-  remain fixed.
+  right margin. Slide 15 now treats the physical symmetric split as an
+  orthogonal projection onto `C_f={(phi,psi):phi+psi=f}`: it removes the
+  `(1,1)` common-mode defect, preserves the `(1,-1)` difference mode, and then
+  exposes the remaining directional mismatch
+  `m0=H_x*phi_tilde-H_y*psi_tilde`. Slide 16 starts from that exact-balanced
+  pair and defines the optional tangent candidate
+  `g=(H_x+H_y)^T M_Omega m0`, `delta=-eta*g/D`,
+  `phi=phi_tilde+delta`, `psi=psi_tilde-delta`. The fixed column diagonals
+  `diag(H_s^T M_Omega H_s)` appear only in the Jacobi denominator `D`; they do
+  not allocate `f-p-q`. The five directional-response factors remain in the
+  balanced 3+2 block grid. These are presentation-only changes: the slides make
+  no performance claim before paired retraining, and frozen artifacts and
+  numerical values remain fixed.
 - Annulus meeting asset regeneration: run
   `PYTHONPATH=src ~/.conda/envs/green_net/bin/python docs/meeting/annulus_transition_error/build_assets.py --overwrite`,
   then render with
@@ -227,19 +229,21 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   }
   ```
 - Complex optional column-diagonal Green-response projection: set `mode="column_diagonal_green_response"` to distribute the raw physical balance residual `r=rhs-p-q` using each source point's downstream solution-response cost. For direction `s`, production reconstruction defines `H_s=K_s W_s L_s^2` and the cached gain is `gamma_s^2=diag(H_s^T M_Omega H_s)` with `M_Omega=(hx*hy)I`. This is the squared norm of each source column, not a row/evaluation sensitivity. With `gx_bar=gamma_x^2+eps` and `gy_bar=gamma_y^2+eps`, the fixed tempered weight is `w_phi=sigmoid(alpha*(log(gy_bar)-log(gx_bar)))`, `w_psi=1-w_phi`; then `delta_phi=w_phi*r` and `delta_psi=w_psi*r`. `gain_exponent=0` gives the physical symmetric correction, while `gain_exponent=1` uses the legacy direct column-diagonal ratio. The default is `1.0`, so configs that omit the field preserve the existing numerical path. Intermediate values such as `0.25` temper gain anisotropy without adding a learnable parameter, sample-dependent gate, row method, or full-Gram solve. The frozen GreenNet context and fixed weights are built segment-by-segment once per trainer/evaluator instance. Artifact export writes the exponent, run-level gains, and weights to `data/column_diagonal_green_response_fields.npz`, selected-sample correction diagnostics to `data/selected_raw_arrays.npz`, and gain/weight Plotly figures under `figures/balance_projection/`. Exponent comparisons require paired retraining from the same initialization and data; changing alpha only at export time is not a fair comparison. See `docs/complex_column_diagonal_green_response_projection.md` for the full contract.
-- Complex optional symmetric-tangent Green-response projection: set `mode="symmetric_tangent_green_response"` to start from the exact-balanced symmetric pair `p_tilde=(rhs+p-q)/2`, `q_tilde=(rhs-p+q)/2` and take one fixed response-space tangent step. With `m0=H_x p_tilde-H_y q_tilde`, the reference-free gradient is `g=(H_x+H_y)^T M_Omega m0`. The cached Jacobi denominator is `D=gamma_x^2+gamma_y^2+(relative_lambda+denominator_relative_eps)*mean(gamma_x^2+gamma_y^2)`, and the correction is `delta=-eta*g/D`, `phi=p_tilde+delta`, `psi=q_tilde-delta`. This preserves `phi+psi=rhs`, uses no reference target, learned step size, row norm, global response matrix, full-Gram matrix, or linear solve. Frozen segment-local response blocks are built once and reused for the tangent forward/adjoint actions and final reconstruction; ordinary first-order autograd still reaches CouplingNet through these fixed matvecs. `eta=0` is exactly the physical-symmetric ablation. The default fixed settings are `eta=0.01`, `relative_lambda=0.01`, and `denominator_relative_eps=1e-12`.
+- Complex optional symmetric-tangent Green-response projection: set `mode="symmetric_tangent_green_response"` to start from the exact-balanced symmetric pair `p_tilde=(rhs+p-q)/2`, `q_tilde=(rhs-p+q)/2`. With `m0=H_x p_tilde-H_y q_tilde`, the reference-free gradient is `g=(H_x+H_y)^T M_Omega m0`, and the cached Jacobi denominator is `D=gamma_x^2+gamma_y^2+(relative_lambda+denominator_relative_eps)*mean(gamma_x^2+gamma_y^2)`. The backward-compatible default `eta_strategy="fixed"` uses `delta=-eta*g/D`. The opt-in `eta_strategy="closed_loop_exact_line_search"` forms `z=g/D`, `v=(H_x+H_y)z`, computes the sample-wise `eta_star=(g^T z)/(<v,v>_M+eps_sample)`, and applies `eta_applied=min(eta_star,eta_cap)`. Here `eta` is the final safety cap, not a learned parameter. When the CouplingNet LR schedule is enabled, the training cap uses a half-cosine rise over the same effective warmup epochs and then remains at `eta`; LR cosine decay is not reused. Validation, checkpoint selection, standalone evaluation, and artifact export always use the final cap. Both strategies use `phi=p_tilde+delta`, `psi=q_tilde-delta`, preserve `phi+psi=rhs`, remain differentiable through the sample-wise eta, and use no reference target, batch-global statistic, row norm, global response matrix, full-Gram matrix, or linear solve. Frozen segment-local response blocks are built once and reused. `eta=0` is exactly the physical-symmetric ablation.
   ```json
   "balance_projection": {
     "enabled": true,
     "mode": "symmetric_tangent_green_response",
     "symmetric_tangent_green_response": {
       "eta": 0.01,
+      "eta_strategy": "closed_loop_exact_line_search",
+      "line_search_relative_eps": 1e-12,
       "relative_lambda": 0.01,
       "denominator_relative_eps": 1e-12
     }
   }
   ```
-  `configs/complex_coupling_soap_tangent.json` is the separate SOAP experiment config; existing canonical and column-diagonal configs remain unchanged. Artifact export records the symmetric base, gradient, denominator, tangent delta, and pre/post directional response mismatch. The method must be compared with physical symmetric through paired retraining; the frozen-checkpoint audit remains diagnostic evidence rather than a training result.
+  `configs/complex_coupling_soap_tangent.json` is the separate SOAP adaptive-tangent experiment config; existing canonical and column-diagonal configs remain unchanged. Omit `eta_strategy` to retain the fixed update. Training logs and CSV record the scheduled cap and aggregate eta statistics; evaluation artifacts record per-sample `eta_star`, applied eta, cap hits, and line-search numerator/denominator. The method must be compared with physical symmetric through paired retraining; the frozen-checkpoint audit remains diagnostic evidence rather than a training result.
   ```json
   "balance_projection": {
     "enabled": true,
@@ -299,6 +303,19 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   transpose actions, and performs no global matrix assembly or solve. The
   eta/lambda sweep reports response mismatch and canonical energy as primary
   reference-free metrics; `rel_sol` and `rel_flux` remain evaluation-only.
+  Add `--closed-loop` to include the production-equivalent sample-wise exact
+  line search on the same frozen raw output. Its defaults are final cap `0.01`,
+  `lambda_rel=0.01`, and relative epsilon `1e-12`; override them with
+  `--closed-loop-eta-cap`, `--closed-loop-relative-lambda`, and
+  `--line-search-relative-eps`. The post-hoc path uses the final evaluation cap,
+  not the training warmup schedule, and records each sample's `eta_star`,
+  applied eta, cap hit, and line-search numerator/denominator in CSV and NPZ.
+  For a shared-context cap sweep, pass
+  `--closed-loop-eta-caps 0.01 0.0125 0.015 0.02 inf`; `inf` (or `uncapped`)
+  applies `eta_star` directly. The response operator, tangent direction, and
+  sample-wise `eta_star` are built once and reused for every listed cap. The
+  audit then writes `figures/aggregate/closed_loop_cap_sweep.*` in addition to
+  the per-sample CSV and selected raw arrays.
 
   ```bash
   PYTHONPATH=src ~/.conda/envs/green_net/bin/python \
@@ -306,12 +323,14 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     --config checkpoints/annulus_CDR/coupling7/config_used.json \
     --coupling-checkpoint \
       checkpoints/annulus_CDR/coupling7/complex_coupling_model_best_energy.safetensors \
-    --green-checkpoint checkpoints/annulus_CDR/green/model.safetensors
+    --green-checkpoint checkpoints/annulus_CDR/green/model.safetensors \
+    --closed-loop
   ```
 
   The default output directory is
   `<coupling-checkpoint-parent>/symmetric_tangent_response_audit`. This is a
-  post-hoc ablation of one fixed tangent step. It does not modify the training
+  post-hoc ablation of fixed and optional closed-loop tangent steps. It does not
+  modify the training
   projection or establish the result of paired retraining. The diagnostic
   accepts checkpoints trained with either `physical_symmetric` or
   `column_diagonal_green_response`. For a symmetric-trained checkpoint the

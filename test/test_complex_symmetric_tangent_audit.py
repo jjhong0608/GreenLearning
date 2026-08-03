@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -113,6 +115,18 @@ def test_request_rejects_invalid_eta_lambda_and_duplicates(tmp_path: Path) -> No
         SymmetricTangentAuditRequest(**common, relative_lambdas=(-1.0,))
     with pytest.raises(ValueError, match="must not contain duplicate"):
         SymmetricTangentAuditRequest(**common, etas=(0.1, 0.1))
+    with pytest.raises(ValueError, match="line_search_relative_eps"):
+        SymmetricTangentAuditRequest(**common, line_search_relative_eps=0.0)
+    with pytest.raises(ValueError, match="must not contain duplicates"):
+        SymmetricTangentAuditRequest(
+            **common,
+            closed_loop_eta_caps=(0.01, 0.01),
+        )
+    with pytest.raises(ValueError, match=r"non-negative values or \+inf"):
+        SymmetricTangentAuditRequest(
+            **common,
+            closed_loop_eta_caps=(math.nan,),
+        )
 
 
 def test_checkpoint_backed_tangent_audit_writes_balanced_candidates(
@@ -225,6 +239,168 @@ def test_checkpoint_backed_tangent_audit_accepts_symmetric_trained_config(
     )
     assert "configured_column" not in summary["aggregate_metrics"]
     assert len(summary["aggregate_metrics"]) == 5
+
+
+def test_checkpoint_backed_tangent_audit_adds_closed_loop_exact_line_search(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    (
+        config_path,
+        coupling_checkpoint,
+        green_checkpoint,
+        geometry_path,
+        test_path,
+        coefficient_path,
+    ) = _write_fixture(tmp_path)
+    payload = json.loads(config_path.read_text())
+    payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "physical_symmetric",
+    }
+    config_path.write_text(json.dumps(payload))
+    outdir = tmp_path / "closed_loop_tangent_audit"
+
+    summary = run_symmetric_tangent_response_audit(
+        SymmetricTangentAuditRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_checkpoint,
+            green_checkpoint=green_checkpoint,
+            outdir=outdir,
+            geometry=geometry_path,
+            test_path=test_path,
+            coefficients=coefficient_path,
+            etas=(0.01,),
+            relative_lambdas=(0.01,),
+            closed_loop_enabled=True,
+            closed_loop_eta_cap=0.01,
+            closed_loop_relative_lambda=0.01,
+            line_search_relative_eps=1.0e-12,
+            selected_samples=(0,),
+            batch_size=1,
+        )
+    )
+
+    method_id = "closed_loop_eta_cap_0p01_lambda_0p01"
+    assert len(summary["aggregate_metrics"]) == 3
+    assert summary["closed_loop_exact_line_search"] == {
+        "enabled": True,
+        "eta_cap": 0.01,
+        "relative_lambda": 0.01,
+        "line_search_relative_eps": 1.0e-12,
+        "cap_policy": "final_cap_posthoc_evaluation",
+        "sample_adaptive": True,
+        "batch_independent": True,
+        "reference_targets_used": False,
+    }
+    closed_loop = summary["aggregate_metrics"][method_id]
+    assert closed_loop["method_kind"] == "closed_loop_exact_line_search"
+    assert closed_loop["response_mismatch_ratio_vs_symmetric_mean"] <= 1.0
+    assert closed_loop["eta_applied_mean"] <= 0.01
+    assert summary["automated_findings"]["closed_loop_method"] == method_id
+    assert method_id in summary["selected_method_ids"]
+
+    with (outdir / "metrics" / "per_sample_tangent_sweep.csv").open() as handle:
+        rows = list(csv.DictReader(handle))
+    row = next(row for row in rows if row["method_id"] == method_id)
+    assert float(row["eta_applied"]) == pytest.approx(
+        min(float(row["eta_star"]), float(row["eta_cap"]))
+    )
+    assert float(row["physical_balance_max_abs"]) < 1.0e-12
+
+    with np.load(
+        outdir / "data" / "selected_symmetric_tangent_audit.npz",
+        allow_pickle=False,
+    ) as raw:
+        assert raw["closed_loop_method_id"].item() == method_id
+        assert raw["closed_loop_eta_cap"].item() == pytest.approx(0.01)
+        np.testing.assert_allclose(
+            raw["closed_loop_eta_applied"],
+            np.minimum(raw["closed_loop_eta_star"], 0.01),
+        )
+        assert {
+            "closed_loop_line_search_numerator",
+            "closed_loop_line_search_denominator",
+        }.issubset(raw.files)
+
+
+def test_checkpoint_backed_tangent_audit_sweeps_closed_loop_caps_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    (
+        config_path,
+        coupling_checkpoint,
+        green_checkpoint,
+        geometry_path,
+        test_path,
+        coefficient_path,
+    ) = _write_fixture(tmp_path)
+    payload = json.loads(config_path.read_text())
+    payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "physical_symmetric",
+    }
+    config_path.write_text(json.dumps(payload))
+    outdir = tmp_path / "closed_loop_cap_sweep"
+
+    summary = run_symmetric_tangent_response_audit(
+        SymmetricTangentAuditRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_checkpoint,
+            green_checkpoint=green_checkpoint,
+            outdir=outdir,
+            geometry=geometry_path,
+            test_path=test_path,
+            coefficients=coefficient_path,
+            etas=(0.01,),
+            relative_lambdas=(0.01,),
+            closed_loop_enabled=True,
+            closed_loop_eta_caps=(0.01, 0.015, math.inf),
+            closed_loop_relative_lambda=0.01,
+            selected_samples=(0,),
+            batch_size=1,
+        )
+    )
+
+    assert summary["matrix_policy"]["response_context_build_count"] == 1
+    assert summary["matrix_policy"]["response_operator_build_count"] == 1
+    assert summary["closed_loop_exact_line_search"]["eta_caps"] == [
+        0.01,
+        0.015,
+        None,
+    ]
+    assert len(summary["aggregate_metrics"]) == 5
+    assert (outdir / "figures" / "aggregate" / "closed_loop_cap_sweep.json").is_file()
+
+    with (outdir / "metrics" / "per_sample_tangent_sweep.csv").open() as handle:
+        rows = list(csv.DictReader(handle))
+    closed_loop_rows = [
+        row for row in rows if row["method_kind"] == "closed_loop_exact_line_search"
+    ]
+    assert len(closed_loop_rows) == 3
+    eta_star = float(closed_loop_rows[0]["eta_star"])
+    for row, cap in zip(closed_loop_rows, (0.01, 0.015, math.inf), strict=True):
+        expected = eta_star if math.isinf(cap) else min(eta_star, cap)
+        assert float(row["eta_applied"]) == pytest.approx(expected)
+        assert float(row["physical_balance_max_abs"]) < 1.0e-12
+    response_costs = [float(row["response_mismatch_cost"]) for row in closed_loop_rows]
+    assert response_costs == sorted(response_costs, reverse=True)
+    assert closed_loop_rows[-1]["eta_cap_label"] == "uncapped"
+
+    with np.load(
+        outdir / "data" / "selected_symmetric_tangent_audit.npz",
+        allow_pickle=False,
+    ) as raw:
+        assert raw["closed_loop_eta_star"].shape == (3, 1)
+        assert raw["closed_loop_eta_applied"].shape == (3, 1)
+        assert raw["closed_loop_cap_is_unbounded"].tolist() == [False, False, True]
+        np.testing.assert_allclose(
+            raw["closed_loop_eta_applied"][-1],
+            raw["closed_loop_eta_star"][-1],
+        )
 
 
 def test_cli_module_imports_and_exposes_runner() -> None:

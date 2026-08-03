@@ -299,7 +299,7 @@ evidence, and a future source-space modification:
 \;\longrightarrow\;
 \text{CDR weak-result coefficients/fields/errors}
 \;\longrightarrow\;
-\text{fixed Green-response-aware source projection}
+\text{symmetric balance-plane tangent correction}
 }
 \]
 
@@ -315,9 +315,11 @@ no-retraining experiments that change only the final reconstruction estimator.
 Slides 11-12 present the final Poisson weak-result fields and signed errors, while
 Slides 13-14 repeat the result contract for CDR and add its physical
 coefficients. These four slides describe the computed result rather than
-diagnosing the transition. Slide 15 explains why equal source correction does
-not imply equal reconstructed response. Slide 16 then introduces the fixed
-diagonal Green-response source-split proposal and requires paired retraining.
+diagnosing the transition. Slide 15 separates exact source balance from
+directional response consistency. Slide 16 then starts from that
+symmetric-balanced source and introduces one fixed Jacobi-preconditioned
+tangent step inside the balance plane. It is presented as a method-only
+candidate that requires paired retraining.
 
 ## Main Slide Plan
 
@@ -2166,256 +2168,248 @@ The standard combined directional-source metric is
 3. Add the final weak-prediction error and the representative/full-test metric
    card.
 
-### Slide 15: Why Equal Source Correction Is Not Equal Response
+### Slide 15: Exact Balance Does Not Imply Directional Response Consistency
 
 **Purpose**
 
-State the failure mode before presenting a new formula. The current symmetric
-projection exactly restores physical source balance, but it assigns equal
-source-space corrections without accounting for the unequal downstream Green
-responses.
+Reframe symmetric projection correctly. It is an exact Euclidean projection to
+the physical-source balance plane, not a failed approximation. What it does not
+determine is which feasible point on that plane makes the two directional Green
+responses consistent.
 
 **Title**
 
-> Why Equal Source Correction Is Not Equal Response
+> Exact Balance Does Not Imply Directional Response Consistency
 
-**Current exact-balance projection**
+**Physical raw proposals and balance plane**
 
-Given physical raw proposals \(p,q\), define
-
-\[
-r=f-p-q.
-\]
-
-The symmetric correction is
+Convert the network responses to physical raw proposals,
 
 \[
-\delta\phi_{\mathrm{sym}}
-=
-\delta\psi_{\mathrm{sym}}
-=
-\frac r2,
-\]
-
-\[
-\phi=p+\delta\phi_{\mathrm{sym}},
+p=\frac{P}{L_x^2},
 \qquad
-\psi=q+\delta\psi_{\mathrm{sym}}.
+q=\frac{Q}{L_y^2},
+\qquad
+d=p-q.
 \]
 
-This guarantees \(\phi+\psi=f\), but it assumes equal correction cost in
-physical source space.
-
-**Directional response operators**
-
-The corresponding solution perturbations are
+The pointwise affine balance plane is
 
 \[
-\delta u_\phi=H_x\delta\phi,
+\mathcal C_f=\{(\phi,\psi):\phi+\psi=f\}.
+\]
+
+The symmetric-balanced pair is
+
+\[
+\widetilde\phi=\frac{f+d}{2},
 \qquad
-H_x=K_xW_xL_x^2,
+\widetilde\psi=\frac{f-d}{2},
+\]
+
+so
+
+\[
+\widetilde\phi+\widetilde\psi=f,
+\qquad
+\widetilde\phi-\widetilde\psi=d.
+\]
+
+The common direction \((1,1)\) is normal to \(\mathcal C_f\), while the
+difference direction \((1,-1)\) is tangent to it. Symmetric projection removes
+the common-mode balance defect and preserves the raw difference mode.
+
+**Directional response mismatch**
+
+With the existing frozen directional response operators,
+
+\[
+\widetilde u_\phi=H_x\widetilde\phi,
+\qquad
+\widetilde u_\psi=H_y\widetilde\psi,
 \]
 
 \[
-\delta u_\psi=H_y\delta\psi,
-\qquad
-H_y=K_yW_yL_y^2.
+m_0=H_x\widetilde\phi-H_y\widetilde\psi.
 \]
 
-Here \(K_s\) is the axial Green-kernel matrix, \(W_s\) contains normalized
-quadrature weights, and \(L_s^2\) is the physical-source to reference-response
-pull-back. Thus \(H_s\) contains kernel, prescribed-coefficient, quadrature,
-evaluation-position, and segment-length sensitivity.
+Here \(H_s=K_sW_sL_s^2\) contains the Green kernel, prescribed coefficient,
+quadrature, evaluation position, and segment length. Keep these five factors
+as the existing balanced 3+2 block grid.
 
-For the visible operator card, present these five factors as a balanced two-row
-matrix: Green kernel, coefficient, and quadrature on the first row; evaluation
-position and segment length on the second. Use block-level items so Quarto does
-not collapse the factor labels into one paragraph or split `Green kernel`
-awkwardly across lines.
-
-**Transition consequence**
-
-If \(\|H_x\|\gg\|H_y\|\), then symmetric source correction produces
+Exact balance does not imply response consistency:
 
 \[
-\delta\phi=\delta\psi=\frac r2,
-\qquad
-\|\delta u_\phi\|\gg\|\delta u_\psi\|.
+\widetilde\phi+\widetilde\psi=f
+\not\Longrightarrow
+H_x\widetilde\phi=H_y\widetilde\psi.
 \]
 
-The projection is exactly balanced, yet its reconstructed perturbation can be
-strongly directional. Annulus line-length and kernel-row changes make this
-distinction especially relevant near the transition.
+The existing canonical energy and optimizer already try to reduce directional
+mismatch while training. The proposed next step makes one response-informed
+movement explicit without leaving the feasible plane.
 
 **Visual composition**
 
-- Left card: \(r\), the symmetric \(r/2\) corrections, and exact balance.
-- Center card: \(H_x,H_y\), their factors, and the mapping from source
-  correction to solution perturbation.
-- Right card: the unequal-response implication and transition interpretation.
-- Bottom invariant: the balance constraint remains in physical source space;
-  only the correction cost is under discussion.
-
-**Reveal plan**
-
-1. Start with symmetric source correction and exact balance.
-2. Reveal the directional response operators and their ingredients.
-3. Reveal why equal source corrections can produce unequal reconstructed
-   responses.
-
-### Slide 16: Column-Diagonal Green-Response Projection
-
-**Purpose**
-
-Define the proposed response-aware correction only after Slide 15 establishes
-why the current equal correction is insufficient. Attach each gain to the
-source point being corrected by using the corresponding Green-response column,
-then retain only the Gram diagonal so exact balance remains closed form and no
-full response-matrix solve is introduced.
-
-**Title**
-
-> Next Candidate: Allocate Balance Correction by Green Response
-
-**Fixed source-point response-impact gains**
-
-Let \(M_\Omega\) be the discrete physical solution-space mass matrix. For source
-point \(j\), define
-
-\[
-\gamma_{x,j}^2
-=
-\left[H_x^\top M_\Omega H_x\right]_{jj}
-=
-\left\|M_\Omega^{1/2}H_x(:,j)\right\|_2^2,
-\]
-
-\[
-\gamma_{y,j}^2
-=
-\left[H_y^\top M_\Omega H_y\right]_{jj}
-=
-\left\|M_\Omega^{1/2}H_y(:,j)\right\|_2^2.
-\]
-
-Thus the gain answers the source-aligned question: how strongly does a unit
-correction at point \(j\) move the whole directional solution field? It is a
-column norm, not evaluation-row sensitivity.
-
-The gains are fixed from geometry, prescribed coefficients, quadrature, and the
-frozen GreenNet. No `sol`, `target_phi`, `target_psi`, learned gate, or
-CouplingNet output enters their construction.
-
-**Column-diagonal response-metric principle**
-
-The exact global response cost contains
-
-\[
-A_s=H_s^\top M_\Omega H_s,
-\]
-
-including off-diagonal correlations between different source points. The
-candidate keeps only
-
-\[
-D_s=\operatorname{diag}(A_s)
-=\operatorname{diag}\!\left(H_s^\top M_\Omega H_s\right).
-\]
-
-Floor the squared diagonal gains,
-
-\[
-\bar\gamma_{s,j}^2=\gamma_{s,j}^2+\varepsilon,
-\]
-
-and solve the independent pointwise constrained problem
-
-\[
-\min_{\delta\phi_j+\delta\psi_j=r_j}
-\left(
-\bar\gamma_{x,j}^2\delta\phi_j^2
-+
-\bar\gamma_{y,j}^2\delta\psi_j^2
-\right).
-\]
-
-This drops cross-source cancellation and reinforcement, but preserves
-individual source-point response impact and avoids the coupled system
-\((A_x+A_y)\delta\phi=A_y r\).
-
-**Closed-form exact-balance projection**
-
-\[
-\delta\phi_j
-=
-\frac{\bar\gamma_{y,j}^2}
-{\bar\gamma_{x,j}^2+\bar\gamma_{y,j}^2}r_j,
-\qquad
-\delta\psi_j
-=
-\frac{\bar\gamma_{x,j}^2}
-{\bar\gamma_{x,j}^2+\bar\gamma_{y,j}^2}r_j,
-\]
-
-\[
-\phi_j=p_j+\delta\phi_j,
-\qquad
-\psi_j=q_j+\delta\psi_j,
-\qquad
-\phi_j+\psi_j=f_j.
-\]
-
-The opposite-direction gain appears in each numerator because a more
-influential source-to-global-response direction must receive the smaller
-correction:
-
-\[
-\gamma_{x,j}^2>\gamma_{y,j}^2
-\quad\Longrightarrow\quad
-\delta\phi_j<\delta\psi_j.
-\]
-
-**Method boundaries**
-
-- This is a physical source-projection metric, not optimizer preconditioning.
-- The column diagonal aligns the gain with the source point being corrected,
-  while the full Gram matrix includes all cross-source correlations.
-- The diagonal approximation avoids a matrix solve but does not reproduce
-  cancellation or reinforcement between different source corrections.
-- Discarded off-diagonal energy, positivity, grid refinement, and boundary
-  behavior must be audited before implementation.
-- The source split and both directional reconstructions change, so a fair
-  conclusion requires paired retraining from identical initialization and data.
-- Applying the projection post-hoc to a symmetric-trained checkpoint is not a
-  fair trained comparison.
-
-**Visual composition**
-
-- Top row: column-impact \(\gamma_{x,j},\gamma_{y,j}\) definition and information
-  contract.
-- Middle-left card: the full coupled system
-  \((A_x+A_y)\delta\phi=A_y r\), its diagonal reduction, and the resulting
-  pointwise minimization.
-- Middle-right card: the closed-form exact-balance correction.
-- Bottom row:
-  \(\gamma_{x,j}^2>\gamma_{y,j}^2\Rightarrow\delta\phi_j<\delta\psi_j\),
-  no-solve status, and exact balance.
+- Left card: physical raw proposals, \(\mathcal C_f\), symmetric projection,
+  normal direction, and tangent direction.
+- Center card: \(\widetilde u_\phi,\widetilde u_\psi,m_0\) and the five response
+  factors.
+- Right card: exact-balance implication that does not follow, plus the distinct
+  roles of projection and canonical-energy training.
+- Bottom takeaway: feasibility and response consistency are separate
+  requirements.
 
 **Takeaway**
 
-> Allocate the exact physical balance correction according to each source
-> point's global Green-response impact: the more influential directional source
-> correction receives the smaller share.
+> Exact source balance selects a feasible split, but not necessarily the
+> response-consistent point on the balance plane.
 
 **Reveal plan**
 
-1. Show the fixed column-impact gain and its reference-free information
-   contract.
-2. Reveal the full Gram coupled system and then its column-diagonal reduction,
-   making the no-solve approximation explicit on screen.
-3. Reveal the closed-form correction and exact balance.
-4. Reveal the source-point impact intuition, audit requirements, and
-   paired-retraining requirement.
+1. Start with the physical proposals and symmetric orthogonal projection.
+2. Reveal the directional response operators and mismatch \(m_0\).
+3. Reveal the remaining tangent freedom and the role of existing energy
+   training.
+
+### Slide 16: Tangent Correction Within the Balance Plane
+
+**Purpose**
+
+Start from the exact-balanced symmetric pair and take one fixed,
+differentiable, response-gradient step in the feasible tangent direction. Do
+not reintroduce the assumption that raw \(p,q\) are individually reliable
+directional-source candidates.
+
+**Title**
+
+> Next Candidate: Tangent Correction Within the Balance Plane
+
+**Feasible tangent family**
+
+Parameterize every candidate by
+
+\[
+\phi(\delta)=\widetilde\phi+\delta,
+\qquad
+\psi(\delta)=\widetilde\psi-\delta.
+\]
+
+Then
+
+\[
+\phi(\delta)+\psi(\delta)=f
+\qquad\text{for every }\delta.
+\]
+
+The update therefore changes only the balance-plane difference mode.
+
+**Directional response objective and gradient**
+
+Define
+
+\[
+J(\delta)
+=
+\frac12
+\left\|
+H_x(\widetilde\phi+\delta)
+-H_y(\widetilde\psi-\delta)
+\right\|_{M_\Omega}^2
+=
+\frac12\left\|m_0+(H_x+H_y)\delta\right\|_{M_\Omega}^2.
+\]
+
+At \(\delta=0\),
+
+\[
+g=\nabla J(0)=(H_x+H_y)^\top M_\Omega m_0.
+\]
+
+The forward actions construct \(m_0\), and the transpose action asks how each
+source-point tangent change affects the full directional response mismatch.
+
+**Fixed column-diagonal Jacobi preconditioner**
+
+Reuse the fixed source-column gains only as a preconditioner:
+
+\[
+\gamma_{s,j}^2
+=
+\left[H_s^\top M_\Omega H_s\right]_{jj},
+\qquad
+G_j=\gamma_{x,j}^2+\gamma_{y,j}^2,
+\]
+
+\[
+\overline G=\frac1N\sum_jG_j,
+\qquad
+D_j
+=
+G_j+(\lambda_{\mathrm{rel}}+\varepsilon_{\mathrm{rel}})\overline G.
+\]
+
+Take one fixed step,
+
+\[
+\delta_j=-\eta\frac{g_j}{D_j},
+\qquad
+\phi=\widetilde\phi+\delta,
+\qquad
+\psi=\widetilde\psi-\delta.
+\]
+
+The column diagonal scales the tangent gradient. It does not allocate the raw
+balance residual \(f-p-q\), and there is no opposite-gain closed form.
+
+**Local descent interpretation**
+
+For \(v=-D^{-1}g\),
+
+\[
+\left.\frac{d}{d\epsilon}J(\epsilon v)\right|_{\epsilon=0}
+=-g^\top D^{-1}g\leq0.
+\]
+
+This proves a local descent direction at the symmetric pair. It does not claim
+that every finite \(\eta\) decreases \(J\); pre/post mismatch diagnostics and
+paired retraining are still required.
+
+**Method boundaries**
+
+- The symmetric-balanced source is the only tangent base.
+- \(\eta\), \(\lambda_{\mathrm{rel}}\), and
+  \(\varepsilon_{\mathrm{rel}}\) are fixed config scalars.
+- Geometry, prescribed coefficients, quadrature, and the frozen GreenNet are
+  allowed; reference `sol/phi/psi` targets are not.
+- Forward and transpose response actions are segment-local and differentiable.
+- Learned step sizes, learned gates, row norms, global response matrices,
+  full-Gram solves, and new loss terms are excluded.
+- The tangent correction runs before the unchanged canonical energy and
+  SOAP/AdamW optimization.
+- \(\eta=0\) is exactly the symmetric-projection ablation.
+
+**Visual composition**
+
+- Top-left card: the symmetric-balanced tangent family and exact balance.
+- Top-right card: fixed/reference-free/no-solve information contract.
+- Middle-left card: \(m_0\), \(J(\delta)\), and \(g\).
+- Middle-right card: \(\gamma_s^2\), \(D\), and the fixed tangent step.
+- Bottom strip: exact balance, local descent direction, and unchanged training
+  pipeline.
+
+**Takeaway**
+
+> First enforce balance exactly, then take one response-informed feasible
+> descent step before the existing energy optimization.
+
+**Reveal plan**
+
+1. Show the symmetric-balanced tangent family and information contract.
+2. Reveal the response mismatch objective and tangent gradient.
+3. Reveal the fixed column-diagonal Jacobi denominator and update.
+4. Reveal exact balance, local descent interpretation, unchanged downstream
+   training, and the paired-retraining requirement.
 
 ### Result And Candidate Order
 
@@ -2435,18 +2429,18 @@ order:
 5. Present the corresponding CDR coefficients, directional sources,
    reconstructions, signed errors, and metrics with the same visual contract.
 6. Validate the reliability rule on independent geometries before production
-   integration. Separately audit fixed Green-response gain definitions and
-   only then run a paired retraining experiment for the diagonal
-   Green-response projection.
+   integration. Separately audit the fixed tangent step size and damping, then
+   run a paired retraining experiment against the symmetric baseline.
 
 The three post-hoc blend rules and the proposed response gains construct their
 outputs without reference targets. Slide 5 defines the rules, Slides 6-8 explain
 their construction, Slide 9 presents Poisson comparison evidence, Slide 10
 presents CDR consistency, Slides 11-14 present the final computed fields and
-evaluation-only errors, Slide 15 explains the unequal-response problem, and
-Slide 16 proposes fixed response gains. Learned weights, learned gates, full
-response-matrix solves, and additional axial orientations remain outside the
-meeting plan.
+evaluation-only errors, Slide 15 separates exact balance from directional
+response consistency, and Slide 16 proposes one fixed Jacobi-preconditioned
+tangent step from the symmetric-balanced source. Learned weights, learned
+steps, learned gates, full response-matrix solves, and additional axial
+orientations remain outside the meeting plan.
 
 ## Optional Backup Slides
 
@@ -2615,9 +2609,10 @@ This directory must not be created until the content plan is approved.
     `poisson_weak_result_errors_sample0`,
     `cdr_weak_result_fields_sample9`, and
     `cdr_weak_result_errors_sample9`.
-19. Audit fixed Green-response gain definitions and prepare schematic
-    \(\gamma_x,\gamma_y\) maps for Slides 15-16; do not fabricate trained outcome
-    figures.
+19. Verify the tangent formulas against the production forward/transpose
+    response actions and fixed Jacobi denominator. Slides 15-16 remain
+    method-only; do not fabricate trained outcome figures or add frozen
+    post-hoc metrics.
 20. Crop or regenerate diagnostic figures without artifact-specific titles that
     compete with slide headings.
 21. Copy only approved final assets into the future meeting `assets/`
@@ -2745,25 +2740,30 @@ This directory must not be created until the content plan is approved.
       maps, trace-jump metrics, or causal problem statement.
 - [ ] Slides 11-14 use reference `sol/target_phi/target_psi` only for displayed
       evaluation errors and metrics, never for weak-weight construction.
-- [ ] Slide 15 defines the symmetric correction
-      \(\delta\phi=\delta\psi=r/2\), then shows that
-      \(\delta u_\phi=H_x\delta\phi\) and
-      \(\delta u_\psi=H_y\delta\psi\) need not have equal magnitude.
-- [ ] Slide 15 defines \(H_s=K_sW_sL_s^2\) and does not imply that \(H_s\)
-      computes the directional source split.
-- [ ] Slide 16 defines fixed \(\gamma_x,\gamma_y\), the diagonal constrained
-      minimization, its closed-form correction, and the intuition
-      \(\gamma_x>\gamma_y\Rightarrow\delta\phi<\delta\psi\).
-- [ ] Slide 16 distinguishes fixed diagonal Green-response gains from the
-      retired length-only response-space formulation.
-- [ ] Slide 16 excludes a full response-matrix solve and requires exact
-      \(\phi+\psi=f\) preservation.
-- [ ] Slide 16 is labeled `proposed / paired retraining required`; post-hoc
-      application to a symmetric-trained checkpoint is not presented as a fair
-      comparison.
-- [ ] Slides 5-14's blend construction and Slide 16's fixed response gains are
+- [ ] Slide 15 defines the physical proposals \(p=P/L_x^2,q=Q/L_y^2\), the
+      balance plane \(\mathcal C_f\), and the symmetric-balanced pair that
+      preserves \(d=p-q\).
+- [ ] Slide 15 identifies \((1,1)\) as the normal/common direction and
+      \((1,-1)\) as the tangent/difference direction.
+- [ ] Slide 15 defines \(m_0=H_x\widetilde\phi-H_y\widetilde\psi\), retains the
+      five \(H_s\) factors, and distinguishes exact source balance from
+      directional response consistency.
+- [ ] Slide 16 parameterizes the feasible update as
+      \(\phi=\widetilde\phi+\delta\),
+      \(\psi=\widetilde\psi-\delta\), so \(\phi+\psi=f\) is structural.
+- [ ] Slide 16 defines \(J(\delta)\),
+      \(g=(H_x+H_y)^\top M_\Omega m_0\), the fixed Jacobi denominator \(D\),
+      and \(\delta=-\eta D^{-1}g\).
+- [ ] Slide 16 uses the column diagonal only to precondition the tangent
+      gradient. Raw-residual allocation, opposite-gain correction, and the full
+      coupled solve are absent.
+- [ ] Slide 16 states only a local descent direction at \(\delta=0\), preserves
+      the existing canonical-energy/optimizer path, and requires paired
+      retraining before any performance conclusion.
+- [ ] Slides 5-14's blend construction and Slide 16's tangent construction are
       reference-free; displayed reference errors are evaluation-only, and
-      learned weights, learned gates, and target-fitted calibration are absent.
+      learned weights, learned steps, learned gates, and target-fitted
+      calibration are absent.
 - [ ] Relative split consistency, training-time weak operator closure,
       self-trace gluing, cross-axis carrier, null-space analysis, and
       boundary-energy development are absent from main slides, backup slides,
@@ -2774,12 +2774,13 @@ This directory must not be created until the content plan is approved.
       rather than production remedies; only Slides 15-16 present an
       unvalidated proposal.
 
-## Decisions Required Before Quarto Authoring
+## Locked Authoring Decisions
 
-- Meeting title and date
-- Slide language: English or Korean
-- Whether the sixteen-slide block is standalone or part of a larger progress deck
-- Whether optional backups A and B are needed
-- The grid-stable fixed definition of the diagonal Green-response gain
-  \(\gamma_s\) before Slide 16 advances from schematic proposal to measured
-  evidence
+- The deck has sixteen main slides followed by Backup A/B.
+- Visible slide text is English and speaker notes are Korean.
+- Slides 15-16 are method-only and make no trained-performance claim.
+- Slide 16 uses the production fixed tangent contract: symmetric-balanced base,
+  response forward/transpose gradient, column-diagonal Jacobi denominator, and
+  one balance-preserving step.
+- Any performance conclusion requires paired retraining against the symmetric
+  baseline; frozen post-hoc evidence is not presented on these two slides.

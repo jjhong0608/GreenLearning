@@ -24,6 +24,7 @@ from greenonet.complex_green_response_projection import (
     ColumnDiagonalGreenResponseContext,
 )
 from greenonet.complex_tangent_projection import (
+    SymmetricTangentEtaCapSchedule,
     SymmetricTangentGreenResponseContext,
 )
 from greenonet.complex_pre_projection_fusion import (
@@ -37,6 +38,7 @@ from greenonet.coupling_artifacts import (
     load_coupling_artifact_configs,
 )
 from greenonet.coupling_optimizer import ComplexCouplingOptimizerFactory
+from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
@@ -48,6 +50,7 @@ from greenonet.config import (
     CouplingBestEnergyCheckpointConfig,
     CouplingBestPhysicsCheckpointConfig,
     CouplingCoefficientTermsConfig,
+    CouplingTrainingConfig,
     SymmetricTangentGreenResponseProjectionConfig,
 )
 from greenonet.io import load_model_with_config, load_state_dict_auto
@@ -702,6 +705,8 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             evaluator.symmetric_tangent_green_response_context,
             evaluator,
             balance_projection,
+            configs.coupling_training,
+            metric_rows,
         )
         boundary_context = evaluator.boundary_energy_context(geometry)
         summary = {
@@ -1228,6 +1233,53 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                             ),
                         }
                     )
+                    if tangent.eta_star is not None:
+                        if (
+                            tangent.eta_capped is None
+                            or tangent.line_search_numerator is None
+                            or tangent.line_search_denominator is None
+                            or tangent.response_direction is None
+                        ):
+                            raise RuntimeError(
+                                "Adaptive tangent diagnostics are incomplete."
+                            )
+                        arrays.update(
+                            {
+                                "tangent_response_direction": (
+                                    tangent.response_direction[0].detach().cpu().numpy()
+                                ),
+                                "tangent_line_search_numerator": np.asarray(
+                                    tangent.line_search_numerator[0]
+                                    .detach()
+                                    .cpu()
+                                    .item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_line_search_denominator": np.asarray(
+                                    tangent.line_search_denominator[0]
+                                    .detach()
+                                    .cpu()
+                                    .item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_eta_star": np.asarray(
+                                    tangent.eta_star[0].detach().cpu().item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_eta_applied": np.asarray(
+                                    tangent.eta_applied[0].detach().cpu().item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_eta_cap": np.asarray(
+                                    tangent.eta_cap,
+                                    dtype=np.float64,
+                                ),
+                                "tangent_eta_capped": np.asarray(
+                                    tangent.eta_capped[0].detach().cpu().item(),
+                                    dtype=np.bool_,
+                                ),
+                            }
+                        )
                 reliability = prediction.cross_axis_reconstruction.reliability
                 if reliability is not None:
                     arrays.update(
@@ -1527,6 +1579,11 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             denominator=context.denominator.detach().cpu().numpy(),
             point_mass=context.point_mass.detach().cpu().numpy(),
             eta=np.asarray(context.eta, dtype=np.float64),
+            eta_strategy=np.asarray(context.eta_strategy),
+            line_search_relative_eps=np.asarray(
+                context.line_search_relative_eps,
+                dtype=np.float64,
+            ),
             relative_lambda=np.asarray(context.relative_lambda, dtype=np.float64),
             denominator_relative_eps=np.asarray(
                 context.denominator_relative_eps,
@@ -1617,6 +1674,15 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
                 projection.symmetric_tangent_green_response
             )
+            if tangent_config.eta_strategy == "closed_loop_exact_line_search":
+                update = (
+                    "z=g/D; v=(H_x+H_y)*z; "
+                    "eta_star=(g^T*z)/(<v,v>_M+eps_relative); "
+                    f"eta_applied=min(eta_star,{tangent_config.eta:g}); "
+                    "delta=-eta_applied*z; "
+                )
+            else:
+                update = f"delta=-{tangent_config.eta:g}*g/D; "
             return (
                 prefix
                 + "p_tilde=(rhs+d)/2; q_tilde=(rhs-d)/2; "
@@ -1625,7 +1691,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 + "D=gamma_x^2+gamma_y^2+"
                 + f"({tangent_config.relative_lambda:g}+"
                 + f"{tangent_config.denominator_relative_eps:g})*mean(gamma_sum); "
-                + f"delta=-{tangent_config.eta:g}*g/D; "
+                + update
                 + "phi=p_tilde+delta; psi=q_tilde-delta; "
                 + suffix
             )
@@ -1685,23 +1751,60 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         context: SymmetricTangentGreenResponseContext | None,
         evaluator: ComplexCouplingEvaluator,
         projection: BalanceProjectionConfig,
+        training_config: CouplingTrainingConfig,
+        metric_rows: list[dict[str, float | int | str]],
     ) -> dict[str, Any]:
         active = projection.mode == "symmetric_tangent_green_response"
         config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             projection.symmetric_tangent_green_response
         )
+        learning_rate_schedule = CouplingLearningRateSchedule.from_config(
+            training_config,
+            total_epochs=training_config.epochs,
+        )
+        eta_schedule = SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
+            config=config,
+            learning_rate_schedule=learning_rate_schedule,
+        )
+        adaptive = config.eta_strategy == "closed_loop_exact_line_search"
+        update = (
+            "z=g/D; v=(H_x+H_y)z; "
+            "eta_star=(g^T z)/(<v,v>_M+relative_eps); "
+            "eta_applied=min(eta_star,eta_cap); "
+            "delta=-eta_applied*z; phi=p_tilde+delta; psi=q_tilde-delta"
+            if adaptive
+            else "delta=-eta*g/D; phi=p_tilde+delta; psi=q_tilde-delta"
+        )
         summary: dict[str, Any] = {
             "active": active,
             "eta": config.eta,
+            "eta_role": "final_safety_cap" if adaptive else "fixed_step",
+            "eta_strategy": config.eta_strategy,
+            "line_search_relative_eps": config.line_search_relative_eps,
             "relative_lambda": config.relative_lambda,
             "denominator_relative_eps": config.denominator_relative_eps,
-            "fixed_parameters": True,
+            "fixed_parameters": not adaptive,
+            "sample_adaptive": adaptive,
+            "batch_independent": True,
+            "differentiable_eta": adaptive,
             "learnable_parameters": False,
             "reference_targets_used": False,
             "base_projection": "physical_symmetric",
             "objective": "0.5*||H_x*phi-H_y*psi||_M_Omega^2",
             "gradient": "g=(H_x+H_y)^T*M_Omega*m0",
-            "update": "delta=-eta*g/D; phi=p_tilde+delta; psi=q_tilde-delta",
+            "update": update,
+            "eta_cap_schedule": {
+                "kind": eta_schedule.kind,
+                "final_eta": eta_schedule.final_eta,
+                "shared_with_lr_warmup": eta_schedule.enabled,
+                "configured_warmup_epochs": (eta_schedule.configured_warmup_epochs),
+                "effective_warmup_epochs": eta_schedule.effective_warmup_epochs,
+                "post_warmup_behavior": "hold_final_eta",
+                "training_policy": "scheduled_cap",
+                "validation_policy": "final_cap",
+                "evaluation_policy": "final_cap",
+                "artifact_policy": "final_cap",
+            },
             "preconditioner": (
                 "D=gamma_x_squared+gamma_y_squared+"
                 "(relative_lambda+denominator_relative_eps)*mean(gamma_sum)"
@@ -1726,7 +1829,47 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         if context is not None:
             summary["statistics"] = context.statistics()
             summary["point_mass"] = float(context.point_mass.item())
+        eta_star = np.asarray(
+            [
+                float(row["tangent_eta_star"])
+                for row in metric_rows
+                if "tangent_eta_star" in row
+            ],
+            dtype=np.float64,
+        )
+        eta_applied = np.asarray(
+            [
+                float(row["tangent_eta_applied"])
+                for row in metric_rows
+                if "tangent_eta_applied" in row
+            ],
+            dtype=np.float64,
+        )
+        capped = np.asarray(
+            [
+                float(row["tangent_eta_capped"])
+                for row in metric_rows
+                if "tangent_eta_capped" in row
+            ],
+            dtype=np.float64,
+        )
+        if eta_star.size:
+            summary["eta_star_statistics"] = self._scalar_distribution(eta_star)
+        if eta_applied.size:
+            summary["eta_applied_statistics"] = self._scalar_distribution(eta_applied)
+        if capped.size:
+            summary["eta_cap_hit_fraction"] = float(capped.mean())
         return summary
+
+    @staticmethod
+    def _scalar_distribution(values: np.ndarray) -> dict[str, float]:
+        return {
+            "min": float(np.min(values)),
+            "median": float(np.median(values)),
+            "mean": float(np.mean(values)),
+            "p95": float(np.quantile(values, 0.95)),
+            "max": float(np.max(values)),
+        }
 
     def _write_figures(
         self,
