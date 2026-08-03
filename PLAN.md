@@ -1,251 +1,367 @@
-# Fixed Alpha Tempered Column-Diagonal Projection 구현 계획
+# Symmetric Tangent Green-Response Method Optional Integration Plan
 
 ## Summary
 
-- 기존 `column_diagonal_green_response` projection에 **sample-independent fixed \(\alpha\)**를 optional config로 추가한다.
-- Regularized Green-response gain을
-  \[
-  \bar\gamma_x^2=\gamma_x^2+\varepsilon,
-  \qquad
-  \bar\gamma_y^2=\gamma_y^2+\varepsilon
-  \]
-  로 두고 correction weight를
-  \[
-  w_\phi^{(\alpha)}
-  =
-  \frac{(\bar\gamma_y^2)^\alpha}
-  {(\bar\gamma_x^2)^\alpha+(\bar\gamma_y^2)^\alpha},
-  \qquad
-  w_\psi^{(\alpha)}=1-w_\phi^{(\alpha)}
-  \]
-  로 계산한다.
-- Projection은 기존대로
-  \[
-  r=f-p-q,
-  \qquad
-  \phi=p+w_\phi^{(\alpha)}r,
-  \qquad
-  \psi=q+w_\psi^{(\alpha)}r
-  \]
-  를 사용하므로 모든 \(\alpha\)에서 \(\phi+\psi=f\)를 정확히 보존한다.
-- \(\alpha=0\)은 physical symmetric correction, \(\alpha=1\)은 현재 column-diagonal correction이며, \(0<\alpha<1\)은 Green-response anisotropy를 완화한 tempered correction이다.
-- Learnable scalar, sample-dependent scalar, pointwise \(\alpha\), alpha-prediction network, alpha loss 또는 regularizer는 추가하지 않는다.
-- CouplingNet/GreenNet architecture, model parameter, state-dict key, source contract, loss, reconstruction 및 optimizer는 변경하지 않는다.
-- 구현 확신도는 **0.99**다. 규칙과 코드 연결 지점은 명확하며 정보 부족이나 규칙 모호성은 없다. `gain_exponent=0.25`의 실제 성능 개선 가능성에 대한 경험적 확신도는 **0.75**다.
+Complex CouplingNet에 **symmetric-balanced directional source를 기준점으로 삼는 one-step tangent Green-response correction**을 optional projection mode로 추가한다.
+
+핵심 목적은 raw output \(p,q\)를 곧바로 directional source의 최종 후보로 간주하지 않고, 먼저 symmetric projection으로 balance-feasible pair \((\widetilde p,\widetilde q)\)를 만든 뒤, reconstructed directional solution의 mismatch를 줄이는 방향으로 source split을 한 번 보정하는 것이다.
+
+새 mode는 다음 원칙을 따른다.
+
+- Complex CouplingNet 전용 opt-in 기능이다.
+- 기존 `physical_symmetric`와 `column_diagonal_green_response` mode는 그대로 보존한다.
+- \(\phi+\psi=f\) balance는 모든 점에서 정확히 유지한다.
+- reference `sol/phi/psi`를 사용하지 않는다.
+- global matrix를 구성하거나 matrix equation을 풀지 않는다.
+- 학습 가능한 step size, gate, surrogate network를 추가하지 않는다.
+- 기존 CouplingNet과 GreenNet architecture 및 checkpoint tensor key를 변경하지 않는다.
+- 구현 후 focused smoke test까지만 수행하고 장기 retraining은 실행하지 않는다.
+- 기존 config는 수정하지 않고 tangent 전용 실험 config를 별도로 추가한다.
+
+## Tangent Method
+
+### 1. Physical symmetric base pair
+
+현재 CouplingNet raw response를 physical directional-source proposal \(p,q\)로 변환한 후 raw difference를 정의한다.
+
+\[
+d_{\mathrm{raw}}=p-q.
+\]
+
+먼저 physical symmetric projection을 적용한다.
+
+\[
+\widetilde p
+=
+\frac12\left(f+d_{\mathrm{raw}}\right),
+\qquad
+\widetilde q
+=
+\frac12\left(f-d_{\mathrm{raw}}\right).
+\]
+
+따라서 다음 balance가 정확히 성립한다.
+
+\[
+\widetilde p+\widetilde q=f.
+\]
+
+Tangent method는 raw \(p,q\)가 아니라 이 symmetric-balanced pair를 기준점으로 사용한다.
+
+### 2. Frozen directional Green-response operators
+
+Physical directional source에서 reconstructed solution으로 가는 연산자를 다음처럼 정의한다.
+
+\[
+u_\phi=H_x\phi,
+\qquad
+u_\psi=H_y\psi.
+\]
+
+여기서
+
+\[
+H_x=K_xW_xL_x^2,
+\qquad
+H_y=K_yW_yL_y^2
+\]
+
+이며 각각 다음 요소를 포함한다.
+
+- frozen GreenNet kernel
+- segment-local reconstruction quadrature
+- physical source에서 reference response로 가는 \(L_x^2,L_y^2\) pull-back
+- valid-point assembly
+- disconnected axial segment와 endpoint hard-zero 처리
+
+GreenNet은 학습 중 고정되어 있으므로 \(H_x,H_y\)도 geometry와 coefficient가 고정된 run에서는 한 번만 구성해 재사용한다.
+
+### 3. Balance-preserving tangent direction
+
+Symmetric pair에 하나의 feasible correction field \(\delta\)를 적용한다.
+
+\[
+\phi(\delta)=\widetilde p+\delta,
+\qquad
+\psi(\delta)=\widetilde q-\delta.
+\]
+
+그러면 임의의 \(\delta\)에 대해
+
+\[
+\phi(\delta)+\psi(\delta)=f
+\]
+
+가 자동으로 유지된다. 즉 tangent correction은 balance constraint plane 내부에서만 움직인다.
+
+### 4. Response mismatch objective
+
+Directional reconstruction mismatch를 다음처럼 둔다.
+
+\[
+m(\delta)
+=
+H_x(\widetilde p+\delta)
+-
+H_y(\widetilde q-\delta).
+\]
+
+\(\delta=0\)에서의 mismatch는
+
+\[
+m_0=H_x\widetilde p-H_y\widetilde q.
+\]
+
+고려하는 reference-free response objective는
+
+\[
+J(\delta)
+=
+\frac12
+\left\|m(\delta)\right\|_{M_\Omega}^{2},
+\]
+
+이며 \(M_\Omega\)는 valid-grid physical quadrature mass다. 현재 uniform Cartesian valid grid에서는 point mass \(h_xh_y\)를 사용한다.
+
+\(\delta=0\)에서의 gradient는
+
+\[
+g
+=
+\nabla_\delta J(0)
+=
+(H_x+H_y)^\top M_\Omega m_0.
+\]
+
+이 계산에는 `sol`, target \(\phi\), target \(\psi\)가 사용되지 않는다.
+
+### 5. Column-diagonal tangent preconditioner
+
+각 physical source coordinate \(j\)의 directional response gain을
+
+\[
+\gamma_{x,j}^{2}
+=
+e_j^\top H_x^\top M_\Omega H_xe_j,
+\qquad
+\gamma_{y,j}^{2}
+=
+e_j^\top H_y^\top M_\Omega H_ye_j
+\]
+
+로 정의한다.
+
+Preconditioner base와 global relative damping scale은
+
+\[
+G_j=\gamma_{x,j}^{2}+\gamma_{y,j}^{2},
+\qquad
+\overline G=\frac1P\sum_{j=1}^{P}G_j
+\]
+
+이고, 실제 denominator는
+
+\[
+D_j
+=
+G_j+
+\left(\lambda_{\mathrm{rel}}+\varepsilon_D\right)\overline G
+\]
+
+로 둔다.
+
+한 번의 fixed Jacobi-preconditioned tangent step은
+
+\[
+\delta_j
+=
+-\eta\frac{g_j}{D_j}
+\]
+
+이다. 최종 physical directional source는
+
+\[
+\phi=\widetilde p+\delta,
+\qquad
+\psi=\widetilde q-\delta.
+\]
+
+그 후 기존 pull-back convention에 따라
+
+\[
+\Phi=L_x^2\phi,
+\qquad
+\Psi=L_y^2\psi
+\]
+
+를 만들고 Green reconstruction에 사용한다.
+
+이 방법은 다음과 명확히 구분한다.
+
+- **Row-norm method가 아니다.**
+- Column-diagonal gain을 balance correction weight로 직접 사용하는 기존 column-diagonal projection이 아니다.
+- Full Gram matrix \((H_x+H_y)^\top M_\Omega(H_x+H_y)\)를 구성하지 않는다.
+- Cross-column term을 포함한 정확한 Newton step이 아니다.
+- Global linear system을 풀지 않는 one-step diagonal-preconditioned gradient correction이다.
 
 ## Public Configuration
 
-기존 nested projection config에 다음 field를 추가한다.
+다음 complex-only projection mode를 추가한다.
 
 ```json
 "balance_projection": {
   "enabled": true,
-  "mode": "column_diagonal_green_response",
-  "column_diagonal_green_response": {
-    "gain_squared_eps": 1e-12,
-    "gain_exponent": 0.25
+  "mode": "symmetric_tangent_green_response",
+  "symmetric_tangent_green_response": {
+    "eta": 0.01,
+    "relative_lambda": 0.01,
+    "denominator_relative_eps": 1e-12
   }
 }
 ```
 
-- Public 이름은 `gain_exponent`로 고정한다. 일반적인 temperature convention과 방향이 혼동될 수 있으므로 `temperature` 또는 `tau`라는 config 이름은 사용하지 않는다.
-- Dataclass 기본값은 `gain_exponent=1.0`으로 둔다. 기존 config에 field가 없으면 현재 column-diagonal 동작을 그대로 유지한다.
-- 허용 범위는 finite numeric \([0,1]\)이다.
-- `bool`, 문자열, `NaN`, infinity, 음수, `1`보다 큰 값은 fail fast한다.
-- Unknown nested key를 거부하는 현재 strict parsing을 유지한다.
-- `physical_symmetric` mode에서는 nested exponent가 projection 결과에 영향을 주지 않는다.
-- `configs/complex_coupling.json`의 `physical_symmetric` 기본 설정은 변경하지 않는다.
-- 다음 tempered SOAP 실험을 위해 `configs/complex_coupling_soap.json`에는 `gain_exponent=0.25`를 명시한다.
-- 여러 \(\alpha\)용 config 파일을 추가로 복제하지 않는다. 후속 paired experiment에서는 같은 config를 복사하거나 해당 field만 변경해 \(\alpha\in\{0,0.25,0.5,1\}\)을 비교한다.
+설정 의미는 다음과 같다.
 
-## Implementation Steps
+- `eta`: fixed tangent step size. 기본값 `0.01`.
+- `relative_lambda`: mean response gain에 대한 relative damping. 기본값 `0.01`.
+- `denominator_relative_eps`: zero/near-zero response gain을 위한 relative numerical floor. 기본값 `1e-12`.
+- `eta=0`은 symmetric projection과 정확히 같은 결과를 내는 no-op ablation으로 허용한다.
+- 모든 값은 sample-independent fixed scalar다.
+- `eta`와 `relative_lambda`는 finite, nonnegative여야 한다.
+- `denominator_relative_eps`는 finite, positive여야 한다.
+- unknown nested key와 잘못된 타입은 fail fast한다.
+- Unit-square CouplingNet에서 이 mode를 요청하면 complex-only option이라는 오류를 낸다.
 
-### 1. Config Contract
+별도 실험 config를 추가한다.
 
-- `ColumnDiagonalGreenResponseProjectionConfig`에 `gain_exponent: float = 1.0`을 추가한다.
-- `__post_init__`에서 타입, finite 여부 및 \([0,1]\) 범위를 검증한다.
-- `from_raw(...)`의 허용 key를 `gain_squared_eps`, `gain_exponent`로 확장한다.
-- JSON serialization/deserialization, train CLI, eval CLI 및 checkpoint embedded config가 동일한 nested parser를 사용하도록 기존 경로를 유지한다.
-- Learnable 여부를 나타내는 별도 config는 만들지 않는다. Fixed-only가 유일한 contract다.
+```text
+configs/complex_coupling_soap_tangent.json
+```
 
-### 2. Stable Tempered Weight Computation
+기존 `configs/complex_coupling_soap.json`과 canonical config는 변경하지 않는다. Tangent config는 기존 SOAP 학습 조건을 복제하되 projection block만 tangent mode로 변경한다.
 
-- `ColumnDiagonalGreenResponseContext.from_gain_squared(...)`가 config 전체 또는 `gain_exponent`를 받아 cached correction weight를 생성하도록 확장한다.
-- Regularization을 exponent 적용 전에 수행한다.
-  \[
-  \bar\gamma_s^2=\gamma_s^2+\varepsilon.
-  \]
-- 수치 및 backward behavior를 다음처럼 고정한다.
-  - `gain_exponent == 0.0`: `w_phi=w_psi=0.5`를 직접 생성한다.
-  - `gain_exponent == 1.0`: 기존 ratio 수식
-    \[
-    w_\phi=\bar\gamma_y^2/(\bar\gamma_x^2+\bar\gamma_y^2)
-    \]
-    을 그대로 사용해 기존 floating-point 경로를 보존한다.
-  - 그 외:
-    \[
-    \ell=\log\bar\gamma_y^2-\log\bar\gamma_x^2,
-    \qquad
-    w_\phi=\operatorname{sigmoid}(\alpha\ell)
-    \]
-    을 사용해 overflow/underflow를 방지한다.
-- `w_psi=1-w_phi`로 계산해 weight sum을 직접 보존한다.
-- Context에 fixed `gain_exponent`를 저장하되 tensor parameter나 autograd graph에는 넣지 않는다.
-- Segment-wise Green gain 계산, cache lifetime, full-Gram 미생성 및 no-global-solve contract는 그대로 유지한다.
+공정한 paired baseline은 같은 config에서 projection만 `physical_symmetric`으로 바꾼 run으로 정의한다. 장기 paired run 자체는 이번 구현에서 실행하지 않는다.
 
-### 3. Projection, Trainer, Evaluator
+## Implementation Plan
 
-- `apply_complex_balance_projection(...)`의 correction 수식과 exact-balance construction은 변경하지 않는다. Tempered context가 제공하는 fixed weights를 그대로 소비한다.
-- `gain_exponent=0`에서 unequal gains를 사용하더라도 결과가 `physical_symmetric` mode와 일치하도록 검증한다.
-- Trainer와 evaluator는 기존 context cache를 그대로 사용한다. Batch 또는 sample마다 weight를 다시 계산하지 않는다.
-- Context 최초 생성 로그에 `gain_exponent`, weight min/max 및 기존 gain/floor/cache 정보를 추가한다.
-- Training objective, best-energy checkpoint, detached `rel_sol/rel_flux`, local weak-residual reliability reconstruction 및 SOAP scheduler에는 변경을 가하지 않는다.
-- Changed exponent checkpoint는 tensor architecture상 load 가능하지만 projection/network co-adaptation 때문에 다른 exponent로 post-hoc 비교하지 않으며, 각 exponent 실험은 처음부터 재학습해야 한다는 안내를 유지한다.
+1. `src/greenonet/config.py`에 strict nested tangent config dataclass를 추가하고 `BalanceProjectionConfig.mode`에 `symmetric_tangent_green_response`를 등록한다.
+2. 기존 diagnostic용 `complex_axial_response_operator.py`를 production 공용 연산자로 정리해 segment-local \(H_x,H_y\) forward 및 adjoint matvec를 제공한다.
+3. Response operator의 cached blocks에서 \(\gamma_x^2,\gamma_y^2\)를 계산하는 column-gain helper를 추가한다. Green kernel을 gain 계산과 reconstruction을 위해 중복 평가하지 않는다.
+4. Tangent 전용 immutable context와 cache를 추가한다. Context에는 response operator, point mass, gain squares, \(G\), \(\overline G\), \(D\), build statistics를 저장한다.
+5. `complex_projection.py` dispatcher에 tangent branch를 추가한다. Raw response를 physical \(p,q\)로 변환하고 symmetric pair, \(m_0\), \(g\), \(\delta\), 최종 physical/response pair를 순서대로 계산한다.
+6. Tangent 계산에서 tensor를 detach하지 않는다. Frozen \(H_x,H_y\) matrix는 parameter가 아니지만 explicit forward/adjoint matvec를 통해 CouplingNet parameter까지 일반적인 first-order autograd가 전달되게 한다.
+7. Tangent mode의 최종 reconstruction은 tangent 계산에 사용한 동일 cached \(H_x,H_y\)로 수행한다. GreenNet kernel을 같은 batch에서 다시 평가하지 않으며 기존 reconstruction result contract로 반환한다.
+8. Trainer, evaluator, artifact exporter가 같은 projection/reconstruction runtime helper와 context cache를 공유하도록 연결한다. Context는 각 runtime에서 정확히 한 번만 생성한다.
+9. Existing canonical energy loss와 checkpoint 선택 기준은 변경하지 않는다. Tangent response objective \(J\)는 correction 방향 계산에만 사용하고 별도의 weighted loss로 추가하지 않는다.
+10. Optional cross-axis reconstruction blend는 tangent reconstruction 이후의 기존 downstream diagnostic/final-prediction 단계로 유지한다. Tangent correction 자체는 unblended \(u_\phi-u_\psi\)를 기준으로 계산한다.
+11. Model output contract version과 state-dict key는 변경하지 않는다. 기존 complex CouplingNet checkpoint를 post-hoc evaluation 또는 explicit fine-tuning에 로드할 수 있지만, tangent 효과의 결론은 tangent mode로 처음부터 재학습한 paired run에서만 내린다.
+12. `README.md`와 `docs/memory.md`에 수식, complex-only 범위, fixed hyperparameter, reference-free 원칙, no-global-solve 정책, post-hoc 결과의 한계를 기록한다.
 
-### 4. Artifact Provenance
+## Runtime Metrics And Artifacts
 
-- Artifact `summary.json`의 column-diagonal section에 다음을 기록한다.
-  - `gain_exponent`
-  - `fixed_exponent=true`
-  - `learnable_exponent=false`
-  - tempered weight formula
-  - \(\alpha=0\)/\(\alpha=1\) endpoint 의미
-- Top-level projection formula도 exponent를 포함한 식으로 갱신한다.
-- `data/column_diagonal_green_response_fields.npz`에는 기존 gain/regularized gain/weight 배열과 함께 scalar `gain_exponent`를 저장한다.
-- Selected-sample raw archive는 이미 실제 correction weights와 corrections를 저장하므로 schema를 추가로 확장하지 않는다.
-- 기존 gain/weight Plotly figure set은 유지한다. Figure title 또는 hover metadata에 fixed exponent를 표시해 artifact만 보고도 projection 강도를 확인할 수 있게 한다.
-- `gain_exponent=1` artifact는 기존 수치와 일치해야 한다.
+Training/evaluation log에는 다음 tangent metadata와 detached diagnostics를 추가한다.
 
-### 5. Config And Documentation
+- `tangent_eta`
+- `tangent_relative_lambda`
+- `tangent_response_mismatch_pre`
+- `tangent_response_mismatch_post`
+- `tangent_response_mismatch_ratio`
+- `tangent_gradient_rms`
+- `tangent_delta_rms`
+- `tangent_delta_max_abs`
+- `tangent_correction_rel_symmetric_pair`
+- response context build count와 operator block statistics
+- physical balance residual
 
-- `configs/complex_coupling_soap.json`의 column-diagonal block에 `gain_exponent: 0.25`를 추가한다.
-- README에 fixed exponent 수식, endpoint 의미, config 예시 및 paired retraining 요구사항을 추가한다.
-- `docs/complex_column_diagonal_green_response_projection.md`에 full column metric과 tempering의 관계를 기록한다. Tempering은 row method나 full-Gram solve가 아니라 diagonal anisotropy strength 조절임을 명시한다.
-- `docs/memory.md`에 다음 durable convention을 기록한다.
-  - 기본 exponent는 `1.0`
-  - `0`은 symmetric correction
-  - fixed-only이며 learnable/sample-dependent alpha는 지원하지 않음
-  - exponent 변경 비교는 같은 seed/data로 각각 재학습
-- 현재 README/docs의 row-norm rejection 및 local weak-residual reconstruction 설명은 유지한다.
+Artifact raw NPZ에는 다음을 저장한다.
+
+- `symmetric_physical_phi`, `symmetric_physical_psi`
+- `symmetric_u_phi`, `symmetric_u_psi`
+- `tangent_mismatch_pre`
+- `tangent_gradient`
+- `tangent_preconditioner_base`
+- `tangent_denominator`
+- `tangent_delta`
+- `projected_physical_phi`, `projected_physical_psi`
+- `projected_response_phi`, `projected_response_psi`
+- `tangent_u_phi`, `tangent_u_psi`
+- `tangent_mismatch_post`
+
+Artifact summary에는 formula, fixed parameters, context provenance, no-reference/no-solve 정책을 기록한다. Existing solution/coefficient/cross-axis figures와 column-diagonal artifacts는 보존한다.
 
 ## Affected Files
 
-- Config/runtime core:
-  - `src/greenonet/config.py`
-  - `src/greenonet/complex_green_response_projection.py`
-  - `src/greenonet/complex_projection.py`
-- Logging/artifacts:
-  - `src/greenonet/complex_coupling_trainer.py`
-  - `src/greenonet/complex_coupling_evaluator.py`
-  - `src/greenonet/complex_coupling_artifacts.py`
-- Experiment config:
-  - `configs/complex_coupling_soap.json`
-- Tests:
-  - `test/test_complex_projection.py`
-  - `test/test_complex_reconstruction.py`
-  - `test/test_complex_coupling_trainer.py`
-  - `test/test_complex_coupling_artifacts.py`
-  - `test/test_io_config.py`
-  - `test/test_cli_train.py`
-  - `test/test_coupling.py`
-- Documentation:
-  - `README.md`
-  - `docs/complex_column_diagonal_green_response_projection.md`
-  - `docs/memory.md`
+- Config: `src/greenonet/config.py`
+- Projection: `src/greenonet/complex_projection.py`
+- Response operator/context: `src/greenonet/complex_axial_response_operator.py` 및 새 tangent context module
+- Runtime: `src/greenonet/complex_coupling_trainer.py`, evaluator, artifact exporter
+- Experiment config: 새 `configs/complex_coupling_soap_tangent.json`
+- Tests: projection, response operator, trainer, evaluator, artifact, config/IO tests
+- Documentation: `README.md`, `docs/memory.md`
 
-`PLAN.md`는 사용자가 이 계획 내용으로 project root에 직접 작성하며, 이번 계획 수립 단계에서는 파일을 수정하지 않는다.
+Model backbone, GreenNet training, optimizer, scheduler, source generator, loss definition, geometry/sample NPZ schema는 수정하지 않는다.
 
 ## Test Plan
 
-### Config Tests
+- **Config:** default/explicit parsing, JSON round-trip, unknown-key rejection, invalid `eta/lambda/eps`, unit-square rejection.
+- **Projection:** exact \(\phi+\psi=f\), `eta=0` symmetric equivalence, zero mismatch에서 \(\delta=0\), low-gain point에서 finite denominator와 output.
+- **Math:** segment-local forward/adjoint duality, tangent gradient finite-difference 검증, column gain fixture 검증.
+- **Autograd:** tangent correction을 포함한 loss gradient가 CouplingNet parameter에 도달하며 response operator와 GreenNet에는 gradient/state change가 없는지 확인.
+- **Reconstruction:** cached response operator가 production Green reconstruction과 float64 tolerance 내에서 일치하고, 추가 \(L^2\) scaling이 중복 적용되지 않는지 확인.
+- **Integration:** trainer/evaluator/artifact가 같은 fixed context를 사용하고 context가 한 번만 생성되는지 확인.
+- **Reference-free:** `sol/phi/psi` target을 변경하거나 제거해도 training loss와 best-energy checkpoint 선택이 바뀌지 않는지 확인.
+- **Artifacts:** tangent raw schema, summary formula, figures, exact balance residual, cross/gauge key 부재 검증.
+- **Regression:** `physical_symmetric`, `column_diagonal_green_response`, unit-square CouplingNet, complex GreenNet 결과가 유지되는지 확인.
+- **Smoke:** 작은 complex fixture에서 tangent mode one-step training/evaluation/export를 실행한다. 장기 retraining은 실행하지 않는다.
 
-- Field가 없을 때 `gain_exponent==1.0`인지 확인한다.
-- `gain_exponent=0`, `0.25`, `0.5`, `1`이 parse되고 JSON/checkpoint config round-trip 되는지 확인한다.
-- `bool`, 문자열, `NaN`, infinity, `-0.1`, `1.1`을 fail fast하는지 확인한다.
-- Unknown nested key와 기존 row-norm alias rejection이 유지되는지 확인한다.
-- Unit-square CouplingNet이 column-diagonal mode를 계속 거부하는지 확인한다.
-
-### Weight Math Tests
-
-- \(\alpha=1\)에서 기존 ratio formula와 결과가 일치하는지 확인한다.
-- Unequal gains에서도 \(\alpha=0\)이 정확히 `0.5/0.5`를 반환하는지 확인한다.
-- \(\alpha=0.25\)와 `0.5`가 analytic power/log-sigmoid reference와 일치하는지 확인한다.
-- 모든 exponent에서 `w_phi+w_psi==1`, finite 및 \([0,1]\) 범위를 만족하는지 확인한다.
-- 매우 작거나 큰 positive gain ratio에서도 intermediate exponent가 finite인지 확인한다.
-- Gain tensors와 weights가 sample-independent, detached 및 cache-once 상태인지 확인한다.
-- Existing \(L^4\) source-column gain scaling test는 변경 없이 유지한다.
-
-### Projection Tests
-
-- \(\alpha=0,0.25,0.5,1\) 모두에서
-  \[
-  \phi+\psi=f
-  \]
-  가 float64 exact-balance tolerance를 만족하는지 확인한다.
-- \(\alpha=0\) column context와 `physical_symmetric` 결과가 projected physical/response 및 difference update에서 일치하는지 확인한다.
-- \(\alpha=1\)이 기존 column projection fixture를 그대로 통과하는지 확인한다.
-- Intermediate exponent에서 expected correction과 difference update를 검증한다.
-- Raw response에 대한 gradient가 finite하고 alpha/gain context에는 gradient가 없는지 확인한다.
-
-### Integration And Artifact Tests
-
-- Trainer/evaluator가 같은 exponent와 cached context를 공유하고 context를 한 번만 생성하는지 확인한다.
-- Training/evaluator log에 fixed exponent가 기록되는지 확인한다.
-- Artifact summary가 exponent, fixed/learnable 상태 및 formula를 기록하는지 확인한다.
-- Run-level NPZ에 scalar exponent와 tempered weights가 저장되는지 확인한다.
-- `gain_exponent=1` regression과 `save_generated_data=false` path가 유지되는지 확인한다.
-- Existing solution/flux/weak-residual figures와 cross-key 부재 contract가 유지되는지 확인한다.
-
-### Verification Commands
+검증 명령은 다음과 같이 구성한다.
 
 ```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
+  test/test_complex_symmetric_tangent_audit.py \
   test/test_complex_projection.py \
-  test/test_complex_reconstruction.py \
   test/test_complex_coupling_trainer.py \
   test/test_complex_coupling_artifacts.py \
   test/test_io_config.py \
-  test/test_cli_train.py \
-  test/test_coupling.py
-```
+  test/test_cli_train.py
 
-```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
+
 ruff check src cli test
 ruff format src cli test
 ~/.conda/envs/green_net/bin/python -m mypy src
 git diff --check
 ```
 
-실제 장기 paired retraining은 구현 검증 범위에 포함하지 않는다.
+## Rollback Strategy
+
+- Runtime rollback은 `balance_projection.mode`를 `physical_symmetric` 또는 기존 `column_diagonal_green_response`로 변경하는 것으로 완료된다.
+- Model architecture와 checkpoint key를 변경하지 않으므로 checkpoint migration은 필요하지 않다.
+- Code rollback은 tangent config, tangent context/cache, dispatcher branch, tangent artifact fields와 관련 tests만 제거한다.
+- Existing response operator diagnostic과 frozen post-hoc audit 결과는 production mode와 독립적으로 유지할 수 있다.
+- 기존 projection 또는 reconstruction의 numerical result가 변하면 tangent integration을 중단하고 shared runtime refactor를 되돌린 뒤 tangent branch를 완전히 격리한다.
 
 ## Acceptance Criteria
 
-- 기존 config가 field 없이 `gain_exponent=1.0`으로 기존 column-diagonal 결과를 유지한다.
-- `gain_exponent=0.25`가 fixed, sample-independent tempered weights를 생성한다.
-- \(\alpha=0\)은 physical symmetric correction과 일치하고 \(\alpha=1\)은 기존 column correction과 일치한다.
-- 모든 exponent에서 physical source balance가 정확히 보존된다.
-- Learnable parameter, gate, sample-conditioned network 또는 alpha gradient가 생성되지 않는다.
-- Model state-dict key와 GreenNet/CouplingNet architecture가 변경되지 않는다.
-- Artifact와 로그만으로 사용된 exponent와 projection formula를 재현할 수 있다.
-- `configs/complex_coupling_soap.json`은 다음 실험용 `gain_exponent=0.25`를 명시한다.
-- Unit-square CouplingNet, GreenNet, optimizer, scheduler, loss 및 reconstruction regression이 없다.
-
-## Rollback Strategy
-
-- Runtime rollback은 `gain_exponent`를 생략하거나 `1.0`으로 설정하는 것이다.
-- Code rollback은 config field, tempered weight helper, exponent provenance 및 관련 tests만 제거한다.
-- Model architecture와 state dict가 변하지 않으므로 checkpoint migration은 필요하지 않다.
-- `configs/complex_coupling_soap.json`에서 `gain_exponent`를 제거하면 기존 column-diagonal 실험 설정으로 돌아간다.
-- Default \(\alpha=1\) 수치가 기존 fixture와 일치하지 않으면 intermediate stable formula 적용을 중단하고 `alpha==1` legacy ratio branch를 우선 복구한다.
-- AdamW/SOAP, scheduler, objective, dataset, geometry/sample NPZ 및 Green reconstruction에는 rollback 변경이 없어야 한다.
+- Tangent mode가 complex-only optional config로 strict하게 parse된다.
+- Symmetric projection 후 fixed tangent correction이 적용된다.
+- 모든 valid point에서 \(\phi+\psi=f\)가 float64 tolerance 내에서 유지된다.
+- `eta=0`이 기존 physical symmetric 결과와 일치한다.
+- Tangent update가 reference target과 global matrix solve 없이 계산된다.
+- CouplingNet gradient가 tangent forward/adjoint matvec를 통과한다.
+- 동일 cached Green-response operator가 tangent update와 최종 reconstruction에 사용된다.
+- Trainer, evaluator, artifact exporter가 동일한 수식과 parameter를 사용한다.
+- Model checkpoint key와 output contract는 변경되지 않는다.
+- 기존 projection mode와 unit-square/GreenNet regression이 없다.
+- 장기 학습은 실행하지 않고 tangent 전용 config와 smoke 검증까지만 완료한다.
 
 ## Confidence
 
-- 구현 계획 및 기존 behavior 보존 확신도: **0.99**
-- `gain_exponent=0.25`가 transition weight jump를 줄일 확신도: **0.99**
-- 재학습 후 `rel_flux`와 `rel_sol`을 함께 개선할 경험적 확신도: **0.75**
-- 규칙 모호성이나 필수 정보 부족은 없다. 남은 불확실성은 projection/network co-adaptation이 tempered setting에서 어떻게 다시 형성되는지에 관한 실험적 불확실성이다.
+- 구현 계획과 코드 적용 가능성에 대한 확신도: **0.97**
+- Tangent retraining이 symmetric/column-diagonal training보다 평균 solution error를 개선할 가능성에 대한 경험적 확신도: **0.80**
+- Tangent method가 transition-local error까지 개선할 가능성에 대한 경험적 확신도: **0.58**
+
+구현 규칙에는 모호성이 없다. 남은 불확실성은 정보 부족에 해당한다. Frozen-checkpoint post-hoc 결과에서는 global response mismatch와 `rel_sol` 개선이 확인됐지만 transition error가 함께 개선되지는 않았으므로, 최종 효과는 동일 조건의 paired retraining으로 검증해야 한다.
 
 ## Executable `/goal` Draft
 
@@ -253,49 +369,55 @@ git diff --check
 /goal
 
 `/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/PLAN.md`의
-"Fixed Alpha Tempered Column-Diagonal Projection 구현 계획"을 기준 문서로
-참고하여 fixed gain exponent integration을 끝까지 구현한다.
+"Symmetric Tangent Green-Response Method Optional Integration Plan"을 기준
+문서로 참고하여 tangent projection의 optional integration을 끝까지 구현한다.
 
 완료는 다음 조건으로 검증한다.
 
-- 기존 column-diagonal config에서 exponent를 생략하면 `gain_exponent=1.0`으로
-  현재 projection 결과가 유지될 것,
-- `gain_exponent`가 finite numeric `[0,1]` 범위에서 strict하게 parse되고
-  config/save/load round-trip 될 것,
-- alpha 0은 physical symmetric correction과 일치하고 alpha 1은 기존
-  column-diagonal correction과 일치할 것,
-- alpha 0.25와 0.5가 stable log-ratio 수식에 따라 fixed tempered weight를
-  생성할 것,
-- 모든 exponent에서 `phi+psi=rhs`가 정확히 보존될 것,
-- exponent는 sample-independent fixed scalar이며 model parameter, gradient,
-  learned gate 또는 sample-dependent network가 추가되지 않을 것,
-- Green-response context가 기존처럼 한 번만 생성되고 trainer/evaluator/export가
-  같은 cached weight를 사용할 것,
-- summary, raw NPZ, figures와 logs에 fixed exponent와 projection formula가
-  기록될 것,
-- `configs/complex_coupling_soap.json`이 다음 paired experiment용
-  `gain_exponent=0.25`를 명시할 것,
-- CouplingNet/GreenNet architecture와 model checkpoint key가 변경되지 않을 것,
-- unit-square CouplingNet, optimizer, scheduler, loss, reconstruction 및 기존
-  artifact behavior에 regression이 없을 것,
+- complex CouplingNet에 `symmetric_tangent_green_response` projection mode가
+  optional로 추가될 것,
+- symmetric-balanced physical pair를 기준으로 response mismatch gradient와
+  fixed diagonal-preconditioned tangent correction을 계산할 것,
+- eta, relative lambda, denominator epsilon이 strict config로 parse되고
+  save/load round-trip 될 것,
+- eta 0이 기존 physical symmetric projection과 정확히 일치할 것,
+- 모든 valid point에서 phi+psi=rhs가 float64 tolerance 내에서 보존될 것,
+- tangent correction에 reference sol/phi/psi, learned gate, sample-dependent
+  parameter, global matrix 또는 linear solve를 사용하지 않을 것,
+- frozen segment-local Green-response operator의 forward/adjoint matvec를 통해
+  CouplingNet parameter까지 first-order autograd가 전달될 것,
+- 동일 cached response operator를 tangent update와 최종 reconstruction에
+  사용하고 runtime당 context를 한 번만 생성할 것,
+- canonical energy loss, optimizer, scheduler, checkpoint selection과 optional
+  cross-axis reconstruction의 기존 의미를 변경하지 않을 것,
+- trainer, evaluator, artifact exporter가 동일한 tangent 수식과 context를
+  사용할 것,
+- summary, raw NPZ, figures와 logs에 tangent parameter, gradient, denominator,
+  delta와 pre/post response mismatch가 기록될 것,
+- 기존 physical symmetric와 column-diagonal projection, unit-square CouplingNet,
+  GreenNet에 regression이 없을 것,
+- model architecture, output contract version과 safetensors checkpoint key가
+  변경되지 않을 것,
+- tangent 전용 paired-experiment config를 별도로 추가하고 기존 config를
+  변경하지 않을 것,
 - focused tests와 전체 pytest, Ruff, mypy, git diff check가 통과할 것.
 
-수정 범위는 column-diagonal projection config, fixed weight computation,
-context logging/provenance, complex artifact export, SOAP experiment config,
-관련 tests와 문서로 제한한다.
+수정 범위는 complex projection config, frozen axial response operator,
+tangent context/cache, complex trainer/evaluator/artifact integration,
+별도 tangent experiment config, 관련 tests, README와 docs/memory.md로 제한한다.
 
-Learnable global alpha, sample-dependent alpha, pointwise alpha, alpha network,
-alpha loss, row-norm projection, full-Gram solve, model backbone, training
-objective, Green reconstruction 및 geometry/sample NPZ schema는 변경하지 않는다.
+Row-norm projection, full-Gram solve, learnable eta/lambda, sample-dependent tangent
+network, 새로운 loss, reference-supervised training, model backbone, GreenNet
+training, geometry/sample NPZ schema는 변경하지 않는다.
 
 각 구현 단계 후 가장 작은 config/math/projection tests를 먼저 실행하고,
-통과한 뒤 trainer/artifact integration tests와 전체 regression suite를 실행한다.
+통과한 뒤 trainer/evaluator/artifact smoke와 전체 regression suite를 실행한다.
 실제 장기 paired retraining은 실행하지 않는다.
 
-기존 `gain_exponent=1.0` 수치 또는 checkpoint architecture compatibility를
+기존 projection numerical behavior 또는 checkpoint architecture compatibility를
 유지할 수 없다면 작업을 중단하고 다음을 보고한다.
 
-1. 정확히 달라지는 projection 수식, floating-point 결과 또는 tensor contract,
+1. 정확히 달라지는 projection, reconstruction 또는 tensor contract,
 2. 영향을 받는 config, checkpoint, artifact와 tests,
-3. alpha 1 legacy path를 보존하는 가장 작은 rollback 또는 migration 전략.
+3. 기존 mode를 보존하면서 tangent path를 격리하는 가장 작은 rollback 전략.
 ```

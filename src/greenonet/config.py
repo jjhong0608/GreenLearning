@@ -542,6 +542,72 @@ class ColumnDiagonalGreenResponseProjectionConfig:
 
 
 @dataclass
+class SymmetricTangentGreenResponseProjectionConfig:
+    """Fixed one-step tangent Green-response correction settings."""
+
+    eta: float = 0.01
+    relative_lambda: float = 0.01
+    denominator_relative_eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        self._validate_nonnegative("eta", self.eta)
+        self._validate_nonnegative("relative_lambda", self.relative_lambda)
+        if not isinstance(self.denominator_relative_eps, (int, float)) or isinstance(
+            self.denominator_relative_eps,
+            bool,
+        ):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                "denominator_relative_eps must be numeric."
+            )
+        if (
+            not math.isfinite(float(self.denominator_relative_eps))
+            or float(self.denominator_relative_eps) <= 0.0
+        ):
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                "denominator_relative_eps must be finite and positive."
+            )
+
+    @staticmethod
+    def _validate_nonnegative(name: str, value: float) -> None:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                f"{name} must be numeric."
+            )
+        if not math.isfinite(float(value)) or float(value) < 0.0:
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                f"{name} must be finite and non-negative."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: SymmetricTangentGreenResponseProjectionConfig | dict[str, Any] | None,
+    ) -> SymmetricTangentGreenResponseProjectionConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(
+                set(data) - {"eta", "relative_lambda", "denominator_relative_eps"}
+            )
+            if unknown:
+                raise TypeError(
+                    "balance_projection.symmetric_tangent_green_response has "
+                    f"unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError(
+            "balance_projection.symmetric_tangent_green_response must be an object."
+        )
+
+
+@dataclass
 class BalanceProjectionConfig:
     """CouplingNet output balance projection settings."""
 
@@ -552,11 +618,15 @@ class BalanceProjectionConfig:
         "response_space",
         "physical_symmetric",
         "column_diagonal_green_response",
+        "symmetric_tangent_green_response",
     ] = "symmetric"
     mask: Literal["quadratic", "sin"] = "quadratic"
     column_diagonal_green_response: (
         ColumnDiagonalGreenResponseProjectionConfig | dict[str, Any]
     ) = field(default_factory=ColumnDiagonalGreenResponseProjectionConfig)
+    symmetric_tangent_green_response: (
+        SymmetricTangentGreenResponseProjectionConfig | dict[str, Any]
+    ) = field(default_factory=SymmetricTangentGreenResponseProjectionConfig)
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -564,6 +634,11 @@ class BalanceProjectionConfig:
         self.column_diagonal_green_response = (
             ColumnDiagonalGreenResponseProjectionConfig.from_raw(
                 self.column_diagonal_green_response
+            )
+        )
+        self.symmetric_tangent_green_response = (
+            SymmetricTangentGreenResponseProjectionConfig.from_raw(
+                self.symmetric_tangent_green_response
             )
         )
         mode = str(self.mode)
@@ -585,11 +660,13 @@ class BalanceProjectionConfig:
             "response_space",
             "physical_symmetric",
             "column_diagonal_green_response",
+            "symmetric_tangent_green_response",
         }:
             raise ValueError(
                 "balance_projection.mode must be 'symmetric', 'smooth_mask', "
                 "'response_space', 'physical_symmetric', or "
-                "'column_diagonal_green_response'."
+                "'column_diagonal_green_response', or "
+                "'symmetric_tangent_green_response'."
             )
         if self.mask not in {"quadratic", "sin"}:
             raise ValueError("balance_projection.mask must be 'quadratic' or 'sin'.")
@@ -613,6 +690,7 @@ class BalanceProjectionConfig:
                         "response_space",
                         "physical_symmetric",
                         "column_diagonal_green_response",
+                        "symmetric_tangent_green_response",
                     ],
                     raw,
                 ),
@@ -635,6 +713,7 @@ class BalanceProjectionConfig:
                     "mode",
                     "mask",
                     "column_diagonal_green_response",
+                    "symmetric_tangent_green_response",
                 }
             )
             if unknown:
@@ -645,6 +724,7 @@ class BalanceProjectionConfig:
             mode = data.get("mode", "symmetric")
             mask = data.get("mask", "quadratic")
             column_diagonal = data.get("column_diagonal_green_response")
+            symmetric_tangent = data.get("symmetric_tangent_green_response")
             if not isinstance(enabled, bool):
                 raise TypeError("balance_projection.enabled must be a boolean.")
             if not isinstance(mode, str):
@@ -660,6 +740,7 @@ class BalanceProjectionConfig:
                         "response_space",
                         "physical_symmetric",
                         "column_diagonal_green_response",
+                        "symmetric_tangent_green_response",
                     ],
                     mode,
                 ),
@@ -667,6 +748,11 @@ class BalanceProjectionConfig:
                 column_diagonal_green_response=(
                     ColumnDiagonalGreenResponseProjectionConfig.from_raw(
                         column_diagonal
+                    )
+                ),
+                symmetric_tangent_green_response=(
+                    SymmetricTangentGreenResponseProjectionConfig.from_raw(
+                        symmetric_tangent
                     )
                 ),
             )
@@ -874,6 +960,7 @@ class CouplingModelConfig:
             "response_space",
             "physical_symmetric",
             "column_diagonal_green_response",
+            "symmetric_tangent_green_response",
         ]
         | dict[str, Any]
     ) = field(default_factory=BalanceProjectionConfig)

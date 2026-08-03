@@ -40,6 +40,8 @@ from greenonet.complex_green_response_projection import (
 from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
+    reconstruct_complex_projection,
+    symmetric_tangent_metric_tensors,
 )
 from greenonet.complex_pre_projection_fusion import (
     FINAL_LAYER_INITIALIZATION,
@@ -48,7 +50,10 @@ from greenonet.complex_pre_projection_fusion import (
 )
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
-    reconstruct_from_projected_response,
+)
+from greenonet.complex_tangent_projection import (
+    SymmetricTangentGreenResponseContext,
+    SymmetricTangentGreenResponseContextCache,
 )
 from greenonet.coupling_optimizer import (
     ComplexCouplingOptimizerFactory,
@@ -97,6 +102,13 @@ class ComplexCouplingTrainer(LoggingMixin):
         "loss_weak_operator_y",
         "rel_sol",
         "rel_flux",
+        "tangent_response_mismatch_pre",
+        "tangent_response_mismatch_post",
+        "tangent_response_mismatch_ratio",
+        "tangent_gradient_rms",
+        "tangent_delta_rms",
+        "tangent_delta_max_abs",
+        "tangent_correction_rel_symmetric_pair",
         "learning_rate",
         "optimizer_step_time_mean_ms",
         "optimizer_step_time_p95_ms",
@@ -188,6 +200,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         self._boundary_context: ComplexBoundaryEnergyContext | None = None
         self._green_response_context_cache = ColumnDiagonalGreenResponseContextCache(
             self.balance_projection.column_diagonal_green_response
+        )
+        self._tangent_context_cache = SymmetricTangentGreenResponseContextCache(
+            self.balance_projection.symmetric_tangent_green_response
         )
 
     def train(
@@ -327,6 +342,7 @@ class ComplexCouplingTrainer(LoggingMixin):
 
     def _forward_batch(self, batch: ComplexCouplingBatch) -> ComplexForwardResult:
         projection_context = self._projection_context(batch)
+        tangent_context = self._tangent_projection_context(batch)
         raw_response = self.model(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
@@ -343,11 +359,12 @@ class ComplexCouplingTrainer(LoggingMixin):
             geometry=batch.geometry,
             config=self.balance_projection,
             column_diagonal_context=projection_context,
+            symmetric_tangent_context=tangent_context,
         )
-        reconstruction = reconstruct_from_projected_response(
+        reconstruction = reconstruct_complex_projection(
+            projection=projection,
             green_model=self.green_model,
             geometry=batch.geometry,
-            projected_response=projection.projected_response,
             x_green_branch=batch.x_green_branch,
             y_green_branch=batch.y_green_branch,
         )
@@ -367,6 +384,12 @@ class ComplexCouplingTrainer(LoggingMixin):
         metrics = {
             key: value.detach() for key, value in objective.metric_tensors().items()
         }
+        metrics.update(
+            {
+                key: value.detach()
+                for key, value in symmetric_tangent_metric_tensors(projection).items()
+            }
+        )
         cross_axis_reconstruction: ComplexCrossAxisReconstructionResult | None = None
         if torch.any(batch.has_solution):
             selected_solution = batch.has_solution
@@ -430,6 +453,39 @@ class ComplexCouplingTrainer(LoggingMixin):
             )
         return context
 
+    def _tangent_projection_context(
+        self,
+        batch: ComplexCouplingBatch,
+    ) -> SymmetricTangentGreenResponseContext | None:
+        if self.balance_projection.mode != "symmetric_tangent_green_response":
+            return None
+        build_count_before = self._tangent_context_cache.build_count
+        context = self._tangent_context_cache.get_or_build(
+            green_model=self.green_model,
+            geometry=batch.geometry,
+            x_green_branch=batch.x_green_branch,
+            y_green_branch=batch.y_green_branch,
+        )
+        if self._tangent_context_cache.build_count != build_count_before:
+            stats = context.statistics()
+            self.logger.info(
+                "symmetric-tangent Green-response context build_seconds=%.6f "
+                "eta=%.6e relative_lambda=%.6e denominator_relative_eps=%.6e "
+                "gain_scale=%.6e denominator=[%.6e, %.6e] "
+                "x_blocks=%d y_blocks=%d row_norm_used=false "
+                "global_matrix_materialized=false full_gram_solve=false",
+                self._tangent_context_cache.build_seconds,
+                context.eta,
+                context.relative_lambda,
+                context.denominator_relative_eps,
+                stats["gain_scale"],
+                stats["denominator_min"],
+                stats["denominator_max"],
+                stats["x_segment_block_count"],
+                stats["y_segment_block_count"],
+            )
+        return context
+
     @property
     def column_diagonal_green_response_context(
         self,
@@ -439,6 +495,20 @@ class ComplexCouplingTrainer(LoggingMixin):
     @property
     def column_diagonal_green_response_context_build_count(self) -> int:
         return self._green_response_context_cache.build_count
+
+    @property
+    def symmetric_tangent_green_response_context(
+        self,
+    ) -> SymmetricTangentGreenResponseContext | None:
+        return self._tangent_context_cache.context
+
+    @property
+    def symmetric_tangent_green_response_context_build_count(self) -> int:
+        return self._tangent_context_cache.build_count
+
+    @property
+    def symmetric_tangent_green_response_context_build_seconds(self) -> float:
+        return self._tangent_context_cache.build_seconds
 
     def _boundary_energy_context(
         self,

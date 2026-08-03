@@ -9,7 +9,29 @@ from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.complex_green_response_projection import (
     ColumnDiagonalGreenResponseContext,
 )
+from greenonet.complex_reconstruction import (
+    ComplexReconstructionResult,
+    reconstruct_from_projected_response,
+)
+from greenonet.complex_tangent_projection import (
+    SymmetricTangentGreenResponseContext,
+)
 from greenonet.config import BalanceProjectionConfig
+
+
+@dataclass(frozen=True)
+class SymmetricTangentProjectionDiagnostics:
+    """Audit tensors from one balance-preserving tangent response step."""
+
+    symmetric_physical: torch.Tensor
+    symmetric_solution: torch.Tensor
+    mismatch_pre: torch.Tensor
+    gradient: torch.Tensor
+    preconditioner_base: torch.Tensor
+    denominator: torch.Tensor
+    delta: torch.Tensor
+    projected_solution: torch.Tensor
+    mismatch_post: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -34,6 +56,7 @@ class ComplexProjectionResult:
     sigma_x: torch.Tensor
     sigma_y: torch.Tensor
     column_diagonal_context: ColumnDiagonalGreenResponseContext | None
+    symmetric_tangent_diagnostics: SymmetricTangentProjectionDiagnostics | None
 
 
 def apply_complex_balance_projection(
@@ -42,6 +65,7 @@ def apply_complex_balance_projection(
     geometry: ComplexGeometryMetadata,
     config: BalanceProjectionConfig | str | dict[str, Any],
     column_diagonal_context: ColumnDiagonalGreenResponseContext | None = None,
+    symmetric_tangent_context: SymmetricTangentGreenResponseContext | None = None,
 ) -> ComplexProjectionResult:
     """Project in physical source space and pull back to reference responses."""
 
@@ -51,11 +75,13 @@ def apply_complex_balance_projection(
     if projection.mode not in {
         "physical_symmetric",
         "column_diagonal_green_response",
+        "symmetric_tangent_green_response",
     }:
         raise ValueError(
             "Complex output-contract version 6 requires "
             "balance_projection.mode='physical_symmetric' or "
-            "'column_diagonal_green_response'."
+            "'column_diagonal_green_response' or "
+            "'symmetric_tangent_green_response'."
         )
 
     sigma_x, sigma_y = _validate_inputs(
@@ -69,19 +95,21 @@ def apply_complex_balance_projection(
     )
     raw_physical_difference = raw_physical[:, 0] - raw_physical[:, 1]
     raw_balance_residual = rhs_phys - raw_physical[:, 0] - raw_physical[:, 1]
+    symmetric_physical = torch.stack(
+        (
+            0.5 * (rhs_phys + raw_physical_difference),
+            0.5 * (rhs_phys - raw_physical_difference),
+        ),
+        dim=1,
+    )
+    tangent_diagnostics: SymmetricTangentProjectionDiagnostics | None = None
     if projection.mode == "physical_symmetric":
         projected_difference = raw_physical_difference
-        projected_physical = torch.stack(
-            (
-                0.5 * (rhs_phys + projected_difference),
-                0.5 * (rhs_phys - projected_difference),
-            ),
-            dim=1,
-        )
+        projected_physical = symmetric_physical
         correction_weight_phi = torch.full_like(rhs_phys, 0.5)
         correction_weight_psi = torch.full_like(rhs_phys, 0.5)
         difference_update = torch.zeros_like(rhs_phys)
-    else:
+    elif projection.mode == "column_diagonal_green_response":
         if column_diagonal_context is None:
             raise ValueError(
                 "column_diagonal_green_response projection requires a frozen "
@@ -98,6 +126,43 @@ def apply_complex_balance_projection(
         projected_difference = raw_physical_difference + difference_update
         phi = 0.5 * (rhs_phys + projected_difference)
         projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
+    else:
+        if symmetric_tangent_context is None:
+            raise ValueError(
+                "symmetric_tangent_green_response projection requires a frozen "
+                "tangent Green-response context."
+            )
+        symmetric_tangent_context.validate_for(rhs_phys)
+        symmetric_solution = symmetric_tangent_context.response_operator.forward_pair(
+            symmetric_physical
+        )
+        mismatch_pre = symmetric_solution[:, 0] - symmetric_solution[:, 1]
+        gradient = symmetric_tangent_context.tangent_gradient(mismatch_pre)
+        delta = symmetric_tangent_context.tangent_delta(gradient)
+        if symmetric_tangent_context.eta == 0.0:
+            projected_physical = symmetric_physical
+        else:
+            phi = symmetric_physical[:, 0] + delta
+            projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
+        projected_solution = symmetric_tangent_context.response_operator.forward_pair(
+            projected_physical
+        )
+        mismatch_post = projected_solution[:, 0] - projected_solution[:, 1]
+        projected_difference = projected_physical[:, 0] - projected_physical[:, 1]
+        correction_weight_phi = torch.full_like(rhs_phys, 0.5)
+        correction_weight_psi = torch.full_like(rhs_phys, 0.5)
+        difference_update = projected_difference - raw_physical_difference
+        tangent_diagnostics = SymmetricTangentProjectionDiagnostics(
+            symmetric_physical=symmetric_physical,
+            symmetric_solution=symmetric_solution,
+            mismatch_pre=mismatch_pre,
+            gradient=gradient,
+            preconditioner_base=(symmetric_tangent_context.preconditioner_base),
+            denominator=symmetric_tangent_context.denominator,
+            delta=delta,
+            projected_solution=projected_solution,
+            mismatch_post=mismatch_post,
+        )
     correction_phi = projected_physical[:, 0] - raw_physical[:, 0]
     correction_psi = projected_physical[:, 1] - raw_physical[:, 1]
     projected_response = torch.stack(
@@ -137,7 +202,64 @@ def apply_complex_balance_projection(
         sigma_x=sigma_x.expand_as(rhs_phys),
         sigma_y=sigma_y.expand_as(rhs_phys),
         column_diagonal_context=column_diagonal_context,
+        symmetric_tangent_diagnostics=tangent_diagnostics,
     )
+
+
+def reconstruct_complex_projection(
+    *,
+    projection: ComplexProjectionResult,
+    green_model: torch.nn.Module,
+    geometry: ComplexGeometryMetadata,
+    x_green_branch: torch.Tensor,
+    y_green_branch: torch.Tensor,
+) -> ComplexReconstructionResult:
+    """Reuse tangent response blocks or run the existing Green reconstruction."""
+
+    tangent = projection.symmetric_tangent_diagnostics
+    if tangent is not None:
+        return ComplexReconstructionResult(
+            u_phi_valid=tangent.projected_solution[:, 0],
+            u_psi_valid=tangent.projected_solution[:, 1],
+            projected_response=projection.projected_response,
+        )
+    return reconstruct_from_projected_response(
+        green_model=green_model,
+        geometry=geometry,
+        projected_response=projection.projected_response,
+        x_green_branch=x_green_branch,
+        y_green_branch=y_green_branch,
+    )
+
+
+def symmetric_tangent_metric_tensors(
+    projection: ComplexProjectionResult,
+) -> dict[str, torch.Tensor]:
+    """Return detached-ready scalar diagnostics without changing the objective."""
+
+    tangent = projection.symmetric_tangent_diagnostics
+    if tangent is None:
+        return {}
+    eps = torch.finfo(tangent.mismatch_pre.dtype).eps
+    mismatch_pre_rms = tangent.mismatch_pre.square().mean().sqrt()
+    mismatch_post_rms = tangent.mismatch_post.square().mean().sqrt()
+    correction_pair_norm = torch.linalg.vector_norm(
+        torch.stack((tangent.delta, -tangent.delta), dim=1)
+    )
+    symmetric_pair_norm = torch.linalg.vector_norm(tangent.symmetric_physical)
+    return {
+        "tangent_response_mismatch_pre": mismatch_pre_rms,
+        "tangent_response_mismatch_post": mismatch_post_rms,
+        "tangent_response_mismatch_ratio": (
+            mismatch_post_rms / mismatch_pre_rms.clamp_min(eps)
+        ),
+        "tangent_gradient_rms": tangent.gradient.square().mean().sqrt(),
+        "tangent_delta_rms": tangent.delta.square().mean().sqrt(),
+        "tangent_delta_max_abs": tangent.delta.abs().max(),
+        "tangent_correction_rel_symmetric_pair": (
+            correction_pair_norm / symmetric_pair_norm.clamp_min(eps)
+        ),
+    }
 
 
 def _validate_inputs(

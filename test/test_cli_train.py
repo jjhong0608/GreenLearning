@@ -831,6 +831,37 @@ class TestTrainCLIDatasetConfig:
             == 0.25
         )
 
+    def test_parses_symmetric_tangent_green_response_projection_config(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        payload = {
+            "dataset": {"step_size": 0.25},
+            "model": {},
+            "training": {},
+            "coupling_model": {
+                "balance_projection": {
+                    "enabled": True,
+                    "mode": "symmetric_tangent_green_response",
+                    "symmetric_tangent_green_response": {
+                        "eta": 0.02,
+                        "relative_lambda": 0.1,
+                        "denominator_relative_eps": 2.0e-12,
+                    },
+                },
+            },
+            "coupling_training": {},
+            "pipeline": {"run_green": True, "run_coupling": False},
+        }
+        config_path.write_text(json.dumps(payload))
+
+        configs = TrainCLI()._build_configs(config_path)
+        projection = configs[3].balance_projection
+
+        assert projection.mode == "symmetric_tangent_green_response"
+        tangent = projection.symmetric_tangent_green_response
+        assert tangent.eta == pytest.approx(0.02)
+        assert tangent.relative_lambda == pytest.approx(0.1)
+        assert tangent.denominator_relative_eps == pytest.approx(2.0e-12)
+
     def test_parses_branch_fusion_object_config(self, tmp_path):
         config_path = tmp_path / "config.json"
         payload = {

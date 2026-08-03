@@ -661,6 +661,146 @@ def test_column_diagonal_green_response_artifact_provenance_and_fields(
         assert any(key.endswith(suffix) for key in selected.files)
 
 
+def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
+    tmp_path,
+    monkeypatch,
+):
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coeff_path = write_coefficients(tmp_path / "coeffs.py")
+    data_dir = tmp_path / "test_data"
+    write_sample_npz(data_dir)
+    coupling_cfg = CouplingModelConfig(
+        branch_input_dim=4,
+        hidden_dim=4,
+        depth=1,
+        dtype=torch.float64,
+        balance_projection=BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={
+                "eta": 0.01,
+                "relative_lambda": 0.1,
+                "denominator_relative_eps": 2.0e-12,
+            },
+        ),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            num_frequencies=2,
+            max_frequency=2.0,
+            transverse_trunk=TransverseTrunkConfig(
+                enabled=True,
+                fusion="product",
+                length_context=True,
+            ),
+        ),
+    )
+    green_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        branch_input_dim=4,
+        use_green=False,
+        dtype=torch.float64,
+    )
+    coupling_path = tmp_path / "complex_coupling.safetensors"
+    green_path = tmp_path / "green.safetensors"
+    save_state_dict_safetensors(
+        ComplexCouplingNet(coupling_cfg).state_dict(), coupling_path
+    )
+    save_model_with_config(GreenONetModel(green_cfg), green_cfg, green_path)
+    config_path = write_complex_config(
+        tmp_path / "config.json",
+        geometry_path=geometry_path,
+        train_path=None,
+        test_path=data_dir,
+        coefficient_path=coeff_path,
+    )
+    config_payload = json.loads(config_path.read_text())
+    config_payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "symmetric_tangent_green_response",
+        "symmetric_tangent_green_response": {
+            "eta": 0.01,
+            "relative_lambda": 0.1,
+            "denominator_relative_eps": 2.0e-12,
+        },
+    }
+    config_path.write_text(json.dumps(config_payload))
+    outdir = tmp_path / "artifacts"
+
+    summary = export_complex_coupling_artifacts(
+        CouplingArtifactRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_path,
+            green_checkpoint=green_path,
+            outdir=outdir,
+            selected_samples=(0,),
+            device="cpu",
+            theme="plotly_white",
+        )
+    )
+
+    projection = summary["balance_projection"]
+    tangent = projection["symmetric_tangent_green_response"]
+    assert projection["mode"] == "symmetric_tangent_green_response"
+    assert projection["uses_reference_targets"] is False
+    assert tangent["active"] is True
+    assert tangent["eta"] == pytest.approx(0.01)
+    assert tangent["relative_lambda"] == pytest.approx(0.1)
+    assert tangent["denominator_relative_eps"] == pytest.approx(2.0e-12)
+    assert tangent["fixed_parameters"] is True
+    assert tangent["learnable_parameters"] is False
+    assert tangent["row_norm_used"] is False
+    assert tangent["global_response_matrix_materialized"] is False
+    assert tangent["full_gram_solve"] is False
+    assert tangent["context_build_count"] == 1
+    assert tangent["raw_archive"] == (
+        "data/symmetric_tangent_green_response_fields.npz"
+    )
+    assert "m0=H_x*p_tilde-H_y*q_tilde" in projection["formula"]
+    assert summary["projection_figure_fields"] == [
+        "tangent_preconditioner_base",
+        "tangent_denominator",
+    ]
+
+    context_fields = np.load(
+        outdir / "data" / "symmetric_tangent_green_response_fields.npz"
+    )
+    assert set(context_fields.files) == {
+        "gamma_x_squared",
+        "gamma_y_squared",
+        "preconditioner_base",
+        "denominator",
+        "point_mass",
+        "eta",
+        "relative_lambda",
+        "denominator_relative_eps",
+    }
+    assert context_fields["eta"].item() == pytest.approx(0.01)
+    assert np.all(context_fields["denominator"] > 0.0)
+    for field in summary["projection_figure_fields"]:
+        assert (outdir / "figures" / "balance_projection" / f"{field}.json").is_file()
+
+    selected = np.load(outdir / "data" / "selected_raw_arrays.npz")
+    for suffix in (
+        "_symmetric_physical_phi",
+        "_symmetric_physical_psi",
+        "_symmetric_u_phi",
+        "_symmetric_u_psi",
+        "_tangent_mismatch_pre",
+        "_tangent_gradient",
+        "_tangent_preconditioner_base",
+        "_tangent_denominator",
+        "_tangent_delta",
+        "_tangent_mismatch_post",
+    ):
+        assert any(key.endswith(suffix) for key in selected.files)
+    metric_rows = list(
+        csv.DictReader((outdir / "metrics" / "per_sample_metrics.csv").open())
+    )
+    assert "tangent_response_mismatch_pre" in metric_rows[0]
+    assert "tangent_response_mismatch_post" in metric_rows[0]
+
+
 def test_local_weak_reliability_artifact_uses_weighted_official_prediction(
     tmp_path,
     monkeypatch,

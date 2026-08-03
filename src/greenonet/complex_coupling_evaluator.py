@@ -39,10 +39,15 @@ from greenonet.complex_losses import (
 from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
+    reconstruct_complex_projection,
+    symmetric_tangent_metric_tensors,
 )
 from greenonet.complex_reconstruction import (
     ComplexReconstructionResult,
-    reconstruct_from_projected_response,
+)
+from greenonet.complex_tangent_projection import (
+    SymmetricTangentGreenResponseContext,
+    SymmetricTangentGreenResponseContextCache,
 )
 from greenonet.config import (
     BalanceProjectionConfig,
@@ -115,6 +120,9 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self._green_response_context_cache = ColumnDiagonalGreenResponseContextCache(
             self.balance_projection.column_diagonal_green_response
         )
+        self._tangent_context_cache = SymmetricTangentGreenResponseContextCache(
+            self.balance_projection.symmetric_tangent_green_response
+        )
         self.logger.info(
             "final reconstruction enabled=%s mode=%s gamma=%.6f "
             "smoothing_steps=%d smoothing_relaxation=%.6f relative_floor=%.6f "
@@ -165,6 +173,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
 
     def predict_batch(self, batch: ComplexCouplingBatch) -> ComplexPredictionBatch:
         projection_context = self._projection_context(batch)
+        tangent_context = self._tangent_projection_context(batch)
         raw_response, fusion = self.model.forward_with_fusion_diagnostics(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
@@ -181,11 +190,12 @@ class ComplexCouplingEvaluator(LoggingMixin):
             geometry=batch.geometry,
             config=self.balance_projection,
             column_diagonal_context=projection_context,
+            symmetric_tangent_context=tangent_context,
         )
-        reconstruction = reconstruct_from_projected_response(
+        reconstruction = reconstruct_complex_projection(
+            projection=projection,
             green_model=self.green_model,
             geometry=batch.geometry,
-            projected_response=projection.projected_response,
             x_green_branch=batch.x_green_branch,
             y_green_branch=batch.y_green_branch,
         )
@@ -211,6 +221,12 @@ class ComplexCouplingEvaluator(LoggingMixin):
         metrics = {
             key: value.detach() for key, value in objective.metric_tensors().items()
         }
+        metrics.update(
+            {
+                key: value.detach()
+                for key, value in symmetric_tangent_metric_tensors(projection).items()
+            }
+        )
         if torch.any(batch.has_solution):
             selected_solution = batch.has_solution
             metrics["rel_sol"] = relative_l2_valid(
@@ -274,6 +290,39 @@ class ComplexCouplingEvaluator(LoggingMixin):
             )
         return context
 
+    def _tangent_projection_context(
+        self,
+        batch: ComplexCouplingBatch,
+    ) -> SymmetricTangentGreenResponseContext | None:
+        if self.balance_projection.mode != "symmetric_tangent_green_response":
+            return None
+        build_count_before = self._tangent_context_cache.build_count
+        context = self._tangent_context_cache.get_or_build(
+            green_model=self.green_model,
+            geometry=batch.geometry,
+            x_green_branch=batch.x_green_branch,
+            y_green_branch=batch.y_green_branch,
+        )
+        if self._tangent_context_cache.build_count != build_count_before:
+            stats = context.statistics()
+            self.logger.info(
+                "symmetric-tangent Green-response context build_seconds=%.6f "
+                "eta=%.6e relative_lambda=%.6e denominator_relative_eps=%.6e "
+                "gain_scale=%.6e denominator=[%.6e, %.6e] "
+                "x_blocks=%d y_blocks=%d row_norm_used=false "
+                "global_matrix_materialized=false full_gram_solve=false",
+                self._tangent_context_cache.build_seconds,
+                context.eta,
+                context.relative_lambda,
+                context.denominator_relative_eps,
+                stats["gain_scale"],
+                stats["denominator_min"],
+                stats["denominator_max"],
+                stats["x_segment_block_count"],
+                stats["y_segment_block_count"],
+            )
+        return context
+
     @property
     def column_diagonal_green_response_context(
         self,
@@ -288,6 +337,20 @@ class ComplexCouplingEvaluator(LoggingMixin):
     def column_diagonal_green_response_context_build_seconds(self) -> float:
         return self._green_response_context_cache.build_seconds
 
+    @property
+    def symmetric_tangent_green_response_context(
+        self,
+    ) -> SymmetricTangentGreenResponseContext | None:
+        return self._tangent_context_cache.context
+
+    @property
+    def symmetric_tangent_green_response_context_build_count(self) -> int:
+        return self._tangent_context_cache.build_count
+
+    @property
+    def symmetric_tangent_green_response_context_build_seconds(self) -> float:
+        return self._tangent_context_cache.build_seconds
+
     def _sample_metric_row(
         self,
         prediction: ComplexPredictionBatch,
@@ -299,6 +362,40 @@ class ComplexCouplingEvaluator(LoggingMixin):
                 sample_offset
             ).items()
         }
+        tangent = prediction.projection.symmetric_tangent_diagnostics
+        if tangent is not None:
+            mismatch_pre = tangent.mismatch_pre[sample_offset]
+            mismatch_post = tangent.mismatch_post[sample_offset]
+            gradient = tangent.gradient[sample_offset]
+            delta = tangent.delta[sample_offset]
+            eps = torch.finfo(mismatch_pre.dtype).eps
+            pre_rms = mismatch_pre.square().mean().sqrt()
+            post_rms = mismatch_post.square().mean().sqrt()
+            correction_pair_norm = torch.linalg.vector_norm(
+                torch.stack((delta, -delta), dim=0)
+            )
+            symmetric_pair_norm = torch.linalg.vector_norm(
+                tangent.symmetric_physical[sample_offset]
+            )
+            row.update(
+                {
+                    "tangent_response_mismatch_pre": float(pre_rms.item()),
+                    "tangent_response_mismatch_post": float(post_rms.item()),
+                    "tangent_response_mismatch_ratio": float(
+                        (post_rms / pre_rms.clamp_min(eps)).item()
+                    ),
+                    "tangent_gradient_rms": float(
+                        gradient.square().mean().sqrt().item()
+                    ),
+                    "tangent_delta_rms": float(delta.square().mean().sqrt().item()),
+                    "tangent_delta_max_abs": float(delta.abs().max().item()),
+                    "tangent_correction_rel_symmetric_pair": float(
+                        (
+                            correction_pair_norm / symmetric_pair_norm.clamp_min(eps)
+                        ).item()
+                    ),
+                }
+            )
         if bool(prediction.batch.has_solution[sample_offset].item()):
             row["rel_sol"] = float(
                 relative_l2_valid(

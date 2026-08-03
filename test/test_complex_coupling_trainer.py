@@ -833,6 +833,123 @@ def test_complex_training_loss_graph_excludes_reference_targets(tmp_path):
     assert any(parameter.grad is not None for parameter in model.parameters())
 
 
+def test_complex_tangent_projection_smoke_reuses_context_and_preserves_autograd(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={
+                    "eta": 0.01,
+                    "relative_lambda": 0.01,
+                },
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=1,
+            batch_size=1,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+        ),
+        work_dir=tmp_path / "tangent_training",
+        green_model=ConstantGreen(1.0),
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+
+    first = trainer._forward_batch(batch)
+    first.loss.backward()
+    second = trainer._forward_batch(batch)
+
+    tangent = first.projection.symmetric_tangent_diagnostics
+    assert tangent is not None
+    assert trainer.symmetric_tangent_green_response_context_build_count == 1
+    assert trainer.symmetric_tangent_green_response_context is not None
+    assert all(
+        key in first.metrics
+        for key in (
+            "tangent_response_mismatch_pre",
+            "tangent_response_mismatch_post",
+            "tangent_gradient_rms",
+            "tangent_delta_rms",
+        )
+    )
+    torch.testing.assert_close(
+        first.reconstruction.u_phi_valid,
+        tangent.projected_solution[:, 0],
+    )
+    torch.testing.assert_close(
+        first.projection.projected_physical.sum(dim=1),
+        batch.rhs_valid,
+        atol=0.0,
+        rtol=0.0,
+    )
+    assert any(parameter.grad is not None for parameter in model.parameters())
+    assert second.projection.symmetric_tangent_diagnostics is not None
+
+
+def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response"
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    evaluator = ComplexCouplingEvaluator(
+        model=model,
+        green_model=ConstantGreen(1.0),
+        config=CouplingTrainingConfig(batch_size=1, device="cpu"),
+        device=torch.device("cpu"),
+        work_dir=tmp_path / "tangent_evaluation",
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+
+    prediction = evaluator.predict_batch(batch)
+    row = evaluator._sample_metric_row(prediction, 0)
+    evaluator.predict_batch(batch)
+
+    assert evaluator.symmetric_tangent_green_response_context_build_count == 1
+    assert "tangent_response_mismatch_pre" in row
+    assert "tangent_response_mismatch_post" in row
+    assert "tangent_correction_rel_symmetric_pair" in row
+
+
 def test_complex_trainer_rejects_reference_based_checkpoint_selection(tmp_path):
     model = ComplexCouplingNet(
         CouplingModelConfig(

@@ -188,6 +188,126 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Canonical config는 계속 symmetric이고, 성능 비교는 같은 초기화와 학습 조건으로
   두 mode 및 각 exponent를 각각 재학습해야 한다. 기존 checkpoint의 post-hoc
   projection/exponent 비교는 공정한 학습 비교로 해석하지 않는다.
+- Frozen column-diagonal response audit는
+  `cli/audit_complex_projection_response.py`로 실행한다. 동일한 frozen CouplingNet
+  raw response와 residual에 fixed exponent들을 적용하고, Green-response context는
+  한 번만 만든다. Primary metric은 diagonal surrogate와 실제 learned-Green
+  correction response cost
+  `hx*hy*(||H_x delta_phi||^2+||H_y delta_psi||^2)`이며, cross-axis transition에서
+  source correction jump와 reconstructed correction jump를 별도로 기록한다.
+  Row norm, full Gram matrix, global solve는 사용하지 않고 reference
+  `sol/phi/psi`는 optional evaluation metric에만 사용한다. 이 결과는 projection의
+  즉시 효과를 공정하게 비교하지만, 특정 exponent로 학습된 network의 end-to-end
+  alpha 선택에는 paired retraining이 필요하다.
+- 같은 frozen audit는 raw directional candidate identifiability도 별도로 기록한다.
+  `metrics/per_sample_directional_candidate_audit.csv`에서 raw physical `(p,q)`,
+  raw difference를 보존한 exact-balanced
+  `p_tilde=(rhs+p-q)/2`, `q_tilde=(rhs-p+q)/2`, configured projected
+  `(phi,psi)`를 optional target `phi/psi`와 비교한다. Global 및 transition-point
+  pair relative error, raw balance defect/rhs norm, projection correction/projected
+  norm을 함께 저장한다. Target fields는 이 diagnostic에서만 사용하며 training,
+  projection, checkpoint selection에는 사용하지 않는다. 이 비교는 raw pair가
+  physical candidate인지 projection-dependent latent coordinate인지 판별하기 위한
+  evaluation-only audit이다.
+- `annulus_CDR/coupling7` best-energy checkpoint의 frozen audit에서 alpha가
+  `0 -> 0.25 -> 0.5 -> 1`로 증가할 때 mean actual correction-response cost ratio는
+  `1 -> 0.561529 -> 0.353580 -> 0.239688`, directional transition response-jump
+  ratio는 `1 -> 0.478732 -> 0.327955 -> 0.325758`이었다. 반대로 weight transition
+  jump RMS는 `0 -> 0.122851 -> 0.185828 -> 0.247887`로 증가했다. 따라서 불연속
+  weight가 곧바로 더 큰 reconstructed correction seam을 뜻하지 않으며, 이 run에서는
+  의도된 response preconditioning으로 작동했다. 다만 alpha=0.25로 학습된 frozen
+  network의 equal-mean `rel_sol`은 alpha=0.25에서만 `5.1622%`였고 alpha=1 post-hoc은
+  `140.8773%`였으므로, response-cost 감소를 accuracy 개선으로 해석해서는 안 된다.
+- 같은 `coupling7` checkpoint의 50-sample directional-candidate audit에서 valid-point
+  pair relative target error의 mean은 raw `(p,q)` `188.03%`, symmetric-balanced
+  `(p_tilde,q_tilde)` `50.39%`, configured alpha=0.25 projected `(phi,psi)`
+  `17.27%`였다. Symmetric stage는 raw보다 50/50 sample에서, configured stage는
+  symmetric보다 50/50 sample에서 작았다. Raw balance defect/rhs norm은 평균
+  `226.95%`, configured correction/projected-pair norm은 `188.75%`였으므로 이
+  checkpoint의 raw `(p,q)`를 작은 correction만 필요한 독립 physical directional
+  candidate로 해석하지 않는다. Raw difference는 유용한 split signal을 포함하지만,
+  raw pair 전체는 projection-dependent latent proposal이고 최종 projected
+  `(phi,psi)`가 physical directional component이다. Configured target error는
+  transition-point에서 `25.04%`, regular point에서 `16.51%`여서 projection이 전역
+  candidate error를 크게 줄인 뒤에도 Annulus transition은 더 어려운 영역으로 남았다.
+- Symmetric-balanced directional candidate를 출발점으로 하는 후속 post-hoc audit는
+  `cli/audit_symmetric_tangent_response.py`로 실행한다. 목적함수는
+  `0.5*||H_x(p_tilde+delta)-H_y(q_tilde-delta)||_M^2`이고, 한 번의
+  matrix-free tangent update에서
+  `g=(H_x+H_y)^T*M*m0`, `delta=-eta*D^{-1}g`를 사용한다. 여기서
+  `D=gamma_x^2+gamma_y^2+(lambda_rel+eps)*mean(gamma_x^2+gamma_y^2)`이다.
+  Segment-local Green blocks로 forward/transpose action만 수행하며 full Gram matrix,
+  global matrix, solve는 만들지 않는다. 모든 후보는 `phi+psi=rhs`를 정확히 보존하고,
+  reference `sol/phi/psi`는 update나 method selection이 아니라 evaluation에만 쓴다.
+- `annulus_CDR/coupling7`의 50-sample, 72-combination frozen sweep에서 mean absolute
+  response mismatch와 canonical energy를 함께 최소화한 tangent 설정은
+  `eta=0.015`, `lambda_rel=0.1`이었다. Symmetric 대비 mean per-sample response ratio는
+  `0.133889`, canonical-energy ratio는 `0.115515`, production-blend `rel_sol`은
+  `0.973226 -> 0.274304`, `rel_flux`는 `0.514398 -> 0.405362`, transition solution-error
+  jump RMS는 `0.00430626 -> 0.00116966`이었다. 반면 configured column alpha=0.25는
+  각각 `0.005345`, `0.003374`, `0.045711`, `0.176215`, `0.000109589`로 tangent보다
+  여전히 크게 우수했고, tangent는 이 configured method를 어떤 sample에서도
+  이기지 못했다. Mean per-sample normalized response ratio만 최소화한 설정은
+  `eta=0.01`, `lambda_rel=0.001`이지만 `rel_flux=0.637308`로 symmetric보다 악화됐다.
+  따라서 damping은 source/solution consistency tradeoff에 필수이고, 현재 one-step
+  tangent는 symmetric baseline 개선에는 유효하지만 frozen 결과만으로 기본 training
+  projection으로 채택할 근거는 부족하다. 따라서 production에서는 optional mode로만
+  제공하고, 최종 판단에는 projection별 paired retraining을 사용한다. 또한 coupling7은
+  configured column projection으로 학습됐기 때문에 post-hoc 수치만으로 mode를
+  선택하지 않는다.
+- 위 training-projection bias를 분리하기 위해 동일 diagnostic은
+  `physical_symmetric` checkpoint도 허용한다. `annulus_CDR/coupling5`는 coupling7과
+  projection 및 optional cross-axis reconstruction 외의 config가 같고, symmetric로
+  학습된 비교군이다. Coupling5 symmetric baseline은 response mismatch
+  `8.17954e-7`, canonical energy `4.45929e-4`, equal-mean `rel_sol=0.0515625`,
+  `rel_flux=0.178986`였다. 이는 coupling7 raw output을 post-hoc symmetric로 적용한
+  값 `1.87090e-4`, `0.213606`, `1.028401`, `0.514398`보다 압도적으로 좋고,
+  coupling7 configured column의 `8.42383e-7`, `4.40646e-4`, `0.0516218`,
+  `0.176215`와 거의 같은 수준이다. 따라서 coupling7의 symmetric baseline 악화는
+  column-trained raw representation과 symmetric projection의 mismatch가 주원인이다.
+- Coupling5에서 balanced tangent 설정 `eta=0.01`, `lambda_rel=0.01`은 symmetric
+  대비 response mismatch `-45.94%`, canonical energy `-4.54%`, equal-mean rel_sol
+  `-27.61%`, rel_flux `-0.71%`였지만, transition solution-error jump RMS는
+  `+5.08%`, split-transition jump RMS는 `+4.02%`였다. 즉 symmetric-trained
+  checkpoint에서도 global response correction은 유효하지만 Annulus transition을
+  개선한다는 증거는 없다. Coupling7에서 관찰된 큰 tangent improvement를 그대로
+  training benefit으로 해석하지 않고, production integration은 보류한다.
+- Coupling5 frozen candidates에 coupling7과 같은
+  `local_weak_residual_reliability` reconstruction만 post-hoc 적용하면 symmetric
+  baseline `rel_sol`은 equal mean `0.0515625`에서 weak `0.0456472`로 `11.47%`
+  감소한다. Balanced tangent `eta=0.01`, `lambda_rel=0.01`은 equal mean
+  `0.0373254`에서 weak `0.0343297`로 추가 `8.03%` 감소하며, weak symmetric보다
+  `24.79%` 낮고 49/50 sample에서 개선된다. `eta=0.01`, `lambda_rel=0.1`은 weak
+  `rel_sol=0.0346418`이고 50/50 sample에서 weak symmetric를 개선한다. Weak blend는
+  symmetric transition solution-error jump RMS도 `2.17443e-4 -> 1.11364e-4`로
+  약 절반 줄이지만, tangent `eta=0.01`, `lambda_rel=0.01`에서는
+  `1.16880e-4`로 weak symmetric보다 `4.95%` 높다. 따라서 weak blend와 tangent는
+  global rel_sol 측면에서는 상보적이지만, tangent가 transition을 추가 개선한다는
+  결론은 여전히 성립하지 않는다.
+- Complex CouplingNet production은 optional
+  `balance_projection.mode="symmetric_tangent_green_response"`를 지원한다. Raw
+  response를 physical `(p,q)`로 옮긴 뒤 symmetric-balanced
+  `p_tilde=(rhs+p-q)/2`, `q_tilde=(rhs-p+q)/2`를 기준으로 삼는다. Frozen response
+  operator에서 `m0=H_x*p_tilde-H_y*q_tilde`,
+  `g=(H_x+H_y)^T*M_Omega*m0`를 계산하고,
+  `D=gamma_x^2+gamma_y^2+(lambda_rel+eps_rel)*mean(gamma_x^2+gamma_y^2)`,
+  `delta=-eta*g/D`를 한 번 적용한다. 최종 source는
+  `phi=p_tilde+delta`, `psi=q_tilde-delta`여서 exact balance를 유지한다.
+- Tangent `eta`, `relative_lambda`, `denominator_relative_eps`는 fixed
+  sample-independent scalar이며 learnable parameter가 아니다. 기본값은 각각
+  `0.01`, `0.01`, `1e-12`이고 `eta=0`은 physical symmetric와 동일하다. Row norm,
+  full Gram, global response matrix와 matrix solve는 사용하지 않는다. Reference
+  `sol/phi/psi`도 tangent update, loss, checkpoint selection에 사용하지 않는다.
+- Tangent runtime은 GreenNet의 segment-local physical-source response blocks를 한 번
+  구축하고 forward, adjoint, final reconstruction에 동일하게 재사용한다. Blocks는
+  frozen이지만 batch matvec는 detach하지 않으므로 CouplingNet으로 first-order
+  autograd가 전달된다. Model architecture, output contract version, safetensors key는
+  바뀌지 않는다. 별도 paired experiment config는
+  `configs/complex_coupling_soap_tangent.json`이며 canonical/column config는 유지한다.
+- Tangent artifact는 selected raw archive에 symmetric physical/source response,
+  pre/post mismatch, gradient, denominator와 delta를 저장하고, run-level context는
+  `data/symmetric_tangent_green_response_fields.npz`에 저장한다. Context build count,
+  fixed parameters, no-reference/no-solve convention을 summary와 log에 기록한다.
 - Complex CouplingNet의 `coupling_model.pre_projection_fusion`은 optional
   single nonlinear fusion MLP이며 기본값은 disabled이다. Axis network의
   base response \(P_0,Q_0\)를 \(p_0=P_0/L_x^2\), \(q_0=Q_0/L_y^2\)로 옮기고,

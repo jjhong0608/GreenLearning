@@ -219,7 +219,7 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Complex coefficient normalization: each physical segment is mapped to the unit interval before GreenNet training and Green reconstruction. The unit coefficients are `a_unit=a_phys`, `ap_unit=L*ap_phys`, `b_unit=L*b_phys`, and `c_unit=L^2*c_phys`. GreenNet training sources use `f_unit=L^2*f_phys`; GreenNet trunk coordinates are always unit `(t, eta) in [0,1]^2`, and unit reconstruction integrates `G_unit(t, eta) f_unit(eta)` over `eta` without another segment-length factor. Complex CouplingNet reuses the unit-scaled Green coefficient branches but keeps its mandatory source branch in normalized physical source space.
 - Complex CouplingNet behavior: output contract v6 is source-conditioned and response-valued. Full-grid `rhs` is gathered to valid points, lifted into segment-local physical source profiles with endpoint hard-zero values, and normalized by the length-independent amplitude `A=sqrt(integral_0^1 f_phys(s(t))^2 dt)`. The model returns raw directional reference responses `[P,Q]` with shape `(B,2,P)`, using deterministic output scales `P=L_x^2*A_x*P_tilde` and `Q=L_y^2*A_y*Q_tilde`. The coefficient branch is controlled by `coupling_model.coefficient_terms` in active `[a,b_primary,b_transverse,c]` order: when `convection=true`, x/Phi segments receive `[L_x*b_x, L_x*b_y]` and y/Psi segments receive `[L_y*b_y, L_y*b_x]`; Green reconstruction branches remain `[a,ap,b_primary,c]`. The geometry branch consumes `[s_left,s_right,s_mid,L,L^2,1/L]`, the fixed-line transverse branch consumes globally normalized transverse Fourier features, and the primary trunk consumes segment-local `t`.
 - Complex pointwise length context: output contract v6 requires `axis_1d_trunk.transverse_trunk.enabled=true` and `length_context=true`. One shared four-input transverse MLP receives `[t_perp, log(L_perp/L_ref), log(L_parallel/L_perp), kappa]`, where `kappa=4*L_parallel^2*L_perp^2/(L_parallel^2+L_perp^2)^2` and `L_ref` is the larger global geometry extent. The x/Phi path uses `(L_parallel,L_perp,t_perp)=(L_x,L_y,y_local_t)`; the y/Psi path swaps the axes.
-- Complex physical balance projection: output contract v6 requires `balance_projection.enabled=true`. The backward-compatible default is `mode="physical_symmetric"`; the complex-only opt-in alternative is `mode="column_diagonal_green_response"`. Both modes first map raw reference responses to physical directional-source proposals, `p=P/L_x^2` and `q=Q/L_y^2`, impose `phi+psi=rhs` in physical source space, and then pull back with `Phi=L_x^2*phi`, `Psi=L_y^2*psi`. Green reconstruction consumes `Phi/Psi` directly, so it applies no additional `L^2` factor. Physical symmetric preserves `d=p-q` with `phi=0.5*(rhs+d)`, `psi=0.5*(rhs-d)`. Retired complex `response_space`, `response_preconditioned`, `symmetric`, `smooth_mask`, and `geometry_weighted` configs still fail fast; unversioned and v5-or-older complex CouplingNet checkpoints are rejected, while GreenNet checkpoints remain reusable.
+- Complex physical balance projection: output contract v6 requires `balance_projection.enabled=true`. The backward-compatible default is `mode="physical_symmetric"`; the complex-only opt-in alternatives are `mode="column_diagonal_green_response"` and `mode="symmetric_tangent_green_response"`. All modes first map raw reference responses to physical directional-source proposals, `p=P/L_x^2` and `q=Q/L_y^2`, impose `phi+psi=rhs` in physical source space, and then pull back with `Phi=L_x^2*phi`, `Psi=L_y^2*psi`. Green reconstruction consumes `Phi/Psi` directly, so it applies no additional `L^2` factor. Physical symmetric preserves `d=p-q` with `phi=0.5*(rhs+d)`, `psi=0.5*(rhs-d)`. Retired complex `response_space`, `response_preconditioned`, `symmetric`, `smooth_mask`, and `geometry_weighted` configs still fail fast; unversioned and v5-or-older complex CouplingNet checkpoints are rejected, while GreenNet checkpoints remain reusable.
   ```json
   "balance_projection": {
     "enabled": true,
@@ -227,6 +227,19 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   }
   ```
 - Complex optional column-diagonal Green-response projection: set `mode="column_diagonal_green_response"` to distribute the raw physical balance residual `r=rhs-p-q` using each source point's downstream solution-response cost. For direction `s`, production reconstruction defines `H_s=K_s W_s L_s^2` and the cached gain is `gamma_s^2=diag(H_s^T M_Omega H_s)` with `M_Omega=(hx*hy)I`. This is the squared norm of each source column, not a row/evaluation sensitivity. With `gx_bar=gamma_x^2+eps` and `gy_bar=gamma_y^2+eps`, the fixed tempered weight is `w_phi=sigmoid(alpha*(log(gy_bar)-log(gx_bar)))`, `w_psi=1-w_phi`; then `delta_phi=w_phi*r` and `delta_psi=w_psi*r`. `gain_exponent=0` gives the physical symmetric correction, while `gain_exponent=1` uses the legacy direct column-diagonal ratio. The default is `1.0`, so configs that omit the field preserve the existing numerical path. Intermediate values such as `0.25` temper gain anisotropy without adding a learnable parameter, sample-dependent gate, row method, or full-Gram solve. The frozen GreenNet context and fixed weights are built segment-by-segment once per trainer/evaluator instance. Artifact export writes the exponent, run-level gains, and weights to `data/column_diagonal_green_response_fields.npz`, selected-sample correction diagnostics to `data/selected_raw_arrays.npz`, and gain/weight Plotly figures under `figures/balance_projection/`. Exponent comparisons require paired retraining from the same initialization and data; changing alpha only at export time is not a fair comparison. See `docs/complex_column_diagonal_green_response_projection.md` for the full contract.
+- Complex optional symmetric-tangent Green-response projection: set `mode="symmetric_tangent_green_response"` to start from the exact-balanced symmetric pair `p_tilde=(rhs+p-q)/2`, `q_tilde=(rhs-p+q)/2` and take one fixed response-space tangent step. With `m0=H_x p_tilde-H_y q_tilde`, the reference-free gradient is `g=(H_x+H_y)^T M_Omega m0`. The cached Jacobi denominator is `D=gamma_x^2+gamma_y^2+(relative_lambda+denominator_relative_eps)*mean(gamma_x^2+gamma_y^2)`, and the correction is `delta=-eta*g/D`, `phi=p_tilde+delta`, `psi=q_tilde-delta`. This preserves `phi+psi=rhs`, uses no reference target, learned step size, row norm, global response matrix, full-Gram matrix, or linear solve. Frozen segment-local response blocks are built once and reused for the tangent forward/adjoint actions and final reconstruction; ordinary first-order autograd still reaches CouplingNet through these fixed matvecs. `eta=0` is exactly the physical-symmetric ablation. The default fixed settings are `eta=0.01`, `relative_lambda=0.01`, and `denominator_relative_eps=1e-12`.
+  ```json
+  "balance_projection": {
+    "enabled": true,
+    "mode": "symmetric_tangent_green_response",
+    "symmetric_tangent_green_response": {
+      "eta": 0.01,
+      "relative_lambda": 0.01,
+      "denominator_relative_eps": 1e-12
+    }
+  }
+  ```
+  `configs/complex_coupling_soap_tangent.json` is the separate SOAP experiment config; existing canonical and column-diagonal configs remain unchanged. Artifact export records the symmetric base, gradient, denominator, tangent delta, and pre/post directional response mismatch. The method must be compared with physical symmetric through paired retraining; the frozen-checkpoint audit remains diagnostic evidence rather than a training result.
   ```json
   "balance_projection": {
     "enabled": true,
@@ -237,6 +250,80 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     }
   }
   ```
+  A frozen-checkpoint response audit can compare several fixed exponents on the
+  same raw directional response. It builds the column gains once, reconstructs
+  each correction with the existing GreenNet, and reports both the diagonal
+  surrogate
+  `sum(gx_bar*delta_phi^2 + gy_bar*delta_psi^2)` and the actual learned-Green
+  response cost
+  `(hx*hy)*(||H_x delta_phi||_2^2 + ||H_y delta_psi||_2^2)`. It also separates
+  source-correction jumps from reconstructed correction jumps on cross-axis
+  transition edges. No row norm, full Gram matrix, or global solve is used.
+  Reference `sol/phi/psi` appears only in optional evaluation metrics.
+
+  ```bash
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python \
+    cli/audit_complex_projection_response.py \
+    --config checkpoints/annulus_CDR/coupling7/config_used.json \
+    --coupling-checkpoint \
+      checkpoints/annulus_CDR/coupling7/complex_coupling_model_best_energy.safetensors \
+    --green-checkpoint checkpoints/annulus_CDR/green/model.safetensors \
+    --alphas 0 0.25 0.5 1
+  ```
+
+  The default output directory is
+  `<coupling-checkpoint-parent>/projection_response_posthoc_audit`. It contains
+  `summary.json`, a per-sample CSV, selected raw NPZ data, editable Plotly
+  figures, and `diagnosis_report.md`. Because the checkpoint was trained under
+  one configured exponent, solution/flux accuracy at other post-hoc exponents
+  measures frozen-network compensation, not a fair end-to-end training
+  comparison. Paired retraining remains necessary for model selection.
+  The same run also writes
+  `metrics/per_sample_directional_candidate_audit.csv` and selected candidate
+  figures. These compare raw physical proposals `(p,q)`, the exact-balanced
+  raw-difference pair
+  `p_tilde=0.5*(rhs+p-q), q_tilde=0.5*(rhs-p+q)`, and the configured projected
+  `(phi,psi)` against optional sample directional targets. Reported raw balance
+  defect and correction-to-projected ratios test whether `(p,q)` behave as
+  physical directional candidates or only as projection-dependent latent
+  coordinates. Directional targets remain evaluation-only.
+
+  A second frozen-checkpoint diagnostic starts from the symmetric-balanced
+  candidate and tests a matrix-free Green-response tangent correction:
+  `m0=H_x*p_tilde-H_y*q_tilde`,
+  `g=(H_x+H_y)^T*M_Omega*m0`,
+  `delta=-eta*D^{-1}*g`, with
+  `phi=p_tilde+delta` and `psi=q_tilde-delta`. The diagonal damping is
+  `D=gamma_x^2+gamma_y^2+(lambda_rel+eps)*mean(gamma_x^2+gamma_y^2)`.
+  This preserves `phi+psi=rhs` exactly, uses segment-local Green operator and
+  transpose actions, and performs no global matrix assembly or solve. The
+  eta/lambda sweep reports response mismatch and canonical energy as primary
+  reference-free metrics; `rel_sol` and `rel_flux` remain evaluation-only.
+
+  ```bash
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python \
+    cli/audit_symmetric_tangent_response.py \
+    --config checkpoints/annulus_CDR/coupling7/config_used.json \
+    --coupling-checkpoint \
+      checkpoints/annulus_CDR/coupling7/complex_coupling_model_best_energy.safetensors \
+    --green-checkpoint checkpoints/annulus_CDR/green/model.safetensors
+  ```
+
+  The default output directory is
+  `<coupling-checkpoint-parent>/symmetric_tangent_response_audit`. This is a
+  post-hoc ablation of one fixed tangent step. It does not modify the training
+  projection or establish the result of paired retraining. The diagnostic
+  accepts checkpoints trained with either `physical_symmetric` or
+  `column_diagonal_green_response`. For a symmetric-trained checkpoint the
+  configured baseline is the symmetric pair itself; for a column-trained
+  checkpoint the configured column projection is included as a separate
+  baseline. Cross-checkpoint comparisons should use response mismatch,
+  canonical energy, equal-mean `rel_sol`, and directional flux metrics because
+  optional cross-axis reconstruction settings may differ. The summary always
+  records both the configured reconstruction `rel_sol` and
+  `rel_sol_equal_mean`, so the same frozen candidates can be audited with
+  `local_weak_residual_reliability` enabled in a diagnostic config without
+  changing the checkpoint or directional projection.
 - Complex optional pre-projection fusion: set `coupling_model.pre_projection_fusion.enabled=true` to insert one small nonlinear MLP between the two axis-conditioned raw responses and the selected physical balance projection. The block first forms `p0=P0/L_x^2`, `q0=Q0/L_y^2`, `d_base=p0-q0`, and `A=sqrt((A_x^2+A_y^2)/2)`. Its only inputs are the normalized physical values `z=[d_base/A_safe,rhs/A_safe]`, where `A_safe=max(A,eps)`. The backward-compatible default `mode="residual"` uses `d_fused=d_base+A_safe*h_theta(z)` and therefore retains the fixed identity skip. The opt-in `mode="absolute"` uses `d_fused=A_safe*h_theta(z)`, so the MLP predicts the complete fused difference without adding `d_base`. Both modes construct `phi_pre=0.5*(rhs+d_fused)` and `psi_pre=0.5*(rhs-d_fused)`, preserving exact source balance before the configured physical projection. There is no learned linear branch, learned gate, convex combination, or direct coordinate/geometry/line-length input.
   `final_layer_init_scale` scales the final `torch.nn.Linear` layer's standard initialized weight and bias: `0.0` gives zero initialization and `1.0` leaves the standard initialization unchanged. With scale zero, residual mode starts from the disabled/base path, while absolute mode starts from the symmetric split `d_fused=0`; these are intentionally different initial conditions. Zero source amplitude forces the physical MLP output and fused difference to zero in both modes. This complex-only option adds no reference-target loss and leaves output contract v6, physical symmetric projection, reconstruction, GreenNet, and NPZ schemas unchanged. Existing unmarked v6 single-MLP checkpoints are interpreted as residual mode for compatibility, but marked residual and absolute checkpoints cannot be cross-loaded. Checkpoints trained with the retired split linear/nonlinear fuser remain incompatible and require retraining. `configs/complex_coupling_soap_absolute.json` is the paired SOAP example for the absolute-mode experiment.
   ```json

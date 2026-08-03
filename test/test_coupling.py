@@ -2753,6 +2753,14 @@ def test_trainable_smooth_mask_diff_power_gets_gradient_and_preserves_balance():
 def test_smooth_mask_projection_config_validation():
     with pytest.raises(ValueError, match="balance_projection.mode"):
         CouplingNet(CouplingModelConfig(balance_projection="bad"))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="only for ComplexCouplingNet"):
+        CouplingNet(
+            CouplingModelConfig(
+                balance_projection=BalanceProjectionConfig(
+                    mode="symmetric_tangent_green_response"
+                )
+            )
+        )
     with pytest.raises(ValueError, match="smooth_mask_eps"):
         CouplingNet(CouplingModelConfig(smooth_mask_eps=0.0))
     with pytest.raises(ValueError, match="smooth_mask_power"):

@@ -23,6 +23,9 @@ from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geo
 from greenonet.complex_green_response_projection import (
     ColumnDiagonalGreenResponseContext,
 )
+from greenonet.complex_tangent_projection import (
+    SymmetricTangentGreenResponseContext,
+)
 from greenonet.complex_pre_projection_fusion import (
     FINAL_LAYER_INITIALIZATION,
     FUSION_ARCHITECTURE,
@@ -45,6 +48,7 @@ from greenonet.config import (
     CouplingBestEnergyCheckpointConfig,
     CouplingBestPhysicsCheckpointConfig,
     CouplingCoefficientTermsConfig,
+    SymmetricTangentGreenResponseProjectionConfig,
 )
 from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
@@ -496,6 +500,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         "fusion_residual_physical",
         "fusion_fused_difference",
         "fusion_delta_from_base",
+        "tangent_gradient",
+        "tangent_delta",
+        "tangent_mismatch_pre",
+        "tangent_mismatch_post",
     )
     SIGNED_FIGURE_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -514,6 +522,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "fusion_residual_physical",
             "fusion_fused_difference",
             "fusion_delta_from_base",
+            "tangent_gradient",
+            "tangent_delta",
+            "tangent_mismatch_pre",
+            "tangent_mismatch_post",
         }
     )
     FIGURE_TITLES: ClassVar[dict[str, str]] = {
@@ -551,11 +563,17 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         "fusion_residual_physical": "Nonlinear physical difference residual",
         "fusion_fused_difference": "Fused physical difference",
         "fusion_delta_from_base": "Fused difference minus base difference",
+        "tangent_gradient": "Tangent response objective gradient",
+        "tangent_delta": "Balance-preserving tangent source correction",
+        "tangent_mismatch_pre": "Directional response mismatch before tangent step",
+        "tangent_mismatch_post": "Directional response mismatch after tangent step",
     }
     GREEN_RESPONSE_FIGURE_TITLES: ClassVar[dict[str, str]] = {
         "gamma_x_squared": "X source-column Green-response cost",
         "gamma_y_squared": "Y source-column Green-response cost",
         "correction_weight_phi": "Physical balance correction weight for phi",
+        "tangent_preconditioner_base": "Tangent Jacobi preconditioner base",
+        "tangent_denominator": "Tangent regularized denominator",
     }
 
     def __init__(
@@ -613,6 +631,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         self._write_selected_npz(selected_samples)
         self._write_coefficient_npz(coefficient_fields)
         self._write_green_response_context_npz(evaluator)
+        self._write_tangent_response_context_npz(evaluator)
         figure_fields = self._figure_fields(selected_samples)
         sample_figure_paths = self._write_figures(
             selected_samples,
@@ -625,13 +644,22 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 self.request.theme,
             )
         )
-        projection_figure_paths, projection_figure_fields = (
+        column_projection_paths, column_projection_fields = (
             self._write_green_response_context_figures(
                 evaluator.column_diagonal_green_response_context,
                 geometry,
                 self.request.theme,
             )
         )
+        tangent_projection_paths, tangent_projection_fields = (
+            self._write_tangent_response_context_figures(
+                evaluator.symmetric_tangent_green_response_context,
+                geometry,
+                self.request.theme,
+            )
+        )
+        projection_figure_paths = column_projection_paths + tangent_projection_paths
+        projection_figure_fields = column_projection_fields + tangent_projection_fields
         coefficient_statistics = self._coefficient_field_statistics(
             coefficient_fields,
             configs.coupling_model.coefficient_terms,
@@ -667,6 +695,11 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         green_response_context = evaluator.column_diagonal_green_response_context
         green_response_summary = self._green_response_context_summary(
             green_response_context,
+            evaluator,
+            balance_projection,
+        )
+        tangent_response_summary = self._tangent_response_context_summary(
+            evaluator.symmetric_tangent_green_response_context,
             evaluator,
             balance_projection,
         )
@@ -739,6 +772,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 "post_projection_pull_back": "Phi=Lx^2*phi; Psi=Ly^2*psi",
                 "uses_reference_targets": False,
                 "column_diagonal_green_response": green_response_summary,
+                "symmetric_tangent_green_response": tangent_response_summary,
             },
             "pre_projection_fusion": {
                 "enabled": pre_projection_fusion.enabled,
@@ -1160,6 +1194,40 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     "u_psi_error": u_psi - sol,
                     "u_split_mismatch": u_phi - u_psi,
                 }
+                tangent = prediction.projection.symmetric_tangent_diagnostics
+                if tangent is not None:
+                    arrays.update(
+                        {
+                            "symmetric_physical_phi": (
+                                tangent.symmetric_physical[0, 0].detach().cpu().numpy()
+                            ),
+                            "symmetric_physical_psi": (
+                                tangent.symmetric_physical[0, 1].detach().cpu().numpy()
+                            ),
+                            "symmetric_u_phi": (
+                                tangent.symmetric_solution[0, 0].detach().cpu().numpy()
+                            ),
+                            "symmetric_u_psi": (
+                                tangent.symmetric_solution[0, 1].detach().cpu().numpy()
+                            ),
+                            "tangent_mismatch_pre": (
+                                tangent.mismatch_pre[0].detach().cpu().numpy()
+                            ),
+                            "tangent_gradient": (
+                                tangent.gradient[0].detach().cpu().numpy()
+                            ),
+                            "tangent_preconditioner_base": (
+                                tangent.preconditioner_base.detach().cpu().numpy()
+                            ),
+                            "tangent_denominator": (
+                                tangent.denominator.detach().cpu().numpy()
+                            ),
+                            "tangent_delta": tangent.delta[0].detach().cpu().numpy(),
+                            "tangent_mismatch_post": (
+                                tangent.mismatch_post[0].detach().cpu().numpy()
+                            ),
+                        }
+                    )
                 reliability = prediction.cross_axis_reconstruction.reliability
                 if reliability is not None:
                     arrays.update(
@@ -1442,6 +1510,30 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             gain_exponent=np.asarray(context.gain_exponent, dtype=np.float64),
         )
 
+    def _write_tangent_response_context_npz(
+        self,
+        evaluator: ComplexCouplingEvaluator,
+    ) -> None:
+        context = evaluator.symmetric_tangent_green_response_context
+        if context is None or not self.request.save_generated_data:
+            return
+        data_dir = self.request.outdir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            data_dir / "symmetric_tangent_green_response_fields.npz",
+            gamma_x_squared=context.gamma_x_squared.detach().cpu().numpy(),
+            gamma_y_squared=context.gamma_y_squared.detach().cpu().numpy(),
+            preconditioner_base=(context.preconditioner_base.detach().cpu().numpy()),
+            denominator=context.denominator.detach().cpu().numpy(),
+            point_mass=context.point_mass.detach().cpu().numpy(),
+            eta=np.asarray(context.eta, dtype=np.float64),
+            relative_lambda=np.asarray(context.relative_lambda, dtype=np.float64),
+            denominator_relative_eps=np.asarray(
+                context.denominator_relative_eps,
+                dtype=np.float64,
+            ),
+        )
+
     def _write_green_response_context_figures(
         self,
         context: ColumnDiagonalGreenResponseContext | None,
@@ -1474,6 +1566,37 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             paths.append(str(base_path.with_suffix(".json")))
         return paths, tuple(fields)
 
+    def _write_tangent_response_context_figures(
+        self,
+        context: SymmetricTangentGreenResponseContext | None,
+        geometry: ComplexGeometryMetadata,
+        theme: str,
+    ) -> tuple[list[str], tuple[str, ...]]:
+        if context is None:
+            return [], ()
+        coords = geometry.coords_valid.detach().cpu().numpy()
+        fields = {
+            "tangent_preconditioner_base": (
+                context.preconditioner_base.detach().cpu().numpy()
+            ),
+            "tangent_denominator": context.denominator.detach().cpu().numpy(),
+        }
+        paths: list[str] = []
+        for field, values in fields.items():
+            figure = self._scatter_figure(
+                title=(
+                    f"{self.GREEN_RESPONSE_FIGURE_TITLES[field]} "
+                    f"(eta={context.eta:g}, lambda={context.relative_lambda:g})"
+                ),
+                coords=coords,
+                values=values,
+                theme=theme,
+            )
+            base_path = self.request.outdir / "figures" / "balance_projection" / field
+            save_plotly_figure(figure, base_path, logger=self.logger)
+            paths.append(str(base_path.with_suffix(".json")))
+        return paths, tuple(fields)
+
     @staticmethod
     def _projection_formula(projection: BalanceProjectionConfig) -> str:
         prefix = "p=P_raw/Lx^2; q=Q_raw/Ly^2; r=rhs-p-q; d=p-q; "
@@ -1489,6 +1612,22 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 + "w_phi=sigmoid(alpha*(log(gy_bar)-log(gx_bar))); "
                 "d_star=d+(2*w_phi-1)*r; phi=(rhs+d_star)/2; "
                 "psi=rhs-phi; " + suffix
+            )
+        if projection.mode == "symmetric_tangent_green_response":
+            tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+                projection.symmetric_tangent_green_response
+            )
+            return (
+                prefix
+                + "p_tilde=(rhs+d)/2; q_tilde=(rhs-d)/2; "
+                + "m0=H_x*p_tilde-H_y*q_tilde; "
+                + "g=(H_x+H_y)^T*M_Omega*m0; "
+                + "D=gamma_x^2+gamma_y^2+"
+                + f"({tangent_config.relative_lambda:g}+"
+                + f"{tangent_config.denominator_relative_eps:g})*mean(gamma_sum); "
+                + f"delta=-{tangent_config.eta:g}*g/D; "
+                + "phi=p_tilde+delta; psi=q_tilde-delta; "
+                + suffix
             )
         return prefix + "phi=(rhs+d)/2; psi=(rhs-d)/2; " + suffix
 
@@ -1533,6 +1672,54 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 if active
                 and evaluator.column_diagonal_green_response_context is not None
                 and self.request.save_generated_data
+                else None
+            ),
+        }
+        if context is not None:
+            summary["statistics"] = context.statistics()
+            summary["point_mass"] = float(context.point_mass.item())
+        return summary
+
+    def _tangent_response_context_summary(
+        self,
+        context: SymmetricTangentGreenResponseContext | None,
+        evaluator: ComplexCouplingEvaluator,
+        projection: BalanceProjectionConfig,
+    ) -> dict[str, Any]:
+        active = projection.mode == "symmetric_tangent_green_response"
+        config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+            projection.symmetric_tangent_green_response
+        )
+        summary: dict[str, Any] = {
+            "active": active,
+            "eta": config.eta,
+            "relative_lambda": config.relative_lambda,
+            "denominator_relative_eps": config.denominator_relative_eps,
+            "fixed_parameters": True,
+            "learnable_parameters": False,
+            "reference_targets_used": False,
+            "base_projection": "physical_symmetric",
+            "objective": "0.5*||H_x*phi-H_y*psi||_M_Omega^2",
+            "gradient": "g=(H_x+H_y)^T*M_Omega*m0",
+            "update": "delta=-eta*g/D; phi=p_tilde+delta; psi=q_tilde-delta",
+            "preconditioner": (
+                "D=gamma_x_squared+gamma_y_squared+"
+                "(relative_lambda+denominator_relative_eps)*mean(gamma_sum)"
+            ),
+            "gain_definition": "diag(H_s^T M_Omega H_s)",
+            "operator_definition": "H_s=K_s W_s L_s^2",
+            "row_norm_used": False,
+            "global_response_matrix_materialized": False,
+            "full_gram_solve": False,
+            "context_build_count": (
+                evaluator.symmetric_tangent_green_response_context_build_count
+            ),
+            "context_build_seconds": (
+                evaluator.symmetric_tangent_green_response_context_build_seconds
+            ),
+            "raw_archive": (
+                "data/symmetric_tangent_green_response_fields.npz"
+                if active and context is not None and self.request.save_generated_data
                 else None
             ),
         }

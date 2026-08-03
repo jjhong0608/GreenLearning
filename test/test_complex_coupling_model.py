@@ -642,6 +642,44 @@ def test_complex_model_accepts_column_diagonal_green_response_projection():
     assert model.OUTPUT_CONTRACT_VERSION == 6
 
 
+def test_complex_model_accepts_symmetric_tangent_projection_without_state_change():
+    torch.manual_seed(123)
+    symmetric = _model()
+    torch.manual_seed(123)
+    tangent = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=8,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={
+                    "eta": 0.01,
+                    "relative_lambda": 0.01,
+                },
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                num_frequencies=2,
+                max_frequency=2.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+
+    assert tangent.config.balance_projection.mode == (
+        "symmetric_tangent_green_response"
+    )
+    assert tangent.OUTPUT_CONTRACT_VERSION == 6
+    assert symmetric.state_dict().keys() == tangent.state_dict().keys()
+    for key, value in symmetric.state_dict().items():
+        assert value.shape == tangent.state_dict()[key].shape
+
+
 def test_column_diagonal_projection_does_not_change_model_state_dict_surface():
     torch.manual_seed(123)
     symmetric = _model()

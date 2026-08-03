@@ -116,6 +116,65 @@ def test_column_diagonal_green_response_config_round_trip():
     )
 
 
+def test_symmetric_tangent_green_response_config_round_trip():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingModelConfig(
+        balance_projection={
+            "enabled": True,
+            "mode": "symmetric_tangent_green_response",
+            "symmetric_tangent_green_response": {
+                "eta": 0.025,
+                "relative_lambda": 0.2,
+                "denominator_relative_eps": 2.5e-11,
+            },
+        }
+    )
+
+    payload = _serialize_config(config)
+    loaded = _deserialize_config(payload, CouplingModelConfig)
+
+    assert isinstance(loaded, CouplingModelConfig)
+    assert loaded == config
+    assert loaded.balance_projection.mode == "symmetric_tangent_green_response"
+    tangent = loaded.balance_projection.symmetric_tangent_green_response
+    assert tangent.eta == pytest.approx(0.025)
+    assert tangent.relative_lambda == pytest.approx(0.2)
+    assert tangent.denominator_relative_eps == pytest.approx(2.5e-11)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type"),
+    [
+        ("eta", -0.1, ValueError),
+        ("eta", True, TypeError),
+        ("relative_lambda", float("inf"), ValueError),
+        ("denominator_relative_eps", 0.0, ValueError),
+        ("denominator_relative_eps", "1e-12", TypeError),
+    ],
+)
+def test_symmetric_tangent_green_response_rejects_invalid_config(
+    field,
+    value,
+    error_type,
+):
+    with pytest.raises(error_type, match="symmetric_tangent_green_response"):
+        CouplingModelConfig(
+            balance_projection={
+                "mode": "symmetric_tangent_green_response",
+                "symmetric_tangent_green_response": {field: value},
+            }
+        )
+
+    with pytest.raises(TypeError, match="unknown keys"):
+        CouplingModelConfig(
+            balance_projection={
+                "mode": "symmetric_tangent_green_response",
+                "symmetric_tangent_green_response": {"learnable_eta": True},
+            }
+        )
+
+
 def test_save_load_green_model_with_config(tmp_path):
     torch.manual_seed(0)
     cfg = ModelConfig(

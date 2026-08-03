@@ -335,6 +335,7 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
             "response_space",
             "physical_symmetric",
             "column_diagonal_green_response",
+            "symmetric_tangent_green_response",
         }:
             raise ValueError(
                 f"balance_projection.mode='{balance_projection.mode}' is available "

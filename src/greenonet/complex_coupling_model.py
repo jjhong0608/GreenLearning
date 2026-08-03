@@ -222,11 +222,13 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         if balance_projection.mode not in {
             "physical_symmetric",
             "column_diagonal_green_response",
+            "symmetric_tangent_green_response",
         }:
             raise ValueError(
                 "ComplexCouplingNet output-contract version 6 requires "
                 "balance_projection.mode='physical_symmetric' or "
-                "'column_diagonal_green_response'. Response-space and earlier "
+                "'column_diagonal_green_response' or "
+                "'symmetric_tangent_green_response'. Response-space and earlier "
                 "complex checkpoints require retraining."
             )
         axis_cfg = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
