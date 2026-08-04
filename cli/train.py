@@ -23,6 +23,7 @@ from greenonet.config import (
     CouplingTrainingConfig,
     CouplingTrunkPositionalEncodingConfig,
     DatasetConfig,
+    ComplexCanonicalEnergyConfig,
     GreenResponseFeatureConfig,
     IndexedGpSourceConfig,
     ModelConfig,
@@ -237,6 +238,10 @@ class TrainCLI:
                 raise TypeError("coupling_training must be an object.")
             factory = ComplexCouplingOptimizerFactory(coupling_training_cfg)
             coupling_training["optimizer"] = factory.resolved_config()
+            canonical_energy = ComplexCanonicalEnergyConfig.from_raw(
+                coupling_training_cfg.canonical_energy
+            )
+            coupling_training["canonical_energy"] = asdict(canonical_energy)
             payload["optimizer_provenance"] = factory.provenance().as_dict()
             dataset = payload.setdefault("dataset", {})
             if not isinstance(dataset, dict):

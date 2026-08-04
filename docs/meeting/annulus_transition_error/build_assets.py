@@ -38,7 +38,7 @@ STEEL: Final = "#4d6f80"
 PANEL: Final = "#ffffff"
 GRID: Final = "#d7dedc"
 EPSILON: Final = 1e-12
-BUILDER_VERSION: Final = 3
+BUILDER_VERSION: Final = 4
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,12 @@ class MeetingArtifactPaths:
     cdr_weak_root: Path = Path(
         "checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison"
     )
+    poisson_tangent_artifact_root: Path = Path(
+        "checkpoints/Annulus_poisson/coupling18/artifacts"
+    )
+    cdr_tangent_artifact_root: Path = Path(
+        "checkpoints/annulus_CDR/coupling8/artifacts"
+    )
 
     def resolved(self, project_root: Path) -> MeetingArtifactPaths:
         return MeetingArtifactPaths(
@@ -79,6 +85,12 @@ class MeetingArtifactPaths:
             ),
             cdr_artifact_root=self._resolve(project_root, self.cdr_artifact_root),
             cdr_weak_root=self._resolve(project_root, self.cdr_weak_root),
+            poisson_tangent_artifact_root=self._resolve(
+                project_root, self.poisson_tangent_artifact_root
+            ),
+            cdr_tangent_artifact_root=self._resolve(
+                project_root, self.cdr_tangent_artifact_root
+            ),
         )
 
     @staticmethod
@@ -150,6 +162,18 @@ class MismatchSeamDetailFields:
     theta: np.ndarray
     w_phi: np.ndarray
     w_psi: np.ndarray
+
+
+@dataclass(frozen=True)
+class TangentResult:
+    equation: str
+    artifact_root: Path
+    sample: SelectedSample
+    frame: pd.DataFrame
+    summary: dict[str, Any]
+    eta: float
+    relative_lambda: float
+    aggregate: dict[str, float | int]
 
 
 class LoggingMixin:
@@ -308,6 +332,148 @@ class ArtifactLoaderMixin:
             prefix=prefix,
             arrays=arrays,
             metrics=metrics,
+        )
+
+    def load_tangent_result(
+        self,
+        artifact_root: Path,
+        equation: str,
+        expected_sample_id: int,
+    ) -> TangentResult:
+        summary_path = artifact_root / "summary.json"
+        metrics_path = artifact_root / "metrics" / "per_sample_metrics.csv"
+        archive_path = artifact_root / "data" / "selected_raw_arrays.npz"
+        for path in (summary_path, metrics_path, archive_path):
+            self._require_file(path)
+
+        summary = self.load_json(summary_path)
+        roles = summary.get("selected_sample_roles")
+        if not isinstance(roles, dict) or "q50" not in roles:
+            raise ValueError(f"{summary_path} is missing selected_sample_roles.q50")
+        sample_id = int(roles["q50"])
+        if sample_id != expected_sample_id:
+            raise ValueError(
+                f"{equation} q50 sample changed from {expected_sample_id} to {sample_id}"
+            )
+
+        frame = pd.read_csv(metrics_path)
+        required_columns = {
+            "sample_id",
+            "tangent_response_mismatch_pre",
+            "tangent_response_mismatch_post",
+            "tangent_response_mismatch_ratio",
+            "tangent_correction_rel_symmetric_pair",
+            "rel_sol_equal_mean",
+            "rel_sol",
+            "rel_flux",
+            "loss_energy_consistency",
+        }
+        missing_columns = sorted(required_columns.difference(frame.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{metrics_path} is missing required columns: {missing_columns}"
+            )
+        if len(frame) != 50 or frame["sample_id"].nunique() != 50:
+            raise ValueError(
+                f"{metrics_path} must contain exactly 50 unique samples; "
+                f"found {len(frame)} rows and {frame['sample_id'].nunique()} ids"
+            )
+        numeric = frame.loc[:, sorted(required_columns)]
+        if not np.isfinite(numeric.to_numpy(dtype=np.float64)).all():
+            raise ValueError(f"{metrics_path} contains non-finite tangent metrics")
+        expected_ratio = (
+            frame["tangent_response_mismatch_post"]
+            / frame["tangent_response_mismatch_pre"]
+        )
+        if not np.allclose(
+            frame["tangent_response_mismatch_ratio"],
+            expected_ratio,
+            atol=1e-12,
+            rtol=1e-10,
+        ):
+            raise ValueError(
+                f"{metrics_path} contains an inconsistent tangent mismatch ratio"
+            )
+
+        projection = summary.get("balance_projection")
+        if not isinstance(projection, dict):
+            raise ValueError(f"{summary_path} is missing balance_projection metadata")
+        if projection.get("mode") != "symmetric_tangent_green_response":
+            raise ValueError(
+                f"{summary_path} is not a symmetric tangent-response artifact"
+            )
+        tangent = projection.get("symmetric_tangent_green_response")
+        if not isinstance(tangent, dict) or tangent.get("active") is not True:
+            raise ValueError(f"{summary_path} has no active tangent correction")
+        if tangent.get("eta_strategy") != "fixed":
+            raise ValueError(f"{summary_path} does not use fixed tangent eta")
+        eta = float(tangent.get("eta", float("nan")))
+        relative_lambda = float(tangent.get("relative_lambda", float("nan")))
+        if not np.isclose(eta, 0.01, atol=0.0, rtol=1e-12):
+            raise ValueError(f"{summary_path} expected eta=0.01, got {eta}")
+        if not np.isclose(relative_lambda, 0.01, atol=0.0, rtol=1e-12):
+            raise ValueError(
+                f"{summary_path} expected relative_lambda=0.01, got {relative_lambda}"
+            )
+
+        sample = self.load_selected_sample(
+            artifact_root,
+            sample_id,
+            (
+                "coords_valid",
+                "tangent_mismatch_pre",
+                "tangent_mismatch_post",
+                "u_pred_error",
+            ),
+        )
+        sample_ratio = self.rms(sample.arrays["tangent_mismatch_post"]) / max(
+            self.rms(sample.arrays["tangent_mismatch_pre"]), EPSILON
+        )
+        row = frame.loc[frame["sample_id"].astype(int) == sample_id]
+        if len(row) != 1:
+            raise ValueError(
+                f"Expected one q50 metrics row for sample {sample_id}; found {len(row)}"
+            )
+        recorded_ratio = float(row.iloc[0]["tangent_response_mismatch_ratio"])
+        if not np.isclose(sample_ratio, recorded_ratio, atol=1e-12, rtol=1e-10):
+            raise ValueError(
+                f"{equation} sample {sample_id} NPZ/CSV mismatch ratio differs: "
+                f"{sample_ratio:.12g} versus {recorded_ratio:.12g}"
+            )
+
+        ratio = frame["tangent_response_mismatch_ratio"]
+        aggregate: dict[str, float | int] = {
+            "num_samples": int(len(frame)),
+            "mean_mismatch_ratio": float(ratio.mean()),
+            "mean_mismatch_reduction": float(1.0 - ratio.mean()),
+            "improved_sample_count": int((ratio < 1.0).sum()),
+            "mean_tangent_correction_rel_symmetric_pair": float(
+                frame["tangent_correction_rel_symmetric_pair"].mean()
+            ),
+            "mean_rel_sol_equal_mean": float(frame["rel_sol_equal_mean"].mean()),
+            "mean_rel_sol": float(frame["rel_sol"].mean()),
+            "mean_rel_flux": float(frame["rel_flux"].mean()),
+            "mean_loss_energy_consistency": float(
+                frame["loss_energy_consistency"].mean()
+            ),
+            "representative_mismatch_ratio": recorded_ratio,
+        }
+        self.logger.info(
+            "Loaded %s tangent result: q50=%d, mean ratio=%.6f, improved=%d/50",
+            equation,
+            sample_id,
+            aggregate["mean_mismatch_ratio"],
+            aggregate["improved_sample_count"],
+        )
+        return TangentResult(
+            equation=equation,
+            artifact_root=artifact_root,
+            sample=sample,
+            frame=frame,
+            summary=summary,
+            eta=eta,
+            relative_lambda=relative_lambda,
+            aggregate=aggregate,
         )
 
     def load_weak_sample(self, weak_root: Path, sample_id: int) -> WeakBlendSample:
@@ -770,6 +936,174 @@ class PlotlyFigureMixin:
                 scaleratio=1,
                 constrain="domain",
             )
+
+    @classmethod
+    def build_tangent_result(cls, result: TangentResult) -> go.Figure:
+        arrays = result.sample.arrays
+        coords = arrays["coords_valid"]
+        mismatch_limit = cls._symmetric_limit(
+            arrays["tangent_mismatch_pre"], arrays["tangent_mismatch_post"]
+        )
+        solution_error_limit = cls._symmetric_limit(arrays["u_pred_error"])
+        figure = make_subplots(
+            rows=2,
+            cols=2,
+            subplot_titles=(
+                "Before tangent correction: m_pre",
+                "After tangent correction: m_post",
+                "Final signed solution error: u_pred - u",
+                "All 50 test samples: post versus pre",
+            ),
+            horizontal_spacing=0.10,
+            vertical_spacing=0.14,
+        )
+        for field, label, row, col, coloraxis in (
+            ("tangent_mismatch_pre", "m_pre", 1, 1, "coloraxis"),
+            ("tangent_mismatch_post", "m_post", 1, 2, "coloraxis"),
+            ("u_pred_error", "u_pred - u", 2, 1, "coloraxis2"),
+        ):
+            figure.add_trace(
+                cls._field_trace(
+                    coords,
+                    arrays[field],
+                    label,
+                    coloraxis,
+                    point_size=2.8,
+                ),
+                row=row,
+                col=col,
+            )
+
+        frame = result.frame.sort_values("sample_id")
+        mismatch_pre = frame["tangent_response_mismatch_pre"].to_numpy(dtype=np.float64)
+        mismatch_post = frame["tangent_response_mismatch_post"].to_numpy(
+            dtype=np.float64
+        )
+        ratio = frame["tangent_response_mismatch_ratio"].to_numpy(dtype=np.float64)
+        sample_ids = frame["sample_id"].to_numpy(dtype=np.int64)
+        scatter_min = max(
+            0.0,
+            0.92 * float(min(np.min(mismatch_pre), np.min(mismatch_post))),
+        )
+        scatter_max = 1.04 * float(max(np.max(mismatch_pre), np.max(mismatch_post)))
+        figure.add_trace(
+            go.Scatter(
+                x=[scatter_min, scatter_max],
+                y=[scatter_min, scatter_max],
+                mode="lines",
+                line={"color": MUTED, "width": 1.5, "dash": "dash"},
+                hoverinfo="skip",
+                showlegend=False,
+            ),
+            row=2,
+            col=2,
+        )
+        figure.add_trace(
+            go.Scattergl(
+                x=mismatch_pre,
+                y=mismatch_post,
+                mode="markers",
+                marker={
+                    "size": 8,
+                    "color": TEAL,
+                    "opacity": 0.82,
+                    "line": {"color": PANEL, "width": 0.7},
+                },
+                customdata=np.column_stack((sample_ids, ratio)),
+                hovertemplate=(
+                    "sample=%{customdata[0]:.0f}<br>"
+                    "pre=%{x:.6e}<br>post=%{y:.6e}<br>"
+                    "rho=%{customdata[1]:.4f}<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=2,
+            col=2,
+        )
+
+        layout = cls._base_layout(width=1160, height=650)
+        layout.update(
+            margin={"l": 42, "r": 98, "t": 58, "b": 46},
+            coloraxis={
+                "colorscale": "RdBu",
+                "cmin": -mismatch_limit,
+                "cmax": mismatch_limit,
+                "cmid": 0.0,
+                "colorbar": {
+                    "title": {"text": "m", "side": "right"},
+                    "x": 1.015,
+                    "y": 0.78,
+                    "len": 0.34,
+                    "thickness": 12,
+                    "tickfont": {"size": 10},
+                },
+            },
+            coloraxis2={
+                "colorscale": "RdBu",
+                "cmin": -solution_error_limit,
+                "cmax": solution_error_limit,
+                "cmid": 0.0,
+                "colorbar": {
+                    "title": {"text": "error", "side": "right"},
+                    "x": 1.015,
+                    "y": 0.20,
+                    "len": 0.34,
+                    "thickness": 12,
+                    "tickfont": {"size": 10},
+                },
+            },
+        )
+        figure.update_layout(**layout)
+        for annotation in figure.layout.annotations:
+            annotation.update(font={"size": 14, "color": INK})
+
+        x_range = cls._range(coords[:, 0])
+        y_range = cls._range(coords[:, 1])
+        for suffix in ("", "2", "3"):
+            x_axis = getattr(figure.layout, f"xaxis{suffix}")
+            y_axis = getattr(figure.layout, f"yaxis{suffix}")
+            x_reference = f"x{suffix}" if suffix else "x"
+            x_axis.update(
+                range=x_range,
+                showgrid=False,
+                zeroline=False,
+                showline=True,
+                linecolor=GRID,
+                mirror=True,
+                tickfont={"size": 10},
+                nticks=3,
+                constrain="domain",
+            )
+            y_axis.update(
+                range=y_range,
+                showgrid=False,
+                zeroline=False,
+                showline=True,
+                linecolor=GRID,
+                mirror=True,
+                tickfont={"size": 10},
+                nticks=3,
+                scaleanchor=x_reference,
+                scaleratio=1,
+                constrain="domain",
+            )
+        figure.update_xaxes(
+            range=[scatter_min, scatter_max],
+            title_text="pre mismatch RMS",
+            tickformat=".1e",
+            gridcolor=GRID,
+            row=2,
+            col=2,
+        )
+        figure.update_yaxes(
+            range=[scatter_min, scatter_max],
+            title_text="post mismatch RMS",
+            tickformat=".1e",
+            gridcolor=GRID,
+            row=2,
+            col=2,
+        )
+        return figure
 
     @classmethod
     def build_legacy_error_matrix(
@@ -1755,6 +2089,16 @@ class AnnulusMeetingAssetBuilder(
             poisson_standard, poisson_weak
         )
         cdr_selected_metrics = self.selected_result_metrics(cdr_standard, cdr_weak)
+        poisson_tangent = self.load_tangent_result(
+            self.paths.poisson_tangent_artifact_root,
+            equation="Poisson",
+            expected_sample_id=41,
+        )
+        cdr_tangent = self.load_tangent_result(
+            self.paths.cdr_tangent_artifact_root,
+            equation="CDR",
+            expected_sample_id=33,
+        )
         length_summary = self.load_json(
             self.paths.length_response_root / "summary.json"
         )
@@ -1780,6 +2124,8 @@ class AnnulusMeetingAssetBuilder(
             "cdr_summary": cdr_summary,
             "poisson_selected_metrics": poisson_selected_metrics,
             "cdr_selected_metrics": cdr_selected_metrics,
+            "poisson_tangent": poisson_tangent,
+            "cdr_tangent": cdr_tangent,
             "length_transition": transition,
             "unit_physical_equivalence": equivalence,
         }
@@ -1995,6 +2341,48 @@ class AnnulusMeetingAssetBuilder(
                 self.build_result_errors(data["cdr_standard"], data["cdr_weak"]),
                 self._error_metadata("CDR", 9, [14]),
             ),
+            "poisson_tangent_result_q50.html": (
+                self.build_tangent_result(data["poisson_tangent"]),
+                self._tangent_result_metadata(data["poisson_tangent"], [17]),
+            ),
+            "cdr_tangent_result_q50.html": (
+                self.build_tangent_result(data["cdr_tangent"]),
+                self._tangent_result_metadata(data["cdr_tangent"], [18]),
+            ),
+        }
+
+    def _tangent_result_metadata(
+        self,
+        result: TangentResult,
+        slides: list[int],
+    ) -> dict[str, Any]:
+        arrays = result.sample.arrays
+        return {
+            "slides": slides,
+            "equation": result.equation,
+            "sample_id": result.sample.sample_id,
+            "sample_role": "q50",
+            "source_files": [
+                self._rel(result.artifact_root / "summary.json"),
+                self._rel(result.artifact_root / "metrics" / "per_sample_metrics.csv"),
+                self._rel(result.artifact_root / "data" / "selected_raw_arrays.npz"),
+            ],
+            "field_keys": [
+                "tangent_mismatch_pre",
+                "tangent_mismatch_post",
+                "u_pred_error",
+                "tangent_response_mismatch_pre",
+                "tangent_response_mismatch_post",
+                "tangent_response_mismatch_ratio",
+            ],
+            "mismatch_color_limit": self._symmetric_limit(
+                arrays["tangent_mismatch_pre"], arrays["tangent_mismatch_post"]
+            ),
+            "solution_error_color_limit": self._symmetric_limit(arrays["u_pred_error"]),
+            "shared_pre_post_coloraxis": True,
+            "eta": result.eta,
+            "relative_lambda": result.relative_lambda,
+            "aggregate": result.aggregate,
         }
 
     def _result_metadata(
@@ -2136,6 +2524,24 @@ class AnnulusMeetingAssetBuilder(
                 },
                 "quiver_point_count": int(coefficient_fields.quiver_indices.size),
             },
+            "tangent_results": {
+                label: {
+                    "artifact_root": self._rel(result.artifact_root),
+                    "sample_id": result.sample.sample_id,
+                    "sample_role": "q50",
+                    "eta": result.eta,
+                    "relative_lambda": result.relative_lambda,
+                    "aggregate": result.aggregate,
+                    "interpretation": (
+                        "response mismatch diagnostic; not a causal comparison "
+                        "against a symmetric-trained checkpoint"
+                    ),
+                }
+                for label, result in (
+                    ("poisson", data["poisson_tangent"]),
+                    ("cdr", data["cdr_tangent"]),
+                )
+            },
             "length_response_diagnostic": {
                 "source_files": [
                     self._rel(self.paths.length_response_root / "summary.json"),
@@ -2175,6 +2581,16 @@ class AnnulusMeetingAssetBuilder(
             self.paths.cdr_weak_root
             / "metrics"
             / "per_sample_weak_residual_blend_comparison.csv",
+            self.paths.poisson_tangent_artifact_root / "summary.json",
+            self.paths.poisson_tangent_artifact_root
+            / "data"
+            / "selected_raw_arrays.npz",
+            self.paths.poisson_tangent_artifact_root
+            / "metrics"
+            / "per_sample_metrics.csv",
+            self.paths.cdr_tangent_artifact_root / "summary.json",
+            self.paths.cdr_tangent_artifact_root / "data" / "selected_raw_arrays.npz",
+            self.paths.cdr_tangent_artifact_root / "metrics" / "per_sample_metrics.csv",
         ]
         return sorted(set(paths), key=self._rel)
 
@@ -2236,6 +2652,16 @@ class BuildAssetsCLI:
             type=Path,
             default=MeetingArtifactPaths.cdr_weak_root,
         )
+        parser.add_argument(
+            "--poisson-tangent-artifact-root",
+            type=Path,
+            default=MeetingArtifactPaths.poisson_tangent_artifact_root,
+        )
+        parser.add_argument(
+            "--cdr-tangent-artifact-root",
+            type=Path,
+            default=MeetingArtifactPaths.cdr_tangent_artifact_root,
+        )
         parser.add_argument("--overwrite", action="store_true")
         return parser
 
@@ -2251,6 +2677,8 @@ class BuildAssetsCLI:
             poisson_geometry_blend_root=args.poisson_geometry_blend_root,
             cdr_artifact_root=args.cdr_artifact_root,
             cdr_weak_root=args.cdr_weak_root,
+            poisson_tangent_artifact_root=args.poisson_tangent_artifact_root,
+            cdr_tangent_artifact_root=args.cdr_tangent_artifact_root,
         )
         config = MeetingAssetConfig(
             project_root=args.project_root.resolve(),

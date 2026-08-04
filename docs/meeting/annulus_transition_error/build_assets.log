@@ -4,6 +4,10 @@ load_weak_sample - Loaded weak sample 0 from /home/jjhong0608/Documents/GreenNet
 load_weak_sample - Loaded weak sample 47 from /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/checkpoints/Annulus_poisson/coupling15/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz
 load_selected_sample - Loaded sample 9 from /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/checkpoints/annulus_CDR/coupling5/artifacts/data/selected_raw_arrays.npz
 load_weak_sample - Loaded weak sample 9 from /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/checkpoints/annulus_CDR/coupling5/weak_residual_reliability_blend_comparison/data/selected_weak_residual_blend_arrays.npz
+load_selected_sample - Loaded sample 41 from /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/checkpoints/Annulus_poisson/coupling18/artifacts/data/selected_raw_arrays.npz
+load_tangent_result - Loaded Poisson tangent result: q50=41, mean ratio=0.350216, improved=50/50
+load_selected_sample - Loaded sample 33 from /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/checkpoints/annulus_CDR/coupling8/artifacts/data/selected_raw_arrays.npz
+load_tangent_result - Loaded CDR tangent result: q50=33, mean ratio=0.370161, improved=50/50
 save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/annulus_transition_sample47_error_matrix.html
 save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/annulus_transition_sample47_error_matrix_marked.html
 save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/geometry_c2_method_sample0.html
@@ -16,4 +20,6 @@ save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetRese
 save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/poisson_weak_result_errors_sample0.html
 save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/cdr_weak_result_fields_sample9.html
 save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/cdr_weak_result_errors_sample9.html
+save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/poisson_tangent_result_q50.html
+save_figure - Saved offline Plotly asset /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/cdr_tangent_result_q50.html
 run - Saved provenance manifest /home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/docs/meeting/annulus_transition_error/assets/manifest.json

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from greenonet.complex_coupling_objective import optimized_complex_energy_per_sample
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.complex_losses import (
     build_boundary_energy_context,
@@ -10,7 +11,10 @@ from greenonet.complex_losses import (
     physical_edge_energy_loss,
     relative_split_consistency_loss,
 )
-from greenonet.config import ComplexRelativeSplitConsistencyConfig
+from greenonet.config import (
+    ComplexCanonicalEnergyConfig,
+    ComplexRelativeSplitConsistencyConfig,
+)
 from test.complex_fixtures import write_geometry_npz
 
 
@@ -134,6 +138,105 @@ def test_canonical_energy_exposes_per_sample_values(tmp_path):
     )
 
 
+def test_boundary_weight_preserves_canonical_diagnostics_and_interpolates_objective(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    residual = torch.ones((1, geometry.num_points), dtype=torch.float64)
+    energy = canonical_complex_energy_loss(
+        u_phi_valid=residual,
+        u_psi_valid=torch.zeros_like(residual),
+        a_valid=torch.ones_like(residual),
+        geometry=geometry,
+    )
+
+    default = optimized_complex_energy_per_sample(
+        energy,
+        ComplexCanonicalEnergyConfig(),
+    )
+    off = optimized_complex_energy_per_sample(
+        energy,
+        ComplexCanonicalEnergyConfig(boundary_weight=0.0),
+    )
+    tempered = optimized_complex_energy_per_sample(
+        energy,
+        ComplexCanonicalEnergyConfig(boundary_weight=0.25),
+    )
+
+    torch.testing.assert_close(default, energy.total_per_sample)
+    torch.testing.assert_close(off, energy.bulk_per_sample)
+    torch.testing.assert_close(off, torch.zeros_like(off))
+    torch.testing.assert_close(
+        tempered,
+        energy.bulk_per_sample + 0.25 * energy.boundary_per_sample,
+    )
+    assert energy.boundary.item() > 0.0
+    assert energy.total.item() > 0.0
+
+
+def test_relative_split_uses_boundary_weighted_energy_numerator(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    u_phi = torch.ones((1, geometry.num_points), dtype=torch.float64)
+    u_psi = torch.zeros_like(u_phi)
+    rhs = torch.ones_like(u_phi)
+    energy = canonical_complex_energy_loss(
+        u_phi_valid=u_phi,
+        u_psi_valid=u_psi,
+        a_valid=torch.ones_like(u_phi),
+        geometry=geometry,
+    )
+    optimized = optimized_complex_energy_per_sample(
+        energy,
+        ComplexCanonicalEnergyConfig(boundary_weight=0.0),
+    )
+
+    result = relative_split_consistency_loss(
+        u_phi_valid=u_phi,
+        u_psi_valid=u_psi,
+        rhs_valid=rhs,
+        optimized_energy_per_sample=optimized,
+        geometry=geometry,
+        config=ComplexRelativeSplitConsistencyConfig(
+            enabled=True,
+            mass_weight=0.0,
+        ),
+    )
+
+    torch.testing.assert_close(result.energy_relative, torch.zeros_like(result.loss))
+    torch.testing.assert_close(result.loss, torch.zeros_like(result.loss))
+    assert energy.boundary.item() > 0.0
+
+
+def test_boundary_off_gradient_matches_direct_bulk_only_gradient(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    values = torch.tensor([[1.0, 3.0, 5.0]], dtype=torch.float64)
+
+    weighted_values = values.clone().requires_grad_()
+    energy = canonical_complex_energy_loss(
+        u_phi_valid=weighted_values,
+        u_psi_valid=torch.zeros_like(weighted_values),
+        a_valid=torch.ones_like(weighted_values),
+        geometry=geometry,
+    )
+    optimized = optimized_complex_energy_per_sample(
+        energy,
+        ComplexCanonicalEnergyConfig(boundary_weight=0.0),
+    ).mean()
+    weighted_gradient = torch.autograd.grad(optimized, weighted_values)[0]
+
+    bulk_values = values.clone().requires_grad_()
+    bulk = physical_edge_energy_loss(
+        u_phi_valid=bulk_values,
+        u_psi_valid=torch.zeros_like(bulk_values),
+        a_valid=torch.ones_like(bulk_values),
+        geometry=geometry,
+    )
+    bulk_gradient = torch.autograd.grad(bulk, bulk_values)[0]
+
+    torch.testing.assert_close(weighted_gradient, bulk_gradient)
+    assert energy.boundary.item() > 0.0
+
+
 def test_relative_split_mass_detects_constant_solution_mismatch(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     u_phi = torch.ones((1, geometry.num_points), dtype=torch.float64)
@@ -150,7 +253,7 @@ def test_relative_split_mass_detects_constant_solution_mismatch(tmp_path):
         u_phi_valid=u_phi,
         u_psi_valid=u_psi,
         rhs_valid=rhs,
-        energy=energy,
+        optimized_energy_per_sample=energy.total_per_sample,
         geometry=geometry,
         config=ComplexRelativeSplitConsistencyConfig(
             enabled=True,
@@ -195,7 +298,7 @@ def test_relative_split_loss_is_invariant_to_common_source_scale(tmp_path):
             u_phi_valid=u_phi,
             u_psi_valid=u_psi,
             rhs_valid=rhs,
-            energy=energy,
+            optimized_energy_per_sample=energy.total_per_sample,
             geometry=geometry,
             config=config,
         )
@@ -228,7 +331,7 @@ def test_relative_split_normalizes_each_sample_before_batch_reduction(tmp_path):
         u_phi_valid=u_phi,
         u_psi_valid=u_psi,
         rhs_valid=rhs,
-        energy=energy,
+        optimized_energy_per_sample=energy.total_per_sample,
         geometry=geometry,
         config=ComplexRelativeSplitConsistencyConfig(enabled=True),
     )

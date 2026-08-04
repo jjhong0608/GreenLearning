@@ -278,6 +278,19 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   cap으로는 유지하며, cap 증가만으로 Annulus transition을 해결하지 않는다.
   다중 cap audit는 `--closed-loop-eta-caps ... inf`를 지원하고 response operator와
   tangent direction을 한 번만 구성한다.
+- `annulus_CDR/coupling8`과 `coupling9`은 fixed `eta=0.01`과 sample-wise
+  closed-loop exact line search (`eta_cap=0.01`)를 제외한 saved config가 같다.
+  Best validation canonical-energy epoch는 각각 46과 56이다. Best-energy
+  checkpoint의 동일 50-sample test 비교에서 coupling9은 coupling8 대비 response
+  mismatch `-0.735%`, canonical energy `+0.680%`, `rel_sol`
+  `2.970490% -> 2.998864%`, split-transition jump RMS `+3.532%`, `rel_flux`
+  `13.676697% -> 13.297429%`다. Flux 개선은 regular zone `-3.405%`에서 나오며
+  transition flux는 `+1.527%` 악화된다. Coupling9의 mean `eta_star=0.011414`이고
+  68% sample이 cap에 걸린다. 같은 frozen output에서 closed-loop는 fixed보다
+  response mismatch를 낮추지만 canonical energy와 transition jump를 높이므로,
+  현재 energy/solution/transition 목적에는 fixed `eta=0.01`을 tangent baseline으로
+  유지하고 closed-loop는 optional ablation으로 취급한다. Canonical evidence는
+  `checkpoints/annulus_CDR/coupling8_vs_coupling9_analysis/`에 있다.
 - `annulus_CDR/coupling7`의 50-sample, 72-combination frozen sweep에서 mean absolute
   response mismatch와 canonical energy를 함께 최소화한 tangent 설정은
   `eta=0.015`, `lambda_rel=0.1`이었다. Symmetric 대비 mean per-sample response ratio는
@@ -376,16 +389,25 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   checkpoint는 서로 cross-load하지 않고 fail fast한다. Retired split-fuser
   checkpoint와 config는 호환하지 않으며 재학습한다. Paired absolute SOAP
   예시는 `configs/complex_coupling_soap_absolute.json`이다.
-- Complex v6 training의 base split seminorm은 full-domain canonical physical
-  energy이다. Residual `r=u_phi-u_psi`에 대해 모든 same-segment `x_edges`와
+- Complex v6 training은 unweighted canonical audit와 optimized split energy를
+  구분한다. Residual `r=u_phi-u_psi`에 대해 모든 same-segment `x_edges`와
   `y_edges`의 diffusion face energy를 물리 spacing과 `hx*hy` area weight로 합하고,
-  모든 connected-segment endpoint의 general boundary energy를 더한다.
-  Regular/transition 분류, length-jump score, group normalization은 production
-  objective에서 사용하지 않는다. `loss_energy_consistency`가 유일한 base split
-  objective이자 best-energy checkpoint metric이다.
+  모든 connected-segment endpoint의 general boundary energy를 별도로 계산한다.
+  `loss_energy_consistency=E_bulk+E_boundary`는 항상 기록되는 audit이고,
+  `loss_energy_optimized=E_bulk+boundary_weight*E_boundary`가 실제 base split
+  objective와 best-energy checkpoint metric이다. Default `boundary_weight=1.0`은
+  기존 canonical objective를 정확히 보존한다. Regular/transition 분류,
+  length-jump score, group normalization은 production objective에서 사용하지 않는다.
+- `coupling_training.canonical_energy.boundary_weight=0.0`은 complex-only
+  boundary-off ablation이다. Boundary total/x/y는 계속 계산하고 evaluator,
+  metric CSV, artifact에 기록하지만 gradient와 best-energy model selection에서는
+  제외한다. Fixed sample-independent scalar이고 learnable weight/scheduler가 아니다.
+  `configs/complex_coupling_soap_tangent_boundary_off.json`은 tangent baseline과 이
+  설정 한 필드만 다른 paired config다. 이는 tangent correction과 endpoint anchor의
+  역할 중복을 검증하기 위한 ablation이며 production default를 폐기한 것이 아니다.
 - Complex v6의 `relative_split_consistency`는 opt-in이고 dataclass 기본값은
-  disabled이다. Enabled이면 raw canonical energy 대신 sample별
-  `(E_canonical + mass_weight*D_ref^-2*h_x*h_y*sum((u_phi-u_psi)^2)) /
+  disabled이다. Enabled이면 sample별 optimized energy를 사용해
+  `(E_optimized + mass_weight*D_ref^-2*h_x*h_y*sum((u_phi-u_psi)^2)) /
   (h_x*h_y*sum(rhs^2)+eps)`를 split objective로 사용한다. `D_ref`는 global x/y
   extent 중 큰 값이다. 이 mass term은 derivative energy가 보지 못하는 constant 및
   low-frequency split mismatch를 억제한다. Reference `sol/phi/psi`는 사용하지 않는다.
@@ -398,11 +420,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   이는 reference-free variational closure이며 sparse matrix dependency 없이
   element gather/scatter로 구현한다.
 - Complex total objective는 selected split objective에 enabled weak closure를
-  더한다. Relative split이 꺼져 있으면 full-domain canonical
-  bulk-plus-boundary energy가 split objective다. Reported canonical, bulk,
-  boundary x/y, relative split, weak x/y/total metric은 실제 objective와 audit
-  contribution을 구분해 기록한다. Transition-specific training metric은 생성하지
-  않는다.
+  더한다. Relative split이 꺼져 있으면 `loss_energy_optimized`가 split
+  objective다. Reported optimized energy, unweighted canonical, bulk, boundary
+  x/y, relative split, weak x/y/total metric은 실제 objective와 audit contribution을
+  구분해 기록한다. Transition-specific training metric은 생성하지 않는다.
   Raw-balance gauge penalty는 이번 contract에서 구현하지 않으며 후속 현상이 남을
   때만 재검토한다.
 - Canonical `configs/complex_coupling.json`은 energy-only v6 실험만 표현한다.
@@ -411,14 +432,15 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   disabled default를 사용한다. `pipeline.run_green=false`이므로 Green `training`
   section도 생략하며, null `coupling_pretrained_path`를 쓰지 않아 새 CouplingNet을
   처음부터 학습한다.
-- Complex canonical split energy는 valid-point physical bulk edge energy와 general
+- Complex canonical audit energy는 valid-point physical bulk edge energy와 general
   boundary energy의 합이다. Boundary energy는 모든 connected x/y segment의 양쪽
   hard-zero endpoint를 해당 segment의 nearest represented interior node에 연결하는
   누락된 P1 edge contribution이다. Residual `r=u_phi-u_psi`에 대해 각 anchor는
   `a_i*r_i^2*h_perp/d_endpoint`를 더한다. Coefficient는 nearest valid point의 one-sided
   값을 사용하고, x endpoint의 transverse measure는 `h_y`, y endpoint는 `h_x`다.
-  `loss_energy_consistency`는 이 bulk+boundary 합이며, 별도 length-balanced
-  metric은 없다.
+  `loss_energy_consistency`는 이 unweighted bulk+boundary 합이고,
+  `loss_energy_optimized`만 configured boundary weight를 적용한다. 별도
+  length-balanced metric은 없다.
 - `admissibility_gluing`, global self-trace loss, transition-only cross-axis carrier,
   trace/carrier metric과 artifact는 폐기되었다. General endpoint boundary energy가
   residual constant null mode를 제거하므로 carrier는 coercivity에 필요하지 않다.
@@ -435,7 +457,7 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `-1.0734`, `h*E_h` relative spread는 `0.1011`로 inverse-h acceptance를 통과했다.
 - Complex v6는 reference-free checkpoint selection을 강제한다.
   `best_rel_sol_checkpoint.enabled=true`는 fail fast한다.
-  `best_energy_checkpoint`는 validation `loss_energy_consistency`가 가장 작은
+  `best_energy_checkpoint`는 validation `loss_energy_optimized`가 가장 작은
   `complex_coupling_model_best_energy.safetensors`를 저장하고,
   `best_physics_checkpoint`는 validation total reference-free loss가 가장 작은
   `complex_coupling_model_best_physics.safetensors`를 독립 저장한다. Reference
@@ -1904,6 +1926,19 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   unresolved boundary/flux tradeoff requiring paired seeded retraining.
   Canonical report:
   `checkpoints/annulus_CDR/coupling6/weak_residual_reliability_analysis/diagnosis_report.md`.
+- The Annulus transition meeting deck now has 18 main slides plus two backups.
+  Slide 16 defines the evaluated fixed tangent correction with `eta=0.01`,
+  `lambda_rel=0.01`, and
+  `rho_b=||m_post,b||_M/||m_pre,b||_M`. Slides 17-18 use frozen artifact-only
+  evidence from `Annulus_poisson/coupling18` q50 sample 41 and
+  `annulus_CDR/coupling8` q50 sample 33. Across all 50 test samples, mean
+  response mismatch decreases by `65.0%` for Poisson and `63.0%` for CDR, with
+  `50/50` samples improved in both. These percentages describe the tangent
+  response mismatch, not solution-error reduction. Equal-mean/weak-final
+  `rel_sol` and `rel_flux` remain evaluation metrics, and the deck makes no
+  causal claim against a separately symmetric-trained baseline. The asset
+  builder reads NPZ/CSV/JSON only, uses a shared zero-centered pre/post mismatch
+  scale within each PDE, and records source SHA-256 provenance.
 
 ## Verification Defaults
 

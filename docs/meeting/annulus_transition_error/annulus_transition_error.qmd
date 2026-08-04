@@ -781,14 +781,14 @@ H_x\widetilde\phi=H_y\widetilde\psi$$</div>
 
 **Click:** exact-balanced source를 Hx와 Hy로 reconstruction하면 u phi tilde와 u psi tilde를 얻습니다. 두 결과의 차이 m zero는 balance가 맞은 뒤에도 남는 directional response mismatch입니다. H에는 Green kernel, prescribed coefficient, quadrature, evaluation position, segment length가 함께 들어가며, source split을 만드는 projection이 아니라 source를 solution으로 보내는 directional response operator입니다.
 
-**Click:** 따라서 exact source balance만으로 Hx phi tilde equals Hy psi tilde를 결론낼 수 없습니다. Projection은 common-mode balance defect를 제거하지만, balance plane 내부의 tangent degree of freedom은 남깁니다. 현재 canonical energy loss와 optimizer는 이 feasible plane 위에서 mismatch를 줄이려고 합니다. 다음 장에서는 balance를 깨지 않고 response mismatch의 국소 감소 방향을 명시적으로 한 번 적용합니다.
+**Click:** 따라서 exact source balance만으로 Hx phi tilde equals Hy psi tilde를 결론낼 수 없습니다. Projection은 common-mode balance defect를 제거하지만, balance plane 내부의 tangent degree of freedom은 남깁니다. 현재 canonical energy loss와 optimizer는 이 feasible plane 위에서 mismatch를 줄이려고 합니다. 다음 장에서는 balance를 깨지 않고 response mismatch의 국소 감소 방향을 명시적으로 한 번 적용하고, 이어서 실제 fixed-step 결과를 확인합니다.
 
 **If timing is tight:** symmetric projection은 exact balance를 만들지만 balance plane 위의 response-consistent split까지 정하지는 않는다는 점만 설명합니다.
 
-**Transition:** 다음 장에서는 symmetric-balanced source를 시작점으로 하는 feasible tangent correction을 정의합니다.
+**Transition:** 다음 장에서는 symmetric-balanced source를 시작점으로 하는 feasible tangent correction과 실제 audit 지표를 정의합니다.
 :::
 
-## Next Candidate: Tangent Correction Within the Balance Plane
+## Tangent Green-Response Correction Within the Balance Plane
 
 <div class="response-gain-strip">
 <div class="response-card gain-definition">
@@ -800,9 +800,10 @@ H_x\widetilde\phi=H_y\widetilde\psi$$</div>
 </div>
 <div class="response-card gain-contract">
 <div class="small-label">Information contract</div>
-<div class="response-contract-row"><strong>Fixed</strong><span>$\eta$, damping, geometry, coefficients, quadrature, frozen GreenNet</span></div>
+<div class="response-contract-row"><strong>Fixed</strong><span>$\eta=0.01$, $\lambda_{\mathrm{rel}}=0.01$, geometry, coefficients, quadrature, frozen GreenNet</span></div>
 <div class="response-contract-row"><strong>Uses</strong><span>response-operator forward and transpose actions</span></div>
 <div class="response-contract-row"><strong>Excluded</strong><span>reference targets, learned step, row norm, full Gram solve</span></div>
+<div class="response-contract-row"><strong>Audit</strong><span>$\rho_b=\|m_{\mathrm{post},b}\|_{M_\Omega}/\|m_{\mathrm{pre},b}\|_{M_\Omega}$; $\rho_b\lt 1$ means reduced mismatch</span></div>
 </div>
 </div>
 
@@ -836,21 +837,107 @@ D_j=G_j+(\lambda_{\mathrm{rel}}+\varepsilon_{\mathrm{rel}})\overline G$$</div>
 <div><strong>Local descent direction</strong><span>$g^\top(-D^{-1}g)\leq 0$ at $\delta=0$</span></div>
 <div><strong>Existing training stays</strong><span>tangent correction $\rightarrow$ canonical energy $\rightarrow$ optimizer</span></div>
 </div>
-<div class="takeaway">First enforce balance exactly, then take one response-informed feasible descent step before the existing energy optimization.</div>
+<div class="takeaway">First enforce balance exactly, then take the evaluated fixed response-informed step; the next slides separate mismatch reduction from final solution accuracy.</div>
 :::
 
 ::: {.notes}
 **Target: 3분**
 
-후보 방법은 raw p와 q를 개별 directional source candidate로 다시 신뢰하지 않습니다. 먼저 symmetric-balanced phi tilde와 psi tilde를 만들고, 여기에 같은 delta를 반대 부호로 더합니다. 그러면 delta가 어떤 값이어도 phi plus psi equals f가 정확히 유지되므로 update는 balance plane의 tangent 방향 안에만 있습니다. Eta와 damping은 fixed config이고, geometry, prescribed coefficient, quadrature와 frozen GreenNet만 사용합니다.
+이 방법은 raw p와 q를 개별 directional source candidate로 다시 신뢰하지 않습니다. 먼저 symmetric-balanced phi tilde와 psi tilde를 만들고, 여기에 같은 delta를 반대 부호로 더합니다. 그러면 delta가 어떤 값이어도 phi plus psi equals f가 정확히 유지되므로 update는 balance plane의 tangent 방향 안에만 있습니다. 이번 Poisson과 CDR run은 eta 0.01과 relative lambda 0.01을 고정하고 geometry, prescribed coefficient, quadrature와 frozen GreenNet만 사용했습니다. Rho b는 tangent correction 전후의 response mismatch norm 비율이며 1보다 작으면 직접 목표가 감소했다는 뜻입니다.
 
 **Click:** tangent objective J는 corrected x response와 y response의 L2 mismatch를 측정합니다. Delta가 zero일 때 mismatch m zero를 계산하고, Hx plus Hy의 transpose action으로 gradient g를 얻습니다. 이 gradient는 balance를 이미 만족하는 pair에서 difference mode를 어느 방향으로 움직여야 response mismatch가 국소적으로 감소하는지를 나타냅니다. Reference solution이나 target phi와 psi는 사용하지 않습니다.
 
 **Click:** gamma squared는 기존과 같은 response column diagonal이지만 역할이 달라졌습니다. 이제 raw residual의 allocation weight가 아니라 gradient step의 Jacobi denominator입니다. Gamma x squared와 gamma y squared를 합친 G에 relative damping을 더하고, delta equals minus eta g over D를 한 번 적용합니다. Forward와 transpose action은 segment-local frozen response block으로 계산하므로 global matrix나 full Gram solve가 필요하지 않습니다.
 
-**Click:** 최종 phi와 psi는 반대 부호의 같은 delta를 사용하므로 exact balance를 보존합니다. Minus D inverse g는 delta equals zero에서 J의 descent direction이지만, finite eta에서 실제 mismatch가 반드시 감소한다고 여기서 주장하지는 않습니다. Pre와 post mismatch를 audit하고 symmetric baseline과 같은 initialization과 data로 paired retraining해야 합니다. 이 correction은 새로운 loss나 optimizer step이 아니며, corrected reconstruction 뒤에서 기존 canonical energy와 SOAP 또는 AdamW 학습이 그대로 동작합니다.
+**Click:** 최종 phi와 psi는 반대 부호의 같은 delta를 사용하므로 exact balance를 보존합니다. Minus D inverse g는 delta equals zero에서 J의 descent direction이고, 다음 두 장에서는 실제 fixed eta run에서 pre와 post mismatch를 직접 비교합니다. 이 correction은 새로운 loss나 optimizer step이 아니며, corrected reconstruction 뒤에서 기존 canonical energy와 SOAP 또는 AdamW 학습이 그대로 동작합니다. 다만 이 결과만으로 symmetric-trained baseline 대비 solution quality의 인과적 개선을 주장하지는 않습니다.
 
 **If timing is tight:** symmetric balance를 먼저 정확히 맞춘 뒤, response mismatch gradient를 따라 balance plane 안에서 한 번 이동한다는 점만 설명합니다.
+
+**Transition:** 먼저 Pure Poisson에서 50개 test sample과 q50 field를 확인한 뒤, 같은 검사를 variable-coefficient CDR로 확장합니다.
+:::
+
+## Poisson: Fixed Tangent Correction Reduces Response Mismatch
+
+<div class="tangent-result-grid">
+<div class="plotly-shell tangent-result">
+<iframe class="plotly-frame" src="assets/poisson_tangent_result_q50.html" title="Poisson fixed tangent correction response mismatch and final error"></iframe>
+</div>
+<div class="tangent-result-side">
+<div class="tangent-setting"><strong>Frozen evidence</strong><span>q50 sample 41 | $\eta=0.01$ | $\lambda_{\mathrm{rel}}=0.01$</span></div>
+::: {.fragment data-fragment-index="0"}
+<div class="metric-card"><span class="value">0.3502</span><span class="label">mean $\rho_b$</span></div>
+<div class="metric-card teal"><span class="value">-65.0%</span><span class="label">mean response-mismatch change</span></div>
+:::
+::: {.fragment data-fragment-index="1"}
+<div class="metric-card steel"><span class="value">50 / 50</span><span class="label">samples with $\rho_b\lt 1$</span></div>
+<div class="metric-card amber"><span class="value">5.390%</span><span class="label">tangent correction / symmetric pair</span></div>
+:::
+::: {.fragment data-fragment-index="2"}
+<div class="tangent-metric-table">
+<div><span>equal-mean rel_sol</span><strong>3.660%</strong></div>
+<div><span>weak-final rel_sol</span><strong>3.405%</strong></div>
+<div><span>mean rel_flux</span><strong>12.487%</strong></div>
+</div>
+<div class="tangent-qualifier">Mismatch reduction is the direct tangent diagnostic. The rel_sol values are evaluation metrics within this trained pipeline, not a causal comparison with a separately symmetric-trained run.</div>
+:::
+</div>
+</div>
+
+::: {.notes}
+**Target: 2분**
+
+왼쪽 위와 오른쪽 위는 sample 41의 tangent correction 전후 response mismatch입니다. 두 패널은 같은 zero-centered color range를 사용하므로 색이 옅어진 정도를 직접 비교할 수 있습니다. 왼쪽 아래의 final signed solution error는 단위와 크기가 다르기 때문에 별도 color scale을 사용하고, 오른쪽 아래는 50개 sample의 pre와 post mismatch RMS를 비교합니다.
+
+**Click:** 50개 sample에서 rho b의 평균은 0.3502이고, 이는 평균 response mismatch가 65.0퍼센트 감소했다는 뜻입니다. 이것은 solution error가 65퍼센트 감소했다는 뜻이 아닙니다.
+
+**Click:** 모든 50개 sample이 y equals x 기준선 아래에 있으며 rho b가 1보다 작습니다. Tangent correction norm은 symmetric pair norm의 평균 5.390퍼센트이므로, 비교적 작은 feasible correction이 직접 목적을 일관되게 줄였습니다.
+
+**Click:** 이 run에서 equal-mean rel sol은 3.660퍼센트, weak-final rel sol은 3.405퍼센트, mean rel flux는 12.487퍼센트입니다. Equal mean과 weak final의 차이는 final reconstruction blend 효과를 포함합니다. 별도로 학습된 symmetric checkpoint와의 paired comparison이 아니므로 tangent correction이 solution quality를 인과적으로 개선했다고 주장하지 않습니다. Final error에는 transition-aligned pattern도 남아 있습니다.
+
+**If timing is tight:** 65.0퍼센트 mismatch 감소, 50대50 개선, 그리고 이것이 rel sol 감소율이 아니라는 제한만 말합니다.
+
+**Transition:** 같은 fixed tangent mechanism이 variable diffusion, convection, reaction에서도 유지되는지 확인합니다.
+:::
+
+## CDR: The Same Tangent Mechanism Persists with Variable Coefficients
+
+<div class="tangent-result-grid">
+<div class="plotly-shell tangent-result">
+<iframe class="plotly-frame" src="assets/cdr_tangent_result_q50.html" title="CDR fixed tangent correction response mismatch and final error"></iframe>
+</div>
+<div class="tangent-result-side">
+<div class="tangent-setting"><strong>Frozen evidence</strong><span>q50 sample 33 | $\eta=0.01$ | $\lambda_{\mathrm{rel}}=0.01$</span></div>
+::: {.fragment data-fragment-index="0"}
+<div class="metric-card"><span class="value">0.3702</span><span class="label">mean $\rho_b$</span></div>
+<div class="metric-card teal"><span class="value">-63.0%</span><span class="label">mean response-mismatch change</span></div>
+:::
+::: {.fragment data-fragment-index="1"}
+<div class="metric-card steel"><span class="value">50 / 50</span><span class="label">samples with $\rho_b\lt 1$</span></div>
+<div class="metric-card amber"><span class="value">4.694%</span><span class="label">tangent correction / symmetric pair</span></div>
+:::
+::: {.fragment data-fragment-index="2"}
+<div class="tangent-metric-table">
+<div><span>equal-mean rel_sol</span><strong>3.232%</strong></div>
+<div><span>weak-final rel_sol</span><strong>2.970%</strong></div>
+<div><span>mean rel_flux</span><strong>13.677%</strong></div>
+</div>
+<div class="tangent-qualifier">This is cross-equation evidence on the same Annulus geometry. It is neither cross-domain validation nor a paired Poisson-versus-CDR ranking.</div>
+:::
+</div>
+</div>
+
+::: {.notes}
+**Target: 2분**
+
+CDR도 Poisson과 같은 2곱하기2 시각 문법을 사용합니다. 대표 sample은 q50 역할의 33번이고, pre와 post mismatch는 이 CDR sample 안에서 동일한 zero-centered color range를 공유합니다. Poisson과 CDR은 서로 다른 PDE와 source이므로 두 슬라이드 사이에는 color limit을 공유하지 않습니다.
+
+**Click:** CDR의 mean rho b는 0.3702이며 response mismatch는 평균 63.0퍼센트 감소합니다. 따라서 fixed tangent direction이 Pure Poisson에만 국한되지 않고 variable coefficient directional response에서도 직접 목적을 줄였습니다.
+
+**Click:** CDR도 50개 sample 모두 rho b가 1보다 작고, tangent correction은 symmetric pair의 평균 4.694퍼센트입니다. 즉, 작은 balance-preserving correction이 모든 test sample에서 measured mismatch를 낮췄습니다.
+
+**Click:** Equal-mean rel sol은 3.232퍼센트, weak-final rel sol은 2.970퍼센트, mean rel flux는 13.677퍼센트입니다. 이 수치는 현재 trained pipeline의 evaluation 결과이며 response mismatch 감소율과 다른 metric입니다. 또한 같은 Annulus geometry에서의 cross-equation evidence이지 cross-domain validation이나 Poisson과 CDR의 우열 비교가 아닙니다.
+
+**If timing is tight:** 63.0퍼센트 mismatch 감소와 50대50 개선, 그리고 same-geometry evidence라는 제한만 말합니다.
 
 **Transition:** 여기까지가 main discussion이며, 다음 두 장은 질문에 대비한 numerical audit입니다.
 :::

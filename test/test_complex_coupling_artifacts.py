@@ -159,6 +159,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "mass_weight": 3.0,
         "eps": 1e-12,
     }
+    config_payload["coupling_training"]["canonical_energy"] = {"boundary_weight": 0.0}
     config_payload["coupling_training"]["weak_operator_closure"] = {
         "enabled": True,
         "weight": 4.0,
@@ -272,6 +273,9 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     assert summary["reference_targets_used_for_training"] is False
     assert summary["canonical_boundary_energy"] == {
         "enabled": True,
+        "optimization_enabled": False,
+        "weight": 0.0,
+        "diagnostic_always_reported": True,
         "definition": "endpoint_p1_edge",
         "formula": "a_i * r_i^2 * h_perp / d_endpoint",
         "coefficient_evaluation": "one_sided_nearest_valid_point",
@@ -289,10 +293,16 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
             "sum_edges arithmetic_mean(a)*(delta(u_phi-u_psi)/h_axis)^2*hx*hy"
         ),
         "boundary_included": True,
+        "boundary_weight": 0.0,
+        "optimized_formula": "bulk + boundary_weight * boundary",
+        "optimized_metric": "loss_energy_optimized",
+        "unweighted_canonical_metric": "loss_energy_consistency",
         "transition_partition": False,
-        "checkpoint_metric": "loss_energy_consistency",
+        "checkpoint_metric": "loss_energy_optimized",
         "uses_reference_targets": False,
     }
+    assert "loss_energy_optimized_mean" in summary["aggregate_metrics"]
+    assert summary["canonical_energy"]["boundary_weight"] == pytest.approx(0.0)
     assert "length_jump_balance" not in summary
     assert summary["relative_split_consistency"] == {
         "enabled": True,
@@ -388,6 +398,12 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     with (outdir / "metrics" / "per_sample_metrics.csv").open() as fp:
         rows = list(csv.DictReader(fp))
     assert rows
+    assert float(rows[0]["boundary_weight"]) == pytest.approx(0.0)
+    assert "loss_energy_optimized" in rows[0]
+    assert "loss_energy_consistency" in rows[0]
+    assert "loss_energy_boundary" in rows[0]
+    assert "loss_energy_boundary_x" in rows[0]
+    assert "loss_energy_boundary_y" in rows[0]
     assert all("cross" not in key for key in rows[0])
 
     raw = np.load(outdir / "data" / "selected_raw_arrays.npz")

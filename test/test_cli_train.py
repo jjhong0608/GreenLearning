@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -146,6 +147,7 @@ class TestTrainCLIConfigCopy:
                     "dataset": {"geometry_mode": "complex"},
                     "coupling_training": {
                         "learning_rate": 0.002,
+                        "canonical_energy": {"boundary_weight": 0.0},
                         "optimizer": {
                             "name": "soap",
                             "soap": {"precondition_frequency": 7},
@@ -159,6 +161,7 @@ class TestTrainCLIConfigCopy:
         work_dir.mkdir()
         training = CouplingTrainingConfig(
             learning_rate=0.002,
+            canonical_energy={"boundary_weight": 0.0},
             optimizer={
                 "name": "soap",
                 "soap": {"precondition_frequency": 7},
@@ -175,6 +178,7 @@ class TestTrainCLIConfigCopy:
 
         used = json.loads((work_dir / "config_used.json").read_text())
         assert used["coupling_training"]["optimizer"]["name"] == "soap"
+        assert used["coupling_training"]["canonical_energy"] == {"boundary_weight": 0.0}
         assert used["coupling_training"]["optimizer"]["betas"] == [0.9, 0.999]
         assert (
             used["coupling_training"]["optimizer"]["soap"]["precondition_frequency"]
@@ -189,6 +193,22 @@ class TestTrainCLIConfigCopy:
             "validation": True,
         }
         assert used["complex_source_provenance"]["fixed_across_epochs"] is True
+
+    def test_boundary_off_paired_config_differs_only_by_canonical_weight(self):
+        root = Path(__file__).resolve().parents[1]
+        baseline = json.loads(
+            (root / "configs/complex_coupling_soap_tangent.json").read_text()
+        )
+        boundary_off = json.loads(
+            (
+                root / "configs/complex_coupling_soap_tangent_boundary_off.json"
+            ).read_text()
+        )
+
+        canonical_energy = boundary_off["coupling_training"].pop("canonical_energy")
+
+        assert canonical_energy == {"boundary_weight": 0.0}
+        assert boundary_off == baseline
 
     def test_uses_custom_coefficient_functions_for_green_training(
         self, tmp_path, monkeypatch

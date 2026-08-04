@@ -37,6 +37,8 @@ EXPECTED_HTML_ASSETS = {
     "poisson_weak_result_errors_sample0.html",
     "cdr_weak_result_fields_sample9.html",
     "cdr_weak_result_errors_sample9.html",
+    "poisson_tangent_result_q50.html",
+    "cdr_tangent_result_q50.html",
 }
 
 
@@ -66,7 +68,7 @@ def test_meeting_asset_builder_uses_locked_artifacts_offline(tmp_path: Path) -> 
 
     assert set(manifest["assets"]) == EXPECTED_HTML_ASSETS
     assert manifest["offline_plotly"] is True
-    assert manifest["builder_version"] == 3
+    assert manifest["builder_version"] == 4
     assert len(manifest["plotly_bundle_provenance"]["sha256"]) == 64
     assert manifest["plotly_bundle_provenance"]["size_bytes"] > 0
     assert manifest["final_prediction_contract"].startswith(
@@ -103,6 +105,28 @@ def test_meeting_asset_builder_uses_locked_artifacts_offline(tmp_path: Path) -> 
     assert manifest["cdr"]["representative_sample"]["weak_rel_sol"] == pytest.approx(
         0.04573526837658398
     )
+    poisson_tangent = manifest["tangent_results"]["poisson"]
+    cdr_tangent = manifest["tangent_results"]["cdr"]
+    assert poisson_tangent["sample_id"] == 41
+    assert cdr_tangent["sample_id"] == 33
+    assert poisson_tangent["eta"] == pytest.approx(0.01)
+    assert cdr_tangent["relative_lambda"] == pytest.approx(0.01)
+    assert poisson_tangent["aggregate"]["mean_mismatch_reduction"] == pytest.approx(
+        0.649783954468857
+    )
+    assert cdr_tangent["aggregate"]["mean_mismatch_reduction"] == pytest.approx(
+        0.629839051681288
+    )
+    assert poisson_tangent["aggregate"]["improved_sample_count"] == 50
+    assert cdr_tangent["aggregate"]["improved_sample_count"] == 50
+    for asset_name in (
+        "poisson_tangent_result_q50.html",
+        "cdr_tangent_result_q50.html",
+    ):
+        metadata = manifest["assets"][asset_name]
+        assert metadata["shared_pre_post_coloraxis"] is True
+        assert metadata["mismatch_color_limit"] > 0.0
+        assert metadata["solution_error_color_limit"] > 0.0
     assert (
         manifest["length_response_diagnostic"]["unit_physical_equivalence"]["passed"]
         is True
@@ -133,6 +157,29 @@ def test_meeting_asset_builder_uses_locked_artifacts_offline(tmp_path: Path) -> 
         assert "https://" not in html
         assert "http://" not in html
         assert 'style="height:100vh; width:100vw;"' in html
+
+
+def test_tangent_result_uses_shared_pre_post_coloraxis(tmp_path: Path) -> None:
+    builder = AnnulusMeetingAssetBuilder(
+        MeetingAssetConfig(project_root=PROJECT_ROOT, outdir=tmp_path / "assets")
+    )
+    result = builder.load_tangent_result(
+        builder.paths.poisson_tangent_artifact_root,
+        equation="Poisson",
+        expected_sample_id=41,
+    )
+
+    figure = builder.build_tangent_result(result)
+
+    assert result.sample.sample_id == 41
+    assert len(result.frame) == 50
+    assert figure.data[0].marker.coloraxis == "coloraxis"
+    assert figure.data[1].marker.coloraxis == "coloraxis"
+    assert figure.data[2].marker.coloraxis == "coloraxis2"
+    assert figure.layout.coloraxis.cmin == pytest.approx(-figure.layout.coloraxis.cmax)
+    assert figure.layout.coloraxis2.cmin == pytest.approx(
+        -figure.layout.coloraxis2.cmax
+    )
 
 
 def test_weak_archive_requires_final_prediction_field(tmp_path: Path) -> None:

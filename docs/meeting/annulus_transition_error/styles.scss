@@ -54,7 +54,9 @@ $presentation-h3-font-size: 1.02em;
   text-transform: none;
 }
 
-.reveal #next-candidate-tangent-correction-within-the-balance-plane h2 {
+.reveal #tangent-green-response-correction-within-the-balance-plane h2,
+.reveal #poisson-fixed-tangent-correction-reduces-response-mismatch h2,
+.reveal #cdr-the-same-tangent-mechanism-persists-with-variable-coefficients h2 {
   font-size: 30pt;
 }
 
@@ -904,6 +906,99 @@ $presentation-h3-font-size: 1.02em;
 
 .result-side .metric-card {
   min-height: 82px;
+}
+
+.tangent-result-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 342px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.plotly-shell.tangent-result {
+  height: 606px;
+}
+
+.tangent-result-side {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tangent-result-side > .fragment {
+  display: grid;
+  gap: 8px;
+}
+
+.tangent-result-side .metric-card {
+  min-height: 76px;
+  padding: 9px 12px;
+}
+
+.tangent-result-side .metric-card .value {
+  font-size: 24pt;
+}
+
+.tangent-result-side .metric-card .label {
+  font-size: 10.5pt;
+  line-height: 1.12;
+}
+
+.tangent-setting {
+  display: flex;
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--steel);
+  border-radius: 5px;
+  background: #ffffff;
+  flex-direction: column;
+  justify-content: center;
+  font-size: 10.5pt;
+  line-height: 1.15;
+}
+
+.tangent-setting span {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.tangent-metric-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.tangent-metric-table > div {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 9px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10.5pt;
+}
+
+.tangent-metric-table > div:last-child {
+  border-bottom: 0;
+}
+
+.tangent-metric-table strong {
+  color: var(--teal);
+}
+
+.tangent-qualifier {
+  box-sizing: border-box;
+  margin-top: 7px;
+  padding: 7px 9px;
+  border-left: 5px solid var(--amber);
+  background: var(--pale-amber);
+  font-size: 9.6pt;
+  line-height: 1.17;
 }
 
 .result-formula-card {

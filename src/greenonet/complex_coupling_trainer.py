@@ -63,6 +63,7 @@ from greenonet.coupling_optimizer import (
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.config import (
     BalanceProjectionConfig,
+    ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
@@ -90,6 +91,8 @@ class ComplexCouplingTrainer(LoggingMixin):
 
     _METRIC_KEYS: tuple[str, ...] = (
         "loss",
+        "boundary_weight",
+        "loss_energy_optimized",
         "loss_energy_consistency",
         "loss_energy_bulk",
         "loss_energy_boundary",
@@ -150,6 +153,9 @@ class ComplexCouplingTrainer(LoggingMixin):
             self.cross_axis_reconstruction_config
         )
         self.config = config
+        self.canonical_energy_config = ComplexCanonicalEnergyConfig.from_raw(
+            config.canonical_energy
+        )
         self.relative_split_config = ComplexRelativeSplitConsistencyConfig.from_raw(
             config.relative_split_consistency
         )
@@ -179,6 +185,14 @@ class ComplexCouplingTrainer(LoggingMixin):
             terminal_width=terminal_width,
         )
         self._log_pre_projection_fusion(model)
+        self.logger.info(
+            "canonical energy boundary_weight=%.6e "
+            "boundary_in_optimization=%s boundary_diagnostic_always=true "
+            "optimized_formula=bulk+boundary_weight*boundary "
+            "canonical_formula=bulk+boundary",
+            self.canonical_energy_config.boundary_weight,
+            self.canonical_energy_config.boundary_weight > 0.0,
+        )
         self.logger.info(
             "final reconstruction enabled=%s mode=%s gamma=%.6f "
             "smoothing_steps=%d smoothing_relaxation=%.6f relative_floor=%.6f "
@@ -277,7 +291,7 @@ class ComplexCouplingTrainer(LoggingMixin):
                 if epoch % self.config.log_interval == 0:
                     self._log_epoch(epoch, "val", val_metrics)
                 if self.best_energy_checkpoint.enabled:
-                    validation_energy = float(val_metrics["loss_energy_consistency"])
+                    validation_energy = float(val_metrics["loss_energy_optimized"])
                     if best_val_energy is None or validation_energy < best_val_energy:
                         best_val_energy = validation_energy
                         self._save_checkpoint(
@@ -402,6 +416,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             a_valid=batch.a_valid,
             geometry=batch.geometry,
             weak_context=batch.weak_context,
+            canonical_energy_config=self.canonical_energy_config,
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
             boundary_context=self._boundary_energy_context(batch),

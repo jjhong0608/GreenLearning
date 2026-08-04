@@ -18,6 +18,7 @@ from greenonet.complex_weak_closure import (
     directional_weak_operator_closure_loss,
 )
 from greenonet.config import (
+    ComplexCanonicalEnergyConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
 )
@@ -30,15 +31,20 @@ class ComplexCouplingObjectiveResult:
     loss: torch.Tensor
     loss_per_sample: torch.Tensor
     energy: ComplexEnergyLossResult
+    energy_optimized: torch.Tensor
+    energy_optimized_per_sample: torch.Tensor
     relative_split: ComplexRelativeSplitLossResult | None
     weak_closure: ComplexWeakClosureResult | None
     relative_split_weight: float
     relative_split_mass_weight: float
     weak_closure_weight: float
+    boundary_weight: float
 
     def metric_tensors(self) -> dict[str, torch.Tensor]:
         metrics = {
             "loss": self.loss,
+            "boundary_weight": self.loss.new_tensor(self.boundary_weight),
+            "loss_energy_optimized": self.energy_optimized,
             "loss_energy_consistency": self.energy.total,
             "loss_energy_bulk": self.energy.bulk,
             "loss_energy_boundary": self.energy.boundary,
@@ -78,6 +84,8 @@ class ComplexCouplingObjectiveResult:
     def sample_metric_tensors(self, sample_offset: int) -> dict[str, torch.Tensor]:
         metrics = {
             "loss": self.loss_per_sample[sample_offset],
+            "boundary_weight": self.loss_per_sample.new_tensor(self.boundary_weight),
+            "loss_energy_optimized": self.energy_optimized_per_sample[sample_offset],
             "loss_energy_consistency": self.energy.total_per_sample[sample_offset],
             "loss_energy_bulk": self.energy.bulk_per_sample[sample_offset],
             "loss_energy_boundary": self.energy.boundary_per_sample[sample_offset],
@@ -121,6 +129,20 @@ class ComplexCouplingObjectiveResult:
         return metrics
 
 
+def optimized_complex_energy_per_sample(
+    energy: ComplexEnergyLossResult,
+    config: ComplexCanonicalEnergyConfig,
+) -> torch.Tensor:
+    """Apply the fixed boundary weight without changing canonical diagnostics."""
+
+    boundary_weight = float(config.boundary_weight)
+    if boundary_weight == 0.0:
+        return energy.bulk_per_sample
+    if boundary_weight == 1.0:
+        return energy.total_per_sample
+    return energy.bulk_per_sample + boundary_weight * energy.boundary_per_sample
+
+
 def compute_complex_coupling_objective(
     *,
     u_phi_valid: torch.Tensor,
@@ -130,6 +152,7 @@ def compute_complex_coupling_objective(
     a_valid: torch.Tensor,
     geometry: ComplexGeometryMetadata,
     weak_context: ComplexDirectionalWeakContext,
+    canonical_energy_config: ComplexCanonicalEnergyConfig,
     relative_split_config: ComplexRelativeSplitConsistencyConfig,
     weak_closure_config: ComplexWeakOperatorClosureConfig,
     boundary_context: ComplexBoundaryEnergyContext,
@@ -143,19 +166,25 @@ def compute_complex_coupling_objective(
         geometry=geometry,
         boundary_context=boundary_context,
     )
+    boundary_weight = float(canonical_energy_config.boundary_weight)
+    energy_optimized_per_sample = optimized_complex_energy_per_sample(
+        energy,
+        canonical_energy_config,
+    )
+    energy_optimized = energy_optimized_per_sample.mean()
     relative_split = None
     if relative_split_config.enabled:
         relative_split = relative_split_consistency_loss(
             u_phi_valid=u_phi_valid,
             u_psi_valid=u_psi_valid,
             rhs_valid=rhs_valid,
-            energy=energy,
+            optimized_energy_per_sample=energy_optimized_per_sample,
             geometry=geometry,
             config=relative_split_config,
         )
         split_loss_per_sample = relative_split.loss_per_sample
     else:
-        split_loss_per_sample = energy.total_per_sample
+        split_loss_per_sample = energy_optimized_per_sample
 
     weak_closure = None
     if weak_closure_config.enabled:
@@ -177,9 +206,12 @@ def compute_complex_coupling_objective(
         loss=loss_per_sample.mean(),
         loss_per_sample=loss_per_sample,
         energy=energy,
+        energy_optimized=energy_optimized,
+        energy_optimized_per_sample=energy_optimized_per_sample,
         relative_split=relative_split,
         weak_closure=weak_closure,
         relative_split_weight=float(relative_split_config.weight),
         relative_split_mass_weight=float(relative_split_config.mass_weight),
         weak_closure_weight=float(weak_closure_config.weight),
+        boundary_weight=boundary_weight,
     )

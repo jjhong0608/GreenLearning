@@ -43,6 +43,7 @@ from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
     ColumnDiagonalGreenResponseProjectionConfig,
+    ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
@@ -679,6 +680,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         cross_axis_reconstruction = ComplexCrossAxisReconstructionConfig.from_raw(
             configs.coupling_model.cross_axis_reconstruction
         )
+        canonical_energy = ComplexCanonicalEnergyConfig.from_raw(
+            configs.coupling_training.canonical_energy
+        )
         relative_split = ComplexRelativeSplitConsistencyConfig.from_raw(
             configs.coupling_training.relative_split_consistency
         )
@@ -851,6 +855,9 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             },
             "canonical_boundary_energy": {
                 "enabled": True,
+                "optimization_enabled": canonical_energy.boundary_weight > 0.0,
+                "weight": canonical_energy.boundary_weight,
+                "diagnostic_always_reported": True,
                 "definition": "endpoint_p1_edge",
                 "formula": "a_i * r_i^2 * h_perp / d_endpoint",
                 "coefficient_evaluation": "one_sided_nearest_valid_point",
@@ -868,8 +875,12 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     "sum_edges arithmetic_mean(a)*(delta(u_phi-u_psi)/h_axis)^2*hx*hy"
                 ),
                 "boundary_included": True,
+                "boundary_weight": canonical_energy.boundary_weight,
+                "optimized_formula": "bulk + boundary_weight * boundary",
+                "optimized_metric": "loss_energy_optimized",
+                "unweighted_canonical_metric": "loss_energy_consistency",
                 "transition_partition": False,
-                "checkpoint_metric": "loss_energy_consistency",
+                "checkpoint_metric": "loss_energy_optimized",
                 "uses_reference_targets": False,
             },
             "relative_split_consistency": {
@@ -2008,6 +2019,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         aggregate: dict[str, float] = {}
         for key in (
             "loss",
+            "loss_energy_optimized",
             "loss_energy_consistency",
             "loss_energy_bulk",
             "loss_energy_boundary",

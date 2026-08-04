@@ -31,7 +31,9 @@ EXPECTED_TITLES = [
     "CDR: Physical Coefficients, Directional Sources, and Reconstruction",
     "CDR: Signed Errors and Test-Set Accuracy",
     "Exact Balance Does Not Imply Directional Response Consistency",
-    "Next Candidate: Tangent Correction Within the Balance Plane",
+    "Tangent Green-Response Correction Within the Balance Plane",
+    "Poisson: Fixed Tangent Correction Reduces Response Mismatch",
+    "CDR: The Same Tangent Mechanism Persists with Variable Coefficients",
     "Backup A: Unit and Physical Green Integrals Are Equivalent",
     "Backup B: Exact Green Error Decomposition",
 ]
@@ -52,6 +54,8 @@ EXPECTED_FRAGMENT_COUNTS = [
     2,
     2,
     3,
+    3,
+    3,
     0,
     0,
 ]
@@ -67,6 +71,8 @@ EXPECTED_ASSETS = [
     "poisson_weak_result_errors_sample0.html",
     "cdr_weak_result_fields_sample9.html",
     "cdr_weak_result_errors_sample9.html",
+    "poisson_tangent_result_q50.html",
+    "cdr_tangent_result_q50.html",
 ]
 
 
@@ -103,7 +109,7 @@ def test_qmd_locks_slide_order_animation_and_language_contract() -> None:
     slides = _slides(source)
 
     assert [title for title, _ in slides] == EXPECTED_TITLES
-    assert len(slides) == 18
+    assert len(slides) == 20
 
     for index, ((_, slide), expected_fragments) in enumerate(
         zip(slides, EXPECTED_FRAGMENT_COUNTS, strict=True), start=1
@@ -118,7 +124,7 @@ def test_qmd_locks_slide_order_animation_and_language_contract() -> None:
         assert "**If timing is tight:**" in notes
         assert "**Transition:**" in notes
 
-    assert sum(EXPECTED_FRAGMENT_COUNTS) == 44
+    assert sum(EXPECTED_FRAGMENT_COUNTS) == 50
 
 
 def test_revision_content_contract_is_versionless_and_layout_ready() -> None:
@@ -167,7 +173,7 @@ def test_revision_content_contract_is_versionless_and_layout_ready() -> None:
     assert response_problem.count('class="response-factor context"') == 2
 
     response_projection = slides[
-        "Next Candidate: Tangent Correction Within the Balance Plane"
+        "Tangent Green-Response Correction Within the Balance Plane"
     ]
     assert "\\phi(\\delta)=\\widetilde\\phi+\\delta" in response_projection
     assert "J(\\delta)=\\frac12" in response_projection
@@ -181,19 +187,56 @@ def test_revision_content_contract_is_versionless_and_layout_ready() -> None:
     assert "it does not allocate the raw residual" in response_projection
     assert "g^\\top(-D^{-1}g)\\leq 0" in response_projection
     assert "\\phi+\\psi=f" in response_projection
+    assert "\\eta=0.01" in response_projection
+    assert "\\lambda_{\\mathrm{rel}}=0.01" in response_projection
+    assert "\\rho_b=" in response_projection
     assert "A_s=H_s^\\top M_\\Omega H_s" not in response_projection
     assert "full coupled solve" not in response_projection
     assert "\\min_{\\delta\\phi_j+\\delta\\psi_j=r_j}" not in response_projection
     assert "\\delta\\phi_j=\\frac{\\bar\\gamma_{y,j}^2}" not in response_projection
-    assert "#next-candidate-tangent-correction-within-the-balance-plane h2" in styles
+    assert "#tangent-green-response-correction-within-the-balance-plane h2" in styles
     assert "font-size: 30pt;" in styles
+
+    poisson_tangent = slides[
+        "Poisson: Fixed Tangent Correction Reduces Response Mismatch"
+    ]
+    assert "poisson_tangent_result_q50.html" in poisson_tangent
+    assert "q50 sample 41" in poisson_tangent
+    for value in (
+        "0.3502",
+        "-65.0%",
+        "50 / 50",
+        "5.390%",
+        "3.660%",
+        "3.405%",
+        "12.487%",
+    ):
+        assert value in poisson_tangent
+    assert "not a causal comparison" in poisson_tangent
+
+    cdr_tangent = slides[
+        "CDR: The Same Tangent Mechanism Persists with Variable Coefficients"
+    ]
+    assert "cdr_tangent_result_q50.html" in cdr_tangent
+    assert "q50 sample 33" in cdr_tangent
+    for value in (
+        "0.3702",
+        "-63.0%",
+        "50 / 50",
+        "4.694%",
+        "3.232%",
+        "2.970%",
+        "13.677%",
+    ):
+        assert value in cdr_tangent
+    assert "neither cross-domain validation" in cdr_tangent
 
 
 def test_main_deck_timing_is_advisory_not_a_fixed_total() -> None:
     source = QMD_PATH.read_text(encoding="utf-8")
-    main_slides = _slides(source)[:16]
+    main_slides = _slides(source)[:18]
 
-    assert len(main_slides) == 16
+    assert len(main_slides) == 18
     assert "25-minute" not in source
     assert "25분" not in source
 
@@ -203,6 +246,8 @@ def test_slide_plan_matches_the_tangent_method_contract() -> None:
 
     assert "### Slide 15: Exact Balance Does Not Imply" in plan
     assert "### Slide 16: Tangent Correction Within the Balance Plane" in plan
+    assert "### Slide 17: Poisson Fixed Tangent Result" in plan
+    assert "### Slide 18: CDR Fixed Tangent Result" in plan
     assert "g=\\nabla J(0)=(H_x+H_y)^\\top M_\\Omega m_0" in plan
     assert "\\delta_j=-\\eta\\frac{g_j}{D_j}" in plan
     assert "The column diagonal scales the tangent gradient" in plan
@@ -223,9 +268,9 @@ def test_deck_uses_only_local_presentation_assets() -> None:
 def test_rendered_reveal_html_is_offline_and_structurally_complete() -> None:
     html = HTML_PATH.read_text(encoding="utf-8")
 
-    assert len(re.findall(r'<section id="[^"]+" class="slide level2">', html)) == 18
-    assert html.count('<aside class="notes">') == 18
-    assert len(re.findall(r'class="fragment(?:\s|\")', html)) == 44
+    assert len(re.findall(r'<section id="[^"]+" class="slide level2">', html)) == 20
+    assert html.count('<aside class="notes">') == 20
+    assert len(re.findall(r'class="fragment(?:\s|\")', html)) == 50
     assert not re.search(
         r'<(?:script|link|iframe|img)[^>]+(?:src|href)="https?://',
         html,
@@ -235,7 +280,9 @@ def test_rendered_reveal_html_is_offline_and_structurally_complete() -> None:
     assert not re.search(r"\b(?:v4|v5|v6)\b", html, flags=re.IGNORECASE)
     assert not re.search(r"output[- ]contract", html, flags=re.IGNORECASE)
     assert "Exact Balance Does Not Imply Directional Response Consistency" in html
-    assert "Next Candidate: Tangent Correction Within the Balance Plane" in html
+    assert "Tangent Green-Response Correction Within the Balance Plane" in html
+    assert "Poisson: Fixed Tangent Correction Reduces Response Mismatch" in html
+    assert "CDR: The Same Tangent Mechanism Persists with Variable Coefficients" in html
     assert "Why Equal Source Correction Is Not Equal Response" not in html
     assert "Next Candidate: Allocate Balance Correction by Green Response" not in html
     assert '<div class="response-factor-list"' in html
@@ -253,10 +300,10 @@ def test_browser_qa_covers_final_and_intermediate_states_at_both_viewports() -> 
         "1280x720",
     ]
     for viewport in report["viewports"]:
-        assert viewport["slideCount"] == 18
+        assert viewport["slideCount"] == 20
         assert viewport["overflow"] == []
         assert viewport["overlap"] == []
-        assert viewport["fragmentStatesChecked"] == 60
+        assert viewport["fragmentStatesChecked"] == 68
         assert viewport["fragmentOverflow"] == []
         assert viewport["fragmentOverlap"] == []
         assert viewport["pageErrors"] == []

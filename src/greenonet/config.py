@@ -1160,6 +1160,43 @@ class CouplingBestPhysicsCheckpointConfig:
 
 
 @dataclass
+class ComplexCanonicalEnergyConfig:
+    """Complex canonical-energy optimization weights."""
+
+    boundary_weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.boundary_weight, (int, float)) or isinstance(
+            self.boundary_weight,
+            bool,
+        ):
+            raise TypeError("canonical_energy.boundary_weight must be numeric.")
+        if not math.isfinite(float(self.boundary_weight)):
+            raise ValueError("canonical_energy.boundary_weight must be finite.")
+        if self.boundary_weight < 0.0:
+            raise ValueError("canonical_energy.boundary_weight must be non-negative.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexCanonicalEnergyConfig | dict[str, Any] | None,
+    ) -> ComplexCanonicalEnergyConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"boundary_weight"})
+            if unknown:
+                raise TypeError(
+                    f"canonical_energy has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("canonical_energy must be an object.")
+
+
+@dataclass
 class ComplexRelativeSplitConsistencyConfig:
     """Source-normalized complex split energy and value consistency."""
 
@@ -1478,6 +1515,9 @@ class CouplingTrainingConfig:
     best_physics_checkpoint: CouplingBestPhysicsCheckpointConfig | dict[str, Any] = (
         field(default_factory=CouplingBestPhysicsCheckpointConfig)
     )
+    canonical_energy: ComplexCanonicalEnergyConfig | dict[str, Any] = field(
+        default_factory=ComplexCanonicalEnergyConfig
+    )
     relative_split_consistency: (
         ComplexRelativeSplitConsistencyConfig | dict[str, Any]
     ) = field(default_factory=ComplexRelativeSplitConsistencyConfig)
@@ -1495,6 +1535,9 @@ class CouplingTrainingConfig:
         self.best_physics_checkpoint = CouplingBestPhysicsCheckpointConfig.from_raw(
             self.best_physics_checkpoint
         )
+        self.canonical_energy = ComplexCanonicalEnergyConfig.from_raw(
+            self.canonical_energy
+        )
         self.relative_split_consistency = (
             ComplexRelativeSplitConsistencyConfig.from_raw(
                 self.relative_split_consistency
@@ -1510,6 +1553,15 @@ def validate_unit_square_coupling_training_config(
     config: CouplingTrainingConfig,
 ) -> None:
     """Reject complex-only training options on the unit-square path."""
+
+    if (
+        ComplexCanonicalEnergyConfig.from_raw(config.canonical_energy)
+        != ComplexCanonicalEnergyConfig()
+    ):
+        raise ValueError(
+            "coupling_training.canonical_energy is available only for "
+            "ComplexCouplingTrainer."
+        )
 
     if ComplexRelativeSplitConsistencyConfig.from_raw(
         config.relative_split_consistency

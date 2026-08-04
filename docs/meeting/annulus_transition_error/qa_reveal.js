@@ -17,7 +17,7 @@ class CommandLineConfig {
       this.values.viewports || "1600x900,1280x720",
     );
     this.fragmentSlides = this.parseSlides(
-      this.values.slides || "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16",
+      this.values.slides || "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",
     );
   }
 
@@ -277,9 +277,9 @@ class RevealDeckQa {
       ),
     );
 
-    if (slides.length !== 18) {
+    if (slides.length !== 20) {
       this.failures.push(
-        `${viewport.width}x${viewport.height}: expected 18 slides, found ${slides.length}.`,
+        `${viewport.width}x${viewport.height}: expected 20 slides, found ${slides.length}.`,
       );
     }
 

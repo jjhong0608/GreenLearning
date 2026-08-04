@@ -29,6 +29,7 @@ from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
     CompileConfig,
+    ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     ComplexRelativeSplitConsistencyConfig,
@@ -115,6 +116,8 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
     assert (work_dir / "complex_training_metrics.csv").exists()
     assert complex_metric_keys_are_safe(trainer.metric_rows[0].keys())
     assert "cross" not in (work_dir / "training.log").read_text()
+    assert "loss_energy_optimized" in trainer.metric_rows[0]
+    assert trainer.metric_rows[0]["boundary_weight"] == pytest.approx(1.0)
     assert "loss_energy_consistency" in trainer.metric_rows[0]
     assert "loss_energy_bulk" in trainer.metric_rows[0]
     assert "loss_energy_boundary" in trainer.metric_rows[0]
@@ -781,6 +784,80 @@ def test_complex_trainer_selects_best_checkpoint_by_reference_free_energy(tmp_pa
     ).exists()
 
 
+def test_complex_trainer_selects_best_energy_checkpoint_by_optimized_energy(
+    tmp_path,
+    monkeypatch,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=2,
+            batch_size=1,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+            canonical_energy=ComplexCanonicalEnergyConfig(boundary_weight=0.0),
+            best_energy_checkpoint=CouplingBestEnergyCheckpointConfig(enabled=True),
+        ),
+        work_dir=tmp_path / "best_optimized_energy",
+        green_model=ConstantGreen(1.0),
+    )
+    validation_metrics = iter(
+        (
+            {
+                "loss": 2.0,
+                "loss_energy_optimized": 2.0,
+                "loss_energy_consistency": 1.0,
+            },
+            {
+                "loss": 1.0,
+                "loss_energy_optimized": 1.0,
+                "loss_energy_consistency": 2.0,
+            },
+        )
+    )
+    saved: list[str] = []
+    monkeypatch.setattr(
+        trainer,
+        "_run_epoch",
+        lambda *_args, **_kwargs: {
+            "loss": 1.0,
+            "loss_energy_optimized": 1.0,
+            "loss_energy_consistency": 1.0,
+        },
+    )
+    monkeypatch.setattr(
+        trainer,
+        "_evaluate_loader",
+        lambda *_args, **_kwargs: next(validation_metrics),
+    )
+    monkeypatch.setattr(trainer, "_save_checkpoint", saved.append)
+
+    trainer.train(dataset, dataset)
+
+    assert saved.count("complex_coupling_model_best_energy.safetensors") == 2
+
+
 def test_complex_training_loss_graph_excludes_reference_targets(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
@@ -870,6 +947,7 @@ def test_complex_tangent_projection_smoke_reuses_context_and_preserves_autograd(
             batch_size=1,
             device="cpu",
             compile=CompileConfig(enabled=False),
+            canonical_energy=ComplexCanonicalEnergyConfig(boundary_weight=0.0),
         ),
         work_dir=tmp_path / "tangent_training",
         green_model=ConstantGreen(1.0),
@@ -882,6 +960,19 @@ def test_complex_tangent_projection_smoke_reuses_context_and_preserves_autograd(
 
     tangent = first.projection.symmetric_tangent_diagnostics
     assert tangent is not None
+    torch.testing.assert_close(
+        first.objective.energy_optimized,
+        first.objective.energy.bulk,
+    )
+    torch.testing.assert_close(
+        first.metrics["boundary_weight"],
+        torch.zeros((), dtype=torch.float64),
+    )
+    assert first.objective.energy.boundary.item() > 0.0
+    assert (
+        "boundary_weight=0.000000e+00"
+        in (tmp_path / "tangent_training" / "training.log").read_text()
+    )
     assert trainer.symmetric_tangent_green_response_context_build_count == 1
     assert trainer.symmetric_tangent_green_response_context is not None
     assert all(

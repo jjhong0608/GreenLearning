@@ -3,10 +3,10 @@
   "viewports": [
     {
       "viewport": "1600x900",
-      "slideCount": 18,
+      "slideCount": 20,
       "overflow": [],
       "overlap": [],
-      "fragmentStatesChecked": 60,
+      "fragmentStatesChecked": 68,
       "fragmentOverflow": [],
       "fragmentOverlap": [],
       "pageErrors": [],
@@ -14,10 +14,10 @@
     },
     {
       "viewport": "1280x720",
-      "slideCount": 18,
+      "slideCount": 20,
       "overflow": [],
       "overlap": [],
-      "fragmentStatesChecked": 60,
+      "fragmentStatesChecked": 68,
       "fragmentOverflow": [],
       "fragmentOverlap": [],
       "pageErrors": [],

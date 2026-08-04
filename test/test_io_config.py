@@ -3,16 +3,19 @@ import torch
 
 from greenonet.config import (
     Axis1DTrunkConfig,
+    ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
+    CouplingTrainingConfig,
     CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
     ModelConfig,
     SourceStencilLiftConfig,
     TransverseTrunkConfig,
+    validate_unit_square_coupling_training_config,
 )
 from greenonet.coupling_model import CouplingNet
 from greenonet.model import GreenONetModel
@@ -85,6 +88,71 @@ def test_complex_cross_axis_reconstruction_rejects_unknown_key() -> None:
         ComplexCrossAxisReconstructionConfig.from_raw(
             {"enabled": True, "geometry_ramp": True}
         )
+
+
+def test_complex_canonical_energy_config_defaults_and_parses_boundary_weight():
+    default = CouplingTrainingConfig()
+    boundary_off = CouplingTrainingConfig(canonical_energy={"boundary_weight": 0.0})
+    tempered = ComplexCanonicalEnergyConfig.from_raw({"boundary_weight": 0.25})
+
+    assert isinstance(default.canonical_energy, ComplexCanonicalEnergyConfig)
+    assert default.canonical_energy.boundary_weight == pytest.approx(1.0)
+    assert boundary_off.canonical_energy.boundary_weight == pytest.approx(0.0)
+    assert tempered.boundary_weight == pytest.approx(0.25)
+    assert (
+        ComplexCanonicalEnergyConfig.from_raw(
+            {"boundary_weight": tempered.boundary_weight}
+        )
+        == tempered
+    )
+
+
+@pytest.mark.parametrize("boundary_weight", [0.0, 0.1, 1.0])
+def test_complex_canonical_energy_config_round_trip(boundary_weight):
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingTrainingConfig(
+        canonical_energy={"boundary_weight": boundary_weight}
+    )
+
+    payload = _serialize_config(config)
+    loaded = _deserialize_config(payload, CouplingTrainingConfig)
+
+    assert isinstance(loaded, CouplingTrainingConfig)
+    assert isinstance(loaded.canonical_energy, ComplexCanonicalEnergyConfig)
+    assert loaded.canonical_energy.boundary_weight == pytest.approx(boundary_weight)
+
+
+@pytest.mark.parametrize(
+    ("value", "error_type"),
+    [
+        (True, TypeError),
+        ("0", TypeError),
+        (-0.1, ValueError),
+        (float("nan"), ValueError),
+        (float("inf"), ValueError),
+    ],
+)
+def test_complex_canonical_energy_rejects_invalid_boundary_weight(
+    value,
+    error_type,
+):
+    with pytest.raises(error_type, match="canonical_energy.boundary_weight"):
+        ComplexCanonicalEnergyConfig.from_raw({"boundary_weight": value})
+
+    with pytest.raises(TypeError, match="canonical_energy has unknown keys"):
+        ComplexCanonicalEnergyConfig.from_raw({"boundary_enabled": False})
+
+
+def test_unit_square_rejects_nondefault_complex_canonical_energy():
+    with pytest.raises(ValueError, match="canonical_energy.*ComplexCouplingTrainer"):
+        validate_unit_square_coupling_training_config(
+            CouplingTrainingConfig(
+                canonical_energy=ComplexCanonicalEnergyConfig(boundary_weight=0.0)
+            )
+        )
+
+    validate_unit_square_coupling_training_config(CouplingTrainingConfig())
 
 
 def test_column_diagonal_green_response_config_round_trip():

@@ -4,14 +4,14 @@
 
 - **Purpose:** 공동연구자 회의에서 Annulus transition error의 원인 가설과
   정량 진단 결과를 공유하기 위한 Quarto 슬라이드 작성 계획
-- **Current stage:** 18장 Quarto Reveal.js deck 구현 및 layout QA 단계
+- **Current stage:** 20장 Quarto Reveal.js deck 구현 및 layout QA 단계
 - **Implemented deck:**
   `docs/meeting/annulus_transition_error/annulus_transition_error.qmd`,
   presentation SCSS, frozen-artifact Plotly assets, rendered HTML
 - **Primary audience:** 이전 회의에서 Annulus transition error 현상을 이미
   확인한 공동연구자
 - **Language:** visible slide text는 영어, speaker notes는 한국어
-- **Target length:** main slides 16장, backup slides 2장, 총 18장
+- **Target length:** main slides 18장, backup slides 2장, 총 20장
 
 ## Active Revision Contract
 
@@ -30,7 +30,13 @@
 - 발표용 visible text와 한국어 speaker notes에서는 formulation을 version
   번호나 model-contract 번호로 부르지 않는다. 내부 checkpoint contract,
   builder metadata, frozen numerical arrays는 변경하지 않는다.
-- 18장 구조, 44개 fragment, numerical values와 frozen-artifact provenance는
+- Slide 15의 exact-balance/response-consistency 수식은 유지하고, Slide 16은
+  fixed tangent correction의 실제 설정과 response-mismatch ratio를 명시한다.
+- Poisson `coupling18`과 CDR `coupling8`의 frozen tangent artifact를 각각
+  Slide 17/18에서 설명한다. 두 슬라이드는 mismatch 감소와 final evaluation
+  metric을 분리하며 symmetric-trained baseline 대비 causal improvement를
+  주장하지 않는다.
+- 20장 구조, 50개 fragment, numerical values와 frozen-artifact provenance를
   유지한다. 1600x900 및 1280x720의 final/intermediate states에서 overflow,
   overlap, page error, external request가 없어야 한다.
 
@@ -84,12 +90,15 @@
   coefficient-independent Poisson context
 - Frozen Green response에서 계산한 fixed diagonal gain으로 physical source
   projection을 condition하는 Green-Response Preconditioning
+- Symmetric-balanced source에서 balance plane을 따라 이동하는 fixed tangent
+  correction과 Poisson `coupling18`/CDR `coupling8`의 50-sample response-mismatch
+  audit
 
 ### Exclude
 
 - Pre-projection fuser의 구조, residual/absolute/off 비교 및 관련 artifact
 - \(u_\phi,u_\psi\in H_0^1(\Omega)\) 가정의 완화 가능성
-- 승인된 Slide 5-16 이외의 새로운 loss, projection, network architecture 또는
+- 승인된 Slide 5-18 이외의 새로운 loss, projection, network architecture 또는
   regularization 제안
 - Learned reconstruction weight/gate, Multi-Orientation Axial Charts 및 full
   Green-response matrix solve
@@ -282,8 +291,8 @@ This final slide must explain which projection/output-space hypotheses were
 tested and retired. It must not expand into a complete loss or admissibility
 development history.
 
-Slides 5-16 then separate method definition, method construction, estimator comparison, final-field
-evidence, and a future source-space modification:
+Slides 5-18 then separate method definition, method construction, estimator comparison,
+final-field evidence, tangent correction, and its measured response audit:
 
 \[
 \boxed{
@@ -300,6 +309,8 @@ evidence, and a future source-space modification:
 \text{CDR weak-result coefficients/fields/errors}
 \;\longrightarrow\;
 \text{symmetric balance-plane tangent correction}
+\;\longrightarrow\;
+\text{Poisson/CDR fixed-step response audit}
 }
 \]
 
@@ -318,8 +329,12 @@ coefficients. These four slides describe the computed result rather than
 diagnosing the transition. Slide 15 separates exact source balance from
 directional response consistency. Slide 16 then starts from that
 symmetric-balanced source and introduces one fixed Jacobi-preconditioned
-tangent step inside the balance plane. It is presented as a method-only
-candidate that requires paired retraining.
+tangent step inside the balance plane. Slides 17-18 then report the directly
+measured pre/post response mismatch for Poisson and CDR, together with the final
+evaluation metrics. These result slides establish that the fixed tangent step
+reduces its own mismatch objective on all 50 test samples in both equations;
+they do not establish a causal solution-quality gain over a separately trained
+symmetric baseline.
 
 ## Main Slide Plan
 
@@ -2246,8 +2261,8 @@ H_x\widetilde\phi=H_y\widetilde\psi.
 \]
 
 The existing canonical energy and optimizer already try to reduce directional
-mismatch while training. The proposed next step makes one response-informed
-movement explicit without leaving the feasible plane.
+mismatch while training. The evaluated fixed tangent step makes one
+response-informed movement explicit without leaving the feasible plane.
 
 **Visual composition**
 
@@ -2283,7 +2298,7 @@ directional-source candidates.
 
 **Title**
 
-> Next Candidate: Tangent Correction Within the Balance Plane
+> Tangent Green-Response Correction Within the Balance Plane
 
 **Feasible tangent family**
 
@@ -2349,7 +2364,15 @@ D_j
 G_j+(\lambda_{\mathrm{rel}}+\varepsilon_{\mathrm{rel}})\overline G.
 \]
 
-Take one fixed step,
+For the two displayed runs, use the fixed setting
+
+\[
+\eta=0.01,
+\qquad
+\lambda_{\mathrm{rel}}=0.01,
+\]
+
+and take one step,
 
 \[
 \delta_j=-\eta\frac{g_j}{D_j},
@@ -2371,15 +2394,26 @@ For \(v=-D^{-1}g\),
 =-g^\top D^{-1}g\leq0.
 \]
 
-This proves a local descent direction at the symmetric pair. It does not claim
-that every finite \(\eta\) decreases \(J\); pre/post mismatch diagnostics and
-paired retraining are still required.
+This proves a local descent direction at the symmetric pair. The actual fixed
+step is audited sample by sample with
+
+\[
+\rho_b
+=
+\frac{\|m_{\mathrm{post},b}\|_{M_\Omega}}
+{\|m_{\mathrm{pre},b}\|_{M_\Omega}}.
+\]
+
+The condition \(\rho_b<1\) means that the finite tangent step reduced the
+directly optimized response mismatch for sample \(b\). It does not mean that
+the solution error decreased by the same fraction.
 
 **Method boundaries**
 
 - The symmetric-balanced source is the only tangent base.
-- \(\eta\), \(\lambda_{\mathrm{rel}}\), and
-  \(\varepsilon_{\mathrm{rel}}\) are fixed config scalars.
+- \(\eta=0.01\), \(\lambda_{\mathrm{rel}}=0.01\), and
+  \(\varepsilon_{\mathrm{rel}}\) are fixed config scalars in the displayed
+  Poisson/CDR runs.
 - Geometry, prescribed coefficients, quadrature, and the frozen GreenNet are
   allowed; reference `sol/phi/psi` targets are not.
 - Forward and transpose response actions are segment-local and differentiable.
@@ -2408,12 +2442,90 @@ paired retraining are still required.
 1. Show the symmetric-balanced tangent family and information contract.
 2. Reveal the response mismatch objective and tangent gradient.
 3. Reveal the fixed column-diagonal Jacobi denominator and update.
-4. Reveal exact balance, local descent interpretation, unchanged downstream
-   training, and the paired-retraining requirement.
+4. Reveal exact balance, local descent interpretation, the \(\rho_b\) audit,
+   and the unchanged downstream training path.
+
+### Slide 17: Poisson Fixed Tangent Result
+
+**Title**
+
+> Poisson: Fixed Tangent Correction Reduces Response Mismatch
+
+**Frozen evidence**
+
+- Artifact root: `checkpoints/Annulus_poisson/coupling18/artifacts`
+- Representative role: q50, sample 41
+- Fixed setting: \(\eta=0.01\), \(\lambda_{\mathrm{rel}}=0.01\)
+- Presentation asset: `poisson_tangent_result_q50.html`
+
+Use a 2x2 Plotly composite:
+
+1. \(m_{\mathrm{pre}}\) on q50 sample 41.
+2. \(m_{\mathrm{post}}\) on the same sample and the exact same zero-centered
+   color range as panel 1.
+3. Final signed \(u_{\mathrm{pred}}-u\) on an independent zero-centered color
+   range.
+4. All 50 per-sample post-versus-pre mismatch RMS values with the \(y=x\)
+   reference line.
+
+**Locked metrics**
+
+- Mean \(\rho_b=0.350216\), hence mean response-mismatch reduction `65.0%`.
+- `50/50` samples satisfy \(\rho_b<1\).
+- Mean tangent correction / symmetric pair: `5.390%`.
+- Mean equal-mean `rel_sol`: `3.660%`.
+- Mean weak-final `rel_sol`: `3.405%`.
+- Mean `rel_flux`: `12.487%`.
+
+The 65.0% claim refers only to response mismatch. The `rel_sol` values describe
+this trained pipeline and do not provide a causal tangent-versus-symmetric
+comparison.
+
+**Reveal plan**
+
+1. Define the pre/post field comparison and \(\rho_b\).
+2. Reveal the 50-sample reduction and tangent-correction magnitude.
+3. Reveal final evaluation metrics and the causal-comparison limitation.
+
+### Slide 18: CDR Fixed Tangent Result
+
+**Title**
+
+> CDR: The Same Tangent Mechanism Persists with Variable Coefficients
+
+**Frozen evidence**
+
+- Artifact root: `checkpoints/annulus_CDR/coupling8/artifacts`
+- Representative role: q50, sample 33
+- Fixed setting: \(\eta=0.01\), \(\lambda_{\mathrm{rel}}=0.01\)
+- Presentation asset: `cdr_tangent_result_q50.html`
+
+Use the same 2x2 panel order and visual grammar as Slide 17. The pre/post
+mismatch panels share one CDR-specific zero-centered color range. Poisson and
+CDR do not share color limits because they use different PDEs and independent
+source realizations.
+
+**Locked metrics**
+
+- Mean \(\rho_b=0.370161\), hence mean response-mismatch reduction `63.0%`.
+- `50/50` samples satisfy \(\rho_b<1\).
+- Mean tangent correction / symmetric pair: `4.694%`.
+- Mean equal-mean `rel_sol`: `3.232%`.
+- Mean weak-final `rel_sol`: `2.970%`.
+- Mean `rel_flux`: `13.677%`.
+
+This is cross-equation evidence on the same Annulus geometry, not cross-domain
+validation and not a paired Poisson-versus-CDR ranking.
+
+**Reveal plan**
+
+1. Reveal q50 CDR pre/post response mismatch.
+2. Reveal the 50-sample reduction and correction magnitude.
+3. Reveal final evaluation metrics and the same-geometry limitation.
 
 ### Result And Candidate Order
 
-The final eight slides must close with the following evidence and experimental
+The final ten main slides must close with the following evidence and experimental
 order:
 
 1. Define the common post-reconstruction estimator and distinguish fixed
@@ -2428,17 +2540,22 @@ order:
    diagnosis language.
 5. Present the corresponding CDR coefficients, directional sources,
    reconstructions, signed errors, and metrics with the same visual contract.
-6. Validate the reliability rule on independent geometries before production
-   integration. Separately audit the fixed tangent step size and damping, then
-   run a paired retraining experiment against the symmetric baseline.
+6. Define the fixed tangent correction from the symmetric-balanced source and
+   its direct response-mismatch ratio \(\rho_b\).
+7. Present Poisson first, then CDR, showing the q50 pre/post fields, 50-sample
+   paired mismatch audit, correction magnitude, and final evaluation metrics.
+8. Treat the tangent results as direct objective validation. A causal
+   solution-quality conclusion still requires a paired retraining experiment
+   against the symmetric baseline.
 
 The three post-hoc blend rules and the proposed response gains construct their
 outputs without reference targets. Slide 5 defines the rules, Slides 6-8 explain
 their construction, Slide 9 presents Poisson comparison evidence, Slide 10
 presents CDR consistency, Slides 11-14 present the final computed fields and
 evaluation-only errors, Slide 15 separates exact balance from directional
-response consistency, and Slide 16 proposes one fixed Jacobi-preconditioned
-tangent step from the symmetric-balanced source. Learned weights, learned
+response consistency, Slide 16 defines the evaluated fixed
+Jacobi-preconditioned tangent step, and Slides 17-18 present its Poisson/CDR
+response-mismatch audits. Learned weights, learned
 steps, learned gates, full response-matrix solves, and additional axial
 orientations remain outside the meeting plan.
 
@@ -2535,7 +2652,7 @@ wording are approved:
 
 ## Planned Quarto Structure After Content Approval
 
-The proposed future location is:
+The implemented canonical location is:
 
 ```text
 docs/meeting/annulus_transition_error/
@@ -2544,7 +2661,7 @@ docs/meeting/annulus_transition_error/
 └── assets/
 ```
 
-The `.qmd` should use:
+The `.qmd` uses:
 
 - `format: revealjs`
 - 16:9 layout
@@ -2552,8 +2669,6 @@ The `.qmd` should use:
 - slide-local fragments rather than globally incremental lists
 - static image fallbacks for every Plotly figure
 - presentation HTML plus a handout-oriented PDF export check
-
-This directory must not be created until the content plan is approved.
 
 ## Asset Preparation Tasks After Approval
 
@@ -2610,14 +2725,16 @@ This directory must not be created until the content plan is approved.
     `cdr_weak_result_fields_sample9`, and
     `cdr_weak_result_errors_sample9`.
 19. Verify the tangent formulas against the production forward/transpose
-    response actions and fixed Jacobi denominator. Slides 15-16 remain
-    method-only; do not fabricate trained outcome figures or add frozen
-    post-hoc metrics.
-20. Crop or regenerate diagnostic figures without artifact-specific titles that
+    response actions and fixed Jacobi denominator. Lock the displayed setting
+    to \(\eta=0.01\), \(\lambda_{\mathrm{rel}}=0.01\), and define \(\rho_b\).
+20. Build the Slide 17/18 q50 composites from the frozen coupling18/coupling8
+    NPZ/CSV/JSON only. Enforce shared pre/post mismatch color ranges, independent
+    final-error ranges, 50-sample paired scatter, and SHA-256 provenance.
+21. Crop or regenerate diagnostic figures without artifact-specific titles that
     compete with slide headings.
-21. Copy only approved final assets into the future meeting `assets/`
+22. Copy only approved final assets into the meeting `assets/`
     directory.
-22. Verify every numerical value against
+23. Verify every numerical value against
    `length_response_diagnostics/summary.json`, metrics CSV files, and
    the relevant post-hoc geometry, seam, and weak-residual comparison
    `summary.json`/`diagnosis_report.md` files.
@@ -2754,12 +2871,24 @@ This directory must not be created until the content plan is approved.
 - [ ] Slide 16 defines \(J(\delta)\),
       \(g=(H_x+H_y)^\top M_\Omega m_0\), the fixed Jacobi denominator \(D\),
       and \(\delta=-\eta D^{-1}g\).
+- [ ] Slide 16 displays \(\eta=0.01\),
+      \(\lambda_{\mathrm{rel}}=0.01\), and
+      \(\rho_b=\|m_{\mathrm{post},b}\|/\|m_{\mathrm{pre},b}\|\).
 - [ ] Slide 16 uses the column diagonal only to precondition the tangent
       gradient. Raw-residual allocation, opposite-gain correction, and the full
       coupled solve are absent.
 - [ ] Slide 16 states only a local descent direction at \(\delta=0\), preserves
-      the existing canonical-energy/optimizer path, and requires paired
-      retraining before any performance conclusion.
+      the existing canonical-energy/optimizer path, and points to the measured
+      finite-step audit without making a causal baseline claim.
+- [ ] Slide 17 uses Poisson q50 sample 41, reports mean \(\rho_b=0.350216\),
+      `65.0%` response-mismatch reduction, and `50/50` improved samples.
+- [ ] Slide 18 uses CDR q50 sample 33, reports mean \(\rho_b=0.370161\),
+      `63.0%` response-mismatch reduction, and `50/50` improved samples.
+- [ ] Each tangent result asset gives pre/post mismatch one shared
+      zero-centered range and gives `u_pred_error` an independent range.
+- [ ] Slides 17-18 distinguish response-mismatch reduction from equal-mean and
+      weak-final `rel_sol`, and do not claim causal improvement over a
+      symmetric-trained checkpoint.
 - [ ] Slides 5-14's blend construction and Slide 16's tangent construction are
       reference-free; displayed reference errors are evaluation-only, and
       learned weights, learned steps, learned gates, and target-fitted
@@ -2770,17 +2899,19 @@ This directory must not be created until the content plan is approved.
       and speaker notes.
 - [ ] Pre-projection fuser is absent.
 - [ ] The \(H_0^1\) assumption-relaxation discussion is absent.
-- [ ] Slides 9-14 are described as measured frozen-checkpoint post-hoc results
-      rather than production remedies; only Slides 15-16 present an
-      unvalidated proposal.
+- [ ] Slides 9-14 are described as measured frozen-checkpoint post-hoc results.
+      Slides 15-16 define the tangent method, and Slides 17-18 present its
+      frozen trained-run diagnostics with explicit causal limitations.
 
 ## Locked Authoring Decisions
 
-- The deck has sixteen main slides followed by Backup A/B.
+- The deck has eighteen main slides followed by Backup A/B.
 - Visible slide text is English and speaker notes are Korean.
-- Slides 15-16 are method-only and make no trained-performance claim.
+- Slide 15 is method-only, Slide 16 defines the evaluated fixed method, and
+  Slides 17-18 present direct mismatch evidence plus evaluation metrics.
 - Slide 16 uses the production fixed tangent contract: symmetric-balanced base,
   response forward/transpose gradient, column-diagonal Jacobi denominator, and
   one balance-preserving step.
-- Any performance conclusion requires paired retraining against the symmetric
-  baseline; frozen post-hoc evidence is not presented on these two slides.
+- The displayed runs verify the tangent objective on 50/50 samples, but any
+  causal solution-quality conclusion still requires paired retraining against
+  a symmetric baseline.

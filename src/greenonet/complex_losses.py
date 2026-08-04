@@ -288,7 +288,7 @@ def relative_split_consistency_loss(
     u_phi_valid: torch.Tensor,
     u_psi_valid: torch.Tensor,
     rhs_valid: torch.Tensor,
-    energy: ComplexEnergyLossResult,
+    optimized_energy_per_sample: torch.Tensor,
     geometry: ComplexGeometryMetadata,
     config: ComplexRelativeSplitConsistencyConfig,
 ) -> ComplexRelativeSplitLossResult:
@@ -300,8 +300,8 @@ def relative_split_consistency_loss(
         raise ValueError("u_phi_valid and u_psi_valid must have shape (B, P).")
     if rhs_valid.shape != u_phi_valid.shape:
         raise ValueError("rhs_valid must match represented solution shape.")
-    if energy.total_per_sample.shape != (u_phi_valid.shape[0],):
-        raise ValueError("energy per-sample values do not match batch size.")
+    if optimized_energy_per_sample.shape != (u_phi_valid.shape[0],):
+        raise ValueError("optimized energy per-sample values do not match batch size.")
 
     area = geometry.hx.to(u_phi_valid.device) * geometry.hy.to(u_phi_valid.device)
     split_residual = u_phi_valid - u_psi_valid
@@ -312,7 +312,7 @@ def relative_split_consistency_loss(
         reference=u_phi_valid,
     )
     denominator = rhs_l2_squared_per_sample + float(config.eps)
-    energy_relative_per_sample = energy.total_per_sample / denominator
+    energy_relative_per_sample = optimized_energy_per_sample / denominator
     mass_relative_per_sample = (
         mass_unscaled_per_sample / domain_length_scale.square()
     ) / denominator

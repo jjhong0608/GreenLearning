@@ -51,6 +51,7 @@ from greenonet.complex_tangent_projection import (
 )
 from greenonet.config import (
     BalanceProjectionConfig,
+    ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
@@ -98,6 +99,9 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self.cross_axis_reconstructor = ComplexCrossAxisReconstructor(
             self.cross_axis_reconstruction_config
         )
+        self.canonical_energy_config = ComplexCanonicalEnergyConfig.from_raw(
+            config.canonical_energy
+        )
         self.relative_split_config = ComplexRelativeSplitConsistencyConfig.from_raw(
             config.relative_split_consistency
         )
@@ -122,6 +126,14 @@ class ComplexCouplingEvaluator(LoggingMixin):
         )
         self._tangent_context_cache = SymmetricTangentGreenResponseContextCache(
             self.balance_projection.symmetric_tangent_green_response
+        )
+        self.logger.info(
+            "canonical energy boundary_weight=%.6e "
+            "boundary_in_optimization=%s boundary_diagnostic_always=true "
+            "optimized_formula=bulk+boundary_weight*boundary "
+            "canonical_formula=bulk+boundary",
+            self.canonical_energy_config.boundary_weight,
+            self.canonical_energy_config.boundary_weight > 0.0,
         )
         self.logger.info(
             "final reconstruction enabled=%s mode=%s gamma=%.6f "
@@ -214,6 +226,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             a_valid=batch.a_valid,
             geometry=batch.geometry,
             weak_context=batch.weak_context,
+            canonical_energy_config=self.canonical_energy_config,
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
             boundary_context=self.boundary_energy_context(batch.geometry),
