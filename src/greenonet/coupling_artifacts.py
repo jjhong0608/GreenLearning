@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,9 @@ class CouplingArtifactRequest:
     plot_workers: int = 1
     save_generated_data: bool = True
     coefficient_vector_max_points: int = 400
+    show_domain_boundary: bool = True
+    visualization_mesh: Path | None = None
+    directional_color_quantile: float | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -65,6 +69,24 @@ class CouplingArtifactRequest:
         ):
             raise ValueError(
                 "coefficient_vector_max_points must be a positive integer."
+            )
+        if not isinstance(self.show_domain_boundary, bool):
+            raise ValueError("show_domain_boundary must be a boolean.")
+        if self.visualization_mesh is not None and not isinstance(
+            self.visualization_mesh,
+            Path,
+        ):
+            raise TypeError("visualization_mesh must be a pathlib.Path or None.")
+        quantile = self.directional_color_quantile
+        if quantile is not None and (
+            isinstance(quantile, bool)
+            or not isinstance(quantile, (int, float))
+            or not math.isfinite(float(quantile))
+            or float(quantile) <= 0.5
+            or float(quantile) > 1.0
+        ):
+            raise ValueError(
+                "directional_color_quantile must be finite and in (0.5, 1.0]."
             )
 
 
@@ -280,6 +302,16 @@ class CouplingArtifactExporter:
         self.integration_rule: IntegrationRule = "simpson"
 
     def export(self) -> dict[str, object]:
+        if self.request.directional_color_quantile is not None:
+            raise ValueError(
+                "--directional-color-quantile is supported only for complex "
+                "CouplingNet artifacts."
+            )
+        if self.request.visualization_mesh is not None:
+            raise ValueError(
+                "--visualization-mesh is supported only for complex CouplingNet "
+                "artifacts."
+            )
         self.request.outdir.mkdir(parents=True, exist_ok=True)
         self._ensure_output_tree()
         configs = load_coupling_artifact_configs(self.request.config)

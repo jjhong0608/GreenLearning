@@ -1,7 +1,7 @@
 {
   "dataset": {
     "geometry_mode": "complex",
-    "geometry_path": "data/geometry/annulars_05_1_1_128.npz",
+    "geometry_path": "data/geometry/pentagram_r05_h00078125.npz",
     "samples_per_line": 25,
     "validation_samples_per_line": 5,
     "sampler_mode": "forward",
@@ -11,7 +11,7 @@
     "deterministic": true,
     "use_operator_learning": true,
     "dtype": "float64",
-    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py"
+    "coefficient_functions_path": "coefficients/CDR_pentagram.py"
   },
   "terminal": {
     "width": 250
@@ -30,42 +30,42 @@
     "dtype": "float64"
   },
   "training": {
-    "learning_rate": 0.0005,
+    "learning_rate": 0.005,
     "weight_decay": 0.0,
-    "epochs": 4000,
+    "epochs": 200,
     "batch_size": 20000,
     "log_interval": 1,
     "compute_validation_rel_sol": true,
     "device": "cuda:1",
     "use_lr_schedule": true,
-    "warmup_epochs": 100,
+    "warmup_epochs": 20,
     "min_lr": 1e-5,
     "optimizer": {
       "name": "soap",
       "betas": [
-        0.95,
+        0.90,
         0.95
       ],
       "eps": 1e-8,
       "profile_step_time": true,
       "soap": {
-        "shampoo_beta": -1.0,
-        "precondition_frequency": 10,
+        "shampoo_beta": 0.95,
+        "precondition_frequency": 5,
         "max_precondition_dim": 1024,
         "merge_dims": false,
-        "precondition_1d": false,
+        "precondition_1d": true,
         "normalize_grads": false,
         "correct_bias": true
       }
     },
-    "lbfgs_max_iter": 1000,
-    "lbfgs_history_size": 200,
+    "lbfgs_max_iter": 100,
+    "lbfgs_history_size": 100,
     "lbfgs_lr": 1.0,
     "lbfgs_tolerance_grad": 1e-20,
     "lbfgs_epochs": 100,
     "integration_rule": "trapezoid",
     "green_quadrature": {
-      "enabled": false,
+      "enabled": true,
       "rule": "split_gauss_legendre",
       "order": 16,
       "source_sampling_factor": 4,

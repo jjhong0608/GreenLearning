@@ -1,7 +1,7 @@
 {
   "dataset": {
     "geometry_mode": "complex",
-    "geometry_path": "data/geometry/annulars_05_1_1_128.npz",
+    "geometry_path": "data/geometry/pentagram_r05_h00078125.npz",
     "samples_per_line": 25,
     "validation_samples_per_line": 5,
     "sampler_mode": "forward",
@@ -11,7 +11,7 @@
     "deterministic": true,
     "use_operator_learning": true,
     "dtype": "float64",
-    "coefficient_functions_path": "coefficients/Smooth_Variable_Diffusion_Reaction.py"
+    "coefficient_functions_path": "coefficients/CDR_pentagram.py"
   },
   "terminal": {
     "width": 250

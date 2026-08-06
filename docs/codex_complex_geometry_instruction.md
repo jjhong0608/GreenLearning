@@ -307,6 +307,28 @@ S_x=S_y.
 
 Horizontal and vertical segment counts may differ.
 
+#### 5.6.1 Regular pentagram geometry convention
+
+The canonical pentagram domain is a filled, hole-free, simple concave 10-gon.
+It is centered at the origin, has circumradius \(R>0\), and fixes the first
+vertex at \((0,R)\), so its orientation is \(\pi/2\). With
+\(\varphi=(1+\sqrt{5})/2\), the alternating inner vertex radius is derived as
+
+\[
+r=\frac{R}{\varphi^2}.
+\]
+
+Neither the inner radius nor the orientation is a user option. The polygon
+includes its central pentagon and is one connected Gmsh surface; do not use the
+self-intersecting \(\{5/2\}\) star outline as the physical boundary.
+
+`cli/make_pentagram_geometry.py` stores the counter-clockwise `(10, 2)`
+`boundary_vertices` array in the geometry NPZ. Both Cartesian scanline
+intersection and `examples/pentagram_gmsh.py` must consume those saved vertices
+as their common source of truth. Valid points are strict polygon-interior points,
+while segment endpoints are exact polygon intersections and may split at a
+concave vertex. Reconstruction CSR arrays and edge lists remain segment-local.
+
 ### 5.7 CouplingNet raw-output convention
 
 CouplingNet output contract v6 returns two directional reference-response fields.
@@ -1024,6 +1046,12 @@ The metadata should include:
 - segment reconstruction nodes;
 - trapezoid weights;
 - valid x/y energy edge lists.
+
+Geometry-specific provenance may be stored as optional metadata. For the
+regular pentagram this includes `domain_type`, `outer_radius`, derived
+`inner_radius`, `center`, `orientation_angle`, `fill_rule`, `has_hole`, and
+`boundary_vertices`. FEniCSx summary generation must preserve these values, but
+they do not alter the required tensor schema used by existing geometries.
 
 Use torch tensors where appropriate.
 

@@ -1293,6 +1293,54 @@ class ComplexWeakOperatorClosureConfig:
 
 
 @dataclass
+class ComplexPostLineSearchStationarityConfig:
+    """Normalized stationarity regularization after tangent exact line search."""
+
+    enabled: bool = False
+    weight: float = 1.0
+    eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("post_line_search_stationarity.enabled must be a boolean.")
+        for field_name, value in (("weight", self.weight), ("eps", self.eps)):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(
+                    f"post_line_search_stationarity.{field_name} must be numeric."
+                )
+            if not math.isfinite(float(value)):
+                raise ValueError(
+                    f"post_line_search_stationarity.{field_name} must be finite."
+                )
+        if self.weight < 0.0:
+            raise ValueError(
+                "post_line_search_stationarity.weight must be non-negative."
+            )
+        if self.eps <= 0.0:
+            raise ValueError("post_line_search_stationarity.eps must be positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexPostLineSearchStationarityConfig | dict[str, Any] | None,
+    ) -> ComplexPostLineSearchStationarityConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "weight", "eps"})
+            if unknown:
+                raise TypeError(
+                    "post_line_search_stationarity has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("post_line_search_stationarity must be an object.")
+
+
+@dataclass
 class SoapOptimizerConfig:
     """SOAP-specific optimizer settings shared by supported training paths."""
 
@@ -1524,6 +1572,9 @@ class CouplingTrainingConfig:
     weak_operator_closure: ComplexWeakOperatorClosureConfig | dict[str, Any] = field(
         default_factory=ComplexWeakOperatorClosureConfig
     )
+    post_line_search_stationarity: (
+        ComplexPostLineSearchStationarityConfig | dict[str, Any]
+    ) = field(default_factory=ComplexPostLineSearchStationarityConfig)
     optimizer: CouplingOptimizerConfig | dict[str, Any] = field(
         default_factory=CouplingOptimizerConfig
     )
@@ -1545,6 +1596,11 @@ class CouplingTrainingConfig:
         )
         self.weak_operator_closure = ComplexWeakOperatorClosureConfig.from_raw(
             self.weak_operator_closure
+        )
+        self.post_line_search_stationarity = (
+            ComplexPostLineSearchStationarityConfig.from_raw(
+                self.post_line_search_stationarity
+            )
         )
         self.optimizer = CouplingOptimizerConfig.from_raw(self.optimizer)
 
@@ -1575,6 +1631,13 @@ def validate_unit_square_coupling_training_config(
             "coupling_training.weak_operator_closure is available only for "
             "ComplexCouplingTrainer."
         )
+    if ComplexPostLineSearchStationarityConfig.from_raw(
+        config.post_line_search_stationarity
+    ).enabled:
+        raise ValueError(
+            "coupling_training.post_line_search_stationarity is available only "
+            "for ComplexCouplingTrainer."
+        )
     if CouplingBestPhysicsCheckpointConfig.from_raw(
         config.best_physics_checkpoint
     ).enabled:
@@ -1594,6 +1657,37 @@ def validate_unit_square_coupling_training_config(
             "ComplexCouplingTrainer; omit the optimizer block for unit-square "
             "AdamW training."
         )
+
+
+def validate_complex_post_line_search_stationarity_config(
+    *,
+    training: CouplingTrainingConfig,
+    balance_projection: BalanceProjectionConfig | dict[str, Any] | str,
+) -> ComplexPostLineSearchStationarityConfig:
+    """Validate the objective against the complex tangent projection contract."""
+
+    stationarity = ComplexPostLineSearchStationarityConfig.from_raw(
+        training.post_line_search_stationarity
+    )
+    if not stationarity.enabled:
+        return stationarity
+    projection = BalanceProjectionConfig.from_raw(balance_projection)
+    if not projection.enabled or projection.mode != "symmetric_tangent_green_response":
+        raise ValueError(
+            "coupling_training.post_line_search_stationarity.enabled=true requires "
+            "coupling_model.balance_projection.mode="
+            "'symmetric_tangent_green_response'."
+        )
+    tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+        projection.symmetric_tangent_green_response
+    )
+    if tangent.eta_strategy != "closed_loop_exact_line_search":
+        raise ValueError(
+            "coupling_training.post_line_search_stationarity.enabled=true requires "
+            "balance_projection.symmetric_tangent_green_response.eta_strategy="
+            "'closed_loop_exact_line_search'."
+        )
+    return stationarity
 
 
 def validate_complex_coupling_source_config(

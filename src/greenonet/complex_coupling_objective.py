@@ -5,6 +5,9 @@ from dataclasses import dataclass
 import torch
 
 from greenonet.complex_geometry import ComplexGeometryMetadata
+from greenonet.complex_tangent_projection import (
+    NormalizedPostLineSearchStationarityResult,
+)
 from greenonet.complex_losses import (
     ComplexBoundaryEnergyContext,
     ComplexEnergyLossResult,
@@ -19,6 +22,7 @@ from greenonet.complex_weak_closure import (
 )
 from greenonet.config import (
     ComplexCanonicalEnergyConfig,
+    ComplexPostLineSearchStationarityConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
 )
@@ -35,9 +39,11 @@ class ComplexCouplingObjectiveResult:
     energy_optimized_per_sample: torch.Tensor
     relative_split: ComplexRelativeSplitLossResult | None
     weak_closure: ComplexWeakClosureResult | None
+    post_line_search_stationarity: NormalizedPostLineSearchStationarityResult | None
     relative_split_weight: float
     relative_split_mass_weight: float
     weak_closure_weight: float
+    post_line_search_stationarity_weight: float
     boundary_weight: float
 
     def metric_tensors(self) -> dict[str, torch.Tensor]:
@@ -76,6 +82,18 @@ class ComplexCouplingObjectiveResult:
                     ),
                     "loss_weak_operator_y": (
                         self.weak_closure_weight * self.weak_closure.y_loss
+                    ),
+                }
+            )
+        if self.post_line_search_stationarity is not None:
+            metrics.update(
+                {
+                    "loss_tangent_post_line_search_stationarity": (
+                        self.post_line_search_stationarity_weight
+                        * self.post_line_search_stationarity.loss
+                    ),
+                    "tangent_post_line_search_stationarity_ratio": (
+                        self.post_line_search_stationarity.loss
                     ),
                 }
             )
@@ -126,6 +144,16 @@ class ComplexCouplingObjectiveResult:
                     ),
                 }
             )
+        if self.post_line_search_stationarity is not None:
+            ratio = self.post_line_search_stationarity.loss_per_sample[sample_offset]
+            metrics.update(
+                {
+                    "loss_tangent_post_line_search_stationarity": (
+                        self.post_line_search_stationarity_weight * ratio
+                    ),
+                    "tangent_post_line_search_stationarity_ratio": ratio,
+                }
+            )
         return metrics
 
 
@@ -156,6 +184,12 @@ def compute_complex_coupling_objective(
     relative_split_config: ComplexRelativeSplitConsistencyConfig,
     weak_closure_config: ComplexWeakOperatorClosureConfig,
     boundary_context: ComplexBoundaryEnergyContext,
+    post_line_search_stationarity_config: (
+        ComplexPostLineSearchStationarityConfig | None
+    ) = None,
+    post_line_search_stationarity: (
+        NormalizedPostLineSearchStationarityResult | None
+    ) = None,
 ) -> ComplexCouplingObjectiveResult:
     """Compute the configured complex objective without reference targets."""
 
@@ -202,6 +236,29 @@ def compute_complex_coupling_objective(
     else:
         loss_per_sample = split_loss_per_sample
 
+    stationarity_config = (
+        ComplexPostLineSearchStationarityConfig()
+        if post_line_search_stationarity_config is None
+        else ComplexPostLineSearchStationarityConfig.from_raw(
+            post_line_search_stationarity_config
+        )
+    )
+    if stationarity_config.enabled != (post_line_search_stationarity is not None):
+        raise ValueError(
+            "Enabled post-line-search stationarity config and computed result "
+            "must be provided together."
+        )
+    if post_line_search_stationarity is not None:
+        if post_line_search_stationarity.loss_per_sample.shape != loss_per_sample.shape:
+            raise ValueError(
+                "Post-line-search stationarity batch shape does not match objective."
+            )
+        loss_per_sample = (
+            loss_per_sample
+            + float(stationarity_config.weight)
+            * post_line_search_stationarity.loss_per_sample
+        )
+
     return ComplexCouplingObjectiveResult(
         loss=loss_per_sample.mean(),
         loss_per_sample=loss_per_sample,
@@ -210,8 +267,10 @@ def compute_complex_coupling_objective(
         energy_optimized_per_sample=energy_optimized_per_sample,
         relative_split=relative_split,
         weak_closure=weak_closure,
+        post_line_search_stationarity=post_line_search_stationarity,
         relative_split_weight=float(relative_split_config.weight),
         relative_split_mass_weight=float(relative_split_config.mass_weight),
         weak_closure_weight=float(weak_closure_config.weight),
+        post_line_search_stationarity_weight=float(stationarity_config.weight),
         boundary_weight=boundary_weight,
     )

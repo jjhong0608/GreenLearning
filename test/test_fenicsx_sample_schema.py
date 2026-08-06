@@ -410,6 +410,182 @@ def test_annulus_gmsh_radii_reader_rejects_missing_or_invalid_metadata(tmp_path)
         )
 
 
+def _load_pentagram_gmsh_module():
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "pentagram_gmsh.py"
+    spec = importlib.util.spec_from_file_location("pentagram_gmsh", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load pentagram_gmsh.py.")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_pentagram_metadata(path, **overrides):
+    outer_radius = 1.0
+    golden_ratio = 0.5 * (1.0 + np.sqrt(5.0))
+    inner_radius = outer_radius / golden_ratio**2
+    indices = np.arange(10)
+    radii = np.where(indices % 2 == 0, outer_radius, inner_radius)
+    angles = np.pi / 2.0 + indices * np.pi / 5.0
+    vertices = np.column_stack((radii * np.cos(angles), radii * np.sin(angles)))
+    vertices[np.abs(vertices) < 1.0e-14] = 0.0
+    payload = {
+        "domain_type": np.array("regular_pentagram"),
+        "outer_radius": np.array(outer_radius, dtype=np.float64),
+        "inner_radius": np.array(inner_radius, dtype=np.float64),
+        "center": np.array([0.0, 0.0], dtype=np.float64),
+        "orientation_angle": np.array(np.pi / 2.0, dtype=np.float64),
+        "fill_rule": np.array("filled_simple_decagon"),
+        "has_hole": np.array(False),
+        "boundary_vertices": vertices,
+    }
+    payload.update(overrides)
+    np.savez(path, **payload)
+    return vertices
+
+
+def test_pentagram_gmsh_example_imports():
+    module = _load_pentagram_gmsh_module()
+
+    assert callable(module.build_domain)
+
+
+def test_pentagram_gmsh_reader_uses_saved_boundary_vertices(tmp_path):
+    module = _load_pentagram_gmsh_module()
+    path = tmp_path / "pentagram.npz"
+    vertices = _write_pentagram_metadata(path)
+
+    metadata = module.PentagramDomainBuilder.metadata_from_context(
+        SimpleNamespace(geometry_path=path)
+    )
+
+    assert metadata.outer_radius == pytest.approx(1.0)
+    assert metadata.inner_radius == pytest.approx(
+        1.0 / module.PentagramGmshMixin.GOLDEN_RATIO**2
+    )
+    assert metadata.boundary_vertices == pytest.approx(vertices)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"domain_type": np.array("annulus")}, "domain_type"),
+        ({"boundary_vertices": np.zeros((9, 2))}, "shape"),
+        (
+            {"boundary_vertices": np.full((10, 2), np.nan)},
+            "finite",
+        ),
+        ({"has_hole": np.array(True)}, "has_hole"),
+    ],
+)
+def test_pentagram_gmsh_reader_rejects_invalid_metadata(tmp_path, overrides, message):
+    module = _load_pentagram_gmsh_module()
+    path = tmp_path / "bad_pentagram.npz"
+    _write_pentagram_metadata(path, **overrides)
+
+    with pytest.raises((KeyError, ValueError), match=message):
+        module.PentagramDomainBuilder.metadata_from_context(
+            SimpleNamespace(geometry_path=path)
+        )
+
+
+def test_pentagram_gmsh_reader_rejects_missing_metadata(tmp_path):
+    module = _load_pentagram_gmsh_module()
+    path = tmp_path / "missing_pentagram_metadata.npz"
+    np.savez(path, domain_type=np.array("regular_pentagram"))
+
+    with pytest.raises(KeyError, match="missing required keys"):
+        module.PentagramDomainBuilder.metadata_from_context(
+            SimpleNamespace(geometry_path=path)
+        )
+
+
+def test_pentagram_gmsh_reader_rejects_self_intersecting_boundary(tmp_path):
+    module = _load_pentagram_gmsh_module()
+    reference_path = tmp_path / "reference_pentagram.npz"
+    vertices = _write_pentagram_metadata(reference_path)
+    crossing_vertices = vertices[[0, 3, 2, 1, 4, 5, 6, 7, 8, 9]]
+    path = tmp_path / "crossing_pentagram.npz"
+    _write_pentagram_metadata(path, boundary_vertices=crossing_vertices)
+
+    with pytest.raises(ValueError, match="self-intersect"):
+        module.PentagramDomainBuilder.metadata_from_context(
+            SimpleNamespace(geometry_path=path)
+        )
+
+
+def test_pentagram_gmsh_reader_rejects_missing_geometry_path():
+    module = _load_pentagram_gmsh_module()
+
+    with pytest.raises(ValueError, match="geometry_path"):
+        module.PentagramDomainBuilder.metadata_from_context(
+            SimpleNamespace(geometry_path=None)
+        )
+
+
+def test_pentagram_gmsh_builds_one_surface_with_ten_boundary_tags(tmp_path):
+    module = _load_pentagram_gmsh_module()
+    path = tmp_path / "pentagram.npz"
+    vertices = _write_pentagram_metadata(path)
+
+    class FakeOcc:
+        def __init__(self):
+            self.points = []
+            self.lines = []
+            self.curve_loops = []
+            self.plane_surfaces = []
+            self.synchronized = False
+
+        def addPoint(self, x, y, z, meshSize=0.0):
+            self.points.append((x, y, z, meshSize))
+            return len(self.points)
+
+        def addLine(self, start, end):
+            self.lines.append((start, end))
+            return 100 + len(self.lines)
+
+        def addCurveLoop(self, line_tags):
+            self.curve_loops.append(tuple(line_tags))
+            return 201
+
+        def addPlaneSurface(self, loop_tags):
+            self.plane_surfaces.append(tuple(loop_tags))
+            return 301
+
+        def synchronize(self):
+            self.synchronized = True
+
+    class FakeOption:
+        def __init__(self):
+            self.values = []
+
+        def setNumber(self, name, value):
+            self.values.append((name, value))
+
+    occ = FakeOcc()
+    gmsh = SimpleNamespace(
+        model=SimpleNamespace(occ=occ),
+        option=FakeOption(),
+    )
+    result = module.build_domain(
+        gmsh,
+        SimpleNamespace(geometry_path=path, mesh_size=0.05),
+    )
+
+    assert result == {
+        "surface_tags": [301],
+        "boundary_tags": list(range(101, 111)),
+    }
+    assert np.asarray([point[:2] for point in occ.points]) == pytest.approx(vertices)
+    assert len(occ.lines) == 10
+    assert occ.lines[-1] == (10, 1)
+    assert occ.curve_loops == [tuple(range(101, 111))]
+    assert occ.plane_surfaces == [(201,)]
+    assert occ.synchronized
+    assert gmsh.option.values == [("Mesh.CharacteristicLengthMax", 0.05)]
+
+
 def test_gmsh_io_adapter_normalizes_tuple_return():
     class TupleGmshModule:
         @staticmethod

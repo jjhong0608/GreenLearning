@@ -3,8 +3,10 @@ import torch
 
 from greenonet.config import (
     Axis1DTrunkConfig,
+    BalanceProjectionConfig,
     ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
+    ComplexPostLineSearchStationarityConfig,
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
@@ -15,6 +17,7 @@ from greenonet.config import (
     ModelConfig,
     SourceStencilLiftConfig,
     TransverseTrunkConfig,
+    validate_complex_post_line_search_stationarity_config,
     validate_unit_square_coupling_training_config,
 )
 from greenonet.coupling_model import CouplingNet
@@ -153,6 +156,105 @@ def test_unit_square_rejects_nondefault_complex_canonical_energy():
         )
 
     validate_unit_square_coupling_training_config(CouplingTrainingConfig())
+
+
+def test_post_line_search_stationarity_config_round_trip_and_defaults():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    default = CouplingTrainingConfig()
+    configured = CouplingTrainingConfig(
+        post_line_search_stationarity={
+            "enabled": True,
+            "weight": 1.0e-3,
+            "eps": 2.0e-12,
+        }
+    )
+    payload = _serialize_config(configured)
+    loaded = _deserialize_config(payload, CouplingTrainingConfig)
+
+    assert isinstance(
+        default.post_line_search_stationarity,
+        ComplexPostLineSearchStationarityConfig,
+    )
+    assert default.post_line_search_stationarity.enabled is False
+    assert default.post_line_search_stationarity.weight == pytest.approx(1.0)
+    assert default.post_line_search_stationarity.eps == pytest.approx(1.0e-12)
+    assert isinstance(
+        loaded.post_line_search_stationarity,
+        ComplexPostLineSearchStationarityConfig,
+    )
+    assert loaded.post_line_search_stationarity.enabled is True
+    assert loaded.post_line_search_stationarity.weight == pytest.approx(1.0e-3)
+    assert loaded.post_line_search_stationarity.eps == pytest.approx(2.0e-12)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type"),
+    (
+        ("enabled", 1, TypeError),
+        ("weight", True, TypeError),
+        ("weight", -1.0, ValueError),
+        ("weight", float("nan"), ValueError),
+        ("eps", 0.0, ValueError),
+        ("eps", float("inf"), ValueError),
+    ),
+)
+def test_post_line_search_stationarity_rejects_invalid_values(
+    field,
+    value,
+    error_type,
+):
+    with pytest.raises(
+        error_type,
+        match=rf"post_line_search_stationarity\.{field}",
+    ):
+        ComplexPostLineSearchStationarityConfig.from_raw({field: value})
+
+    with pytest.raises(
+        TypeError,
+        match="post_line_search_stationarity has unknown keys",
+    ):
+        ComplexPostLineSearchStationarityConfig.from_raw({"unknown": 1})
+
+
+def test_unit_square_rejects_enabled_post_line_search_stationarity():
+    with pytest.raises(
+        ValueError,
+        match="post_line_search_stationarity.*ComplexCouplingTrainer",
+    ):
+        validate_unit_square_coupling_training_config(
+            CouplingTrainingConfig(post_line_search_stationarity={"enabled": True})
+        )
+
+
+def test_post_line_search_stationarity_requires_closed_loop_tangent_projection():
+    training = CouplingTrainingConfig(post_line_search_stationarity={"enabled": True})
+    valid = BalanceProjectionConfig(
+        mode="symmetric_tangent_green_response",
+        symmetric_tangent_green_response={
+            "eta_strategy": "closed_loop_exact_line_search"
+        },
+    )
+
+    resolved = validate_complex_post_line_search_stationarity_config(
+        training=training,
+        balance_projection=valid,
+    )
+    assert resolved.enabled is True
+
+    with pytest.raises(ValueError, match="symmetric_tangent_green_response"):
+        validate_complex_post_line_search_stationarity_config(
+            training=training,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+        )
+    with pytest.raises(ValueError, match="closed_loop_exact_line_search"):
+        validate_complex_post_line_search_stationarity_config(
+            training=training,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={"eta_strategy": "fixed"},
+            ),
+        )
 
 
 def test_column_diagonal_green_response_config_round_trip():

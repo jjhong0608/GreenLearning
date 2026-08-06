@@ -133,6 +133,55 @@ def test_divergence_free_convection_diffusion_example() -> None:
     torch.testing.assert_close(dbx_dx + dby_dy, torch.zeros_like(x))
 
 
+def test_pentagram_cdr_coefficients_match_physical_contract() -> None:
+    coeffs = load_coefficient_functions(Path("coefficients/CDR_pentagram.py"))
+    radius = 0.5
+    amplitude = 0.5
+    x = torch.tensor(
+        [0.0, 0.125, 0.25, -0.25],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    y = torch.tensor(
+        [0.0, -0.25, 0.25, 0.25],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    scaled_x = torch.pi * x / radius
+    scaled_y = torch.pi * y / radius
+
+    expected_a = 1.0 + 0.5 * torch.sin(scaled_x) * torch.sin(scaled_y)
+    expected_apx = 0.5 * torch.pi / radius * torch.cos(scaled_x) * torch.sin(scaled_y)
+    expected_apy = 0.5 * torch.pi / radius * torch.sin(scaled_x) * torch.cos(scaled_y)
+    expected_bx = -amplitude * y / radius
+    expected_by = amplitude * x / radius
+    expected_c = 1.0 + 0.5 * torch.cos(scaled_x) * torch.cos(scaled_y)
+
+    torch.testing.assert_close(coeffs.a_fun(x, y), expected_a)
+    torch.testing.assert_close(coeffs.apx_fun(x, y), expected_apx)
+    torch.testing.assert_close(coeffs.apy_fun(x, y), expected_apy)
+    torch.testing.assert_close(coeffs.bx_fun(x, y), expected_bx)
+    torch.testing.assert_close(coeffs.by_fun(x, y), expected_by)
+    torch.testing.assert_close(coeffs.c_fun(x, y), expected_c)
+
+    da_dx = torch.autograd.grad(coeffs.a_fun(x, y).sum(), x, create_graph=True)[0]
+    da_dy = torch.autograd.grad(coeffs.a_fun(x, y).sum(), y, create_graph=True)[0]
+    torch.testing.assert_close(da_dx, coeffs.apx_fun(x, y))
+    torch.testing.assert_close(da_dy, coeffs.apy_fun(x, y))
+
+    delta = 1.0e-6
+    dbx_dx = (coeffs.bx_fun(x + delta, y) - coeffs.bx_fun(x - delta, y)) / (2.0 * delta)
+    dby_dy = (coeffs.by_fun(x, y + delta) - coeffs.by_fun(x, y - delta)) / (2.0 * delta)
+    torch.testing.assert_close(dbx_dx + dby_dy, torch.zeros_like(x))
+
+    extrema_x = torch.tensor([0.0, 0.0], dtype=torch.float64)
+    extrema_y = torch.tensor([0.0, radius], dtype=torch.float64)
+    torch.testing.assert_close(
+        coeffs.c_fun(extrema_x, extrema_y),
+        torch.tensor([1.5, 0.5], dtype=torch.float64),
+    )
+
+
 def test_load_coefficient_functions_rejects_missing_callable(tmp_path: Path) -> None:
     coeff_path = tmp_path / "missing_coefficients.py"
     coeff_path.write_text(

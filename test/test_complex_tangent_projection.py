@@ -13,14 +13,19 @@ from greenonet.complex_axial_response_operator import (
 from greenonet.complex_geometry import load_complex_geometry
 from greenonet.complex_projection import (
     apply_complex_balance_projection,
+    post_line_search_stationarity_from_projection,
     reconstruct_complex_projection,
     symmetric_tangent_metric_tensors,
 )
 from greenonet.complex_tangent_projection import (
+    normalized_post_line_search_stationarity_loss,
     SymmetricTangentEtaCapSchedule,
     SymmetricTangentGreenResponseContext,
 )
-from greenonet.config import BalanceProjectionConfig
+from greenonet.config import (
+    BalanceProjectionConfig,
+    ComplexPostLineSearchStationarityConfig,
+)
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from test.complex_fixtures import ConstantGreen, write_geometry_npz
 
@@ -470,3 +475,208 @@ def test_tangent_eta_cap_schedule_reuses_lr_warmup_and_holds_final_eta():
     )
     assert [immediate.cap_for_epoch_index(index) for index in range(8)] == [0.02] * 8
     assert immediate.kind == "closed_loop_final_cap"
+
+
+def test_normalized_stationarity_is_zero_when_tangent_line_reaches_minimizer(
+    monkeypatch,
+):
+    dtype = torch.float64
+    identity = torch.eye(3, dtype=dtype)
+    zeros = torch.zeros((3, 3), dtype=dtype)
+    context = SymmetricTangentGreenResponseContext.from_response_operator(
+        response_operator=_response_operator(identity, zeros),
+        point_mass=1.0,
+        config={
+            "eta": 10.0,
+            "eta_strategy": "closed_loop_exact_line_search",
+            "line_search_relative_eps": 1.0e-15,
+            "relative_lambda": 0.0,
+            "denominator_relative_eps": 1.0e-12,
+        },
+    )
+    mismatch = torch.tensor([[1.0, -2.0, 0.5]], dtype=dtype)
+    gradient = context.tangent_gradient(mismatch)
+    step = context.tangent_step(mismatch=mismatch, gradient=gradient)
+    assert step.eta_star is not None
+    assert step.response_direction is not None
+
+    def fail_solve(*args, **kwargs):
+        raise AssertionError("Stationarity loss must not solve a matrix.")
+
+    monkeypatch.setattr(torch.linalg, "solve", fail_solve)
+    result = normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=gradient,
+        response_direction=step.response_direction,
+        eta_star=step.eta_star,
+        config=ComplexPostLineSearchStationarityConfig(enabled=True),
+    )
+
+    assert result.loss.item() < 1.0e-20
+    assert torch.all(torch.isfinite(result.stationarity_residual))
+    torch.testing.assert_close(
+        result.hessian_direction,
+        context.tangent_gradient(step.response_direction),
+    )
+
+
+def test_normalized_stationarity_detects_tangent_line_missing_full_minimizer():
+    context = _context(
+        eta=10.0,
+        relative_lambda=0.1,
+        eta_strategy="closed_loop_exact_line_search",
+        line_search_relative_eps=1.0e-15,
+    )
+    mismatch = torch.tensor([[1.0, -0.25, 0.75]], dtype=torch.float64)
+    gradient = context.tangent_gradient(mismatch)
+    step = context.tangent_step(mismatch=mismatch, gradient=gradient)
+    assert step.eta_star is not None
+    assert step.response_direction is not None
+
+    result = normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=gradient,
+        response_direction=step.response_direction,
+        eta_star=step.eta_star,
+        config={"enabled": True, "eps": 1.0e-12},
+    )
+
+    assert result.loss.item() > 0.0
+    assert result.loss_per_sample.shape == (1,)
+    assert result.stationarity_residual.shape == gradient.shape
+
+
+def test_normalized_stationarity_uses_uncapped_eta_and_is_scale_invariant():
+    context = _context(
+        eta=1.0,
+        relative_lambda=0.1,
+        eta_strategy="closed_loop_exact_line_search",
+        line_search_relative_eps=1.0e-15,
+    )
+    mismatch = torch.tensor([[1.0, -0.25, 0.75]], dtype=torch.float64)
+    gradient = context.tangent_gradient(mismatch)
+    capped = context.tangent_step(
+        mismatch=mismatch,
+        gradient=gradient,
+        eta_cap=1.0e-3,
+    )
+    uncapped = context.tangent_step(
+        mismatch=mismatch,
+        gradient=gradient,
+        eta_cap=1.0,
+    )
+    assert capped.eta_star is not None
+    assert capped.response_direction is not None
+    assert uncapped.eta_star is not None
+    assert uncapped.response_direction is not None
+    assert not torch.equal(capped.eta_applied, uncapped.eta_applied)
+
+    config = ComplexPostLineSearchStationarityConfig(enabled=True, eps=1.0e-14)
+    capped_result = normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=gradient,
+        response_direction=capped.response_direction,
+        eta_star=capped.eta_star,
+        config=config,
+    )
+    uncapped_result = normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=gradient,
+        response_direction=uncapped.response_direction,
+        eta_star=uncapped.eta_star,
+        config=config,
+    )
+    scaled_result = normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=7.0 * gradient,
+        response_direction=7.0 * capped.response_direction,
+        eta_star=capped.eta_star,
+        config=config,
+    )
+
+    torch.testing.assert_close(capped_result.loss, uncapped_result.loss)
+    torch.testing.assert_close(capped_result.loss, scaled_result.loss)
+
+
+def test_normalized_stationarity_zero_gradient_is_finite_and_differentiable():
+    context = _context(
+        eta=1.0,
+        eta_strategy="closed_loop_exact_line_search",
+    )
+    gradient = torch.zeros(
+        (2, context.num_points),
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    response_direction = torch.zeros_like(gradient)
+    eta_star = torch.zeros(2, dtype=torch.float64)
+
+    result = normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=gradient,
+        response_direction=response_direction,
+        eta_star=eta_star,
+        config={"enabled": True, "eps": 1.0e-12},
+    )
+
+    assert torch.equal(result.loss_per_sample, torch.zeros(2, dtype=torch.float64))
+    assert torch.all(torch.isfinite(result.loss_per_sample))
+    result.loss.backward()
+    assert gradient.grad is not None
+    assert torch.all(torch.isfinite(gradient.grad))
+
+
+def test_stationarity_bridge_adds_one_adjoint_only_when_enabled(tmp_path, monkeypatch):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    context = _context(
+        eta=1.0,
+        eta_strategy="closed_loop_exact_line_search",
+    )
+    raw_physical = torch.tensor(
+        [[[0.2, -0.4, 0.8], [0.7, 0.1, -0.3]]],
+        dtype=torch.float64,
+    )
+    rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
+    calls = 0
+    original = FrozenBidirectionalResponseOperator.tangent_gradient
+
+    def counted(self, mismatch, *, point_mass):
+        nonlocal calls
+        calls += 1
+        return original(self, mismatch, point_mass=point_mass)
+
+    monkeypatch.setattr(
+        FrozenBidirectionalResponseOperator,
+        "tangent_gradient",
+        counted,
+    )
+    projection = apply_complex_balance_projection(
+        _raw_response(geometry, raw_physical),
+        rhs,
+        geometry,
+        BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={
+                "eta": 1.0,
+                "eta_strategy": "closed_loop_exact_line_search",
+            },
+        ),
+        symmetric_tangent_context=context,
+    )
+    assert calls == 1
+
+    disabled = post_line_search_stationarity_from_projection(
+        projection=projection,
+        context=context,
+        config=ComplexPostLineSearchStationarityConfig(enabled=False),
+    )
+    assert disabled is None
+    assert calls == 1
+
+    enabled = post_line_search_stationarity_from_projection(
+        projection=projection,
+        context=context,
+        config=ComplexPostLineSearchStationarityConfig(enabled=True),
+    )
+    assert enabled is not None
+    assert calls == 2

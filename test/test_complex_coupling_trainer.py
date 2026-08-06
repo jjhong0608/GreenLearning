@@ -32,6 +32,7 @@ from greenonet.config import (
     ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
+    ComplexPostLineSearchStationarityConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingBestEnergyCheckpointConfig,
@@ -1073,6 +1074,137 @@ def test_complex_adaptive_tangent_uses_scheduled_training_cap_and_final_validati
     assert "tangent_eta_star_mean" in csv_rows[0]
     assert "tangent_eta_applied_mean" in csv_rows[0]
     assert "tangent_eta_cap_fraction" in csv_rows[0]
+
+
+def test_complex_stationarity_objective_uses_uncapped_eta_and_reference_free_targets(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={
+                    "eta": 1.0,
+                    "eta_strategy": "closed_loop_exact_line_search",
+                    "line_search_relative_eps": 1.0e-15,
+                    "relative_lambda": 0.01,
+                },
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    weight = 0.25
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=1,
+            batch_size=1,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+            post_line_search_stationarity=(
+                ComplexPostLineSearchStationarityConfig(
+                    enabled=True,
+                    weight=weight,
+                    eps=1.0e-12,
+                )
+            ),
+            best_energy_checkpoint=CouplingBestEnergyCheckpointConfig(enabled=True),
+            best_physics_checkpoint=CouplingBestPhysicsCheckpointConfig(enabled=True),
+        ),
+        work_dir=tmp_path / "stationarity_training",
+        green_model=ConstantGreen(1.0),
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+
+    result = trainer._forward_batch(batch, symmetric_tangent_eta_cap=1.0e-12)
+    tangent = result.projection.symmetric_tangent_diagnostics
+    stationarity = result.objective.post_line_search_stationarity
+    context = trainer.symmetric_tangent_green_response_context
+    assert tangent is not None
+    assert tangent.eta_star is not None
+    assert tangent.response_direction is not None
+    assert context is not None
+    assert stationarity is not None
+    assert torch.all(tangent.eta_applied < tangent.eta_star)
+    expected_hessian_direction = context.tangent_gradient(tangent.response_direction)
+    expected_residual = (
+        tangent.gradient - tangent.eta_star.unsqueeze(1) * expected_hessian_direction
+    )
+    torch.testing.assert_close(
+        stationarity.hessian_direction,
+        expected_hessian_direction,
+    )
+    torch.testing.assert_close(
+        stationarity.stationarity_residual,
+        expected_residual,
+    )
+    torch.testing.assert_close(
+        result.loss,
+        result.objective.energy_optimized + weight * stationarity.loss,
+    )
+    torch.testing.assert_close(
+        result.metrics["loss_tangent_post_line_search_stationarity"],
+        weight * stationarity.loss.detach(),
+    )
+    torch.testing.assert_close(
+        result.metrics["tangent_post_line_search_stationarity_ratio"],
+        stationarity.loss.detach(),
+    )
+
+    changed_targets = replace(
+        batch,
+        sol_valid=batch.sol_valid + 1000.0,
+        flux_valid=batch.flux_valid - 1000.0,
+    )
+    changed = trainer._forward_batch(
+        changed_targets,
+        symmetric_tangent_eta_cap=1.0e-12,
+    )
+    torch.testing.assert_close(result.loss, changed.loss)
+    result.loss.backward()
+    assert any(parameter.grad is not None for parameter in model.parameters())
+    assert all(
+        parameter.grad is None or torch.all(torch.isfinite(parameter.grad))
+        for parameter in model.parameters()
+    )
+    training_log = (tmp_path / "stationarity_training" / "training.log").read_text()
+    assert "post-line-search stationarity enabled=True" in training_log
+    assert "eta_source=uncapped_eta_star" in training_log
+    assert "uses_reference_targets=false" in training_log
+
+    trainer.train(dataset, dataset)
+    with (tmp_path / "stationarity_training" / "complex_training_metrics.csv").open(
+        newline=""
+    ) as fp:
+        rows = list(csv.DictReader(fp))
+    assert rows
+    assert "loss_tangent_post_line_search_stationarity" in rows[0]
+    assert "tangent_post_line_search_stationarity_ratio" in rows[0]
+    assert (
+        tmp_path
+        / "stationarity_training"
+        / "complex_coupling_model_best_energy.safetensors"
+    ).is_file()
+    assert (
+        tmp_path
+        / "stationarity_training"
+        / "complex_coupling_model_best_physics.safetensors"
+    ).is_file()
 
 
 def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(tmp_path):

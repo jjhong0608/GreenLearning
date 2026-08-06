@@ -210,6 +210,30 @@ class TestTrainCLIConfigCopy:
         assert canonical_energy == {"boundary_weight": 0.0}
         assert boundary_off == baseline
 
+    def test_stationarity_paired_config_changes_only_objective_and_checkpoint(self):
+        root = Path(__file__).resolve().parents[1]
+        baseline = json.loads(
+            (root / "configs/complex_coupling_soap_tangent.json").read_text()
+        )
+        stationarity = json.loads(
+            (
+                root / "configs/complex_coupling_soap_tangent_stationarity.json"
+            ).read_text()
+        )
+
+        loss_config = stationarity["coupling_training"].pop(
+            "post_line_search_stationarity"
+        )
+        best_physics = stationarity["coupling_training"].pop("best_physics_checkpoint")
+
+        assert loss_config == {
+            "enabled": True,
+            "weight": 1.0e-3,
+            "eps": 1.0e-12,
+        }
+        assert best_physics == {"enabled": True}
+        assert stationarity == baseline
+
     def test_uses_custom_coefficient_functions_for_green_training(
         self, tmp_path, monkeypatch
     ):
@@ -1526,6 +1550,11 @@ class TestComplexPhysicsLossTrainingConfig:
                 "weight": 4.0,
                 "eps": 1e-9,
             },
+            "post_line_search_stationarity": {
+                "enabled": True,
+                "weight": 1.0e-3,
+                "eps": 2e-12,
+            },
             "best_physics_checkpoint": {"enabled": True},
         }
 
@@ -1541,6 +1570,9 @@ class TestComplexPhysicsLossTrainingConfig:
             assert config.weak_operator_closure.enabled is True
             assert config.weak_operator_closure.weight == 4.0
             assert config.weak_operator_closure.eps == 1e-9
+            assert config.post_line_search_stationarity.enabled is True
+            assert config.post_line_search_stationarity.weight == pytest.approx(1.0e-3)
+            assert config.post_line_search_stationarity.eps == pytest.approx(2e-12)
             assert config.best_physics_checkpoint.enabled is True
 
     @pytest.mark.parametrize(
@@ -1551,6 +1583,8 @@ class TestComplexPhysicsLossTrainingConfig:
             ("relative_split_consistency", "eps", 0.0),
             ("weak_operator_closure", "weight", -1.0),
             ("weak_operator_closure", "eps", 0.0),
+            ("post_line_search_stationarity", "weight", -1.0),
+            ("post_line_search_stationarity", "eps", 0.0),
         ),
     )
     def test_rejects_invalid_complex_physics_loss_values(
@@ -1569,6 +1603,7 @@ class TestComplexPhysicsLossTrainingConfig:
         (
             "relative_split_consistency",
             "weak_operator_closure",
+            "post_line_search_stationarity",
             "best_physics_checkpoint",
         ),
     )

@@ -1,102 +1,228 @@
-# Boundary-Off Canonical Energy Ablation 구현 계획
+# Normalized Post-Line-Search Stationarity Loss 구현 계획
 
 ## Summary
 
-- Complex CouplingNet의 canonical energy에 fixed scalar boundary weight \(\lambda_{\partial}\)를 추가한다.
+현재 Complex CouplingNet의 symmetric-tangent projection은 symmetric balance plane에서 Jacobi-preconditioned direction \(z=D^{-1}g\)를 만들고, 그 **고정된 1차원 직선 위에서만** sample별 exact line search를 수행한다. 새 loss는 exact line search 이후에도 남는 **full stationarity residual**을 정규화해 최소화함으로써, CouplingNet이 만든 tangent line이 이상적인 response-mismatch minimizer를 지나도록 유도한다.
+
+이 기능은 complex CouplingNet 전용 opt-in training objective로 추가한다. Projection, Green reconstruction, model architecture, canonical energy, checkpoint tensor key는 변경하지 않는다. Reference `sol/phi/psi`도 사용하지 않는다. Exact line search가 search direction 위의 최적 step만 정한다는 해석은 표준 quadratic exact-line-search 이론과 일치한다. [Exact line-search gradient method 참고](https://arxiv.org/abs/1606.09365)
+
+## Current CouplingNet Contract
+
+Network는 두 directional reference-response proposal \(P,Q\)를 출력한다. Physical source proposal은
 
 \[
-E_{\mathrm{canonical}}
-=
-E_{\mathrm{bulk}}+E_{\partial},
+p=\frac{P}{L_x^2},
 \qquad
-E_{\mathrm{optimized}}
-=
-E_{\mathrm{bulk}}+\lambda_{\partial}E_{\partial}.
+q=\frac{Q}{L_y^2}
 \]
 
-- `boundary_weight=1.0`은 현재 동작을 정확히 보존하고, `boundary_weight=0.0`은 tangent correction을 유지하면서 bulk energy만 최적화하는 boundary-off ablation이다.
-- Boundary-off에서도 \(E_{\partial}\), \(E_{\partial,x}\), \(E_{\partial,y}\)는 항상 계산하고 diagnostic으로 기록한다.
-- 이 기능은 complex CouplingNet 전용이다. GreenNet, unit-square CouplingNet, model architecture, projection, reconstruction, geometry/sample NPZ schema는 변경하지 않는다.
-- 기존 config와 checkpoint는 migration 없이 사용할 수 있다.
+이고, symmetric balance projection은
 
-## Public Interface
+\[
+\widetilde\phi
+=
+\frac12\left[f+(p-q)\right],
+\qquad
+\widetilde\psi
+=
+\frac12\left[f-(p-q)\right]
+\]
 
-`coupling_training`에 다음 complex-only 설정을 추가한다.
+로 정확한 balance를 만든다.
+
+Frozen directional response operator를 \(H_x,H_y\)라고 두면 symmetric response mismatch는
+
+\[
+m_0
+=
+H_x\widetilde\phi-H_y\widetilde\psi
+\]
+
+이다. Balance plane의 tangent correction은
+
+\[
+\phi=\widetilde\phi+\delta,
+\qquad
+\psi=\widetilde\psi-\delta
+\]
+
+이므로 \(\phi+\psi=f\)는 항상 보존된다. 다음을 정의한다.
+
+\[
+S=H_x+H_y,
+\qquad
+J(\delta)=\frac12\lVert m_0+S\delta\rVert_{M_\Omega}^2,
+\]
+
+\[
+g=S^\top M_\Omega m_0,
+\qquad
+A=S^\top M_\Omega S.
+\]
+
+현재 Jacobi-preconditioned direction과 closed-loop line search는
+
+\[
+z=D^{-1}g,
+\qquad
+\eta_b^\star
+=
+\frac{g_b^\top z_b}
+{\lVert Sz_b\rVert_{M_\Omega}^2+\epsilon_{\mathrm{line},b}},
+\]
+
+\[
+\eta_{b,\mathrm{applied}}
+=
+\min(\eta_b^\star,\eta_{\mathrm{cap}}),
+\qquad
+\delta_b=-\eta_{b,\mathrm{applied}}z_b
+\]
+
+이다. 따라서 현재 “exact”는 full-dimensional \(\delta^\star\)가 아니라 고정된 직선 \(\{-\eta z\}\) 위에서 exact하다는 의미다.
+
+## New Loss Contract
+
+Exact line search는 direction \(z\)에 대한 stationarity만 만족시킨다. 이상적인 full stationarity 조건은
+
+\[
+\nabla_\delta J(-\eta_b^\star z_b)
+=
+g_b-\eta_b^\star A z_b
+=
+0
+\]
+
+이다. 새 residual을
+
+\[
+r_{\mathrm{stat},b}
+=
+g_b-\eta_b^\star A z_b
+=
+S^\top M_\Omega
+\left(m_{0,b}-\eta_b^\star Sz_b\right)
+\]
+
+로 정의한다.
+
+Normalized post-line-search stationarity loss는
+
+\[
+\mathcal L_{\mathrm{stat},b}
+=
+\frac{
+r_{\mathrm{stat},b}^{\top}D^{-1}r_{\mathrm{stat},b}
+}{
+g_b^{\top}D^{-1}g_b+\epsilon_{\mathrm{stat}}
+},
+\qquad
+\mathcal L_{\mathrm{stat}}
+=
+\frac1B\sum_{b=1}^{B}\mathcal L_{\mathrm{stat},b}
+\]
+
+로 고정한다.
+
+- Loss 계산에는 **uncapped** \(\eta_b^\star\)를 사용한다. 이는 safety cap이 아니라 tangent line 자체의 적합성을 측정하기 위해서다.
+- 실제 forward correction에는 기존처럼 capped \(\eta_{b,\mathrm{applied}}\)를 사용한다.
+- \(Az\)는 matrix를 만들지 않고 기존 operator action으로 `tangent_gradient(Sz)`를 한 번 더 호출해 계산한다.
+- \(\eta^\star\), \(Az\), stationarity residual은 detach하지 않아 CouplingNet output까지 gradient가 전달되게 한다.
+- \(A\)가 positive definite이면 loss 0은 tangent line이 full quadratic minimizer를 지난다는 뜻이다. Positive semidefinite이면 response null space를 제외한 stationary minimizer를 뜻한다.
+- 이 loss는 learned Green-response surrogate에 대한 조건이며 exact PDE solution을 직접 보장하지 않으므로 canonical energy를 대체하지 않는다.
+
+Total objective는
+
+\[
+\mathcal L_{\mathrm{total}}
+=
+\mathcal L_{\mathrm{existing}}
++
+\lambda_{\mathrm{stat}}\mathcal L_{\mathrm{stat}}
+\]
+
+으로 구성한다. `existing`은 현재 설정에 따라 canonical energy 또는 기존 optional relative/weak 항을 포함한 objective다.
+
+## Public Configuration
+
+`coupling_training`에 다음 complex-only block을 추가한다.
 
 ```json
-"canonical_energy": {
-  "boundary_weight": 0.0
+"post_line_search_stationarity": {
+  "enabled": true,
+  "weight": 0.001,
+  "eps": 1e-12
 }
 ```
 
-- `boundary_weight` 기본값은 `1.0`이다.
-- 허용 범위는 finite numeric `>=0.0`이다.
-- `bool`, 음수, `NaN`, `Inf`, unknown key는 fail fast한다.
-- `0.0`은 완전한 boundary-off, `0.1` 같은 값은 약한 boundary anchor ablation으로 해석한다.
-- Fixed sample-independent scalar이며 learnable parameter나 scheduler를 추가하지 않는다.
-- Unit-square CouplingNet에서 non-default boundary weight를 요청하면 complex-only option이라는 오류를 낸다.
-- 기존 tangent baseline은 유지하고, `configs/complex_coupling_soap_tangent_boundary_off.json`을 별도 paired-experiment config로 추가한다.
+Dataclass 기본값은 기존 실행을 보존하도록 다음과 같이 고정한다.
 
-## Implementation Changes
+```text
+enabled = false
+weight  = 1.0
+eps     = 1e-12
+```
 
-1. `ComplexCanonicalEnergyConfig`를 추가하고 `CouplingTrainingConfig.canonical_energy`에서 strict `from_raw(...)` parsing과 round-trip을 지원한다.
-2. `cli/train.py`가 resolved canonical-energy 설정을 `config_used.json`에 기록하도록 연결한다.
-3. 기존 `canonical_complex_energy_loss(...)`는 unweighted \(E_{\mathrm{bulk}}+E_{\partial}\) audit 계산으로 보존한다.
-4. Shared complex objective에서 별도로
-   \[
-   E_{\mathrm{optimized},b}
-   =
-   E_{\mathrm{bulk},b}
-   +
-   \lambda_{\partial}E_{\partial,b}
-   \]
-   를 계산한다. `boundary_weight=0`이면 objective가 bulk tensor만 직접 사용하도록 분기해 boundary 항이 gradient에 들어가지 않게 한다.
-5. Boundary-off에서도 동일한 reconstructed fields로 boundary diagnostic을 계산한다. Backward는 실제 scalar objective에 연결된 graph만 사용한다는 점을 gradient test로 고정한다. [PyTorch autograd mechanics](https://docs.pytorch.org/docs/main/notes/autograd.html)
-6. Relative split consistency가 활성화된 경우에도 energy numerator는 unweighted canonical energy가 아니라 `E_optimized`를 사용한다. Mass term과 normalization은 변경하지 않는다.
-7. Weak operator closure는 기존처럼 selected split objective에 더하며 변경하지 않는다.
-8. Metric contract를 다음처럼 고정한다.
-   - `loss`: 실제 total objective
-   - `loss_energy_optimized`: \(E_{\mathrm{bulk}}+\lambda_{\partial}E_{\partial}\)
-   - `loss_energy_consistency`: unweighted canonical \(E_{\mathrm{bulk}}+E_{\partial}\)
-   - `loss_energy_bulk`: \(E_{\mathrm{bulk}}\)
-   - `loss_energy_boundary`, `loss_energy_boundary_x`, `loss_energy_boundary_y`: 항상 계산되는 diagnostic
-9. `best_energy_checkpoint`는 boundary-off를 checkpoint 선택까지 일관되게 반영하도록 validation `loss_energy_optimized`를 최소화한다. `best_physics_checkpoint`는 계속 total `loss`를 사용한다.
-10. Trainer 시작 로그와 metric CSV에 `boundary_weight`, optimized formula, boundary diagnostic 유지 여부를 기록한다.
-11. Evaluator와 artifact exporter는 trainer와 같은 objective helper를 재사용한다. Artifact summary에는 boundary weight, optimization inclusion, unweighted audit formula, optimized checkpoint metric을 기록하고 aggregate metrics에 `loss_energy_optimized`를 추가한다.
-12. `README.md`와 `docs/memory.md`에 boundary-off가 canonical boundary condition을 삭제하는 production default가 아니라 tangent와의 역할 중복을 검증하는 ablation이라는 점을 기록한다.
+Validation 규칙:
+
+- `enabled`는 strict boolean이어야 한다.
+- `weight`는 finite nonnegative numeric이어야 한다.
+- `eps`는 finite positive numeric이어야 한다.
+- unknown key는 fail fast한다.
+- enabled 상태는 complex geometry, `balance_projection.mode="symmetric_tangent_green_response"`, `eta_strategy="closed_loop_exact_line_search"`에서만 허용한다.
+- Unit-square, physical symmetric, column-diagonal, fixed-eta tangent에서 enabled이면 정확한 요구 조건을 포함한 오류를 낸다.
+- `weight=0`은 계산과 diagnostic은 유지하지만 optimizer objective에는 영향을 주지 않는 audit mode로 허용한다.
+
+기존 tangent config는 수정하지 않는다. 별도 paired pilot config `configs/complex_coupling_soap_tangent_stationarity.json`을 추가하고, `configs/complex_coupling_soap_tangent.json`과 동일한 조건에서 stationarity block만 `weight=1e-3`으로 활성화한다. Pilot은 `best_energy_checkpoint`와 `best_physics_checkpoint`를 모두 활성화한다.
+
+## Implementation Steps
+
+1. `src/greenonet/config.py`에 strict `ComplexPostLineSearchStationarityConfig`를 추가하고 `CouplingTrainingConfig` parsing, unit-square rejection, projection-mode compatibility validation에 연결한다.
+2. `src/greenonet/complex_tangent_projection.py`에 immutable result dataclass와 matrix-free loss helper를 추가한다. 기존 cached response operator, \(D\), `eta_star`, `response_direction=Sz`를 재사용하고 추가 adjoint action으로 \(Az\)를 계산한다.
+3. Projection diagnostics에 필요한 uncapped `eta_star`, \(g\), \(Sz\)는 기존 contract를 재사용한다. Forward projection과 capped correction 수식은 변경하지 않는다.
+4. `src/greenonet/complex_coupling_objective.py`가 optional stationarity result를 받아 weighted per-sample contribution을 total objective에 더하도록 확장한다.
+5. Trainer와 evaluator가 projection 직후 동일 helper를 호출하도록 연결한다. Disabled이면 추가 operator action을 수행하지 않는다.
+6. 로그와 CSV에 `loss_tangent_post_line_search_stationarity`와 `tangent_post_line_search_stationarity_ratio`를 추가한다. 전자는 weighted contribution, 후자는 unweighted normalized ratio다.
+7. Best-energy checkpoint는 계속 `loss_energy_optimized`로 선택하고, best-physics checkpoint는 새 항을 포함한 total `loss`로 선택한다.
+8. Artifact summary에는 config, 수식, uncapped-\(\eta^\star\) convention, reference-free 여부, matrix-free one-adjoint implementation을 기록한다.
+9. Per-sample CSV에 unweighted ratio와 weighted contribution을 기록한다. Selected raw NPZ에는 `tangent_hessian_direction`, `tangent_stationarity_residual`, `tangent_stationarity_ratio`를 추가한다. 이번 범위에서는 새 Plotly figure를 추가하지 않는다.
+10. README와 `docs/memory.md`에 이 loss가 canonical energy의 대체물이 아니라 tangent-line alignment regularizer라는 durable convention을 기록한다.
+11. Model output contract와 safetensors state dict는 변경하지 않는다. 기존 tangent checkpoint도 새 loss를 disabled 또는 enabled 상태로 평가하거나 fine-tune할 수 있다.
+12. 장기 학습은 실행하지 않고 작은 trainer smoke와 paired pilot config 생성까지만 수행한다.
 
 ## Affected Files
 
-- Config와 provenance: `src/greenonet/config.py`, `cli/train.py`
-- Loss와 objective: `src/greenonet/complex_losses.py`, `src/greenonet/complex_coupling_objective.py`
-- Runtime와 export: complex trainer, evaluator, artifact exporter
-- Experiment config: 새 boundary-off tangent config
-- Tests: config, complex energy, trainer, artifact 및 CLI tests
+- Config/math/objective: `src/greenonet/config.py`, `src/greenonet/complex_tangent_projection.py`, `src/greenonet/complex_coupling_objective.py`
+- Runtime/export: complex trainer, evaluator, artifact exporter
+- Experiment/config: 기존 tangent config는 보존하고 별도 stationarity pilot config 추가
+- Tests: config, projection math, trainer/evaluator, artifact tests
 - Documentation: `README.md`, `docs/memory.md`
+
+현재 작업 트리의 다른 변경사항과 사용자가 작성할 root `PLAN.md`는 구현 과정에서 되돌리거나 덮어쓰지 않는다.
 
 ## Test Plan
 
-- **Config:** omitted config가 `boundary_weight=1.0`으로 parse되는지, `0`, `0.1`, `1` round-trip, invalid numeric/boolean/unknown key rejection, unit-square non-default rejection을 검증한다.
-- **Energy math:** weight 1은 기존 결과와 exact하게 같고, weight 0은 bulk와 같으며, intermediate weight는 `bulk + weight*boundary`와 일치하는지 확인한다.
-- **Null mode diagnostic:** constant residual에서 optimized energy는 weight 0일 때 0이지만 unweighted canonical 및 boundary diagnostic은 양수로 남는지 확인한다.
-- **Gradient:** weight 0의 model gradient가 direct bulk-only gradient와 같고 boundary contribution이 들어가지 않는지 확인한다.
-- **Relative split:** enabled 상태에서 weighted energy numerator를 사용하고 mass/normalization contract는 유지하는지 확인한다.
-- **Trainer:** tangent + boundary-off one-step smoke, metric/log/CSV schema, best-energy checkpoint가 `loss_energy_optimized`를 사용하는지 검증한다.
-- **Evaluator/artifact:** boundary-off summary, per-sample/aggregate optimized energy, boundary diagnostic 유지, reference-target-free contract를 확인한다.
-- **Regression:** default weight 1에서 기존 metric 값, checkpoint key, unit-square CouplingNet, GreenNet, optimizer/scheduler, projection/reconstruction 동작이 유지되어야 한다.
+- **Config:** disabled default, enabled round-trip, invalid boolean/weight/eps/unknown key, unit-square rejection, 잘못된 projection mode와 fixed eta rejection을 검증한다.
+- **Math:** synthetic diagonal \(A=D\)에서는 ratio가 0에 가까워지고, non-diagonal \(A\)에서 tangent line이 minimizer를 지나지 않으면 양수가 되는지 확인한다.
+- **Normalization:** source/mismatch amplitude scaling에 대한 비율의 불변성, zero-gradient sample의 finite zero result, batch별 독립 계산을 검증한다.
+- **Cap separation:** 같은 raw output에서 cap만 바꾸면 forward correction은 달라지지만 uncapped stationarity ratio는 동일한지 확인한다.
+- **Autograd:** loss가 CouplingNet parameter까지 finite gradient를 전달하고 `sol/target_phi/target_psi` 변경으로 값이 달라지지 않는지 검증한다.
+- **Runtime:** disabled path에서는 추가 adjoint가 없고 기존 objective 결과가 유지되며, enabled path에서는 context를 재생성하지 않고 adjoint action만 한 번 추가되는지 확인한다.
+- **Objective/checkpoint:** total loss 항등식, weighted/unweighted metric 구분, best-energy와 best-physics의 독립 선택을 검증한다.
+- **Artifacts:** summary, per-sample CSV, selected NPZ schema와 기존 tangent fields 보존을 확인한다.
+- **Regression:** projection balance, Green reconstruction, SOAP, scheduler, unit-square CouplingNet, checkpoint tensor keys에 변화가 없는지 확인한다.
 
-## Verification
+검증 순서는 다음과 같다.
 
 ```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_complex_energy.py \
+  test/test_complex_projection.py \
   test/test_complex_coupling_trainer.py \
   test/test_complex_coupling_artifacts.py \
   test/test_io_config.py \
   test/test_cli_train.py
 
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
-
 ruff check src cli test
 ruff format src cli test
 ~/.conda/envs/green_net/bin/python -m mypy src
@@ -105,22 +231,18 @@ git diff --check
 
 ## Rollback Strategy
 
-- Runtime rollback은 `canonical_energy` block을 제거하거나 `boundary_weight=1.0`으로 되돌리는 것이다.
-- 기존 tangent baseline config는 수정하지 않으므로 paired baseline을 그대로 재사용할 수 있다.
-- Model architecture와 safetensors key가 변하지 않으므로 checkpoint migration은 필요하지 않다.
-- Code rollback은 canonical-energy config, weighted objective metric, 별도 experiment config와 관련 tests/provenance만 제거한다.
-- Boundary diagnostic, canonical energy helper, tangent projection 및 reconstruction은 rollback 과정에서도 변경하지 않는다.
+- Runtime rollback은 `post_line_search_stationarity.enabled=false`로 설정하거나 기존 `complex_coupling_soap_tangent.json`을 사용하는 것이다.
+- Code rollback은 새 config, matrix-free stationarity helper, objective contribution, metrics/artifact fields, pilot config만 제거한다.
+- Projection, tangent line search, canonical energy, model architecture, Green reconstruction에는 rollback 변경이 없어야 한다.
+- Model state dict가 변하지 않으므로 checkpoint migration은 필요하지 않다.
+- 학습 불안정성이 나타나면 먼저 `weight=0` audit로 gradient 영향과 metric을 분리하고, 이후 paired weight sweep을 수행한다.
 
-## Assumptions And Confidence
+## Confidence
 
-- Boundary-off는 complex CouplingNet의 모든 projection mode에서 사용할 수 있지만 첫 실험은 symmetric tangent projection과 paired comparison한다.
-- Boundary-off는 gradient와 best-energy checkpoint 선택 모두에서 boundary 항을 제외한다.
-- Boundary 항은 loss에서 꺼져도 diagnostic과 artifact에서는 항상 유지한다.
-- 기존 config를 생략한 실행은 `boundary_weight=1.0`으로 완전히 backward compatible하다.
-- 실제 장기 ablation training은 구현 범위에 포함하지 않는다.
-- 구현 계획 확신도는 **0.99**다.
-- Boundary-off가 solution quality를 개선할 가능성에 대한 경험적 확신도는 **0.45**다. 불확실성은 규칙 모호성이 아니라 paired retraining 결과가 아직 없다는 정보 부족이다.
-- 이 응답에서는 `PLAN.md`를 수정하지 않으며, 사용자가 이 계획을 project root의 `PLAN.md`에 작성한다.
+- 구현 계획 및 수학적 연결에 대한 확신도: **0.97**.
+- 이 loss가 tangent line을 full response minimizer에 더 잘 정렬할 가능성에 대한 확신도: **0.91**.
+- 실제 Annulus solution/flux/transition error를 개선할 가능성에 대한 경험적 확신도: **0.74**.
+- 규칙과 구현 정보는 충분하다. 남은 불확실성은 규칙 모호성이나 정보 부족이 아니라, learned Green-response stationarity와 실제 PDE accuracy가 얼마나 정렬되는지에 관한 실험적 불확실성이다.
 
 ## Executable `/goal` Draft
 
@@ -128,45 +250,51 @@ git diff --check
 /goal
 
 `/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/PLAN.md`의
-"Boundary-Off Canonical Energy Ablation 구현 계획"을 기준 문서로 참고하여
-boundary-weight integration을 끝까지 구현한다.
+"Normalized Post-Line-Search Stationarity Loss 구현 계획"을 기준 문서로
+참고하여 complex CouplingNet에 optional stationarity loss를 끝까지 구현한다.
 
 완료는 다음 조건으로 검증한다.
 
-- config를 생략하면 `boundary_weight=1.0`으로 기존 canonical
-  bulk-plus-boundary objective가 정확히 유지될 것,
-- `boundary_weight=0.0`이면 training gradient와 best-energy checkpoint
-  선택에서 boundary energy가 완전히 제외될 것,
-- boundary-off에서도 unweighted canonical, boundary total, boundary x/y
-  diagnostic이 로그, CSV, evaluator 및 artifact에 계속 기록될 것,
-- `loss_energy_optimized`와 `loss_energy_consistency`의 의미가 명확히
-  분리될 것,
-- relative split consistency가 활성화되면 weighted optimized energy를
-  numerator로 사용할 것,
-- tangent projection, weak closure, optimizer, scheduler 및 reconstruction
-  수식이 변경되지 않을 것,
-- 별도 paired experiment config가 추가되고 기존 tangent baseline config는
-  유지될 것,
-- unit-square CouplingNet과 GreenNet이 변경되지 않을 것,
-- model architecture와 safetensors checkpoint key가 변경되지 않을 것,
+- 기존 config에서 새 option을 생략하면 training objective와 projection 결과가
+  그대로 유지될 것,
+- 새 config가 strict하게 parse되고 save/load round-trip 될 것,
+- stationarity loss는 symmetric-tangent closed-loop exact-line-search
+  projection에서만 활성화될 것,
+- loss 계산에는 uncapped eta_star를 사용하고 실제 projection에는 기존 capped
+  eta_applied를 사용할 것,
+- Az는 cached segment-local Green response operator의 forward/adjoint action으로
+  계산하고 global matrix 또는 linear solve를 만들지 않을 것,
+- normalized loss가 sample별로 계산되고 amplitude scaling과 zero-gradient
+  edge case에서 finite할 것,
+- total loss에 configured weight만큼 추가되며 canonical energy metric과
+  best-energy checkpoint 기준은 변경되지 않을 것,
+- best-physics checkpoint는 stationarity 항을 포함한 validation total loss를
+  사용할 것,
+- reference sol, phi, psi는 loss, gradient 또는 checkpoint 선택에 사용되지 않을 것,
+- trainer, evaluator와 artifact exporter가 동일한 helper와 수식을 사용할 것,
+- logs, CSV, summary와 selected raw NPZ에 stationarity provenance와 diagnostics가
+  기록될 것,
+- model architecture, safetensors key, GreenNet, unit-square CouplingNet,
+  optimizer, scheduler와 reconstruction에 regression이 없을 것,
+- 기존 tangent config는 유지되고 별도 weight=1e-3 paired pilot config가
+  추가될 것,
 - focused tests와 전체 pytest, Ruff, mypy, git diff check가 통과할 것.
 
-수정 범위는 complex canonical-energy config, weighted objective,
-checkpoint metric, trainer/evaluator/artifact provenance, 별도 experiment
-config, 관련 tests와 문서로 제한한다.
+수정 범위는 complex training config, tangent stationarity math helper,
+shared complex objective, trainer/evaluator wiring, artifact provenance,
+paired pilot config, 관련 tests와 README 및 docs/memory.md로 제한한다.
 
-Boundary term 계산 자체, tangent correction, Green reconstruction,
-model backbone, reference-target-free 원칙, geometry/sample NPZ schema는
-변경하지 않는다.
+Projection formula, eta-cap scheduler, canonical energy, model backbone,
+Green reconstruction, geometry/sample NPZ schema와 기존 checkpoint tensor
+contract를 변경하지 않는다. 실제 장기 retraining은 실행하지 않는다.
 
-각 구현 단계 후 config와 energy math tests를 먼저 실행하고, 이어서
-trainer/artifact integration tests와 전체 regression suite를 실행한다.
-실제 장기 boundary-off training은 실행하지 않는다.
+각 구현 단계 후 가장 작은 config/math tests를 먼저 실행하고, 통과한 뒤
+trainer/evaluator/artifact integration tests와 전체 regression suite를 실행한다.
 
-기존 `boundary_weight=1.0` 수치 또는 checkpoint architecture compatibility를
-유지할 수 없다면 작업을 중단하고 다음을 보고한다.
+기존 disabled-path 수치 또는 checkpoint architecture compatibility를 유지할 수
+없다면 작업을 중단하고 다음을 보고한다.
 
-1. 정확히 달라지는 loss, metric 또는 tensor contract,
-2. 영향을 받는 config, checkpoint와 artifact,
-3. 기존 canonical objective를 보존하는 가장 작은 rollback 또는 migration 전략.
+1. 정확히 달라지는 objective, projection 또는 tensor contract,
+2. 영향을 받는 config, checkpoint, artifact와 tests,
+3. 기존 tangent behavior를 보존하는 가장 작은 rollback 또는 migration 전략.
 ```

@@ -40,6 +40,7 @@ from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
     reconstruct_complex_projection,
+    post_line_search_stationarity_from_projection,
     symmetric_tangent_metric_tensors,
 )
 from greenonet.complex_reconstruction import (
@@ -56,6 +57,7 @@ from greenonet.config import (
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingTrainingConfig,
+    validate_complex_post_line_search_stationarity_config,
 )
 from greenonet.logging_mixin import LoggingMixin
 
@@ -108,6 +110,12 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
             config.weak_operator_closure
         )
+        self.post_line_search_stationarity_config = (
+            validate_complex_post_line_search_stationarity_config(
+                training=config,
+                balance_projection=self.balance_projection,
+            )
+        )
         self.green_model = green_model.to(device)
         self.green_model.eval()
         for parameter in self.green_model.parameters():
@@ -145,6 +153,16 @@ class ComplexCouplingEvaluator(LoggingMixin):
             self.cross_axis_reconstruction_config.smoothing_steps,
             self.cross_axis_reconstruction_config.smoothing_relaxation,
             self.cross_axis_reconstruction_config.relative_floor,
+        )
+        self.logger.info(
+            "post-line-search stationarity enabled=%s weight=%.6e eps=%.6e "
+            "eta_source=uncapped_eta_star forward_eta_source=capped_eta_applied "
+            "matrix_free=true extra_adjoint_when_enabled=%s "
+            "uses_reference_targets=false",
+            self.post_line_search_stationarity_config.enabled,
+            self.post_line_search_stationarity_config.weight,
+            self.post_line_search_stationarity_config.eps,
+            self.post_line_search_stationarity_config.enabled,
         )
 
     def evaluate(
@@ -204,6 +222,11 @@ class ComplexCouplingEvaluator(LoggingMixin):
             column_diagonal_context=projection_context,
             symmetric_tangent_context=tangent_context,
         )
+        stationarity = post_line_search_stationarity_from_projection(
+            projection=projection,
+            context=tangent_context,
+            config=self.post_line_search_stationarity_config,
+        )
         reconstruction = reconstruct_complex_projection(
             projection=projection,
             green_model=self.green_model,
@@ -230,6 +253,10 @@ class ComplexCouplingEvaluator(LoggingMixin):
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
             boundary_context=self.boundary_energy_context(batch.geometry),
+            post_line_search_stationarity_config=(
+                self.post_line_search_stationarity_config
+            ),
+            post_line_search_stationarity=stationarity,
         )
         metrics = {
             key: value.detach() for key, value in objective.metric_tensors().items()

@@ -6,6 +6,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from greenonet.complex_visualization_mesh import (
+    ComplexVisualizationMesh,
+    file_sha256,
+)
+
 
 def write_geometry_npz(path: Path, **overrides: np.ndarray) -> Path:
     payload: dict[str, np.ndarray | float] = {
@@ -47,6 +52,74 @@ def write_geometry_npz(path: Path, **overrides: np.ndarray) -> Path:
     payload.update(overrides)
     np.savez(path, **payload)
     return path
+
+
+def write_visualization_mesh_npz(
+    path: Path,
+    *,
+    geometry_path: Path,
+) -> tuple[Path, ComplexVisualizationMesh]:
+    """Write a small conforming square mesh around the standard fixture points."""
+
+    vertices = np.asarray(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [0.25, 0.25],
+            [0.75, 0.25],
+            [0.25, 0.75],
+            [0.60, 0.60],
+        ],
+        dtype=np.float64,
+    )
+    mesh = ComplexVisualizationMesh(
+        vertices=vertices,
+        triangles=np.asarray(
+            [
+                [0, 1, 5],
+                [0, 5, 4],
+                [1, 2, 7],
+                [1, 7, 5],
+                [2, 3, 6],
+                [2, 6, 7],
+                [3, 0, 4],
+                [3, 4, 6],
+                [4, 5, 7],
+                [4, 7, 6],
+            ],
+            dtype=np.int64,
+        ),
+        boundary_edges=np.asarray(
+            [[0, 1], [1, 2], [2, 3], [3, 0]],
+            dtype=np.int64,
+        ),
+        valid_to_vertex=np.asarray([4, 5, 6], dtype=np.int64),
+        boundary_vertex_mask=np.asarray(
+            [True, True, True, True, False, False, False, False],
+            dtype=np.bool_,
+        ),
+        auxiliary_vertex_mask=np.asarray(
+            [False, False, False, False, False, False, False, True],
+            dtype=np.bool_,
+        ),
+        aux_interp_ptr=np.asarray([0, 4], dtype=np.int64),
+        aux_interp_vertex_index=np.asarray([2, 4, 5, 6], dtype=np.int64),
+        aux_interp_weight=np.full(4, 0.25, dtype=np.float64),
+        geometry_sha256=file_sha256(geometry_path),
+        gmsh_script_sha256="0" * 64,
+        gmsh_version="fixture",
+        boundary_size_factor=3.0,
+        max_auxiliary_fraction=0.2,
+    )
+    coords_valid = np.asarray(
+        [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75]],
+        dtype=np.float64,
+    )
+    mesh.validate(coords_valid)
+    np.savez_compressed(path, **mesh.to_payload())
+    return path, mesh
 
 
 def write_sample_npz(

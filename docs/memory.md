@@ -55,6 +55,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `outer_radius=0.5`에서 0이 되는 smooth counter-clockwise tangential
   convection을 사용한다. Convection amplitude scale은 `0.5`이고, radial
   polynomial envelope 때문에 annulus 내부 vector field는 divergence-free이다.
+- `CDR_pentagram.py`: `outer_radius=0.5`인 centered regular pentagram용 CDR
+  coefficient이다. Diffusion은 radius-normalized sinusoid로 `[0.5,1.5]`,
+  convection은 `0.5*(-y/R,x/R)`인 smooth divergence-free counter-clockwise
+  rotation, full physical reaction은 `1+0.5*cos(pi*x/R)*cos(pi*y/R)`로
+  `[0.5,1.5]`이다. File 자체에서는 axial length scaling이나 directional
+  reaction split을 수행하지 않으며, FEniCSx/GreenNet/CouplingNet은 같은
+  coefficient path를 사용한다.
 - `Divergence_Free_Convection_Diffusion.py`: variable diffusion,
   divergence-free convection with amplitude `2.0`, zero reaction.
 - 새 coefficient file을 추가할 때는 `a_fun`, `apx_fun`, `apy_fun`,
@@ -250,6 +257,18 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   LR cosine decay는 공유하지 않는다. Validation, best-checkpoint selection,
   standalone evaluation과 artifact export는 항상 final cap을 사용한다.
   `eta_strategy`를 생략하면 기존 fixed eta update가 유지된다.
+- Optional normalized post-line-search stationarity loss는 closed-loop tangent에서만
+  사용한다. `S=H_x+H_y`, `A=S^T*M_Omega*S`, `g=S^T*M_Omega*m0`, `z=D^-1*g`일 때
+  scalar exact line search 이후의 full residual을
+  `r_stat=g-eta_star*A*z`로 정의하고, sample별
+  `(r_stat^T*D^-1*r_stat)/(g^T*D^-1*g+eps)`를 정규화 loss로 사용한다. Loss는
+  tangent line 자체를 평가하기 위해 uncapped `eta_star`를 사용하지만 forward
+  correction은 기존 capped `eta_applied`를 유지한다. `A*z`는 cached segment-local
+  operator에 `tangent_gradient(Sz)`를 한 번 더 적용해 계산하며 global matrix와 solve는
+  만들지 않는다. 이 항은 canonical energy를 대체하지 않고 configured weight로 total
+  reference-free objective에 더한다. Dataclass default는 disabled이고 별도
+  `configs/complex_coupling_soap_tangent_stationarity.json` pilot만 `weight=1e-3`과
+  best-physics checkpoint를 활성화한다. Model/checkpoint tensor contract는 변하지 않는다.
 - Frozen symmetric-tangent audit CLI도 `--closed-loop` opt-in으로 production과
   같은 sample-wise exact-line-search helper를 재사용한다. Post-hoc evaluation은
   warmup schedule 없이 final cap을 적용하며, 같은 checkpoint raw output에서
@@ -291,6 +310,22 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   현재 energy/solution/transition 목적에는 fixed `eta=0.01`을 tangent baseline으로
   유지하고 closed-loop는 optional ablation으로 취급한다. Canonical evidence는
   `checkpoints/annulus_CDR/coupling8_vs_coupling9_analysis/`에 있다.
+- `annulus_CDR/coupling10`은 closed-loop tangent cap `0.015`와
+  `canonical_energy.boundary_weight=0.0`을 함께 사용한 CDR run이다. Epoch 43
+  best-bulk-energy checkpoint의 50-sample mean `rel_sol=2.494922%`는 현재
+  archived CDR run 중 가장 낮다. Coupling9 대비 bulk energy와 `rel_sol`은
+  각각 `-31.298%`, `-16.804%`지만 mean `rel_flux`는
+  `13.297429% -> 15.266857%`, boundary energy는 `+22.806%`다. Boundary median은
+  약간 낮아도 maximum은 약 3배이므로 boundary-off는 uniform degradation보다
+  heavy outlier tail을 허용한다. Epoch 100 final checkpoint는 best 대비 test
+  `rel_sol +2.764%`, `rel_flux +83.659%`이고 모든 50개 flux sample이
+  악화되므로 보고용으로 사용하지 않는다. Best checkpoint에서 local weak
+  reconstruction은 equal mean `2.672722% -> 2.494922%`로 50/50 sample을
+  개선하지만 directional transition seam을 구조적으로 제거하지는 않는다.
+  이 run은 coupling9 대비 eta cap과 boundary weight가 동시에 달라 clean
+  boundary-off causal ablation이 아니며, fixed cap/seed/data order에서
+  `boundary_weight=0/1` paired retraining이 필요하다. Full report는
+  `checkpoints/annulus_CDR/coupling10/analysis_report.md`다.
 - `annulus_CDR/coupling7`의 50-sample, 72-combination frozen sweep에서 mean absolute
   response mismatch와 canonical energy를 함께 최소화한 tangent 설정은
   `eta=0.015`, `lambda_rel=0.1`이었다. Symmetric 대비 mean per-sample response ratio는
@@ -1158,6 +1193,15 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `2 * outer_radius / step_size` 정수 조건을 사용한다. Inner hole을 지나거나 접하는
   axial line은 disconnected segment row로 나눠 저장해서 edge/reconstruction이 hole을
   가로지르지 않게 한다.
+- Regular pentagram complex geometry generator는
+  `cli/make_pentagram_geometry.py`이다. 중심은 `(0, 0)`, top vertex는 `(0, R)`,
+  orientation은 `pi/2`로 고정하고, alternating inner radius는 황금비
+  `phi=(1+sqrt(5))/2`에 대해 `R/phi^2`로 자동 계산한다. 도메인은 중앙 pentagon을
+  포함하는 hole-free filled simple concave 10-gon이며 self-intersecting `{5/2}`
+  boundary를 사용하지 않는다. NPZ의 CCW `(10, 2)` `boundary_vertices`를 Cartesian
+  scanline과 Gmsh boundary의 공통 source of truth로 사용한다. Valid point는 strict
+  interior이고, axial endpoint는 polygon과의 exact intersection이며 disconnected
+  segment의 reconstruction/edge는 서로 연결하지 않는다.
 - FEniCSx complex sample generator는 optional `green_fenicsx` conda env에서만
   실행하는 path로 둔다. Main `green_net` training env와 `pyproject.toml`에는
   FEniCSx dependency를 섞지 않는다.
@@ -1184,6 +1228,11 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Gmsh OCC cut으로 inner hole을 가진 single annulus surface를 반환한다. Surface가
   하나이므로 `point_surface_tags`는 필요 없고, 기존 valid-point embedding은 모든
   valid point를 같은 surface에 embed한다.
+- Pentagram FEniCSx sample generation은 `examples/pentagram_gmsh.py`를 사용한다.
+  이 script는 별도로 vertex를 재계산하지 않고 geometry NPZ의
+  `boundary_vertices`와 fixed pentagram provenance를 검증한 뒤 Gmsh OCC의 10개
+  line으로 one plane surface를 만든다. 반환값은 one `surface_tag`와 10개
+  `boundary_tags`이며 `point_surface_tags`는 필요 없다.
 - Circular sample generation workflow는 `examples/unit_circle_gmsh.py`를 기본
   Gmsh domain script로 사용한다. Smoke default는 `h=0.25`, `mesh_size=0.035`,
   `solution_degree=3`, `target_degree=2`, `train=1`; small dataset default는
@@ -1261,11 +1310,55 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `u_pred - sol`, `u_phi - sol`, `u_psi - sol`, split mismatch `u_phi - u_psi`,
   projected physical `phi`/`psi`, and optional target `phi`/`psi` plus signed
   flux errors when sample flux targets are available. Complex error and mismatch
-  scatter figures use zero-centered diverging colors. Complex non-error comparison
-  groups are `sol/u_pred/u_phi/u_psi`, `target_phi/phi`, and `target_psi/psi`
-  when flux targets exist; `rhs` and target-free flux diagnostics keep independent
-  ranges. The raw archive stores `raw_physical_phi/psi` and
+  scatter figures use zero-centered diverging colors. Solution comparison fields
+  `sol/u_pred/u_phi/u_psi` share a full range. Directional values pool finite
+  valid-point values in `target_phi/phi` and `target_psi/psi` groups and use shared
+  lower/upper quantiles; directional errors use a symmetric absolute-value
+  quantile. Complex default is `--directional-color-quantile 0.99`, while `1.0`
+  restores full extrema. Scatter and mesh figures reuse the same per-sample range,
+  and every scalar hover reports `x`, `y`, and the raw unclipped value. Summary
+  metadata records full/display extrema and saturation counts; color clipping never
+  changes raw arrays, metrics, or checkpoint selection. The raw archive stores
+  `raw_physical_phi/psi` and
   `projected_unit_phi/psi` for audit; raw/projected-unit fields are not primary figures.
+- Complex CouplingNet artifact는 selected-sample scatter, coefficient/vector,
+  column-diagonal, tangent projection-context figure에 domain boundary를 기본 표시한다. Boundary
+  coordinate는 cached canonical boundary-energy context의 `endpoint_coords`를
+  exact-deduplicate해서 사용하고, neutral `circle-open` geometry marker로만
+  표현한다. Boundary에는 scalar value를 부여하지 않으며 interior colorscale,
+  color range, metric, raw NPZ와 `figure_count`/`figure_fields`에 포함하지 않는다.
+  `--no-show-domain-boundary`는 기존 interior-only figure를 복원하고 unit-square
+  artifact에는 영향을 주지 않는다. Complex `summary.json`의
+  `domain_boundary_overlay`가 enabled state, coordinate source, representation,
+  point count와 numerical exclusion contract를 기록한다. Mesh는 이 open-marker
+  overlay 대신 아래의 field-specific boundary policy를 사용한다.
+- Complex CouplingNet solution mesh artifact는 optional two-step path이다.
+  `cli/make_complex_visualization_mesh.py`를 Gmsh가 있는 `green_fenicsx`
+  environment에서 geometry/Gmsh-script pair마다 한 번 실행해 versioned NPZ
+  cache를 만들고, main exporter에는 `--visualization-mesh`로 전달한다. Exporter는
+  Gmsh를 import하거나 mesh를 다시 생성하지 않는다. Cache는 every `coords_valid`
+  point의 exact one-to-one mesh vertex mapping, explicit first-order triangle와
+  boundary-edge connectivity, geometry/Gmsh-script SHA-256, Gmsh version,
+  boundary/auxiliary masks, auxiliary adjacency stencil을 저장한다. Geometry hash나
+  exact coordinate mapping이 다르면 artifact 시작 시 fail fast한다.
+- Mesh scalar figure는 selected sample의 `sol`, `u_pred`, `u_pred_error`, `rhs`,
+  `phi`, `psi`와, target flux가 있을 때 `target_phi`, `target_psi`, `phi_error`,
+  `psi_error`에 additive로 생성하며 기존 scatter를 대체하지 않는다. Solution
+  field는 valid vertex 값을 exact-copy하고 physical boundary vertex를 prescribed
+  homogeneous Dirichlet zero로 두며 black outline을 추가하지 않는다. Source와
+  directional field는 boundary scalar를 정의하지 않는다. Auxiliary interior는
+  non-boundary cached stencil만 renormalize해 사용하고, triangle cell 값은
+  non-boundary vertex만 평균하며 all-boundary triangle은 fail fast한다. 이 field의
+  boundary는 `--show-domain-boundary`가 켜진 경우 neutral dark outline으로만
+  표시한다. `u_phi/u_psi`와 projection diagnostic에는 scalar mesh를 사용하지
+  않으며 coefficient mesh는 아래의 별도 run-level contract를 따른다. Mesh-added
+  value는 metrics, checkpoint selection과
+  `selected_raw_arrays.npz`에서 제외한다. Option 생략 시 additive mesh output만
+  사라지고 unit-square artifact에서는 mesh와 directional quantile option을 모두
+  fail fast한다. Sample과 coefficient scalar mesh는 physical x/y aspect ratio를
+  유지한 채 shared scene scale `1.5`, fixed `900x800` canvas와 compact margin을
+  사용해 이전보다 plotting area를 크게 채운다. 이 framing은 좌표, connectivity,
+  intensity와 color range를 바꾸지 않는다.
 - CouplingNet selected-sample flux-divergence figures should exclude boundary
   grid values. CouplingNet predictions use zero-padding at boundaries only for
   trapezoid-rule integration compatibility with boundary-zero Green functions;
@@ -1293,6 +1386,15 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   figure를 만들고, reaction/convection은 physical field가 nonzero이거나 대응
   `coefficient_terms`가 enabled일 때 figure를 만든다. Convection은 signed component,
   magnitude, subsampled quiver를 함께 저장하며 default arrow limit은 400이다.
+- `--visualization-mesh`가 제공되면 coefficient artifact는 같은 activation rule로
+  `a`, `c`, `b_x`, `b_y`, `|b|`의 run-level scalar mesh를
+  `figures/coefficients/mesh/`에 추가한다. 값은 `coords_valid` transfer가 아니라
+  boundary와 auxiliary를 포함한 every visualization-mesh physical vertex에서
+  coefficient function을 직접 평가하며 vertex intensity와 all-vertex exact hover를
+  사용한다. Coefficient boundary에는 prescribed zero나 unavailable black outline을
+  적용하지 않는다. Scatter와 mesh는 동일한 colorscale/range를 공유하고 기존
+  `convection_vector` quiver는 유지하며 vector `Mesh3d`는 만들지 않는다. 기존
+  `coefficient_fields.npz`와 visualization-mesh NPZ schema는 변경하지 않는다.
 - `coefficient_terms`는 CouplingNet branch input 여부이고 physical PDE coefficient의
   존재 여부가 아니다. Complex artifact summary는 physical nonzero/constant 상태와
   branch enabled 상태를 분리해 기록하고, raw coefficient arrays는
@@ -1910,6 +2012,22 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   state keys, and the output contract remain unchanged. Reliability weights
   use no `sol/target_phi/target_psi` and require no global matrix assembly or
   solve. Source-only train/validation skips the optional reconstruction.
+- Frozen smoothing-off ablation keeps `gamma=0.5`, `relative_floor=0.1`, the
+  checkpoint, projection, and directional solutions fixed, so it isolates only
+  graph smoothing in the final estimator. For Poisson `coupling18`, steps `0 -> 2`
+  change mean `rel_sol` `3.432811% -> 3.405442%` (`-0.797%`, smoothing wins
+  `37/50`), transition trace-jump RMS by `-11.297%`, and maximum neighboring
+  weight jump by `-35.247%`; broad transition RMS changes by `+2.176%`. For CDR
+  `coupling8`, mean `rel_sol` changes `3.025313% -> 2.970490%` (`-1.812%`,
+  `44/50`), broad transition RMS by `-0.376%`, trace-jump RMS by `-12.129%`, and
+  maximum neighboring weight jump by `-26.065%`. Steps zero still beats equal
+  mean by `6.205%` for Poisson and `6.398%` for CDR, so smoothing is not necessary
+  for estimator validity. Retain two 50:50 steps as the default because global
+  error and trace regularity improve consistently; do not claim that it lowers
+  every broad transition-error metric. Canonical outputs are in
+  `checkpoints/Annulus_poisson/coupling18/weak_residual_smoothing_ablation/` and
+  `checkpoints/annulus_CDR/coupling8/weak_residual_smoothing_ablation/`, with
+  paired zero-step outputs under `weak_residual_no_smoothing/`.
 - `annulus_CDR/coupling6` uses both column-diagonal Green-response projection
   and production local weak-residual final reconstruction, with the
   pre-projection fuser disabled. The best-energy checkpoint is exactly epoch

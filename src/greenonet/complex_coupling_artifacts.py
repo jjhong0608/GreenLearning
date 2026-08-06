@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import shutil
 from dataclasses import asdict, dataclass
 from typing import Any, ClassVar
 
@@ -27,6 +28,10 @@ from greenonet.complex_tangent_projection import (
     SymmetricTangentEtaCapSchedule,
     SymmetricTangentGreenResponseContext,
 )
+from greenonet.complex_visualization_mesh import (
+    ComplexVisualizationMesh,
+    load_complex_visualization_mesh,
+)
 from greenonet.complex_pre_projection_fusion import (
     FINAL_LAYER_INITIALIZATION,
     FUSION_ARCHITECTURE,
@@ -46,6 +51,7 @@ from greenonet.config import (
     ComplexCanonicalEnergyConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
+    ComplexPostLineSearchStationarityConfig,
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingBestEnergyCheckpointConfig,
@@ -64,6 +70,45 @@ class ComplexSelectedSample:
     sample_id: int
     file_stem: str
     arrays: dict[str, np.ndarray]
+
+
+@dataclass(frozen=True)
+class ComplexArtifactColorRange:
+    """Plotly range plus provenance for one shared scalar-field group."""
+
+    group: str
+    policy: str
+    quantile: float
+    cmin: float | None
+    cmax: float | None
+
+    def plotly_kwargs(self) -> dict[str, float]:
+        if self.cmin is None or self.cmax is None:
+            return {}
+        return {"cmin": self.cmin, "cmax": self.cmax}
+
+    def field_summary(self, values: np.ndarray) -> dict[str, float | int | str]:
+        finite = np.asarray(values)[np.isfinite(values)]
+        if finite.size == 0:
+            raise ValueError("Artifact color-range fields must contain finite values.")
+        full_min = float(np.min(finite))
+        full_max = float(np.max(finite))
+        display_min = full_min if self.cmin is None else self.cmin
+        display_max = full_max if self.cmax is None else self.cmax
+        saturated = (finite < display_min) | (finite > display_max)
+        saturated_count = int(np.count_nonzero(saturated))
+        return {
+            "group": self.group,
+            "policy": self.policy,
+            "quantile": self.quantile,
+            "full_min": full_min,
+            "full_max": full_max,
+            "display_cmin": display_min,
+            "display_cmax": display_max,
+            "finite_point_count": int(finite.size),
+            "saturated_point_count": saturated_count,
+            "saturated_point_fraction": saturated_count / int(finite.size),
+        }
 
 
 @dataclass(frozen=True)
@@ -92,7 +137,372 @@ class ComplexCoefficientFields:
         }
 
 
-class ComplexCoefficientArtifactMixin:
+@dataclass(frozen=True)
+class ComplexCoefficientMeshFields:
+    """Physical coefficients evaluated directly at visualization-mesh vertices."""
+
+    coords: np.ndarray
+    a: np.ndarray
+    bx: np.ndarray
+    by: np.ndarray
+    b_magnitude: np.ndarray
+    c: np.ndarray
+
+
+@dataclass(frozen=True)
+class ComplexDomainBoundaryOverlay:
+    """Geometry-only boundary markers shared by every complex artifact figure."""
+
+    coords: np.ndarray
+    enabled: bool
+    marker_color: str
+    legend_bgcolor: str
+    marker_size: float = 5.0
+
+    @classmethod
+    def from_endpoint_coords(
+        cls,
+        endpoint_coords: np.ndarray,
+        *,
+        enabled: bool,
+        theme: str,
+    ) -> ComplexDomainBoundaryOverlay:
+        coords = np.asarray(endpoint_coords)
+        if coords.ndim != 2 or coords.shape[1] != 2:
+            raise ValueError(
+                "Domain boundary endpoint coordinates must have shape (N, 2)."
+            )
+        if coords.shape[0] == 0:
+            raise ValueError("Domain boundary endpoint coordinates cannot be empty.")
+        if not np.all(np.isfinite(coords)):
+            raise ValueError("Domain boundary endpoint coordinates must be finite.")
+        unique_coords = np.unique(coords, axis=0)
+        unique_coords.setflags(write=False)
+        dark_theme = "dark" in theme.lower()
+        return cls(
+            coords=unique_coords,
+            enabled=enabled,
+            marker_color="#ECEFF1" if dark_theme else "#263238",
+            legend_bgcolor=(
+                "rgba(0, 0, 0, 0.55)" if dark_theme else "rgba(255, 255, 255, 0.72)"
+            ),
+        )
+
+    @property
+    def point_count(self) -> int:
+        return int(self.coords.shape[0])
+
+    def add_to_figure(self, figure: go.Figure) -> None:
+        if not self.enabled:
+            return
+        for trace in figure.data:
+            trace.update(showlegend=False)
+        figure.add_trace(
+            go.Scatter(
+                x=self.coords[:, 0],
+                y=self.coords[:, 1],
+                mode="markers",
+                marker={
+                    "symbol": "circle-open",
+                    "size": self.marker_size,
+                    "color": self.marker_color,
+                    "line": {"color": self.marker_color, "width": 1.2},
+                },
+                name="Domain boundary",
+                showlegend=True,
+                hovertemplate=(
+                    "Domain boundary<br>x=%{x:.6g}<br>y=%{y:.6g}<extra></extra>"
+                ),
+            )
+        )
+        figure.update_layout(
+            legend={
+                "orientation": "h",
+                "x": 0.01,
+                "xanchor": "left",
+                "y": 0.01,
+                "yanchor": "bottom",
+                "bgcolor": self.legend_bgcolor,
+            }
+        )
+
+    def summary(self) -> dict[str, bool | int | str]:
+        return {
+            "enabled": self.enabled,
+            "representation": "open_markers",
+            "coordinate_source": ("canonical_boundary_energy_context.endpoint_coords"),
+            "point_count": self.point_count,
+            "scalar_values_included": False,
+            "included_in_metrics": False,
+        }
+
+
+class ComplexMeshFigureLayoutMixin:
+    """Shared top-down Plotly scene framing for scalar mesh artifacts."""
+
+    MESH_SCENE_SCALE: ClassVar[float] = 1.5
+    MESH_Z_ASPECT_RATIO: ClassVar[float] = 0.01
+
+    @classmethod
+    def _mesh_layout(
+        cls,
+        *,
+        title: str,
+        theme: str,
+        vertices: np.ndarray,
+    ) -> go.Layout:
+        span = np.ptp(vertices, axis=0)
+        max_span = max(float(np.max(span)), np.finfo(np.float64).eps)
+        return go.Layout(
+            template=theme,
+            width=900,
+            height=800,
+            title=title,
+            margin={"l": 10, "r": 70, "t": 65, "b": 10},
+            scene={
+                "xaxis": {"title": "x"},
+                "yaxis": {"title": "y"},
+                "zaxis": {"visible": False},
+                "aspectmode": "manual",
+                "aspectratio": {
+                    "x": cls.MESH_SCENE_SCALE * max(float(span[0]) / max_span, 1.0e-3),
+                    "y": cls.MESH_SCENE_SCALE * max(float(span[1]) / max_span, 1.0e-3),
+                    "z": cls.MESH_Z_ASPECT_RATIO,
+                },
+                "camera": {
+                    "center": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "eye": {"x": 0.0, "y": 0.0, "z": 2.5},
+                    "up": {"x": 0.0, "y": 1.0, "z": 0.0},
+                    "projection": {"type": "orthographic"},
+                },
+            },
+        )
+
+
+class ComplexScalarMeshArtifactMixin(ComplexMeshFigureLayoutMixin):
+    """Add scalar mesh figures without changing valid-point diagnostics."""
+
+    SOLUTION_MESH_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"sol", "u_pred", "u_pred_error"}
+    )
+    INTERIOR_SCALAR_MESH_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "rhs",
+            "phi",
+            "psi",
+            "target_phi",
+            "target_psi",
+            "phi_error",
+            "psi_error",
+        }
+    )
+    MESH_FIGURE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "sol",
+        "u_pred",
+        "u_pred_error",
+        "rhs",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error",
+    )
+    FIGURE_TITLES: ClassVar[dict[str, str]]
+    SIGNED_FIGURE_FIELDS: ClassVar[frozenset[str]]
+
+    request: CouplingArtifactRequest
+    logger: logging.Logger | None
+
+    def _load_visualization_mesh(
+        self,
+        *,
+        geometry_path: Any,
+        geometry: ComplexGeometryMetadata,
+    ) -> ComplexVisualizationMesh | None:
+        if self.request.visualization_mesh is None:
+            return None
+        return load_complex_visualization_mesh(
+            self.request.visualization_mesh,
+            geometry_path=geometry_path,
+            coords_valid=geometry.coords_valid.detach().cpu().numpy(),
+        )
+
+    def _write_scalar_mesh_figures(
+        self,
+        selected_samples: list[ComplexSelectedSample],
+        visualization_mesh: ComplexVisualizationMesh | None,
+        theme: str,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
+        color_ranges_by_sample: dict[
+            int,
+            dict[str, ComplexArtifactColorRange],
+        ],
+    ) -> tuple[list[str], tuple[str, ...]]:
+        if visualization_mesh is None:
+            return [], ()
+        paths: list[str] = []
+        exported_fields: list[str] = []
+        for sample in selected_samples:
+            stem = f"sample_{sample.sample_id:04d}_{sample.file_stem}"
+            color_ranges = color_ranges_by_sample[sample.sample_id]
+            for field in self.MESH_FIGURE_FIELDS:
+                if field not in sample.arrays:
+                    continue
+                figure = self._scalar_mesh_figure(
+                    title=f"{stem} {self.FIGURE_TITLES[field]} mesh",
+                    field=field,
+                    visualization_mesh=visualization_mesh,
+                    valid_values=sample.arrays[field],
+                    theme=theme,
+                    signed=field in self.SIGNED_FIGURE_FIELDS,
+                    color_range=color_ranges.get(field),
+                    boundary_overlay=boundary_overlay,
+                )
+                base_path = (
+                    self.request.outdir
+                    / "figures"
+                    / "mesh"
+                    / field
+                    / f"{stem}_{field}_mesh"
+                )
+                save_plotly_figure(figure, base_path, logger=self.logger)
+                paths.append(str(base_path.with_suffix(".json")))
+                if field not in exported_fields:
+                    exported_fields.append(field)
+        return paths, tuple(exported_fields)
+
+    def _copy_visualization_mesh(
+        self,
+        visualization_mesh: ComplexVisualizationMesh | None,
+    ) -> str | None:
+        if (
+            visualization_mesh is None
+            or not self.request.save_generated_data
+            or self.request.visualization_mesh is None
+        ):
+            return None
+        data_dir = self.request.outdir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        destination = data_dir / "visualization_mesh.npz"
+        source = self.request.visualization_mesh
+        if source.resolve() != destination.resolve():
+            shutil.copy2(source, destination)
+        return "data/visualization_mesh.npz"
+
+    @classmethod
+    def _scalar_mesh_figure(
+        cls,
+        *,
+        title: str,
+        field: str,
+        visualization_mesh: ComplexVisualizationMesh,
+        valid_values: np.ndarray,
+        theme: str,
+        signed: bool,
+        color_range: ComplexArtifactColorRange | None,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
+    ) -> go.Figure:
+        solution_field = field in ComplexScalarMeshArtifactMixin.SOLUTION_MESH_FIELDS
+        if solution_field:
+            values = visualization_mesh.transfer_solution(valid_values)
+            intensity_mode = "vertex"
+        else:
+            values = visualization_mesh.transfer_interior_cell_values(valid_values)
+            intensity_mode = "cell"
+        vertices = visualization_mesh.vertices
+        triangles = visualization_mesh.triangles
+        traces: list[Any] = [
+            go.Mesh3d(
+                x=vertices[:, 0],
+                y=vertices[:, 1],
+                z=np.zeros(vertices.shape[0], dtype=np.float64),
+                i=triangles[:, 0],
+                j=triangles[:, 1],
+                k=triangles[:, 2],
+                intensity=values,
+                intensitymode=intensity_mode,
+                colorscale="RdBu" if signed else "Viridis",
+                showscale=True,
+                flatshading=not solution_field,
+                lighting={
+                    "ambient": 1.0,
+                    "diffuse": 0.0,
+                    "specular": 0.0,
+                    "roughness": 1.0,
+                    "fresnel": 0.0,
+                },
+                colorbar={"exponentformat": "power", "showexponent": "all"},
+                hoverinfo="skip",
+                name="Scalar mesh",
+                showlegend=False,
+                **({} if color_range is None else color_range.plotly_kwargs()),
+            )
+        ]
+        hover_coords = vertices[visualization_mesh.valid_to_vertex]
+        hover_values = np.asarray(valid_values)
+        if solution_field:
+            boundary_vertices = vertices[visualization_mesh.boundary_vertex_mask]
+            hover_coords = np.concatenate((hover_coords, boundary_vertices), axis=0)
+            hover_values = np.concatenate(
+                (
+                    hover_values,
+                    np.zeros(boundary_vertices.shape[0], dtype=hover_values.dtype),
+                )
+            )
+        traces.append(
+            go.Scatter3d(
+                x=hover_coords[:, 0],
+                y=hover_coords[:, 1],
+                z=np.zeros(hover_coords.shape[0], dtype=np.float64),
+                customdata=hover_values.reshape(-1, 1),
+                mode="markers",
+                marker={"size": 8, "color": "rgba(0, 0, 0, 0.001)"},
+                hovertemplate=(
+                    "x=%{x:.6g}<br>y=%{y:.6g}<br>value=%{customdata[0]:.6e}"
+                    "<extra></extra>"
+                ),
+                name="Exact scalar values",
+                showlegend=False,
+            )
+        )
+        if not solution_field and boundary_overlay.enabled:
+            boundary_points = vertices[visualization_mesh.boundary_edges]
+            separator = np.full(
+                (boundary_points.shape[0], 1),
+                np.nan,
+                dtype=np.float64,
+            )
+            boundary_x = np.concatenate((boundary_points[:, :, 0], separator), axis=1)
+            boundary_y = np.concatenate((boundary_points[:, :, 1], separator), axis=1)
+            traces.append(
+                go.Scatter3d(
+                    x=boundary_x.reshape(-1),
+                    y=boundary_y.reshape(-1),
+                    z=np.zeros(boundary_x.size, dtype=np.float64),
+                    mode="lines",
+                    line={"color": boundary_overlay.marker_color, "width": 3.0},
+                    hovertemplate=(
+                        "Domain boundary<br>x=%{x:.6g}<br>y=%{y:.6g}<br>"
+                        "scalar unavailable<extra></extra>"
+                    ),
+                    name="Domain boundary",
+                    showlegend=False,
+                )
+            )
+
+        figure = go.Figure(
+            data=traces,
+            layout=cls._mesh_layout(
+                title=title,
+                theme=theme,
+                vertices=vertices,
+            ),
+        )
+        return figure
+
+
+class ComplexCoefficientArtifactMixin(ComplexMeshFigureLayoutMixin):
     """Create run-level physical coefficient artifacts for complex geometry."""
 
     COEFFICIENT_ZERO_TOLERANCE: ClassVar[float] = 1e-12
@@ -107,19 +517,9 @@ class ComplexCoefficientArtifactMixin:
         coeffs: CoefficientFunctions,
     ) -> ComplexCoefficientFields:
         coords = geometry.coords_valid
-        x = coords[:, 0]
-        y = coords[:, 1]
-        with torch.no_grad():
-            a = self._evaluate_coefficient_function(coeffs.a_fun, x, y, "a")
-            bx = self._evaluate_coefficient_function(coeffs.bx_fun, x, y, "bx")
-            by = self._evaluate_coefficient_function(coeffs.by_fun, x, y, "by")
-            c = self._evaluate_coefficient_function(coeffs.c_fun, x, y, "c")
-
-        coords_numpy = coords.detach().cpu().numpy()
-        a_numpy = a.detach().cpu().numpy()
-        bx_numpy = bx.detach().cpu().numpy()
-        by_numpy = by.detach().cpu().numpy()
-        c_numpy = c.detach().cpu().numpy()
+        coords_numpy, a_numpy, bx_numpy, by_numpy, c_numpy = (
+            self._evaluate_coefficient_arrays_at_coords(coords, coeffs)
+        )
         magnitude = np.sqrt(np.square(bx_numpy) + np.square(by_numpy))
         quiver_indices, stride = self._select_quiver_indices(
             geometry,
@@ -152,6 +552,61 @@ class ComplexCoefficientArtifactMixin:
             quiver_indices=quiver_indices,
             quiver_stride=stride,
             quiver_scale=quiver_scale,
+        )
+
+    def _evaluate_coefficient_mesh_fields(
+        self,
+        visualization_mesh: ComplexVisualizationMesh | None,
+        geometry: ComplexGeometryMetadata,
+        coeffs: CoefficientFunctions,
+    ) -> ComplexCoefficientMeshFields | None:
+        if visualization_mesh is None:
+            return None
+        coords = torch.as_tensor(
+            visualization_mesh.vertices,
+            dtype=geometry.coords_valid.dtype,
+            device=geometry.coords_valid.device,
+        )
+        coords_numpy, a, bx, by, c = self._evaluate_coefficient_arrays_at_coords(
+            coords,
+            coeffs,
+        )
+        if coords_numpy.shape[0] != visualization_mesh.vertex_count:
+            raise ValueError(
+                "Coefficient mesh evaluation must return one value per "
+                "visualization-mesh vertex."
+            )
+        return ComplexCoefficientMeshFields(
+            coords=coords_numpy,
+            a=a,
+            bx=bx,
+            by=by,
+            b_magnitude=np.sqrt(np.square(bx) + np.square(by)),
+            c=c,
+        )
+
+    def _evaluate_coefficient_arrays_at_coords(
+        self,
+        coords: torch.Tensor,
+        coeffs: CoefficientFunctions,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        if coords.ndim != 2 or coords.shape[1] != 2:
+            raise ValueError("Physical coefficient coordinates must have shape (N, 2).")
+        if not torch.all(torch.isfinite(coords)):
+            raise ValueError("Physical coefficient coordinates must be finite.")
+        x = coords[:, 0]
+        y = coords[:, 1]
+        with torch.no_grad():
+            a = self._evaluate_coefficient_function(coeffs.a_fun, x, y, "a")
+            bx = self._evaluate_coefficient_function(coeffs.bx_fun, x, y, "bx")
+            by = self._evaluate_coefficient_function(coeffs.by_fun, x, y, "by")
+            c = self._evaluate_coefficient_function(coeffs.c_fun, x, y, "c")
+        return (
+            coords.detach().cpu().numpy(),
+            a.detach().cpu().numpy(),
+            bx.detach().cpu().numpy(),
+            by.detach().cpu().numpy(),
+            c.detach().cpu().numpy(),
         )
 
     @staticmethod
@@ -280,53 +735,120 @@ class ComplexCoefficientArtifactMixin:
         fields: ComplexCoefficientFields,
         terms: CouplingCoefficientTermsConfig,
         theme: str,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
+        color_reference_fields: ComplexCoefficientMeshFields | None = None,
     ) -> tuple[list[str], tuple[str, ...]]:
         figure_fields = self._coefficient_figure_fields(fields, terms)
         paths: list[str] = []
-        scalar_specs = {
-            "diffusion_a": (fields.a, "Diffusion coefficient a(x, y)", "a", False),
+        scalar_specs = self._coefficient_scalar_specs(
+            fields,
+            color_reference_fields=color_reference_fields,
+        )
+        for name in figure_fields:
+            if name == "convection_vector":
+                figure = self._convection_vector_figure(
+                    fields,
+                    theme,
+                    boundary_overlay,
+                )
+            else:
+                values, color_values, title, label, signed = scalar_specs[name]
+                figure = self._coefficient_scalar_figure(
+                    title=title,
+                    label=label,
+                    coords=fields.coords_valid,
+                    values=values,
+                    color_reference_values=color_values,
+                    theme=theme,
+                    signed=signed,
+                    boundary_overlay=boundary_overlay,
+                )
+            base_path = self.request.outdir / "figures" / "coefficients" / name
+            save_plotly_figure(figure, base_path, logger=self.logger)
+            paths.append(str(base_path.with_suffix(".json")))
+        return paths, figure_fields
+
+    def _write_coefficient_mesh_figures(
+        self,
+        visualization_mesh: ComplexVisualizationMesh | None,
+        fields: ComplexCoefficientMeshFields | None,
+        coefficient_figure_fields: tuple[str, ...],
+        theme: str,
+    ) -> tuple[list[str], tuple[str, ...]]:
+        if visualization_mesh is None or fields is None:
+            return [], ()
+        mesh_figure_fields = tuple(
+            name for name in coefficient_figure_fields if name != "convection_vector"
+        )
+        scalar_specs = self._coefficient_scalar_specs(fields)
+        paths: list[str] = []
+        for name in mesh_figure_fields:
+            values, color_values, title, label, signed = scalar_specs[name]
+            figure = self._coefficient_mesh_figure(
+                title=f"{title} mesh",
+                label=label,
+                coords=fields.coords,
+                triangles=visualization_mesh.triangles,
+                values=values,
+                color_reference_values=color_values,
+                theme=theme,
+                signed=signed,
+            )
+            base_path = (
+                self.request.outdir
+                / "figures"
+                / "coefficients"
+                / "mesh"
+                / f"{name}_mesh"
+            )
+            save_plotly_figure(figure, base_path, logger=self.logger)
+            paths.append(str(base_path.with_suffix(".json")))
+        return paths, mesh_figure_fields
+
+    @staticmethod
+    def _coefficient_scalar_specs(
+        fields: ComplexCoefficientFields | ComplexCoefficientMeshFields,
+        *,
+        color_reference_fields: ComplexCoefficientMeshFields | None = None,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray, str, str, bool]]:
+        reference = fields if color_reference_fields is None else color_reference_fields
+        return {
+            "diffusion_a": (
+                fields.a,
+                reference.a,
+                "Diffusion coefficient a(x, y)",
+                "a",
+                False,
+            ),
             "reaction_c": (
                 fields.c,
+                reference.c,
                 "Reaction coefficient c(x, y)",
                 "c",
-                bool(np.min(fields.c) < 0.0 < np.max(fields.c)),
+                bool(np.min(reference.c) < 0.0 < np.max(reference.c)),
             ),
             "convection_bx": (
                 fields.bx,
+                reference.bx,
                 "Convection coefficient b_x(x, y)",
                 "b_x",
                 True,
             ),
             "convection_by": (
                 fields.by,
+                reference.by,
                 "Convection coefficient b_y(x, y)",
                 "b_y",
                 True,
             ),
             "convection_magnitude": (
                 fields.b_magnitude,
+                reference.b_magnitude,
                 "Convection magnitude |b(x, y)|",
                 "|b|",
                 False,
             ),
         }
-        for name in figure_fields:
-            if name == "convection_vector":
-                figure = self._convection_vector_figure(fields, theme)
-            else:
-                values, title, label, signed = scalar_specs[name]
-                figure = self._coefficient_scalar_figure(
-                    title=title,
-                    label=label,
-                    coords=fields.coords_valid,
-                    values=values,
-                    theme=theme,
-                    signed=signed,
-                )
-            base_path = self.request.outdir / "figures" / "coefficients" / name
-            save_plotly_figure(figure, base_path, logger=self.logger)
-            paths.append(str(base_path.with_suffix(".json")))
-        return paths, figure_fields
 
     def _coefficient_scalar_figure(
         self,
@@ -335,13 +857,15 @@ class ComplexCoefficientArtifactMixin:
         label: str,
         coords: np.ndarray,
         values: np.ndarray,
+        color_reference_values: np.ndarray | None = None,
         theme: str,
         signed: bool,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
     ) -> go.Figure:
-        max_abs = float(np.max(np.abs(values))) if values.size else 0.0
-        marker_range: dict[str, float] = {}
-        if signed and max_abs > 0.0:
-            marker_range = {"cmin": -max_abs, "cmax": max_abs}
+        color_values = (
+            values if color_reference_values is None else color_reference_values
+        )
+        color_style = self._coefficient_color_style(color_values, signed=signed)
         figure = go.Figure(
             data=go.Scattergl(
                 x=coords[:, 0],
@@ -354,7 +878,6 @@ class ComplexCoefficientArtifactMixin:
                 ),
                 marker={
                     "color": values,
-                    "colorscale": "RdBu" if signed else "Viridis",
                     "showscale": True,
                     "size": 6,
                     "colorbar": {
@@ -362,14 +885,127 @@ class ComplexCoefficientArtifactMixin:
                         "exponentformat": "power",
                         "showexponent": "all",
                     },
-                    **marker_range,
+                    **color_style,
                 },
             ),
             layout=self._coefficient_layout(title, theme),
         )
+        self._add_coefficient_constant_annotation(figure, values, label=label)
+        boundary_overlay.add_to_figure(figure)
+        return figure
+
+    def _coefficient_mesh_figure(
+        self,
+        *,
+        title: str,
+        label: str,
+        coords: np.ndarray,
+        triangles: np.ndarray,
+        values: np.ndarray,
+        color_reference_values: np.ndarray,
+        theme: str,
+        signed: bool,
+    ) -> go.Figure:
+        if coords.ndim != 2 or coords.shape[1] != 2:
+            raise ValueError("Coefficient mesh coordinates must have shape (N, 2).")
+        if values.shape != (coords.shape[0],):
+            raise ValueError(
+                "Coefficient mesh values must contain one scalar per mesh vertex."
+            )
+        if not np.all(np.isfinite(values)):
+            raise ValueError("Coefficient mesh values must be finite.")
+        color_style = self._coefficient_color_style(
+            color_reference_values,
+            signed=signed,
+        )
+        figure = go.Figure(
+            data=[
+                go.Mesh3d(
+                    x=coords[:, 0],
+                    y=coords[:, 1],
+                    z=np.zeros(coords.shape[0], dtype=np.float64),
+                    i=triangles[:, 0],
+                    j=triangles[:, 1],
+                    k=triangles[:, 2],
+                    intensity=values,
+                    intensitymode="vertex",
+                    showscale=True,
+                    flatshading=False,
+                    lighting={
+                        "ambient": 1.0,
+                        "diffuse": 0.0,
+                        "specular": 0.0,
+                        "roughness": 1.0,
+                        "fresnel": 0.0,
+                    },
+                    colorbar={
+                        "title": label,
+                        "exponentformat": "power",
+                        "showexponent": "all",
+                    },
+                    hoverinfo="skip",
+                    name="Physical coefficient mesh",
+                    showlegend=False,
+                    **color_style,
+                ),
+                go.Scatter3d(
+                    x=coords[:, 0],
+                    y=coords[:, 1],
+                    z=np.zeros(coords.shape[0], dtype=np.float64),
+                    customdata=values.reshape(-1, 1),
+                    mode="markers",
+                    marker={"size": 8, "color": "rgba(0, 0, 0, 0.001)"},
+                    hovertemplate=(
+                        "x=%{x:.6g}<br>y=%{y:.6g}<br>"
+                        f"{label}=%{{customdata[0]:.6g}}<extra></extra>"
+                    ),
+                    name="Direct physical coefficient values",
+                    showlegend=False,
+                ),
+            ],
+            layout=self._mesh_layout(
+                title=title,
+                theme=theme,
+                vertices=coords,
+            ),
+        )
+        self._add_coefficient_constant_annotation(figure, values, label=label)
+        return figure
+
+    @classmethod
+    def _coefficient_color_style(
+        cls,
+        values: np.ndarray,
+        *,
+        signed: bool,
+    ) -> dict[str, Any]:
+        finite = np.asarray(values)[np.isfinite(values)]
+        if finite.size == 0:
+            raise ValueError("Coefficient color reference must contain finite values.")
+        minimum = float(np.min(finite))
+        maximum = float(np.max(finite))
+        max_abs = float(np.max(np.abs(finite)))
+        tolerance = cls.COEFFICIENT_ZERO_TOLERANCE * max(1.0, max_abs)
+        style: dict[str, Any] = {"colorscale": "RdBu" if signed else "Viridis"}
+        if signed:
+            if max_abs > 0.0:
+                style.update(cmin=-max_abs, cmax=max_abs)
+        elif maximum - minimum > tolerance:
+            style.update(cmin=minimum, cmax=maximum)
+        return style
+
+    @classmethod
+    def _add_coefficient_constant_annotation(
+        cls,
+        figure: go.Figure,
+        values: np.ndarray,
+        *,
+        label: str,
+    ) -> None:
         minimum = float(np.min(values))
         maximum = float(np.max(values))
-        tolerance = self.COEFFICIENT_ZERO_TOLERANCE * max(1.0, max_abs)
+        max_abs = float(np.max(np.abs(values)))
+        tolerance = cls.COEFFICIENT_ZERO_TOLERANCE * max(1.0, max_abs)
         if maximum - minimum <= tolerance:
             figure.add_annotation(
                 x=0.5,
@@ -379,12 +1015,12 @@ class ComplexCoefficientArtifactMixin:
                 showarrow=False,
                 text=f"Constant field: {label}={minimum:.6g}",
             )
-        return figure
 
     def _convection_vector_figure(
         self,
         fields: ComplexCoefficientFields,
         theme: str,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
     ) -> go.Figure:
         customdata = np.column_stack((fields.bx, fields.by, fields.b_magnitude))
         figure = go.Figure(
@@ -450,6 +1086,7 @@ class ComplexCoefficientArtifactMixin:
                 showarrow=False,
                 text="Zero convection field on valid points",
             )
+        boundary_overlay.add_to_figure(figure)
         return figure
 
     @staticmethod
@@ -466,15 +1103,34 @@ class ComplexCoefficientArtifactMixin:
         )
 
 
-class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
+class ComplexCouplingArtifactExporter(
+    ComplexScalarMeshArtifactMixin,
+    ComplexCoefficientArtifactMixin,
+):
     """Export complex-geometry CouplingNet metrics, raw archives, and scatter plots."""
 
-    COLOR_RANGE_POLICY: ClassVar[str] = "shared_reference_prediction_groups"
+    DEFAULT_DIRECTIONAL_COLOR_QUANTILE: ClassVar[float] = 0.99
+    COLOR_RANGE_POLICY: ClassVar[str] = (
+        "solution_full_range_and_directional_robust_quantile"
+    )
     COLOR_RANGE_GROUPS: ClassVar[dict[str, tuple[str, ...]]] = {
         "solution": ("sol", "u_pred", "u_phi", "u_psi"),
         "phi": ("target_phi", "phi"),
         "psi": ("target_psi", "psi"),
     }
+    DIRECTIONAL_ERROR_FIELDS: ClassVar[tuple[str, ...]] = (
+        "phi_error",
+        "psi_error",
+    )
+    DIRECTIONAL_COLOR_SUMMARY_FIELDS: ClassVar[tuple[str, ...]] = (
+        "rhs",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error",
+    )
     FIGURE_FIELDS: ClassVar[tuple[str, ...]] = (
         "rhs",
         "sol",
@@ -589,6 +1245,15 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         self.logger = logger
         self.request.outdir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def directional_color_quantile(self) -> float:
+        configured = self.request.directional_color_quantile
+        return (
+            self.DEFAULT_DIRECTIONAL_COLOR_QUANTILE
+            if configured is None
+            else float(configured)
+        )
+
     def export(self) -> dict[str, Any]:
         configs = load_coupling_artifact_configs(self.request.config)
         if configs.dataset.geometry_mode != "complex":
@@ -609,7 +1274,16 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             configs.dataset.geometry_path,
             dtype=configs.dataset.dtype,
         )
+        visualization_mesh = self._load_visualization_mesh(
+            geometry_path=configs.dataset.geometry_path,
+            geometry=geometry,
+        )
         coefficient_fields = self._evaluate_coefficient_fields(geometry, coeffs)
+        coefficient_mesh_fields = self._evaluate_coefficient_mesh_fields(
+            visualization_mesh,
+            geometry,
+            coeffs,
+        )
         dataset = ComplexCouplingDataset(
             configs.dataset.test_path,
             geometry,
@@ -628,9 +1302,19 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             device=device,
             work_dir=self.request.outdir,
         )
+        boundary_context = evaluator.boundary_energy_context(geometry)
+        boundary_overlay = ComplexDomainBoundaryOverlay.from_endpoint_coords(
+            boundary_context.endpoint_coords.detach().cpu().numpy(),
+            enabled=self.request.show_domain_boundary,
+            theme=self.request.theme,
+        )
         metric_rows = self._evaluate_rows(dataset, evaluator, configs)
         selected, roles, policy = self._select_sample_indices(metric_rows)
         selected_samples = self._evaluate_selected(dataset, evaluator, selected, device)
+        color_ranges_by_sample = {
+            sample.sample_id: self._color_ranges_for_sample(sample.arrays)
+            for sample in selected_samples
+        }
         self._write_metric_csv(metric_rows)
         self._write_selected_npz(selected_samples)
         self._write_coefficient_npz(coefficient_fields)
@@ -640,11 +1324,31 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         sample_figure_paths = self._write_figures(
             selected_samples,
             self.request.theme,
+            boundary_overlay,
+            color_ranges_by_sample,
         )
+        mesh_figure_paths, mesh_figure_fields = self._write_scalar_mesh_figures(
+            selected_samples,
+            visualization_mesh,
+            self.request.theme,
+            boundary_overlay,
+            color_ranges_by_sample,
+        )
+        mesh_raw_archive = self._copy_visualization_mesh(visualization_mesh)
         coefficient_figure_paths, coefficient_figure_fields = (
             self._write_coefficient_figures(
                 coefficient_fields,
                 configs.coupling_model.coefficient_terms,
+                self.request.theme,
+                boundary_overlay,
+                coefficient_mesh_fields,
+            )
+        )
+        coefficient_mesh_figure_paths, coefficient_mesh_figure_fields = (
+            self._write_coefficient_mesh_figures(
+                visualization_mesh,
+                coefficient_mesh_fields,
+                coefficient_figure_fields,
                 self.request.theme,
             )
         )
@@ -653,6 +1357,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 evaluator.column_diagonal_green_response_context,
                 geometry,
                 self.request.theme,
+                boundary_overlay,
             )
         )
         tangent_projection_paths, tangent_projection_fields = (
@@ -660,6 +1365,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 evaluator.symmetric_tangent_green_response_context,
                 geometry,
                 self.request.theme,
+                boundary_overlay,
             )
         )
         projection_figure_paths = column_projection_paths + tangent_projection_paths
@@ -689,6 +1395,11 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         weak_closure = ComplexWeakOperatorClosureConfig.from_raw(
             configs.coupling_training.weak_operator_closure
         )
+        post_line_search_stationarity = (
+            ComplexPostLineSearchStationarityConfig.from_raw(
+                configs.coupling_training.post_line_search_stationarity
+            )
+        )
         best_energy = CouplingBestEnergyCheckpointConfig.from_raw(
             configs.coupling_training.best_energy_checkpoint
         )
@@ -712,7 +1423,6 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             configs.coupling_training,
             metric_rows,
         )
-        boundary_context = evaluator.boundary_energy_context(geometry)
         summary = {
             "geometry_mode": "complex",
             "device": str(device),
@@ -727,10 +1437,13 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "selected_sample_policy": policy,
             "plot_workers": self.request.plot_workers,
             "save_generated_data": self.request.save_generated_data,
+            "domain_boundary_overlay": boundary_overlay.summary(),
             "aggregate_metrics": aggregate,
             "figure_count": (
                 len(sample_figure_paths)
+                + len(mesh_figure_paths)
                 + len(coefficient_figure_paths)
+                + len(coefficient_mesh_figure_paths)
                 + len(projection_figure_paths)
             ),
             "figure_fields": list(figure_fields),
@@ -902,6 +1615,22 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 "reaction_split": "c/2_per_direction",
                 "uses_reference_targets": False,
             },
+            "post_line_search_stationarity": {
+                "enabled": post_line_search_stationarity.enabled,
+                "weight": post_line_search_stationarity.weight,
+                "eps": post_line_search_stationarity.eps,
+                "objective": (
+                    "mean((g-eta_star*A*z)^T*D^-1*(g-eta_star*A*z)/(g^T*D^-1*g+eps))"
+                ),
+                "eta_source": "uncapped_eta_star",
+                "forward_eta_source": "capped_eta_applied",
+                "hessian_action": "A*z=(H_x+H_y)^T*M_Omega*(H_x+H_y)*z",
+                "matrix_free": True,
+                "extra_adjoint_actions_per_enabled_batch": 1,
+                "global_response_matrix_materialized": False,
+                "full_gram_solve": False,
+                "uses_reference_targets": False,
+            },
             "checkpoint_selection": {
                 "best_energy": best_energy.enabled,
                 "best_physics": best_physics.enabled,
@@ -912,6 +1641,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             "non_error_color_range_groups": {
                 name: list(fields) for name, fields in self.COLOR_RANGE_GROUPS.items()
             },
+            "directional_color_range": self._directional_color_range_summary(
+                selected_samples,
+                color_ranges_by_sample,
+            ),
             "optional_flux_targets_exported": self._has_flux_target_artifacts(
                 selected_samples
             ),
@@ -955,6 +1688,48 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 ],
             },
         }
+        if visualization_mesh is not None:
+            mesh_summary = visualization_mesh.summary(self.request.visualization_mesh)
+            mesh_summary["raw_archive"] = mesh_raw_archive
+            mesh_summary["figure_fields"] = list(mesh_figure_fields)
+            mesh_summary["figure_count"] = len(mesh_figure_paths)
+            mesh_summary["field_space"] = "physical_scalar"
+            mesh_summary["color_range_policy"] = {
+                "solution": "full_range_including_prescribed_zero",
+                "rhs": "full_min_max",
+                "directional_values": "shared_lower_upper_quantile",
+                "directional_errors": "symmetric_absolute_quantile",
+                "directional_quantile": self.directional_color_quantile,
+            }
+            mesh_summary["field_boundary_policy"] = {
+                "sol/u_pred/u_pred_error": (
+                    "prescribed_homogeneous_dirichlet_zero_without_outline"
+                ),
+                "rhs/phi/psi/target_phi/target_psi/phi_error/psi_error": (
+                    "not_evaluated_black_outline"
+                ),
+            }
+            mesh_summary["hover_policy"] = (
+                "exact_valid_points_and_solution_boundary_zero_only"
+            )
+            mesh_summary["scene_scale"] = self.MESH_SCENE_SCALE
+            summary["visualization_mesh"] = mesh_summary
+            summary["mesh_figure_count"] = len(mesh_figure_paths)
+            summary["mesh_figure_fields"] = list(mesh_figure_fields)
+            summary["coefficient_mesh_figure_count"] = len(
+                coefficient_mesh_figure_paths
+            )
+            summary["coefficient_mesh_figure_fields"] = list(
+                coefficient_mesh_figure_fields
+            )
+            summary["coefficient_mesh_evaluation"] = (
+                "direct_at_visualization_mesh_vertices"
+            )
+            summary["coefficient_mesh_boundary_value_source"] = (
+                "direct_physical_coefficient_function"
+            )
+            summary["coefficient_mesh_intensity_mode"] = "vertex"
+            summary["mesh_scene_scale"] = self.MESH_SCENE_SCALE
         (self.request.outdir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True)
         )
@@ -1291,6 +2066,25 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                                 ),
                             }
                         )
+                stationarity = prediction.objective.post_line_search_stationarity
+                if stationarity is not None:
+                    arrays.update(
+                        {
+                            "tangent_hessian_direction": (
+                                stationarity.hessian_direction[0].detach().cpu().numpy()
+                            ),
+                            "tangent_stationarity_residual": (
+                                stationarity.stationarity_residual[0]
+                                .detach()
+                                .cpu()
+                                .numpy()
+                            ),
+                            "tangent_stationarity_ratio": np.asarray(
+                                stationarity.loss_per_sample[0].detach().cpu().item(),
+                                dtype=np.float64,
+                            ),
+                        }
+                    )
                 reliability = prediction.cross_axis_reconstruction.reliability
                 if reliability is not None:
                     arrays.update(
@@ -1607,6 +2401,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         context: ColumnDiagonalGreenResponseContext | None,
         geometry: ComplexGeometryMetadata,
         theme: str,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
     ) -> tuple[list[str], tuple[str, ...]]:
         if context is None:
             return [], ()
@@ -1628,6 +2423,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 coords=coords,
                 values=values,
                 theme=theme,
+                boundary_overlay=boundary_overlay,
             )
             base_path = self.request.outdir / "figures" / "balance_projection" / field
             save_plotly_figure(figure, base_path, logger=self.logger)
@@ -1639,6 +2435,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         context: SymmetricTangentGreenResponseContext | None,
         geometry: ComplexGeometryMetadata,
         theme: str,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
     ) -> tuple[list[str], tuple[str, ...]]:
         if context is None:
             return [], ()
@@ -1659,6 +2456,7 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 coords=coords,
                 values=values,
                 theme=theme,
+                boundary_overlay=boundary_overlay,
             )
             base_path = self.request.outdir / "figures" / "balance_projection" / field
             save_plotly_figure(figure, base_path, logger=self.logger)
@@ -1886,11 +2684,16 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         self,
         selected_samples: list[ComplexSelectedSample],
         theme: str,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
+        color_ranges_by_sample: dict[
+            int,
+            dict[str, ComplexArtifactColorRange],
+        ],
     ) -> list[str]:
         figure_paths: list[str] = []
         for sample in selected_samples:
             stem = f"sample_{sample.sample_id:04d}_{sample.file_stem}"
-            color_ranges = self._color_ranges_for_sample(sample.arrays)
+            color_ranges = color_ranges_by_sample[sample.sample_id]
             for field in self._figure_fields_for_sample(sample.arrays):
                 fig = self._scatter_figure(
                     title=f"{stem} {self.FIGURE_TITLES[field]}",
@@ -1899,33 +2702,85 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     theme=theme,
                     signed=field in self.SIGNED_FIGURE_FIELDS,
                     color_range=color_ranges.get(field),
+                    boundary_overlay=boundary_overlay,
                 )
                 base_path = self.request.outdir / "figures" / field / f"{stem}_{field}"
                 save_plotly_figure(fig, base_path, logger=self.logger)
                 figure_paths.append(str(base_path.with_suffix(".json")))
         return figure_paths
 
-    @classmethod
     def _color_ranges_for_sample(
-        cls,
+        self,
         arrays: dict[str, np.ndarray],
-    ) -> dict[str, dict[str, float]]:
-        ranges: dict[str, dict[str, float]] = {}
-        for fields in cls.COLOR_RANGE_GROUPS.values():
-            color_range = cls._shared_color_range(arrays, fields)
-            if not color_range:
-                continue
-            for field in fields:
+    ) -> dict[str, ComplexArtifactColorRange]:
+        ranges: dict[str, ComplexArtifactColorRange] = {}
+        solution_range = self._shared_color_range(
+            arrays,
+            self.COLOR_RANGE_GROUPS["solution"],
+            group="solution",
+            policy="full_min_max_including_zero",
+            quantile=1.0,
+            include_zero=True,
+        )
+        if solution_range is not None:
+            for field in self.COLOR_RANGE_GROUPS["solution"]:
                 if field in arrays:
-                    ranges[field] = color_range
+                    ranges[field] = solution_range
+
+        quantile = self.directional_color_quantile
+        for group in ("phi", "psi"):
+            fields = self.COLOR_RANGE_GROUPS[group]
+            color_range = self._shared_color_range(
+                arrays,
+                fields,
+                group=group,
+                policy="shared_lower_upper_quantile",
+                quantile=quantile,
+            )
+            if color_range is not None:
+                for field in fields:
+                    if field in arrays:
+                        ranges[field] = color_range
+
+        for field in self.DIRECTIONAL_ERROR_FIELDS:
+            color_range = self._shared_color_range(
+                arrays,
+                (field,),
+                group=field,
+                policy="symmetric_absolute_quantile",
+                quantile=quantile,
+                symmetric=True,
+            )
+            if color_range is not None:
+                ranges[field] = color_range
+
+        for field, symmetric in (("rhs", False), ("u_pred_error", True)):
+            color_range = self._shared_color_range(
+                arrays,
+                (field,),
+                group=field,
+                policy="symmetric_full_range" if symmetric else "full_min_max",
+                quantile=1.0,
+                symmetric=symmetric,
+            )
+            if color_range is not None:
+                ranges[field] = color_range
         return ranges
 
     @staticmethod
     def _shared_color_range(
         arrays: dict[str, np.ndarray],
         fields: tuple[str, ...],
-    ) -> dict[str, float]:
+        *,
+        group: str,
+        policy: str,
+        quantile: float,
+        symmetric: bool = False,
+        include_zero: bool = False,
+    ) -> ComplexArtifactColorRange | None:
         finite_values: list[np.ndarray] = []
+        if include_zero:
+            finite_values.append(np.asarray([0.0], dtype=np.float64))
         for field in fields:
             if field not in arrays:
                 continue
@@ -1934,11 +2789,62 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
             if finite.size:
                 finite_values.append(finite)
         if not finite_values:
-            return {}
+            return None
         joined = np.concatenate(finite_values)
+        full_min = float(np.min(joined))
+        full_max = float(np.max(joined))
+        if full_min == full_max:
+            cmin: float | None = None
+            cmax: float | None = None
+        elif symmetric:
+            maximum = float(np.quantile(np.abs(joined), quantile))
+            if maximum == 0.0:
+                maximum = max(abs(full_min), abs(full_max))
+            cmin = -maximum
+            cmax = maximum
+        else:
+            cmin = float(np.quantile(joined, 1.0 - quantile))
+            cmax = float(np.quantile(joined, quantile))
+            if cmin == cmax:
+                cmin = full_min
+                cmax = full_max
+        return ComplexArtifactColorRange(
+            group=group,
+            policy=policy,
+            quantile=quantile,
+            cmin=cmin,
+            cmax=cmax,
+        )
+
+    def _directional_color_range_summary(
+        self,
+        selected_samples: list[ComplexSelectedSample],
+        color_ranges_by_sample: dict[
+            int,
+            dict[str, ComplexArtifactColorRange],
+        ],
+    ) -> dict[str, Any]:
+        samples: dict[str, dict[str, dict[str, float | int | str]]] = {}
+        for sample in selected_samples:
+            stem = f"sample_{sample.sample_id:04d}_{sample.file_stem}"
+            ranges = color_ranges_by_sample[sample.sample_id]
+            sample_summary: dict[str, dict[str, float | int | str]] = {}
+            for field in self.DIRECTIONAL_COLOR_SUMMARY_FIELDS:
+                if field in sample.arrays and field in ranges:
+                    sample_summary[field] = ranges[field].field_summary(
+                        sample.arrays[field]
+                    )
+            samples[stem] = sample_summary
         return {
-            "cmin": float(np.min(joined)),
-            "cmax": float(np.max(joined)),
+            "configured_quantile": self.request.directional_color_quantile,
+            "resolved_quantile": self.directional_color_quantile,
+            "value_policy": "shared_lower_upper_quantile",
+            "error_policy": "symmetric_absolute_quantile",
+            "source_policy": "full_min_max",
+            "quantile_method": "numpy_linear",
+            "input_points": "finite_coords_valid_only",
+            "raw_values_modified": False,
+            "samples": samples,
         }
 
     @classmethod
@@ -1980,17 +2886,19 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
         values: np.ndarray,
         theme: str,
         signed: bool = False,
-        color_range: dict[str, float] | None = None,
+        color_range: ComplexArtifactColorRange | None = None,
+        boundary_overlay: ComplexDomainBoundaryOverlay,
     ) -> go.Figure:
         finite_values = values[np.isfinite(values)]
         max_abs = float(np.max(np.abs(finite_values))) if finite_values.size else 0.0
-        marker_color_range: dict[str, float] = dict(color_range or {})
-        if signed and max_abs > 0.0:
+        marker_color_range = {} if color_range is None else color_range.plotly_kwargs()
+        if color_range is None and signed and max_abs > 0.0:
             marker_color_range = {"cmin": -max_abs, "cmax": max_abs}
-        return go.Figure(
+        figure = go.Figure(
             data=go.Scattergl(
                 x=coords[:, 0],
                 y=coords[:, 1],
+                customdata=np.asarray(values).reshape(-1, 1),
                 mode="markers",
                 marker={
                     "color": values,
@@ -2000,6 +2908,10 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                     "colorbar": {"exponentformat": "power", "showexponent": "all"},
                     **marker_color_range,
                 },
+                hovertemplate=(
+                    "x=%{x:.6g}<br>y=%{y:.6g}<br>value=%{customdata[0]:.6e}"
+                    "<extra></extra>"
+                ),
             ),
             layout=go.Layout(
                 template=theme,
@@ -2011,6 +2923,8 @@ class ComplexCouplingArtifactExporter(ComplexCoefficientArtifactMixin):
                 yaxis={"scaleanchor": "x", "scaleratio": 1},
             ),
         )
+        boundary_overlay.add_to_figure(figure)
+        return figure
 
     @staticmethod
     def _aggregate_metrics(

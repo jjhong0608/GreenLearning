@@ -14,9 +14,14 @@ from greenonet.complex_reconstruction import (
     reconstruct_from_projected_response,
 )
 from greenonet.complex_tangent_projection import (
+    NormalizedPostLineSearchStationarityResult,
     SymmetricTangentGreenResponseContext,
+    normalized_post_line_search_stationarity_loss,
 )
-from greenonet.config import BalanceProjectionConfig
+from greenonet.config import (
+    BalanceProjectionConfig,
+    ComplexPostLineSearchStationarityConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -328,6 +333,40 @@ def symmetric_tangent_metric_tensors(
             }
         )
     return metrics
+
+
+def post_line_search_stationarity_from_projection(
+    *,
+    projection: ComplexProjectionResult,
+    context: SymmetricTangentGreenResponseContext | None,
+    config: ComplexPostLineSearchStationarityConfig | dict[str, Any],
+) -> NormalizedPostLineSearchStationarityResult | None:
+    """Compute optional stationarity diagnostics from uncapped tangent data."""
+
+    resolved = ComplexPostLineSearchStationarityConfig.from_raw(config)
+    if not resolved.enabled:
+        return None
+    if projection.mode != "symmetric_tangent_green_response" or context is None:
+        raise ValueError(
+            "Post-line-search stationarity requires symmetric tangent projection "
+            "and its cached Green-response context."
+        )
+    tangent = projection.symmetric_tangent_diagnostics
+    if (
+        tangent is None
+        or tangent.eta_star is None
+        or tangent.response_direction is None
+    ):
+        raise RuntimeError(
+            "Closed-loop tangent diagnostics are incomplete for stationarity loss."
+        )
+    return normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=tangent.gradient,
+        response_direction=tangent.response_direction,
+        eta_star=tangent.eta_star,
+        config=resolved,
+    )
 
 
 def _validate_inputs(

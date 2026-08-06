@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 import json
 from pathlib import Path
@@ -12,6 +13,8 @@ import torch
 from greenonet.coefficients import load_coefficient_functions
 from greenonet.complex_coupling_artifacts import (
     ComplexCouplingArtifactExporter,
+    ComplexDomainBoundaryOverlay,
+    ComplexSelectedSample,
     export_complex_coupling_artifacts,
 )
 from greenonet.complex_coupling_model import ComplexCouplingNet
@@ -34,6 +37,7 @@ from test.complex_fixtures import (
     write_complex_config,
     write_geometry_npz,
     write_sample_npz,
+    write_visualization_mesh_npz,
 )
 
 
@@ -60,6 +64,293 @@ def _coefficient_figure(outdir: Path, field: str) -> dict:
     )
 
 
+def _boundary_overlay(*, enabled: bool = True) -> ComplexDomainBoundaryOverlay:
+    return ComplexDomainBoundaryOverlay.from_endpoint_coords(
+        np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64),
+        enabled=enabled,
+        theme="plotly_white",
+    )
+
+
+def _assert_boundary_trace(figure: dict, *, expected_count: int) -> None:
+    trace = figure["data"][-1]
+    assert trace["type"] == "scatter"
+    assert trace["mode"] == "markers"
+    assert trace["name"] == "Domain boundary"
+    assert trace["showlegend"] is True
+    assert trace["marker"]["symbol"] == "circle-open"
+    assert trace["marker"]["size"] == 5.0
+    assert isinstance(trace["marker"]["color"], str)
+    assert "colorscale" not in trace["marker"]
+    assert "showscale" not in trace["marker"]
+    assert "customdata" not in trace
+    assert _plotly_array_size(trace["x"]) == expected_count
+    assert _plotly_array_size(trace["y"]) == expected_count
+    assert "Domain boundary" in trace["hovertemplate"]
+
+
+def _plotly_array_size(values: list | dict) -> int:
+    if isinstance(values, list):
+        return len(values)
+    buffer = base64.b64decode(values["bdata"])
+    return int(np.frombuffer(buffer, dtype=np.dtype(values["dtype"])).size)
+
+
+def _plotly_array(values: list | dict) -> np.ndarray:
+    if isinstance(values, list):
+        return np.asarray(values)
+    buffer = base64.b64decode(values["bdata"])
+    return np.frombuffer(buffer, dtype=np.dtype(values["dtype"]))
+
+
+def test_complex_domain_boundary_overlay_contract() -> None:
+    endpoint_coords = np.asarray(
+        [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]],
+        dtype=np.float64,
+    )
+    overlay = ComplexDomainBoundaryOverlay.from_endpoint_coords(
+        endpoint_coords,
+        enabled=True,
+        theme="plotly_white",
+    )
+    figure = go.Figure(
+        go.Scattergl(
+            x=[0.5],
+            y=[0.5],
+            mode="markers",
+            marker={"color": [2.0], "colorscale": "Viridis", "showscale": True},
+        )
+    )
+
+    overlay.add_to_figure(figure)
+
+    payload = figure.to_plotly_json()
+    assert len(payload["data"]) == 2
+    assert payload["data"][0]["showlegend"] is False
+    assert payload["data"][0]["marker"]["color"] == [2.0]
+    assert payload["data"][0]["marker"]["showscale"] is True
+    _assert_boundary_trace(payload, expected_count=2)
+    assert overlay.summary() == {
+        "enabled": True,
+        "representation": "open_markers",
+        "coordinate_source": ("canonical_boundary_energy_context.endpoint_coords"),
+        "point_count": 2,
+        "scalar_values_included": False,
+        "included_in_metrics": False,
+    }
+    assert overlay.coords.flags.writeable is False
+
+    disabled = ComplexDomainBoundaryOverlay.from_endpoint_coords(
+        endpoint_coords,
+        enabled=False,
+        theme="plotly_white",
+    )
+    disabled_figure = go.Figure(go.Scattergl(x=[0.5], y=[0.5], mode="markers"))
+    before = disabled_figure.to_plotly_json()
+    disabled.add_to_figure(disabled_figure)
+    assert disabled_figure.to_plotly_json() == before
+
+    dark = ComplexDomainBoundaryOverlay.from_endpoint_coords(
+        endpoint_coords,
+        enabled=True,
+        theme="plotly_dark",
+    )
+    assert dark.marker_color == "#ECEFF1"
+    with pytest.raises(ValueError, match="cannot be empty"):
+        ComplexDomainBoundaryOverlay.from_endpoint_coords(
+            np.empty((0, 2)),
+            enabled=True,
+            theme="plotly_white",
+        )
+    with pytest.raises(ValueError, match="must be finite"):
+        ComplexDomainBoundaryOverlay.from_endpoint_coords(
+            np.asarray([[np.nan, 0.0]]),
+            enabled=True,
+            theme="plotly_white",
+        )
+
+    with pytest.raises(ValueError, match=r"shape \(N, 2\)"):
+        ComplexDomainBoundaryOverlay.from_endpoint_coords(
+            np.zeros((2, 3)),
+            enabled=True,
+            theme="plotly_white",
+        )
+
+
+def test_directional_robust_color_ranges_are_shared_and_zero_centered(
+    tmp_path: Path,
+) -> None:
+    exporter = ComplexCouplingArtifactExporter(
+        CouplingArtifactRequest(
+            config=tmp_path / "config.json",
+            coupling_checkpoint=tmp_path / "coupling.safetensors",
+            green_checkpoint=tmp_path / "green.safetensors",
+            outdir=tmp_path / "artifacts",
+            directional_color_quantile=0.75,
+        )
+    )
+    arrays = {
+        "sol": np.asarray([0.0, 1.0, 2.0]),
+        "u_pred": np.asarray([-1.0, 0.5, 3.0]),
+        "u_pred_error": np.asarray([-2.0, 0.0, 1.0]),
+        "rhs": np.asarray([-5.0, 1.0, 7.0]),
+        "phi": np.asarray([-100.0, -1.0, 0.0, 1.0]),
+        "target_phi": np.asarray([2.0, 3.0, 4.0, 100.0]),
+        "psi": np.asarray([-4.0, 0.0, 8.0, 12.0]),
+        "target_psi": np.asarray([-8.0, -2.0, 2.0, 4.0]),
+        "phi_error": np.asarray([-100.0, -2.0, 0.0, 4.0]),
+        "psi_error": np.asarray([-6.0, -1.0, 3.0, 80.0]),
+    }
+
+    ranges = exporter._color_ranges_for_sample(arrays)
+    phi_joined = np.concatenate((arrays["target_phi"], arrays["phi"]))
+    expected_phi = tuple(np.quantile(phi_joined, (0.25, 0.75)))
+    assert ranges["phi"] is ranges["target_phi"]
+    assert ranges["phi"].plotly_kwargs() == {
+        "cmin": pytest.approx(expected_phi[0]),
+        "cmax": pytest.approx(expected_phi[1]),
+    }
+    assert ranges["psi"] is ranges["target_psi"]
+    phi_error_limit = float(np.quantile(np.abs(arrays["phi_error"]), 0.75))
+    assert ranges["phi_error"].plotly_kwargs() == {
+        "cmin": pytest.approx(-phi_error_limit),
+        "cmax": pytest.approx(phi_error_limit),
+    }
+    assert ranges["rhs"].plotly_kwargs() == {"cmin": -5.0, "cmax": 7.0}
+    stats = ranges["phi"].field_summary(arrays["phi"])
+    assert stats["saturated_point_count"] > 0
+    assert stats["full_min"] == -100.0
+
+    legacy = ComplexCouplingArtifactExporter(
+        CouplingArtifactRequest(
+            config=tmp_path / "config.json",
+            coupling_checkpoint=tmp_path / "coupling.safetensors",
+            green_checkpoint=tmp_path / "green.safetensors",
+            outdir=tmp_path / "legacy_artifacts",
+            directional_color_quantile=1.0,
+        )
+    )._color_ranges_for_sample(arrays)
+    assert legacy["phi"].plotly_kwargs() == {"cmin": -100.0, "cmax": 100.0}
+    assert legacy["phi_error"].plotly_kwargs() == {
+        "cmin": -100.0,
+        "cmax": 100.0,
+    }
+
+
+def test_scalar_mesh_omits_optional_target_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    _, mesh = write_visualization_mesh_npz(
+        tmp_path / "visualization_mesh.npz",
+        geometry_path=geometry_path,
+    )
+    exporter = ComplexCouplingArtifactExporter(
+        CouplingArtifactRequest(
+            config=tmp_path / "config.json",
+            coupling_checkpoint=tmp_path / "coupling.safetensors",
+            green_checkpoint=tmp_path / "green.safetensors",
+            outdir=tmp_path / "artifacts",
+        )
+    )
+    arrays = {
+        "coords_valid": np.asarray(
+            [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75]],
+            dtype=np.float64,
+        ),
+        "sol": np.asarray([0.1, 0.2, 0.3]),
+        "u_pred": np.asarray([0.11, 0.19, 0.31]),
+        "u_pred_error": np.asarray([0.01, -0.01, 0.01]),
+        "rhs": np.asarray([1.0, 2.0, 3.0]),
+        "phi": np.asarray([0.6, 1.1, 1.7]),
+        "psi": np.asarray([0.4, 0.9, 1.3]),
+    }
+    sample = ComplexSelectedSample(sample_id=0, file_stem="sample_0000", arrays=arrays)
+    color_ranges = {0: exporter._color_ranges_for_sample(arrays)}
+
+    paths, fields = exporter._write_scalar_mesh_figures(
+        [sample],
+        mesh,
+        "plotly_white",
+        _boundary_overlay(),
+        color_ranges,
+    )
+
+    assert fields == ("sol", "u_pred", "u_pred_error", "rhs", "phi", "psi")
+    assert len(paths) == 6
+    assert not (tmp_path / "artifacts" / "figures" / "mesh" / "target_phi").exists()
+
+    directional = exporter._scalar_mesh_figure(
+        title="phi without boundary outline",
+        field="phi",
+        visualization_mesh=mesh,
+        valid_values=arrays["phi"],
+        theme="plotly_white",
+        signed=False,
+        color_range=color_ranges[0]["phi"],
+        boundary_overlay=_boundary_overlay(enabled=False),
+    ).to_plotly_json()
+    assert len(directional["data"]) == 2
+    assert all(trace.get("name") != "Domain boundary" for trace in directional["data"])
+
+
+def test_robust_color_range_uses_finite_values_and_handles_constants() -> None:
+    finite_range = ComplexCouplingArtifactExporter._shared_color_range(
+        {"phi": np.asarray([np.nan, -2.0, 4.0, np.inf, -np.inf])},
+        ("phi",),
+        group="phi",
+        policy="shared_lower_upper_quantile",
+        quantile=1.0,
+    )
+    assert finite_range is not None
+    assert finite_range.plotly_kwargs() == {"cmin": -2.0, "cmax": 4.0}
+
+    constant_range = ComplexCouplingArtifactExporter._shared_color_range(
+        {"phi": np.asarray([3.5, 3.5, 3.5])},
+        ("phi",),
+        group="phi",
+        policy="shared_lower_upper_quantile",
+        quantile=0.99,
+    )
+    assert constant_range is not None
+    assert constant_range.plotly_kwargs() == {}
+    assert constant_range.field_summary(np.asarray([3.5, 3.5])) == {
+        "group": "phi",
+        "policy": "shared_lower_upper_quantile",
+        "quantile": 0.99,
+        "full_min": 3.5,
+        "full_max": 3.5,
+        "display_cmin": 3.5,
+        "display_cmax": 3.5,
+        "finite_point_count": 2,
+        "saturated_point_count": 0,
+        "saturated_point_fraction": 0.0,
+    }
+
+
+def test_solution_mesh_cache_copy_respects_generated_data_flag(tmp_path: Path) -> None:
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    mesh_path, mesh = write_visualization_mesh_npz(
+        tmp_path / "visualization_mesh.npz",
+        geometry_path=geometry_path,
+    )
+    exporter = ComplexCouplingArtifactExporter(
+        CouplingArtifactRequest(
+            config=tmp_path / "config.json",
+            coupling_checkpoint=tmp_path / "coupling.safetensors",
+            green_checkpoint=tmp_path / "green.safetensors",
+            outdir=tmp_path / "artifacts",
+            visualization_mesh=mesh_path,
+            save_generated_data=False,
+        )
+    )
+
+    assert exporter._copy_visualization_mesh(mesh) is None
+    assert not (tmp_path / "artifacts" / "data" / "visualization_mesh.npz").exists()
+
+
 def _write_zero_coefficients(path: Path) -> Path:
     path.write_text(
         "\n".join(
@@ -77,12 +368,210 @@ def _write_zero_coefficients(path: Path) -> Path:
     return path
 
 
+def _write_spatial_coefficients(path: Path) -> Path:
+    path.write_text(
+        "\n".join(
+            [
+                "def a_fun(x, y): return 1.0 + x + 2.0 * y",
+                "def apx_fun(x, y): return 1.0 + 0.0 * x",
+                "def apy_fun(x, y): return 2.0 + 0.0 * y",
+                "def bx_fun(x, y): return x - y",
+                "def by_fun(x, y): return 2.0 * x + y",
+                "def c_fun(x, y): return x + 3.0 * y - 1.0",
+            ]
+        )
+    )
+    return path
+
+
+def test_coefficient_mesh_evaluates_every_physical_vertex_directly(
+    tmp_path: Path,
+) -> None:
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    _, mesh = write_visualization_mesh_npz(
+        tmp_path / "visualization_mesh.npz",
+        geometry_path=geometry_path,
+    )
+    coefficient_path = _write_spatial_coefficients(tmp_path / "coefficients.py")
+    exporter = ComplexCouplingArtifactExporter(
+        CouplingArtifactRequest(
+            config=tmp_path / "config.json",
+            coupling_checkpoint=tmp_path / "coupling.safetensors",
+            green_checkpoint=tmp_path / "green.safetensors",
+            outdir=tmp_path / "artifacts",
+        )
+    )
+    geometry = load_complex_geometry(geometry_path)
+    coefficients = load_coefficient_functions(coefficient_path)
+
+    fields = exporter._evaluate_coefficient_mesh_fields(
+        mesh,
+        geometry,
+        coefficients,
+    )
+
+    assert fields is not None
+    x = mesh.vertices[:, 0]
+    y = mesh.vertices[:, 1]
+    np.testing.assert_array_equal(fields.coords, mesh.vertices)
+    np.testing.assert_allclose(fields.a, 1.0 + x + 2.0 * y)
+    np.testing.assert_allclose(fields.bx, x - y)
+    np.testing.assert_allclose(fields.by, 2.0 * x + y)
+    np.testing.assert_allclose(fields.b_magnitude, np.hypot(x - y, 2.0 * x + y))
+    np.testing.assert_allclose(fields.c, x + 3.0 * y - 1.0)
+    assert fields.a[0] == pytest.approx(1.0)
+    assert fields.a[mesh.auxiliary_vertices[0]] == pytest.approx(2.8)
+    assert (
+        exporter._evaluate_coefficient_mesh_fields(None, geometry, coefficients) is None
+    )
+
+
+def test_coefficient_mesh_figures_share_color_contract_and_larger_scene(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    _, mesh = write_visualization_mesh_npz(
+        tmp_path / "visualization_mesh.npz",
+        geometry_path=geometry_path,
+    )
+    coefficient_path = _write_spatial_coefficients(tmp_path / "coefficients.py")
+    request = CouplingArtifactRequest(
+        config=tmp_path / "config.json",
+        coupling_checkpoint=tmp_path / "coupling.safetensors",
+        green_checkpoint=tmp_path / "green.safetensors",
+        outdir=tmp_path / "artifacts",
+    )
+    exporter = ComplexCouplingArtifactExporter(request)
+    geometry = load_complex_geometry(geometry_path)
+    coefficients = load_coefficient_functions(coefficient_path)
+    valid_fields = exporter._evaluate_coefficient_fields(geometry, coefficients)
+    mesh_fields = exporter._evaluate_coefficient_mesh_fields(
+        mesh,
+        geometry,
+        coefficients,
+    )
+    assert mesh_fields is not None
+    terms = CouplingCoefficientTermsConfig(
+        diffusion=True,
+        convection=True,
+        reaction=True,
+    )
+
+    _, coefficient_fields = exporter._write_coefficient_figures(
+        valid_fields,
+        terms,
+        "plotly_white",
+        _boundary_overlay(),
+        mesh_fields,
+    )
+    paths, mesh_figure_fields = exporter._write_coefficient_mesh_figures(
+        mesh,
+        mesh_fields,
+        coefficient_fields,
+        "plotly_white",
+    )
+
+    assert mesh_figure_fields == (
+        "diffusion_a",
+        "reaction_c",
+        "convection_bx",
+        "convection_by",
+        "convection_magnitude",
+    )
+    assert len(paths) == 5
+    assert all("convection_vector" not in path for path in paths)
+    scatter = _coefficient_figure(request.outdir, "convection_bx")
+    mesh_figure = json.loads(
+        (
+            request.outdir
+            / "figures"
+            / "coefficients"
+            / "mesh"
+            / "convection_bx_mesh.json"
+        ).read_text()
+    )
+    mesh_trace = mesh_figure["data"][0]
+    hover_trace = mesh_figure["data"][1]
+    assert mesh_trace["intensitymode"] == "vertex"
+    assert _plotly_array_size(mesh_trace["intensity"]) == mesh.vertex_count
+    assert _plotly_array_size(hover_trace["customdata"]) == mesh.vertex_count
+    assert "b_x=%{customdata[0]:.6g}" in hover_trace["hovertemplate"]
+    assert all(trace.get("name") != "Domain boundary" for trace in mesh_figure["data"])
+    assert mesh_trace["colorscale"] == scatter["data"][0]["marker"]["colorscale"]
+    assert mesh_trace["cmin"] == pytest.approx(scatter["data"][0]["marker"]["cmin"])
+    assert mesh_trace["cmax"] == pytest.approx(scatter["data"][0]["marker"]["cmax"])
+    layout = mesh_figure["layout"]
+    assert layout["width"] == 900
+    assert layout["height"] == 800
+    assert layout["margin"] == {
+        "l": 10,
+        "r": 70,
+        "t": 65,
+        "b": 10,
+    }
+    assert layout["scene"]["aspectratio"]["x"] == pytest.approx(1.5)
+    assert layout["scene"]["aspectratio"]["y"] == pytest.approx(1.5)
+    assert layout["scene"]["aspectratio"]["z"] == pytest.approx(0.01)
+    assert layout["scene"]["camera"]["projection"]["type"] == "orthographic"
+    for field in mesh_figure_fields:
+        field_scatter = _coefficient_figure(request.outdir, field)["data"][0]["marker"]
+        field_mesh = json.loads(
+            (
+                request.outdir
+                / "figures"
+                / "coefficients"
+                / "mesh"
+                / f"{field}_mesh.json"
+            ).read_text()
+        )["data"][0]
+        assert field_mesh["colorscale"] == field_scatter["colorscale"]
+        assert field_mesh.get("cmin") == field_scatter.get("cmin")
+        assert field_mesh.get("cmax") == field_scatter.get("cmax")
+
+
+@pytest.mark.parametrize(
+    ("vertices", "expected_x", "expected_y"),
+    [
+        (
+            np.asarray([[-2.0, -0.25], [2.0, -0.25], [2.0, 0.25], [-2.0, 0.25]]),
+            1.5,
+            0.1875,
+        ),
+        (
+            np.asarray([[-0.25, -2.0], [0.25, -2.0], [0.25, 2.0], [-0.25, 2.0]]),
+            0.1875,
+            1.5,
+        ),
+    ],
+)
+def test_mesh_layout_preserves_extreme_physical_aspect_ratios(
+    vertices: np.ndarray,
+    expected_x: float,
+    expected_y: float,
+) -> None:
+    layout = ComplexCouplingArtifactExporter._mesh_layout(
+        title="aspect ratio fixture",
+        theme="plotly_white",
+        vertices=vertices,
+    ).to_plotly_json()
+
+    assert layout["scene"]["aspectratio"] == pytest.approx(
+        {"x": expected_x, "y": expected_y, "z": 0.01}
+    )
+
+
 def test_complex_artifact_export_writes_outputs_without_cross_fields(
     tmp_path,
     monkeypatch,
 ):
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    visualization_mesh_path, visualization_mesh = write_visualization_mesh_npz(
+        tmp_path / "visualization_mesh.npz",
+        geometry_path=geometry_path,
+    )
     coeff_path = write_coefficients(tmp_path / "coeffs.py")
     data_dir = tmp_path / "test_data"
     write_sample_npz(data_dir)
@@ -187,6 +676,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
             device="cpu",
             theme="plotly_white",
             coefficient_vector_max_points=2,
+            visualization_mesh=visualization_mesh_path,
         )
     )
 
@@ -198,6 +688,15 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "validation": True,
     }
     assert summary["artifact_dataset_contract"] == "full_reference_test_npz"
+    boundary_summary = summary["domain_boundary_overlay"]
+    assert boundary_summary == {
+        "enabled": True,
+        "representation": "open_markers",
+        "coordinate_source": ("canonical_boundary_energy_context.endpoint_coords"),
+        "point_count": 8,
+        "scalar_values_included": False,
+        "included_in_metrics": False,
+    }
     assert "cross_consistency" not in json.dumps(summary)
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_sample_metrics.csv").exists()
@@ -328,8 +827,8 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "best_physics": True,
         "reference_metric_used": False,
     }
-    assert (
-        summary["non_error_color_range_policy"] == "shared_reference_prediction_groups"
+    assert summary["non_error_color_range_policy"] == (
+        "solution_full_range_and_directional_robust_quantile"
     )
     assert summary["non_error_color_range_groups"]["solution"] == [
         "sol",
@@ -338,6 +837,27 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "u_psi",
     ]
     assert summary["optional_flux_targets_exported"] is True
+    directional_range = summary["directional_color_range"]
+    assert directional_range["configured_quantile"] is None
+    assert directional_range["resolved_quantile"] == pytest.approx(0.99)
+    assert directional_range["value_policy"] == "shared_lower_upper_quantile"
+    assert directional_range["error_policy"] == "symmetric_absolute_quantile"
+    sample_ranges = directional_range["samples"]["sample_0000_sample_0000"]
+    assert set(sample_ranges) == {
+        "rhs",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error",
+    }
+    assert sample_ranges["phi"]["display_cmin"] == pytest.approx(
+        sample_ranges["target_phi"]["display_cmin"]
+    )
+    assert sample_ranges["phi_error"]["display_cmin"] == pytest.approx(
+        -sample_ranges["phi_error"]["display_cmax"]
+    )
     assert summary["coefficient_figure_fields"] == [
         "diffusion_a",
         "reaction_c",
@@ -347,10 +867,71 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         "convection_vector",
     ]
     assert summary["coefficient_figure_count"] == 6
-    assert summary["figure_count"] == len(expected_figure_fields) + 6
+    coefficient_mesh_fields = [
+        "diffusion_a",
+        "reaction_c",
+        "convection_bx",
+        "convection_by",
+        "convection_magnitude",
+    ]
+    assert summary["coefficient_mesh_figure_fields"] == coefficient_mesh_fields
+    assert summary["coefficient_mesh_figure_count"] == 5
+    assert summary["coefficient_mesh_evaluation"] == (
+        "direct_at_visualization_mesh_vertices"
+    )
+    assert summary["coefficient_mesh_boundary_value_source"] == (
+        "direct_physical_coefficient_function"
+    )
+    assert summary["coefficient_mesh_intensity_mode"] == "vertex"
+    assert summary["mesh_scene_scale"] == pytest.approx(1.5)
+    mesh_fields = [
+        "sol",
+        "u_pred",
+        "u_pred_error",
+        "rhs",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error",
+    ]
+    assert summary["figure_count"] == len(expected_figure_fields) + 6 + 10 + 5
+    assert summary["mesh_figure_fields"] == mesh_fields
+    assert summary["mesh_figure_count"] == 10
+    mesh_summary = summary["visualization_mesh"]
+    assert mesh_summary["schema_version"] == 1
+    assert mesh_summary["vertex_count"] == 8
+    assert mesh_summary["valid_vertex_count"] == 3
+    assert mesh_summary["boundary_vertex_count"] == 4
+    assert mesh_summary["auxiliary_vertex_count"] == 1
+    assert mesh_summary["valid_point_transfer"] == "exact_vertex_mapping"
+    assert mesh_summary["boundary_value_source"] == "field_specific"
+    assert mesh_summary["solution_boundary_value_source"] == (
+        "prescribed_homogeneous_dirichlet"
+    )
+    assert mesh_summary["interior_scalar_boundary_value_source"] == "not_evaluated"
+    assert mesh_summary["boundary_values_model_evaluated"] is False
+    assert mesh_summary["field_space"] == "physical_scalar"
+    assert mesh_summary["scene_scale"] == pytest.approx(1.5)
+    assert mesh_summary["color_range_policy"]["directional_quantile"] == (
+        pytest.approx(0.99)
+    )
+    assert mesh_summary["field_boundary_policy"]["sol/u_pred/u_pred_error"] == (
+        "prescribed_homogeneous_dirichlet_zero_without_outline"
+    )
+    assert mesh_summary["included_in_metrics"] is False
+    assert mesh_summary["raw_archive"] == "data/visualization_mesh.npz"
+    assert (outdir / "data" / "visualization_mesh.npz").read_bytes() == (
+        visualization_mesh_path.read_bytes()
+    )
     assert summary["coefficient_field_space"] == "physical"
     assert summary["coefficient_evaluation"] == "direct_at_coords_valid"
     assert summary["coefficient_raw_archive"] == "data/coefficient_fields.npz"
+    for field in coefficient_mesh_fields:
+        assert (
+            outdir / "figures" / "coefficients" / "mesh" / f"{field}_mesh.json"
+        ).exists()
     assert summary["coefficient_vector"]["max_points"] == 2
     assert 0 < summary["coefficient_vector"]["selected_points"] <= 2
     assert summary["coefficient_vector"]["background_points"] == 3
@@ -389,11 +970,24 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         ],
     }
     for field in expected_figure_fields:
-        assert (
+        figure_path = (
             outdir / "figures" / field / f"sample_0000_sample_0000_{field}.json"
-        ).exists()
+        )
+        assert figure_path.exists()
+        scalar_trace = json.loads(figure_path.read_text())["data"][0]
+        assert "value=%{customdata[0]:.6e}" in scalar_trace["hovertemplate"]
+        assert _plotly_array_size(scalar_trace["customdata"]) == 3
+        _assert_boundary_trace(
+            json.loads(figure_path.read_text()),
+            expected_count=boundary_summary["point_count"],
+        )
     for field in summary["coefficient_figure_fields"]:
-        assert (outdir / "figures" / "coefficients" / f"{field}.json").exists()
+        figure_path = outdir / "figures" / "coefficients" / f"{field}.json"
+        assert figure_path.exists()
+        _assert_boundary_trace(
+            json.loads(figure_path.read_text()),
+            expected_count=boundary_summary["point_count"],
+        )
 
     with (outdir / "metrics" / "per_sample_metrics.csv").open() as fp:
         rows = list(csv.DictReader(fp))
@@ -470,6 +1064,74 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     ):
         assert any(key.endswith(suffix) for key in raw.files)
     assert all("cross" not in key for key in raw.files)
+    mesh_color_ranges: dict[str, tuple[float, float]] = {}
+    for field in mesh_fields:
+        mesh_figure_path = (
+            outdir
+            / "figures"
+            / "mesh"
+            / field
+            / f"sample_0000_sample_0000_{field}_mesh.json"
+        )
+        assert mesh_figure_path.exists()
+        assert mesh_figure_path.with_suffix(".html").exists()
+        assert mesh_figure_path.with_suffix(".png").exists()
+        assert mesh_figure_path.with_suffix(".pdf").exists()
+        figure = json.loads(mesh_figure_path.read_text())
+        mesh_trace = figure["data"][0]
+        hover_trace = figure["data"][1]
+        assert mesh_trace["type"] == "mesh3d"
+        assert hover_trace["type"] == "scatter3d"
+        assert hover_trace["mode"] == "markers"
+        assert "value=%{customdata[0]:.6e}" in hover_trace["hovertemplate"]
+        np.testing.assert_array_equal(
+            _plotly_array(mesh_trace["i"]),
+            visualization_mesh.triangles[:, 0],
+        )
+        np.testing.assert_array_equal(
+            _plotly_array(mesh_trace["j"]),
+            visualization_mesh.triangles[:, 1],
+        )
+        np.testing.assert_array_equal(
+            _plotly_array(mesh_trace["k"]),
+            visualization_mesh.triangles[:, 2],
+        )
+        assert figure["layout"]["scene"]["camera"]["projection"]["type"] == (
+            "orthographic"
+        )
+        intensity = _plotly_array(mesh_trace["intensity"])
+        raw_key = f"sample_0000_sample_0000_{field}"
+        assert raw_key in raw.files
+        hover_values = _plotly_array(hover_trace["customdata"])
+        np.testing.assert_array_equal(hover_values[:3], raw[raw_key])
+        if field in {"sol", "u_pred", "u_pred_error"}:
+            assert mesh_trace["intensitymode"] == "vertex"
+            assert len(figure["data"]) == 2
+            np.testing.assert_array_equal(
+                intensity[visualization_mesh.valid_to_vertex],
+                raw[raw_key],
+            )
+            np.testing.assert_array_equal(
+                intensity[visualization_mesh.boundary_vertex_mask],
+                0.0,
+            )
+            np.testing.assert_array_equal(hover_values[3:], 0.0)
+        else:
+            assert mesh_trace["intensitymode"] == "cell"
+            np.testing.assert_allclose(
+                intensity,
+                visualization_mesh.transfer_interior_cell_values(raw[raw_key]),
+            )
+            boundary_trace = figure["data"][2]
+            assert boundary_trace["type"] == "scatter3d"
+            assert boundary_trace["mode"] == "lines"
+            assert "scalar unavailable" in boundary_trace["hovertemplate"]
+        mesh_color_ranges[field] = (mesh_trace["cmin"], mesh_trace["cmax"])
+    assert mesh_color_ranges["sol"] == mesh_color_ranges["u_pred"]
+    assert mesh_color_ranges["u_pred_error"][0] == -mesh_color_ranges["u_pred_error"][1]
+    for field in ("phi", "psi", "target_phi", "target_psi", "phi_error", "psi_error"):
+        marker = _marker_for_field(outdir, field)
+        assert mesh_color_ranges[field] == (marker["cmin"], marker["cmax"])
     coefficient_raw = np.load(outdir / "data" / "coefficient_fields.npz")
     assert set(coefficient_raw.files) == {
         "coords_valid",
@@ -493,7 +1155,11 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     vector_figure = _coefficient_figure(outdir, "convection_vector")
     assert vector_figure["data"][0]["type"] == "scattergl"
     assert vector_figure["data"][0]["showlegend"] is False
-    arrow_trace = vector_figure["data"][-1]
+    arrow_trace = next(
+        trace
+        for trace in reversed(vector_figure["data"])
+        if trace.get("mode") == "lines"
+    )
     arrow_dx = arrow_trace["x"][1] - arrow_trace["x"][0]
     arrow_dy = arrow_trace["y"][1] - arrow_trace["y"][0]
     assert arrow_dx / arrow_dy == pytest.approx(4.0 / 5.0)
@@ -534,6 +1200,55 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         _marker_for_field(outdir, "psi")["cmin"],
         _marker_for_field(outdir, "psi")["cmax"],
     )
+
+    boundary_off_outdir = tmp_path / "artifacts_boundary_off"
+    boundary_off_summary = export_complex_coupling_artifacts(
+        CouplingArtifactRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_path,
+            green_checkpoint=green_path,
+            outdir=boundary_off_outdir,
+            device="cpu",
+            theme="plotly_white",
+            coefficient_vector_max_points=2,
+            show_domain_boundary=False,
+        )
+    )
+    assert boundary_off_summary["domain_boundary_overlay"] == {
+        **boundary_summary,
+        "enabled": False,
+    }
+    assert boundary_off_summary["figure_count"] == (
+        summary["figure_count"]
+        - summary["mesh_figure_count"]
+        - summary["coefficient_mesh_figure_count"]
+    )
+    assert "coefficient_mesh_figure_count" not in boundary_off_summary
+    assert "coefficient_mesh_figure_fields" not in boundary_off_summary
+    assert boundary_off_summary["figure_fields"] == summary["figure_fields"]
+    assert boundary_off_summary["aggregate_metrics"] == summary["aggregate_metrics"]
+    assert "visualization_mesh" not in boundary_off_summary
+    assert "mesh_figure_fields" not in boundary_off_summary
+    assert not (boundary_off_outdir / "figures" / "mesh").exists()
+    boundary_off_figure = json.loads(
+        (
+            boundary_off_outdir
+            / "figures"
+            / "u_pred_error"
+            / "sample_0000_sample_0000_u_pred_error.json"
+        ).read_text()
+    )
+    assert len(boundary_off_figure["data"]) == 1
+    assert boundary_off_figure["data"][0]["type"] == "scattergl"
+    assert "showlegend" not in boundary_off_figure["data"][0]
+    assert (
+        boundary_off_outdir / "metrics" / "per_sample_metrics.csv"
+    ).read_bytes() == (outdir / "metrics" / "per_sample_metrics.csv").read_bytes()
+
+    boundary_off_raw = np.load(boundary_off_outdir / "data" / "selected_raw_arrays.npz")
+    assert set(boundary_off_raw.files) == set(raw.files)
+    for key in raw.files:
+        np.testing.assert_equal(boundary_off_raw[key], raw[key])
 
 
 def test_column_diagonal_green_response_artifact_provenance_and_fields(
@@ -657,7 +1372,12 @@ def test_column_diagonal_green_response_artifact_provenance_and_fields(
         1.0,
     )
     for field in summary["projection_figure_fields"]:
-        assert (outdir / "figures" / "balance_projection" / f"{field}.json").is_file()
+        figure_path = outdir / "figures" / "balance_projection" / f"{field}.json"
+        assert figure_path.is_file()
+        _assert_boundary_trace(
+            json.loads(figure_path.read_text()),
+            expected_count=summary["domain_boundary_overlay"]["point_count"],
+        )
     weight_figure = json.loads(
         (
             outdir / "figures" / "balance_projection" / "correction_weight_phi.json"
@@ -749,6 +1469,12 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
             "denominator_relative_eps": 2.0e-12,
         },
     }
+    if eta_strategy == "closed_loop_exact_line_search":
+        config_payload["coupling_training"]["post_line_search_stationarity"] = {
+            "enabled": True,
+            "weight": 1.0e-3,
+            "eps": 2.0e-12,
+        }
     config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
 
@@ -787,6 +1513,19 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert tangent["raw_archive"] == (
         "data/symmetric_tangent_green_response_fields.npz"
     )
+    stationarity_summary = summary["post_line_search_stationarity"]
+    assert stationarity_summary["enabled"] is adaptive
+    assert stationarity_summary["weight"] == pytest.approx(1.0e-3 if adaptive else 1.0)
+    assert stationarity_summary["eps"] == pytest.approx(
+        2.0e-12 if adaptive else 1.0e-12
+    )
+    assert stationarity_summary["eta_source"] == "uncapped_eta_star"
+    assert stationarity_summary["forward_eta_source"] == "capped_eta_applied"
+    assert stationarity_summary["matrix_free"] is True
+    assert stationarity_summary["extra_adjoint_actions_per_enabled_batch"] == 1
+    assert stationarity_summary["global_response_matrix_materialized"] is False
+    assert stationarity_summary["full_gram_solve"] is False
+    assert stationarity_summary["uses_reference_targets"] is False
     assert "m0=H_x*p_tilde-H_y*q_tilde" in projection["formula"]
     assert summary["projection_figure_fields"] == [
         "tangent_preconditioner_base",
@@ -813,7 +1552,12 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert context_fields["line_search_relative_eps"].item() == pytest.approx(3.0e-12)
     assert np.all(context_fields["denominator"] > 0.0)
     for field in summary["projection_figure_fields"]:
-        assert (outdir / "figures" / "balance_projection" / f"{field}.json").is_file()
+        figure_path = outdir / "figures" / "balance_projection" / f"{field}.json"
+        assert figure_path.is_file()
+        _assert_boundary_trace(
+            json.loads(figure_path.read_text()),
+            expected_count=summary["domain_boundary_overlay"]["point_count"],
+        )
 
     selected = np.load(outdir / "data" / "selected_raw_arrays.npz")
     for suffix in (
@@ -849,14 +1593,22 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
             "_tangent_eta_applied",
             "_tangent_eta_cap",
             "_tangent_eta_capped",
+            "_tangent_hessian_direction",
+            "_tangent_stationarity_residual",
+            "_tangent_stationarity_ratio",
         ):
             assert any(key.endswith(suffix) for key in selected.files)
         assert "tangent_eta_star" in metric_rows[0]
         assert "tangent_eta_applied" in metric_rows[0]
         assert "tangent_eta_capped" in metric_rows[0]
+        assert "loss_tangent_post_line_search_stationarity" in metric_rows[0]
+        assert "tangent_post_line_search_stationarity_ratio" in metric_rows[0]
     else:
         assert tangent["eta_role"] == "fixed_step"
         assert "eta_star_statistics" not in tangent
+        assert not any(
+            key.endswith("_tangent_stationarity_ratio") for key in selected.files
+        )
 
 
 def test_local_weak_reliability_artifact_uses_weighted_official_prediction(
@@ -1007,8 +1759,14 @@ def test_local_weak_reliability_artifact_uses_weighted_official_prediction(
 
 def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    _, mesh = write_visualization_mesh_npz(
+        tmp_path / "visualization_mesh.npz",
+        geometry_path=geometry_path,
+    )
     coefficient_path = _write_zero_coefficients(tmp_path / "coefficients.py")
     request = CouplingArtifactRequest(
         config=tmp_path / "config.json",
@@ -1021,6 +1779,11 @@ def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(
     geometry = load_complex_geometry(geometry_path)
     coefficients = load_coefficient_functions(coefficient_path)
     fields = exporter._evaluate_coefficient_fields(geometry, coefficients)
+    mesh_fields = exporter._evaluate_coefficient_mesh_fields(
+        mesh,
+        geometry,
+        coefficients,
+    )
     terms = CouplingCoefficientTermsConfig(
         diffusion=False,
         convection=False,
@@ -1038,6 +1801,14 @@ def test_complex_coefficient_artifacts_distinguish_physical_and_branch_activity(
     assert statistics["b_magnitude"]["figure_exported"] is False
     assert statistics["c"]["physical_nonzero"] is False
     assert statistics["c"]["figure_exported"] is False
+    mesh_paths, mesh_figure_fields = exporter._write_coefficient_mesh_figures(
+        mesh,
+        mesh_fields,
+        figure_fields,
+        "plotly_white",
+    )
+    assert mesh_figure_fields == ("diffusion_a",)
+    assert len(mesh_paths) == 1
 
 
 @pytest.mark.parametrize("mode", ["residual", "absolute"])
@@ -1163,6 +1934,10 @@ def test_complex_coefficient_artifacts_export_enabled_zero_fields(
 ) -> None:
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    _, mesh = write_visualization_mesh_npz(
+        tmp_path / "visualization_mesh.npz",
+        geometry_path=geometry_path,
+    )
     coefficient_path = _write_zero_coefficients(tmp_path / "coefficients.py")
     request = CouplingArtifactRequest(
         config=tmp_path / "config.json",
@@ -1173,9 +1948,13 @@ def test_complex_coefficient_artifacts_export_enabled_zero_fields(
         coefficient_vector_max_points=1,
     )
     exporter = ComplexCouplingArtifactExporter(request)
-    fields = exporter._evaluate_coefficient_fields(
-        load_complex_geometry(geometry_path),
-        load_coefficient_functions(coefficient_path),
+    geometry = load_complex_geometry(geometry_path)
+    coefficients = load_coefficient_functions(coefficient_path)
+    fields = exporter._evaluate_coefficient_fields(geometry, coefficients)
+    mesh_fields = exporter._evaluate_coefficient_mesh_fields(
+        mesh,
+        geometry,
+        coefficients,
     )
     terms = CouplingCoefficientTermsConfig(
         diffusion=False,
@@ -1187,8 +1966,15 @@ def test_complex_coefficient_artifacts_export_enabled_zero_fields(
         fields,
         terms,
         "plotly_white",
+        _boundary_overlay(),
     )
     exporter._write_coefficient_npz(fields)
+    mesh_paths, mesh_figure_fields = exporter._write_coefficient_mesh_figures(
+        mesh,
+        mesh_fields,
+        figure_fields,
+        "plotly_white",
+    )
 
     assert len(paths) == 6
     assert figure_fields == (
@@ -1199,6 +1985,14 @@ def test_complex_coefficient_artifacts_export_enabled_zero_fields(
         "convection_magnitude",
         "convection_vector",
     )
+    assert mesh_figure_fields == (
+        "diffusion_a",
+        "reaction_c",
+        "convection_bx",
+        "convection_by",
+        "convection_magnitude",
+    )
+    assert len(mesh_paths) == 5
     vector_figure = _coefficient_figure(request.outdir, "convection_vector")
     annotations = vector_figure["layout"]["annotations"]
     assert any("Zero convection field" in item["text"] for item in annotations)

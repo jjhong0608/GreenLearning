@@ -12,7 +12,10 @@ from greenonet.complex_axial_response_operator import (
     FrozenBidirectionalResponseOperator,
 )
 from greenonet.complex_geometry import ComplexGeometryMetadata
-from greenonet.config import SymmetricTangentGreenResponseProjectionConfig
+from greenonet.config import (
+    ComplexPostLineSearchStationarityConfig,
+    SymmetricTangentGreenResponseProjectionConfig,
+)
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 
 
@@ -83,6 +86,18 @@ class SymmetricTangentStepResult:
     line_search_denominator: torch.Tensor | None = None
     response_direction: torch.Tensor | None = None
     directional_response: torch.Tensor | None = None
+
+
+@dataclass(frozen=True)
+class NormalizedPostLineSearchStationarityResult:
+    """Full stationarity residual after the uncapped scalar line search."""
+
+    loss: torch.Tensor
+    loss_per_sample: torch.Tensor
+    hessian_direction: torch.Tensor
+    stationarity_residual: torch.Tensor
+    initial_preconditioned_energy_per_sample: torch.Tensor
+    residual_preconditioned_energy_per_sample: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -277,6 +292,52 @@ class SymmetricTangentGreenResponseContext:
             "full_gram_solve": False,
             "row_norm_used": False,
         }
+
+
+def normalized_post_line_search_stationarity_loss(
+    *,
+    context: SymmetricTangentGreenResponseContext,
+    gradient: torch.Tensor,
+    response_direction: torch.Tensor,
+    eta_star: torch.Tensor,
+    config: (ComplexPostLineSearchStationarityConfig | dict[str, object]),
+) -> NormalizedPostLineSearchStationarityResult:
+    """Measure full stationarity after the uncapped line-optimal tangent step."""
+
+    resolved = ComplexPostLineSearchStationarityConfig.from_raw(config)
+    if not resolved.enabled:
+        raise ValueError(
+            "Normalized post-line-search stationarity must be enabled before "
+            "computing its loss."
+        )
+    context.validate_for(gradient)
+    context.validate_for(response_direction)
+    if gradient.shape != response_direction.shape:
+        raise ValueError("gradient and response_direction must share a shape.")
+    if eta_star.dim() != 1 or eta_star.shape[0] != gradient.shape[0]:
+        raise ValueError("eta_star must have shape (B,).")
+    if eta_star.dtype != gradient.dtype or eta_star.device != gradient.device:
+        raise ValueError("eta_star must share dtype and device with gradient.")
+    if not torch.all(torch.isfinite(eta_star)) or torch.any(eta_star < 0.0):
+        raise ValueError("eta_star must be finite and non-negative.")
+
+    # A z = S^T M S z uses one cached segment-local adjoint action.
+    hessian_direction = context.tangent_gradient(response_direction)
+    stationarity_residual = gradient - eta_star.unsqueeze(1) * hessian_direction
+    inverse_denominator = context.denominator.reciprocal().unsqueeze(0)
+    initial_energy = (gradient.square() * inverse_denominator).sum(dim=1)
+    residual_energy = (stationarity_residual.square() * inverse_denominator).sum(dim=1)
+    loss_per_sample = residual_energy / (initial_energy + float(resolved.eps))
+    if not torch.all(torch.isfinite(loss_per_sample)):
+        raise ValueError("Post-line-search stationarity loss is non-finite.")
+    return NormalizedPostLineSearchStationarityResult(
+        loss=loss_per_sample.mean(),
+        loss_per_sample=loss_per_sample,
+        hessian_direction=hessian_direction,
+        stationarity_residual=stationarity_residual,
+        initial_preconditioned_energy_per_sample=initial_energy,
+        residual_preconditioned_energy_per_sample=residual_energy,
+    )
 
 
 class SymmetricTangentGreenResponseContextBuilder:

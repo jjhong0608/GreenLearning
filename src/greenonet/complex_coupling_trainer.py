@@ -41,6 +41,7 @@ from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
     reconstruct_complex_projection,
+    post_line_search_stationarity_from_projection,
     symmetric_tangent_metric_tensors,
 )
 from greenonet.complex_pre_projection_fusion import (
@@ -71,6 +72,7 @@ from greenonet.config import (
     CouplingBestEnergyCheckpointConfig,
     CouplingBestPhysicsCheckpointConfig,
     CouplingTrainingConfig,
+    validate_complex_post_line_search_stationarity_config,
 )
 from greenonet.io import save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
@@ -104,6 +106,8 @@ class ComplexCouplingTrainer(LoggingMixin):
         "loss_weak_operator_closure",
         "loss_weak_operator_x",
         "loss_weak_operator_y",
+        "loss_tangent_post_line_search_stationarity",
+        "tangent_post_line_search_stationarity_ratio",
         "rel_sol",
         "rel_flux",
         "tangent_response_mismatch_pre",
@@ -162,6 +166,12 @@ class ComplexCouplingTrainer(LoggingMixin):
         self.weak_closure_config = ComplexWeakOperatorClosureConfig.from_raw(
             config.weak_operator_closure
         )
+        self.post_line_search_stationarity_config = (
+            validate_complex_post_line_search_stationarity_config(
+                training=config,
+                balance_projection=self.balance_projection,
+            )
+        )
         self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
             config.best_energy_checkpoint
         )
@@ -204,6 +214,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             self.cross_axis_reconstruction_config.smoothing_relaxation,
             self.cross_axis_reconstruction_config.relative_floor,
         )
+        self._log_post_line_search_stationarity()
         self.device = torch.device(config.device)
         self.model.to(self.device)
         self.model = maybe_compile_model(
@@ -401,6 +412,11 @@ class ComplexCouplingTrainer(LoggingMixin):
             symmetric_tangent_context=tangent_context,
             symmetric_tangent_eta_cap=symmetric_tangent_eta_cap,
         )
+        stationarity = post_line_search_stationarity_from_projection(
+            projection=projection,
+            context=tangent_context,
+            config=self.post_line_search_stationarity_config,
+        )
         reconstruction = reconstruct_complex_projection(
             projection=projection,
             green_model=self.green_model,
@@ -420,6 +436,10 @@ class ComplexCouplingTrainer(LoggingMixin):
             relative_split_config=self.relative_split_config,
             weak_closure_config=self.weak_closure_config,
             boundary_context=self._boundary_energy_context(batch),
+            post_line_search_stationarity_config=(
+                self.post_line_search_stationarity_config
+            ),
+            post_line_search_stationarity=stationarity,
         )
         loss = objective.loss
         metrics = {
@@ -633,6 +653,19 @@ class ComplexCouplingTrainer(LoggingMixin):
             schedule.configured_warmup_epochs,
             schedule.effective_warmup_epochs,
             schedule.total_epochs,
+        )
+
+    def _log_post_line_search_stationarity(self) -> None:
+        config = self.post_line_search_stationarity_config
+        self.logger.info(
+            "post-line-search stationarity enabled=%s weight=%.6e eps=%.6e "
+            "eta_source=uncapped_eta_star forward_eta_source=capped_eta_applied "
+            "matrix_free=true extra_adjoint_when_enabled=%s "
+            "uses_reference_targets=false",
+            config.enabled,
+            config.weight,
+            config.eps,
+            config.enabled,
         )
 
     def _log_tangent_eta_schedule(

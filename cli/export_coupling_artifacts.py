@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 from pathlib import Path
 
 from rich.logging import RichHandler
@@ -22,6 +23,13 @@ class ExportCouplingArtifactsCLI:
         parsed = int(value)
         if parsed < 1:
             raise argparse.ArgumentTypeError("value must be a positive integer")
+        return parsed
+
+    @staticmethod
+    def _directional_color_quantile(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed <= 0.5 or parsed > 1.0:
+            raise argparse.ArgumentTypeError("value must be finite and in (0.5, 1.0]")
         return parsed
 
     def __init__(self) -> None:
@@ -104,6 +112,33 @@ class ExportCouplingArtifactsCLI:
                 "coefficient figures."
             ),
         )
+        parser.add_argument(
+            "--show-domain-boundary",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help=(
+                "Overlay geometry-only boundary markers on complex-domain "
+                "figures. Boundary points do not carry scalar field values."
+            ),
+        )
+        parser.add_argument(
+            "--visualization-mesh",
+            type=Path,
+            default=None,
+            help=(
+                "Optional precomputed complex-domain visualization mesh NPZ. "
+                "When provided, scalar mesh figures are added."
+            ),
+        )
+        parser.add_argument(
+            "--directional-color-quantile",
+            type=self._directional_color_quantile,
+            default=None,
+            help=(
+                "Complex-only robust color quantile for phi/psi values and "
+                "errors. Defaults to 0.99 in complex mode; use 1.0 for full range."
+            ),
+        )
         self.parser = parser
 
     @staticmethod
@@ -152,6 +187,9 @@ class ExportCouplingArtifactsCLI:
             plot_workers=args.plot_workers,
             save_generated_data=bool(args.save_generated_data),
             coefficient_vector_max_points=args.coefficient_vector_max_points,
+            show_domain_boundary=bool(args.show_domain_boundary),
+            visualization_mesh=args.visualization_mesh,
+            directional_color_quantile=args.directional_color_quantile,
         )
         logger = self._build_logger(request.outdir)
         with request.config.open() as fp:

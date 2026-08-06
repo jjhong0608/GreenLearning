@@ -63,6 +63,10 @@ class GeometryGridLoader:
         "inner_radius",
         "outer_radius",
         "center",
+        "orientation_angle",
+        "fill_rule",
+        "has_hole",
+        "boundary_vertices",
         "step_size",
         "boundary_tol",
     )

@@ -331,6 +331,112 @@ def test_coefficient_vector_max_points_validation(tmp_path: Path) -> None:
         parser.parse_args([*required_args, "--coefficient-vector-max-points", "0"])
 
 
+def test_show_domain_boundary_request_and_cli_contract(tmp_path: Path) -> None:
+    kwargs = {
+        "config": tmp_path / "config.json",
+        "coupling_checkpoint": tmp_path / "coupling.safetensors",
+        "green_checkpoint": tmp_path / "green.safetensors",
+        "outdir": tmp_path / "artifacts",
+    }
+    assert CouplingArtifactRequest(**kwargs).show_domain_boundary is True
+    assert (
+        CouplingArtifactRequest(
+            **kwargs, show_domain_boundary=False
+        ).show_domain_boundary
+        is False
+    )
+    with pytest.raises(ValueError, match="show_domain_boundary must be a boolean"):
+        CouplingArtifactRequest(**kwargs, show_domain_boundary=1)  # type: ignore[arg-type]
+    mesh_path = tmp_path / "visualization_mesh.npz"
+    assert (
+        CouplingArtifactRequest(
+            **kwargs,
+            visualization_mesh=mesh_path,
+        ).visualization_mesh
+        == mesh_path
+    )
+    with pytest.raises(TypeError, match="pathlib.Path"):
+        CouplingArtifactRequest(
+            **kwargs,
+            visualization_mesh="mesh.npz",  # type: ignore[arg-type]
+        )
+
+    parser = ExportCouplingArtifactsCLI().parser
+    required_args = [
+        "--config",
+        "config.json",
+        "--coupling-checkpoint",
+        "coupling.safetensors",
+        "--green-checkpoint",
+        "green.safetensors",
+        "--outdir",
+        "artifacts",
+    ]
+    assert parser.parse_args(required_args).show_domain_boundary is True
+    assert parser.parse_args(required_args).visualization_mesh is None
+    assert parser.parse_args(required_args).directional_color_quantile is None
+    assert parser.parse_args(
+        [*required_args, "--visualization-mesh", "mesh.npz"]
+    ).visualization_mesh == Path("mesh.npz")
+    assert (
+        parser.parse_args(
+            [*required_args, "--no-show-domain-boundary"]
+        ).show_domain_boundary
+        is False
+    )
+    assert parser.parse_args(
+        [*required_args, "--directional-color-quantile", "0.99"]
+    ).directional_color_quantile == pytest.approx(0.99)
+    for invalid in ("0.5", "1.01", "nan", "inf"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([*required_args, "--directional-color-quantile", invalid])
+
+
+def test_directional_color_quantile_request_validation(tmp_path: Path) -> None:
+    kwargs = {
+        "config": tmp_path / "config.json",
+        "coupling_checkpoint": tmp_path / "coupling.safetensors",
+        "green_checkpoint": tmp_path / "green.safetensors",
+        "outdir": tmp_path / "artifacts",
+    }
+    assert CouplingArtifactRequest(**kwargs).directional_color_quantile is None
+    assert CouplingArtifactRequest(
+        **kwargs, directional_color_quantile=0.99
+    ).directional_color_quantile == pytest.approx(0.99)
+    assert CouplingArtifactRequest(
+        **kwargs, directional_color_quantile=1.0
+    ).directional_color_quantile == pytest.approx(1.0)
+    for invalid in (0.5, 1.01, float("nan"), float("inf"), True):
+        with pytest.raises(ValueError, match="directional_color_quantile"):
+            CouplingArtifactRequest(
+                **kwargs,
+                directional_color_quantile=invalid,  # type: ignore[arg-type]
+            )
+
+
+def test_unit_square_artifact_rejects_visualization_mesh(tmp_path: Path) -> None:
+    request = CouplingArtifactRequest(
+        config=tmp_path / "config.json",
+        coupling_checkpoint=tmp_path / "coupling.safetensors",
+        green_checkpoint=tmp_path / "green.safetensors",
+        outdir=tmp_path / "artifacts",
+        visualization_mesh=tmp_path / "mesh.npz",
+    )
+
+    with pytest.raises(ValueError, match="supported only for complex CouplingNet"):
+        CouplingArtifactExporter(request).export()
+
+    quantile_request = CouplingArtifactRequest(
+        config=tmp_path / "config.json",
+        coupling_checkpoint=tmp_path / "coupling.safetensors",
+        green_checkpoint=tmp_path / "green.safetensors",
+        outdir=tmp_path / "artifacts",
+        directional_color_quantile=0.99,
+    )
+    with pytest.raises(ValueError, match="directional-color-quantile"):
+        CouplingArtifactExporter(quantile_request).export()
+
+
 def test_export_coupling_artifacts_smoke(
     tmp_path: Path,
     monkeypatch,
@@ -371,6 +477,7 @@ def test_export_coupling_artifacts_smoke(
         "q75": 0,
         "max": 0,
     }
+    assert "domain_boundary_overlay" not in summary
     assert (outdir / "summary.json").exists()
     assert (outdir / "metrics" / "per_sample_metrics.csv").exists()
     assert (outdir / "metrics" / "aggregate_metrics.csv").exists()
