@@ -210,29 +210,29 @@ class TestTrainCLIConfigCopy:
         assert canonical_energy == {"boundary_weight": 0.0}
         assert boundary_off == baseline
 
-    def test_stationarity_paired_config_changes_only_objective_and_checkpoint(self):
+    def test_stationarity_pilot_has_closed_loop_objective_and_checkpoint(self):
         root = Path(__file__).resolve().parents[1]
-        baseline = json.loads(
-            (root / "configs/complex_coupling_soap_tangent.json").read_text()
-        )
         stationarity = json.loads(
             (
                 root / "configs/complex_coupling_soap_tangent_stationarity.json"
             ).read_text()
         )
 
-        loss_config = stationarity["coupling_training"].pop(
-            "post_line_search_stationarity"
-        )
-        best_physics = stationarity["coupling_training"].pop("best_physics_checkpoint")
+        loss_config = stationarity["coupling_training"]["post_line_search_stationarity"]
+        best_physics = stationarity["coupling_training"]["best_physics_checkpoint"]
+        projection = stationarity["coupling_model"]["balance_projection"]
 
         assert loss_config == {
             "enabled": True,
-            "weight": 1.0e-3,
+            "weight": 1.0e-2,
             "eps": 1.0e-12,
         }
         assert best_physics == {"enabled": True}
-        assert stationarity == baseline
+        assert projection["mode"] == "symmetric_tangent_green_response"
+        assert (
+            projection["symmetric_tangent_green_response"]["eta_strategy"]
+            == "closed_loop_exact_line_search"
+        )
 
     def test_uses_custom_coefficient_functions_for_green_training(
         self, tmp_path, monkeypatch
@@ -1537,6 +1537,26 @@ class TestCouplingOptimizerConfig:
 
 
 class TestComplexPhysicsLossTrainingConfig:
+    def test_train_and_eval_parse_response_trust_config(self):
+        raw = {
+            "response_trust": {
+                "enabled": True,
+                "weight": 1.0e-3,
+                "trust_weight": 0.01,
+                "eps": 2.0e-12,
+            }
+        }
+
+        for builder in (
+            TrainCLI._build_coupling_training_config,
+            EvalCouplingCLI._build_coupling_training_config,
+        ):
+            config = builder(raw)
+            assert config.response_trust.enabled is True
+            assert config.response_trust.weight == pytest.approx(1.0e-3)
+            assert config.response_trust.trust_weight == pytest.approx(0.01)
+            assert config.response_trust.eps == pytest.approx(2.0e-12)
+
     def test_train_and_eval_parse_complex_physics_loss_configs(self):
         raw = {
             "relative_split_consistency": {
@@ -1585,6 +1605,9 @@ class TestComplexPhysicsLossTrainingConfig:
             ("weak_operator_closure", "eps", 0.0),
             ("post_line_search_stationarity", "weight", -1.0),
             ("post_line_search_stationarity", "eps", 0.0),
+            ("response_trust", "weight", -1.0),
+            ("response_trust", "trust_weight", -1.0),
+            ("response_trust", "eps", 0.0),
         ),
     )
     def test_rejects_invalid_complex_physics_loss_values(
@@ -1604,6 +1627,7 @@ class TestComplexPhysicsLossTrainingConfig:
             "relative_split_consistency",
             "weak_operator_closure",
             "post_line_search_stationarity",
+            "response_trust",
             "best_physics_checkpoint",
         ),
     )

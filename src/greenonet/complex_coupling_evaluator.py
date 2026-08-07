@@ -39,8 +39,10 @@ from greenonet.complex_losses import (
 from greenonet.complex_projection import (
     ComplexProjectionResult,
     apply_complex_balance_projection,
-    reconstruct_complex_projection,
+    post_line_search_stationarity_diagnostic_from_projection,
     post_line_search_stationarity_from_projection,
+    reconstruct_complex_projection,
+    response_trust_from_projection,
     symmetric_tangent_metric_tensors,
 )
 from greenonet.complex_reconstruction import (
@@ -58,6 +60,7 @@ from greenonet.config import (
     ComplexWeakOperatorClosureConfig,
     CouplingTrainingConfig,
     validate_complex_post_line_search_stationarity_config,
+    validate_complex_response_trust_config,
 )
 from greenonet.logging_mixin import LoggingMixin
 
@@ -116,6 +119,10 @@ class ComplexCouplingEvaluator(LoggingMixin):
                 balance_projection=self.balance_projection,
             )
         )
+        self.response_trust_config = validate_complex_response_trust_config(
+            training=config,
+            balance_projection=self.balance_projection,
+        )
         self.green_model = green_model.to(device)
         self.green_model.eval()
         for parameter in self.green_model.parameters():
@@ -163,6 +170,21 @@ class ComplexCouplingEvaluator(LoggingMixin):
             self.post_line_search_stationarity_config.weight,
             self.post_line_search_stationarity_config.eps,
             self.post_line_search_stationarity_config.enabled,
+        )
+        self.logger.info(
+            "response-trust enabled=%s weight=%.6e trust_weight=%.6e eps=%.6e "
+            "eta_source=capped_eta_applied "
+            "source_normalization=Hx(f/2)^2+Hy(f/2)^2 "
+            "matrix_free=true extra_forward_when_enabled=%s "
+            "stationarity_diagnostic_when_enabled=%s "
+            "extra_adjoint_when_enabled=%s uses_reference_targets=false",
+            self.response_trust_config.enabled,
+            self.response_trust_config.weight,
+            self.response_trust_config.trust_weight,
+            self.response_trust_config.eps,
+            self.response_trust_config.enabled,
+            self.response_trust_config.enabled,
+            self.response_trust_config.enabled,
         )
 
     def evaluate(
@@ -222,11 +244,26 @@ class ComplexCouplingEvaluator(LoggingMixin):
             column_diagonal_context=projection_context,
             symmetric_tangent_context=tangent_context,
         )
-        stationarity = post_line_search_stationarity_from_projection(
+        response_trust = response_trust_from_projection(
             projection=projection,
             context=tangent_context,
-            config=self.post_line_search_stationarity_config,
+            rhs_phys=batch.rhs_valid,
+            config=self.response_trust_config,
         )
+        if self.post_line_search_stationarity_config.enabled:
+            stationarity = post_line_search_stationarity_from_projection(
+                projection=projection,
+                context=tangent_context,
+                config=self.post_line_search_stationarity_config,
+            )
+        elif self.response_trust_config.enabled:
+            stationarity = post_line_search_stationarity_diagnostic_from_projection(
+                projection=projection,
+                context=tangent_context,
+                eps=self.response_trust_config.eps,
+            )
+        else:
+            stationarity = None
         reconstruction = reconstruct_complex_projection(
             projection=projection,
             green_model=self.green_model,
@@ -257,6 +294,8 @@ class ComplexCouplingEvaluator(LoggingMixin):
                 self.post_line_search_stationarity_config
             ),
             post_line_search_stationarity=stationarity,
+            response_trust_config=self.response_trust_config,
+            response_trust=response_trust,
         )
         metrics = {
             key: value.detach() for key, value in objective.metric_tensors().items()

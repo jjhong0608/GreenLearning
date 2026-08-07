@@ -14,6 +14,7 @@ from greenonet.complex_axial_response_operator import (
 from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.config import (
     ComplexPostLineSearchStationarityConfig,
+    ComplexResponseTrustConfig,
     SymmetricTangentGreenResponseProjectionConfig,
 )
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
@@ -98,6 +99,25 @@ class NormalizedPostLineSearchStationarityResult:
     stationarity_residual: torch.Tensor
     initial_preconditioned_energy_per_sample: torch.Tensor
     residual_preconditioned_energy_per_sample: torch.Tensor
+
+
+@dataclass(frozen=True)
+class TangentResponseTrustResult:
+    """Applied tangent mismatch and correction response normalized by source."""
+
+    loss: torch.Tensor
+    loss_per_sample: torch.Tensor
+    post_mismatch_ratio: torch.Tensor
+    post_mismatch_ratio_per_sample: torch.Tensor
+    correction_ratio: torch.Tensor
+    correction_ratio_per_sample: torch.Tensor
+    source_response_energy: torch.Tensor
+    source_response_energy_per_sample: torch.Tensor
+    post_mismatch_energy_per_sample: torch.Tensor
+    correction_energy_per_sample: torch.Tensor
+    source_response: torch.Tensor
+    correction_response: torch.Tensor
+    trust_weight: float
 
 
 @dataclass(frozen=True)
@@ -337,6 +357,70 @@ def normalized_post_line_search_stationarity_loss(
         stationarity_residual=stationarity_residual,
         initial_preconditioned_energy_per_sample=initial_energy,
         residual_preconditioned_energy_per_sample=residual_energy,
+    )
+
+
+def tangent_response_trust_loss(
+    *,
+    context: SymmetricTangentGreenResponseContext,
+    rhs_phys: torch.Tensor,
+    mismatch_pre: torch.Tensor,
+    mismatch_post: torch.Tensor,
+    config: ComplexResponseTrustConfig | dict[str, object],
+) -> TangentResponseTrustResult:
+    """Measure the actual capped response mismatch and correction magnitude."""
+
+    resolved = ComplexResponseTrustConfig.from_raw(config)
+    if not resolved.enabled:
+        raise ValueError("Response-trust must be enabled before computing its loss.")
+    context.validate_for(rhs_phys)
+    context.validate_for(mismatch_pre)
+    context.validate_for(mismatch_post)
+    if rhs_phys.dim() != 2:
+        raise ValueError("rhs_phys must have shape (B, P).")
+    if mismatch_pre.shape != rhs_phys.shape or mismatch_post.shape != rhs_phys.shape:
+        raise ValueError(
+            "rhs_phys, mismatch_pre, and mismatch_post must share shape (B, P)."
+        )
+
+    half_rhs = 0.5 * rhs_phys
+    source_response = context.response_operator.forward_pair(
+        torch.stack((half_rhs, half_rhs), dim=1)
+    )
+    correction_response = mismatch_post - mismatch_pre
+    source_energy = context.point_mass * source_response.square().sum(dim=(1, 2))
+    post_energy = context.point_mass * mismatch_post.square().sum(dim=1)
+    correction_energy = context.point_mass * correction_response.square().sum(dim=1)
+    denominator = source_energy + float(resolved.eps)
+    post_ratio = post_energy / denominator
+    correction_ratio = correction_energy / denominator
+    loss_per_sample = post_ratio + float(resolved.trust_weight) * correction_ratio
+    tensors = (
+        source_response,
+        correction_response,
+        source_energy,
+        post_energy,
+        correction_energy,
+        post_ratio,
+        correction_ratio,
+        loss_per_sample,
+    )
+    if any(not torch.all(torch.isfinite(value)) for value in tensors):
+        raise ValueError("Response-trust loss contains non-finite values.")
+    return TangentResponseTrustResult(
+        loss=loss_per_sample.mean(),
+        loss_per_sample=loss_per_sample,
+        post_mismatch_ratio=post_ratio.mean(),
+        post_mismatch_ratio_per_sample=post_ratio,
+        correction_ratio=correction_ratio.mean(),
+        correction_ratio_per_sample=correction_ratio,
+        source_response_energy=source_energy.mean(),
+        source_response_energy_per_sample=source_energy,
+        post_mismatch_energy_per_sample=post_energy,
+        correction_energy_per_sample=correction_energy,
+        source_response=source_response,
+        correction_response=correction_response,
+        trust_weight=float(resolved.trust_weight),
     )
 
 

@@ -53,6 +53,7 @@ from greenonet.config import (
     ComplexPreProjectionFusionConfig,
     ComplexPostLineSearchStationarityConfig,
     ComplexRelativeSplitConsistencyConfig,
+    ComplexResponseTrustConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingBestEnergyCheckpointConfig,
     CouplingBestPhysicsCheckpointConfig,
@@ -1164,6 +1165,8 @@ class ComplexCouplingArtifactExporter(
         "tangent_delta",
         "tangent_mismatch_pre",
         "tangent_mismatch_post",
+        "tangent_source_response_energy_density",
+        "tangent_response_correction",
     )
     SIGNED_FIGURE_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -1186,6 +1189,7 @@ class ComplexCouplingArtifactExporter(
             "tangent_delta",
             "tangent_mismatch_pre",
             "tangent_mismatch_post",
+            "tangent_response_correction",
         }
     )
     FIGURE_TITLES: ClassVar[dict[str, str]] = {
@@ -1227,6 +1231,10 @@ class ComplexCouplingArtifactExporter(
         "tangent_delta": "Balance-preserving tangent source correction",
         "tangent_mismatch_pre": "Directional response mismatch before tangent step",
         "tangent_mismatch_post": "Directional response mismatch after tangent step",
+        "tangent_source_response_energy_density": (
+            "Directional source-response energy density"
+        ),
+        "tangent_response_correction": "Applied tangent response correction S delta",
     }
     GREEN_RESPONSE_FIGURE_TITLES: ClassVar[dict[str, str]] = {
         "gamma_x_squared": "X source-column Green-response cost",
@@ -1399,6 +1407,9 @@ class ComplexCouplingArtifactExporter(
             ComplexPostLineSearchStationarityConfig.from_raw(
                 configs.coupling_training.post_line_search_stationarity
             )
+        )
+        response_trust = ComplexResponseTrustConfig.from_raw(
+            configs.coupling_training.response_trust
         )
         best_energy = CouplingBestEnergyCheckpointConfig.from_raw(
             configs.coupling_training.best_energy_checkpoint
@@ -1617,8 +1628,16 @@ class ComplexCouplingArtifactExporter(
             },
             "post_line_search_stationarity": {
                 "enabled": post_line_search_stationarity.enabled,
+                "optimized": post_line_search_stationarity.enabled,
+                "diagnostic_computed": (
+                    post_line_search_stationarity.enabled or response_trust.enabled
+                ),
                 "weight": post_line_search_stationarity.weight,
-                "eps": post_line_search_stationarity.eps,
+                "eps": (
+                    response_trust.eps
+                    if response_trust.enabled
+                    else post_line_search_stationarity.eps
+                ),
                 "objective": (
                     "mean((g-eta_star*A*z)^T*D^-1*(g-eta_star*A*z)/(g^T*D^-1*g+eps))"
                 ),
@@ -1626,6 +1645,28 @@ class ComplexCouplingArtifactExporter(
                 "forward_eta_source": "capped_eta_applied",
                 "hessian_action": "A*z=(H_x+H_y)^T*M_Omega*(H_x+H_y)*z",
                 "matrix_free": True,
+                "extra_adjoint_actions_per_enabled_batch": 1,
+                "global_response_matrix_materialized": False,
+                "full_gram_solve": False,
+                "uses_reference_targets": False,
+            },
+            "response_trust": {
+                "enabled": response_trust.enabled,
+                "weight": response_trust.weight,
+                "trust_weight": response_trust.trust_weight,
+                "eps": response_trust.eps,
+                "objective": (
+                    "mean((||m_post||_M^2 + trust_weight*||S*delta||_M^2)"
+                    "/(||H_x(f/2)||_M^2+||H_y(f/2)||_M^2+eps))"
+                ),
+                "post_mismatch": "m_post=H_x*phi-H_y*psi",
+                "correction_response": "S*delta=m_post-m_pre",
+                "eta_source": "capped_eta_applied",
+                "source_normalization": "H_x(f/2)^2+H_y(f/2)^2",
+                "stationarity_diagnostic_computed": response_trust.enabled,
+                "stationarity_diagnostic_eta_source": "uncapped_eta_star",
+                "matrix_free": True,
+                "extra_forward_actions_per_enabled_batch": 1,
                 "extra_adjoint_actions_per_enabled_batch": 1,
                 "global_response_matrix_materialized": False,
                 "full_gram_solve": False,
@@ -2081,6 +2122,57 @@ class ComplexCouplingArtifactExporter(
                             ),
                             "tangent_stationarity_ratio": np.asarray(
                                 stationarity.loss_per_sample[0].detach().cpu().item(),
+                                dtype=np.float64,
+                            ),
+                        }
+                    )
+                response_trust = prediction.objective.response_trust
+                if response_trust is not None:
+                    source_response = response_trust.source_response[0]
+                    arrays.update(
+                        {
+                            "tangent_source_response_phi": (
+                                source_response[0].detach().cpu().numpy()
+                            ),
+                            "tangent_source_response_psi": (
+                                source_response[1].detach().cpu().numpy()
+                            ),
+                            "tangent_source_response_energy_density": (
+                                source_response.square()
+                                .sum(dim=0)
+                                .detach()
+                                .cpu()
+                                .numpy()
+                            ),
+                            "tangent_response_correction": (
+                                response_trust.correction_response[0]
+                                .detach()
+                                .cpu()
+                                .numpy()
+                            ),
+                            "tangent_source_response_energy": np.asarray(
+                                response_trust.source_response_energy_per_sample[0]
+                                .detach()
+                                .cpu()
+                                .item(),
+                                dtype=np.float64,
+                            ),
+                            "tangent_response_post_mismatch_ratio": np.asarray(
+                                response_trust.post_mismatch_ratio_per_sample[0]
+                                .detach()
+                                .cpu()
+                                .item(),
+                                dtype=np.float64,
+                            ),
+                            "tangent_response_correction_ratio": np.asarray(
+                                response_trust.correction_ratio_per_sample[0]
+                                .detach()
+                                .cpu()
+                                .item(),
+                                dtype=np.float64,
+                            ),
+                            "tangent_response_trust_ratio": np.asarray(
+                                response_trust.loss_per_sample[0].detach().cpu().item(),
                                 dtype=np.float64,
                             ),
                         }

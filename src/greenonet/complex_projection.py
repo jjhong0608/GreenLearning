@@ -16,11 +16,14 @@ from greenonet.complex_reconstruction import (
 from greenonet.complex_tangent_projection import (
     NormalizedPostLineSearchStationarityResult,
     SymmetricTangentGreenResponseContext,
+    TangentResponseTrustResult,
     normalized_post_line_search_stationarity_loss,
+    tangent_response_trust_loss,
 )
 from greenonet.config import (
     BalanceProjectionConfig,
     ComplexPostLineSearchStationarityConfig,
+    ComplexResponseTrustConfig,
 )
 
 
@@ -365,6 +368,59 @@ def post_line_search_stationarity_from_projection(
         gradient=tangent.gradient,
         response_direction=tangent.response_direction,
         eta_star=tangent.eta_star,
+        config=resolved,
+    )
+
+
+def post_line_search_stationarity_diagnostic_from_projection(
+    *,
+    projection: ComplexProjectionResult,
+    context: SymmetricTangentGreenResponseContext | None,
+    eps: float,
+) -> NormalizedPostLineSearchStationarityResult:
+    """Compute the existing stationarity ratio without optimizing it."""
+
+    result = post_line_search_stationarity_from_projection(
+        projection=projection,
+        context=context,
+        config=ComplexPostLineSearchStationarityConfig(
+            enabled=True,
+            weight=0.0,
+            eps=eps,
+        ),
+    )
+    if result is None:
+        raise RuntimeError("Enabled stationarity diagnostic returned no result.")
+    return result
+
+
+def response_trust_from_projection(
+    *,
+    projection: ComplexProjectionResult,
+    context: SymmetricTangentGreenResponseContext | None,
+    rhs_phys: torch.Tensor,
+    config: ComplexResponseTrustConfig | dict[str, Any],
+) -> TangentResponseTrustResult | None:
+    """Compute response trust from the actual applied tangent projection."""
+
+    resolved = ComplexResponseTrustConfig.from_raw(config)
+    if not resolved.enabled:
+        return None
+    if projection.mode != "symmetric_tangent_green_response" or context is None:
+        raise ValueError(
+            "Response-trust requires symmetric tangent projection and its cached "
+            "Green-response context."
+        )
+    tangent = projection.symmetric_tangent_diagnostics
+    if tangent is None or tangent.eta_star is None:
+        raise RuntimeError(
+            "Closed-loop tangent diagnostics are incomplete for response-trust."
+        )
+    return tangent_response_trust_loss(
+        context=context,
+        rhs_phys=rhs_phys,
+        mismatch_pre=tangent.mismatch_pre,
+        mismatch_post=tangent.mismatch_post,
         config=resolved,
     )
 

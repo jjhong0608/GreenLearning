@@ -1341,6 +1341,54 @@ class ComplexPostLineSearchStationarityConfig:
 
 
 @dataclass
+class ComplexResponseTrustConfig:
+    """Source-normalized trust objective for the applied tangent response."""
+
+    enabled: bool = False
+    weight: float = 1.0
+    trust_weight: float = 0.01
+    eps: float = 1.0e-12
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("response_trust.enabled must be a boolean.")
+        for field_name, value in (
+            ("weight", self.weight),
+            ("trust_weight", self.trust_weight),
+            ("eps", self.eps),
+        ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(f"response_trust.{field_name} must be numeric.")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"response_trust.{field_name} must be finite.")
+        if self.weight < 0.0:
+            raise ValueError("response_trust.weight must be non-negative.")
+        if self.trust_weight < 0.0:
+            raise ValueError("response_trust.trust_weight must be non-negative.")
+        if self.eps <= 0.0:
+            raise ValueError("response_trust.eps must be positive.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: ComplexResponseTrustConfig | dict[str, Any] | None,
+    ) -> ComplexResponseTrustConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled", "weight", "trust_weight", "eps"})
+            if unknown:
+                raise TypeError(
+                    f"response_trust has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("response_trust must be an object.")
+
+
+@dataclass
 class SoapOptimizerConfig:
     """SOAP-specific optimizer settings shared by supported training paths."""
 
@@ -1575,6 +1623,9 @@ class CouplingTrainingConfig:
     post_line_search_stationarity: (
         ComplexPostLineSearchStationarityConfig | dict[str, Any]
     ) = field(default_factory=ComplexPostLineSearchStationarityConfig)
+    response_trust: ComplexResponseTrustConfig | dict[str, Any] = field(
+        default_factory=ComplexResponseTrustConfig
+    )
     optimizer: CouplingOptimizerConfig | dict[str, Any] = field(
         default_factory=CouplingOptimizerConfig
     )
@@ -1602,6 +1653,7 @@ class CouplingTrainingConfig:
                 self.post_line_search_stationarity
             )
         )
+        self.response_trust = ComplexResponseTrustConfig.from_raw(self.response_trust)
         self.optimizer = CouplingOptimizerConfig.from_raw(self.optimizer)
 
 
@@ -1637,6 +1689,11 @@ def validate_unit_square_coupling_training_config(
         raise ValueError(
             "coupling_training.post_line_search_stationarity is available only "
             "for ComplexCouplingTrainer."
+        )
+    if ComplexResponseTrustConfig.from_raw(config.response_trust).enabled:
+        raise ValueError(
+            "coupling_training.response_trust is available only for "
+            "ComplexCouplingTrainer."
         )
     if CouplingBestPhysicsCheckpointConfig.from_raw(
         config.best_physics_checkpoint
@@ -1688,6 +1745,43 @@ def validate_complex_post_line_search_stationarity_config(
             "'closed_loop_exact_line_search'."
         )
     return stationarity
+
+
+def validate_complex_response_trust_config(
+    *,
+    training: CouplingTrainingConfig,
+    balance_projection: BalanceProjectionConfig | dict[str, Any] | str,
+) -> ComplexResponseTrustConfig:
+    """Validate response trust against the applied tangent projection contract."""
+
+    response_trust = ComplexResponseTrustConfig.from_raw(training.response_trust)
+    if not response_trust.enabled:
+        return response_trust
+    stationarity = ComplexPostLineSearchStationarityConfig.from_raw(
+        training.post_line_search_stationarity
+    )
+    if stationarity.enabled:
+        raise ValueError(
+            "coupling_training.response_trust and "
+            "coupling_training.post_line_search_stationarity are mutually exclusive."
+        )
+    projection = BalanceProjectionConfig.from_raw(balance_projection)
+    if not projection.enabled or projection.mode != "symmetric_tangent_green_response":
+        raise ValueError(
+            "coupling_training.response_trust.enabled=true requires "
+            "coupling_model.balance_projection.mode="
+            "'symmetric_tangent_green_response'."
+        )
+    tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+        projection.symmetric_tangent_green_response
+    )
+    if tangent.eta_strategy != "closed_loop_exact_line_search":
+        raise ValueError(
+            "coupling_training.response_trust.enabled=true requires "
+            "balance_projection.symmetric_tangent_green_response.eta_strategy="
+            "'closed_loop_exact_line_search'."
+        )
+    return response_trust
 
 
 def validate_complex_coupling_source_config(

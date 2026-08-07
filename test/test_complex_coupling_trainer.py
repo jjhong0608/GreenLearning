@@ -34,6 +34,7 @@ from greenonet.config import (
     ComplexPreProjectionFusionConfig,
     ComplexPostLineSearchStationarityConfig,
     ComplexRelativeSplitConsistencyConfig,
+    ComplexResponseTrustConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingBestEnergyCheckpointConfig,
     CouplingBestPhysicsCheckpointConfig,
@@ -1205,6 +1206,157 @@ def test_complex_stationarity_objective_uses_uncapped_eta_and_reference_free_tar
         / "stationarity_training"
         / "complex_coupling_model_best_physics.safetensors"
     ).is_file()
+
+
+def test_complex_response_trust_uses_applied_response_and_keeps_stationarity_diagnostic(
+    tmp_path,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={
+                    "eta": 1.0,
+                    "eta_strategy": "closed_loop_exact_line_search",
+                    "line_search_relative_eps": 1.0e-15,
+                    "relative_lambda": 0.01,
+                },
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    weight = 0.25
+    config = CouplingTrainingConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        compile=CompileConfig(enabled=False),
+        response_trust=ComplexResponseTrustConfig(
+            enabled=True,
+            weight=weight,
+            trust_weight=0.02,
+            eps=1.0e-12,
+        ),
+        best_energy_checkpoint=CouplingBestEnergyCheckpointConfig(enabled=True),
+        best_physics_checkpoint=CouplingBestPhysicsCheckpointConfig(enabled=True),
+    )
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=config,
+        work_dir=tmp_path / "response_trust_training",
+        green_model=ConstantGreen(1.0),
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+
+    result = trainer._forward_batch(batch, symmetric_tangent_eta_cap=1.0e-12)
+    tangent = result.projection.symmetric_tangent_diagnostics
+    response = result.objective.response_trust
+    stationarity = result.objective.post_line_search_stationarity
+    context = trainer.symmetric_tangent_green_response_context
+    assert tangent is not None
+    assert tangent.eta_star is not None
+    assert response is not None
+    assert stationarity is not None
+    assert context is not None
+    assert torch.all(tangent.eta_applied < tangent.eta_star)
+    expected_source = context.response_operator.forward_pair(
+        torch.stack((0.5 * batch.rhs_valid, 0.5 * batch.rhs_valid), dim=1)
+    )
+    torch.testing.assert_close(response.source_response, expected_source)
+    torch.testing.assert_close(
+        response.correction_response,
+        tangent.mismatch_post - tangent.mismatch_pre,
+    )
+    torch.testing.assert_close(
+        result.loss,
+        result.objective.energy_optimized + weight * response.loss,
+    )
+    torch.testing.assert_close(
+        result.metrics["loss_tangent_response_trust"],
+        weight * response.loss.detach(),
+    )
+    torch.testing.assert_close(
+        result.metrics["tangent_response_trust_ratio"],
+        response.loss.detach(),
+    )
+    assert "tangent_post_line_search_stationarity_ratio" in result.metrics
+    assert "loss_tangent_post_line_search_stationarity" not in result.metrics
+    torch.testing.assert_close(
+        result.projection.projected_physical[:, 0]
+        + result.projection.projected_physical[:, 1],
+        batch.rhs_valid,
+        atol=0.0,
+        rtol=0.0,
+    )
+
+    changed_targets = replace(
+        batch,
+        sol_valid=batch.sol_valid + 1000.0,
+        flux_valid=batch.flux_valid - 1000.0,
+    )
+    changed = trainer._forward_batch(
+        changed_targets,
+        symmetric_tangent_eta_cap=1.0e-12,
+    )
+    torch.testing.assert_close(result.loss, changed.loss)
+    result.loss.backward()
+    assert any(parameter.grad is not None for parameter in model.parameters())
+    assert all(
+        parameter.grad is None or torch.all(torch.isfinite(parameter.grad))
+        for parameter in model.parameters()
+    )
+
+    final_cap_result = trainer._forward_batch(batch, symmetric_tangent_eta_cap=1.0)
+    evaluator = ComplexCouplingEvaluator(
+        model=model,
+        green_model=ConstantGreen(1.0),
+        config=config,
+        device=torch.device("cpu"),
+        work_dir=tmp_path / "response_trust_evaluation",
+    )
+    evaluated = evaluator.predict_batch(batch)
+    assert final_cap_result.objective.response_trust is not None
+    assert evaluated.objective.response_trust is not None
+    torch.testing.assert_close(
+        final_cap_result.objective.response_trust.loss_per_sample,
+        evaluated.objective.response_trust.loss_per_sample,
+    )
+    assert evaluator.symmetric_tangent_green_response_context_build_count == 1
+
+    log_text = (tmp_path / "response_trust_training" / "training.log").read_text()
+    assert "response-trust enabled=True" in log_text
+    assert "eta_source=capped_eta_applied" in log_text
+    assert "stationarity_diagnostic_when_enabled=True" in log_text
+    assert "uses_reference_targets=false" in log_text
+
+    trainer.train(dataset, dataset)
+    with (tmp_path / "response_trust_training" / "complex_training_metrics.csv").open(
+        newline=""
+    ) as fp:
+        rows = list(csv.DictReader(fp))
+    assert rows
+    assert "loss_tangent_response_trust" in rows[0]
+    assert "tangent_response_trust_ratio" in rows[0]
+    assert "tangent_response_post_mismatch_ratio" in rows[0]
+    assert "tangent_response_correction_ratio" in rows[0]
+    assert "tangent_source_response_energy" in rows[0]
+    assert "tangent_post_line_search_stationarity_ratio" in rows[0]
+    assert "loss_tangent_post_line_search_stationarity" not in rows[0]
 
 
 def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(tmp_path):

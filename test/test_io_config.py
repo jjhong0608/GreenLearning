@@ -8,6 +8,7 @@ from greenonet.config import (
     ComplexCrossAxisReconstructionConfig,
     ComplexPostLineSearchStationarityConfig,
     ComplexPreProjectionFusionConfig,
+    ComplexResponseTrustConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingModelConfig,
@@ -18,6 +19,7 @@ from greenonet.config import (
     SourceStencilLiftConfig,
     TransverseTrunkConfig,
     validate_complex_post_line_search_stationarity_config,
+    validate_complex_response_trust_config,
     validate_unit_square_coupling_training_config,
 )
 from greenonet.coupling_model import CouplingNet
@@ -254,6 +256,98 @@ def test_post_line_search_stationarity_requires_closed_loop_tangent_projection()
                 mode="symmetric_tangent_green_response",
                 symmetric_tangent_green_response={"eta_strategy": "fixed"},
             ),
+        )
+
+
+def test_response_trust_config_round_trip_and_defaults():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    default = CouplingTrainingConfig()
+    configured = CouplingTrainingConfig(
+        response_trust={
+            "enabled": True,
+            "weight": 1.0e-3,
+            "trust_weight": 0.025,
+            "eps": 2.0e-12,
+        }
+    )
+    loaded = _deserialize_config(
+        _serialize_config(configured),
+        CouplingTrainingConfig,
+    )
+
+    assert isinstance(default.response_trust, ComplexResponseTrustConfig)
+    assert default.response_trust == ComplexResponseTrustConfig()
+    assert isinstance(loaded.response_trust, ComplexResponseTrustConfig)
+    assert loaded.response_trust.enabled is True
+    assert loaded.response_trust.weight == pytest.approx(1.0e-3)
+    assert loaded.response_trust.trust_weight == pytest.approx(0.025)
+    assert loaded.response_trust.eps == pytest.approx(2.0e-12)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type"),
+    (
+        ("enabled", 1, TypeError),
+        ("weight", True, TypeError),
+        ("weight", -1.0, ValueError),
+        ("trust_weight", -1.0, ValueError),
+        ("trust_weight", float("nan"), ValueError),
+        ("eps", 0.0, ValueError),
+        ("eps", float("inf"), ValueError),
+    ),
+)
+def test_response_trust_rejects_invalid_values(field, value, error_type):
+    with pytest.raises(error_type, match=rf"response_trust\.{field}"):
+        ComplexResponseTrustConfig.from_raw({field: value})
+
+    with pytest.raises(TypeError, match="response_trust has unknown keys"):
+        ComplexResponseTrustConfig.from_raw({"unknown": 1})
+
+
+def test_response_trust_requires_closed_loop_tangent_and_excludes_stationarity():
+    valid_projection = BalanceProjectionConfig(
+        mode="symmetric_tangent_green_response",
+        symmetric_tangent_green_response={
+            "eta_strategy": "closed_loop_exact_line_search"
+        },
+    )
+    training = CouplingTrainingConfig(response_trust={"enabled": True})
+
+    resolved = validate_complex_response_trust_config(
+        training=training,
+        balance_projection=valid_projection,
+    )
+    assert resolved.enabled is True
+    assert resolved.trust_weight == pytest.approx(0.01)
+
+    with pytest.raises(ValueError, match="symmetric_tangent_green_response"):
+        validate_complex_response_trust_config(
+            training=training,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+        )
+    with pytest.raises(ValueError, match="closed_loop_exact_line_search"):
+        validate_complex_response_trust_config(
+            training=training,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={"eta_strategy": "fixed"},
+            ),
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_complex_response_trust_config(
+            training=CouplingTrainingConfig(
+                response_trust={"enabled": True},
+                post_line_search_stationarity={"enabled": True},
+            ),
+            balance_projection=valid_projection,
+        )
+
+
+def test_unit_square_rejects_enabled_response_trust():
+    with pytest.raises(ValueError, match="response_trust.*ComplexCouplingTrainer"):
+        validate_unit_square_coupling_training_config(
+            CouplingTrainingConfig(response_trust={"enabled": True})
         )
 
 

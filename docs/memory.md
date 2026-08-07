@@ -267,8 +267,21 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   operator에 `tangent_gradient(Sz)`를 한 번 더 적용해 계산하며 global matrix와 solve는
   만들지 않는다. 이 항은 canonical energy를 대체하지 않고 configured weight로 total
   reference-free objective에 더한다. Dataclass default는 disabled이고 별도
-  `configs/complex_coupling_soap_tangent_stationarity.json` pilot만 `weight=1e-3`과
+  `configs/complex_coupling_soap_tangent_stationarity.json` pilot만 현재
+  `weight=1e-2`와
   best-physics checkpoint를 활성화한다. Model/checkpoint tensor contract는 변하지 않는다.
+- Optional response-trust loss는 closed-loop tangent의 실제 capped production
+  correction을 평가한다. `m_post=m_pre+(H_x+H_y)*delta`이고,
+  `E_f=||H_x(f/2)||_M^2+||H_y(f/2)||_M^2`일 때 sample별
+  `||m_post||_M^2/(E_f+eps) + mu*||(H_x+H_y)delta||_M^2/(E_f+eps)`를 사용하며
+  기본 `mu=0.01`이다. Correction response는 `m_post-m_pre`를 재사용하고 source
+  normalization만 cached matrix-free operator의 `forward_pair` 한 번으로 계산한다.
+  이 loss는 existing stationarity loss와 상호 배타적이지만, response-trust가
+  enabled이면 uncapped stationarity ratio를 diagnostic으로 계속 계산한다.
+  따라서 weighted stationarity loss key는 없고 `loss_tangent_response_trust`,
+  unweighted response-trust component, source-response energy와 stationarity ratio를
+  함께 기록한다. Reference `sol/phi/psi`, global response matrix와 solve는 사용하지
+  않으며 model/checkpoint tensor contract는 변하지 않는다.
 - Frozen symmetric-tangent audit CLI도 `--closed-loop` opt-in으로 production과
   같은 sample-wise exact-line-search helper를 재사용한다. Post-hoc evaluation은
   warmup schedule 없이 final cap을 적용하며, 같은 checkpoint raw output에서

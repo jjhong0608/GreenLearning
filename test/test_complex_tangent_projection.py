@@ -19,12 +19,14 @@ from greenonet.complex_projection import (
 )
 from greenonet.complex_tangent_projection import (
     normalized_post_line_search_stationarity_loss,
+    tangent_response_trust_loss,
     SymmetricTangentEtaCapSchedule,
     SymmetricTangentGreenResponseContext,
 )
 from greenonet.config import (
     BalanceProjectionConfig,
     ComplexPostLineSearchStationarityConfig,
+    ComplexResponseTrustConfig,
 )
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from test.complex_fixtures import ConstantGreen, write_geometry_npz
@@ -624,6 +626,114 @@ def test_normalized_stationarity_zero_gradient_is_finite_and_differentiable():
     result.loss.backward()
     assert gradient.grad is not None
     assert torch.all(torch.isfinite(gradient.grad))
+
+
+def test_response_trust_matches_source_normalized_capped_response_formula():
+    context = _context(
+        eta=1.0,
+        relative_lambda=0.1,
+        eta_strategy="closed_loop_exact_line_search",
+    )
+    rhs = torch.tensor(
+        [[1.0, -0.5, 0.25], [0.25, 0.75, -1.0]],
+        dtype=torch.float64,
+    )
+    mismatch_pre = torch.tensor(
+        [[0.8, -0.3, 0.4], [-0.5, 0.2, 0.7]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    mismatch_post = torch.tensor(
+        [[0.2, -0.1, 0.3], [-0.1, 0.15, 0.25]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    trust_weight = 0.025
+
+    result = tangent_response_trust_loss(
+        context=context,
+        rhs_phys=rhs,
+        mismatch_pre=mismatch_pre,
+        mismatch_post=mismatch_post,
+        config=ComplexResponseTrustConfig(
+            enabled=True,
+            trust_weight=trust_weight,
+            eps=1.0e-14,
+        ),
+    )
+
+    half_rhs = 0.5 * rhs
+    expected_source_response = context.response_operator.forward_pair(
+        torch.stack((half_rhs, half_rhs), dim=1)
+    )
+    expected_source_energy = context.point_mass * expected_source_response.square().sum(
+        dim=(1, 2)
+    )
+    expected_post_energy = context.point_mass * mismatch_post.square().sum(dim=1)
+    expected_correction = mismatch_post - mismatch_pre
+    expected_correction_energy = context.point_mass * expected_correction.square().sum(
+        dim=1
+    )
+    denominator = expected_source_energy + 1.0e-14
+    expected_post_ratio = expected_post_energy / denominator
+    expected_correction_ratio = expected_correction_energy / denominator
+    expected_loss = expected_post_ratio + trust_weight * expected_correction_ratio
+
+    torch.testing.assert_close(result.source_response, expected_source_response)
+    torch.testing.assert_close(
+        result.source_response_energy_per_sample, expected_source_energy
+    )
+    torch.testing.assert_close(result.correction_response, expected_correction)
+    torch.testing.assert_close(
+        result.post_mismatch_ratio_per_sample, expected_post_ratio
+    )
+    torch.testing.assert_close(
+        result.correction_ratio_per_sample, expected_correction_ratio
+    )
+    torch.testing.assert_close(result.loss_per_sample, expected_loss)
+    torch.testing.assert_close(result.loss, expected_loss.mean())
+    result.loss.backward()
+    assert mismatch_pre.grad is not None
+    assert mismatch_post.grad is not None
+    assert torch.all(torch.isfinite(mismatch_pre.grad))
+    assert torch.all(torch.isfinite(mismatch_post.grad))
+
+
+def test_response_trust_is_absolute_in_response_scale_and_zero_safe():
+    context = _context(
+        eta=1.0,
+        eta_strategy="closed_loop_exact_line_search",
+    )
+    rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
+    mismatch_pre = torch.tensor([[0.8, -0.3, 0.4]], dtype=torch.float64)
+    mismatch_post = torch.tensor([[0.2, -0.1, 0.3]], dtype=torch.float64)
+    config = ComplexResponseTrustConfig(enabled=True, trust_weight=0.01)
+
+    baseline = tangent_response_trust_loss(
+        context=context,
+        rhs_phys=rhs,
+        mismatch_pre=mismatch_pre,
+        mismatch_post=mismatch_post,
+        config=config,
+    )
+    scaled = tangent_response_trust_loss(
+        context=context,
+        rhs_phys=rhs,
+        mismatch_pre=7.0 * mismatch_pre,
+        mismatch_post=7.0 * mismatch_post,
+        config=config,
+    )
+    zero = tangent_response_trust_loss(
+        context=context,
+        rhs_phys=torch.zeros_like(rhs),
+        mismatch_pre=torch.zeros_like(mismatch_pre),
+        mismatch_post=torch.zeros_like(mismatch_post),
+        config=config,
+    )
+
+    torch.testing.assert_close(scaled.loss, 49.0 * baseline.loss)
+    assert torch.equal(zero.loss_per_sample, torch.zeros_like(zero.loss_per_sample))
+    assert torch.all(torch.isfinite(zero.loss_per_sample))
 
 
 def test_stationarity_bridge_adds_one_adjoint_only_when_enabled(tmp_path, monkeypatch):

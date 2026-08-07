@@ -95,7 +95,7 @@
     },
     "post_line_search_stationarity": {
       "enabled": true,
-      "weight": 0.001,
+      "weight": 0.01,
       "eps": 1e-12
     },
     "optimizer": {

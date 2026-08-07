@@ -7,6 +7,7 @@ import torch
 from greenonet.complex_geometry import ComplexGeometryMetadata
 from greenonet.complex_tangent_projection import (
     NormalizedPostLineSearchStationarityResult,
+    TangentResponseTrustResult,
 )
 from greenonet.complex_losses import (
     ComplexBoundaryEnergyContext,
@@ -24,6 +25,7 @@ from greenonet.config import (
     ComplexCanonicalEnergyConfig,
     ComplexPostLineSearchStationarityConfig,
     ComplexRelativeSplitConsistencyConfig,
+    ComplexResponseTrustConfig,
     ComplexWeakOperatorClosureConfig,
 )
 
@@ -40,10 +42,13 @@ class ComplexCouplingObjectiveResult:
     relative_split: ComplexRelativeSplitLossResult | None
     weak_closure: ComplexWeakClosureResult | None
     post_line_search_stationarity: NormalizedPostLineSearchStationarityResult | None
+    response_trust: TangentResponseTrustResult | None
     relative_split_weight: float
     relative_split_mass_weight: float
     weak_closure_weight: float
     post_line_search_stationarity_weight: float
+    post_line_search_stationarity_optimized: bool
+    response_trust_weight: float
     boundary_weight: float
 
     def metric_tensors(self) -> dict[str, torch.Tensor]:
@@ -86,14 +91,29 @@ class ComplexCouplingObjectiveResult:
                 }
             )
         if self.post_line_search_stationarity is not None:
+            metrics["tangent_post_line_search_stationarity_ratio"] = (
+                self.post_line_search_stationarity.loss
+            )
+            if self.post_line_search_stationarity_optimized:
+                metrics["loss_tangent_post_line_search_stationarity"] = (
+                    self.post_line_search_stationarity_weight
+                    * self.post_line_search_stationarity.loss
+                )
+        if self.response_trust is not None:
             metrics.update(
                 {
-                    "loss_tangent_post_line_search_stationarity": (
-                        self.post_line_search_stationarity_weight
-                        * self.post_line_search_stationarity.loss
+                    "loss_tangent_response_trust": (
+                        self.response_trust_weight * self.response_trust.loss
                     ),
-                    "tangent_post_line_search_stationarity_ratio": (
-                        self.post_line_search_stationarity.loss
+                    "tangent_response_trust_ratio": self.response_trust.loss,
+                    "tangent_response_post_mismatch_ratio": (
+                        self.response_trust.post_mismatch_ratio
+                    ),
+                    "tangent_response_correction_ratio": (
+                        self.response_trust.correction_ratio
+                    ),
+                    "tangent_source_response_energy": (
+                        self.response_trust.source_response_energy
                     ),
                 }
             )
@@ -146,12 +166,27 @@ class ComplexCouplingObjectiveResult:
             )
         if self.post_line_search_stationarity is not None:
             ratio = self.post_line_search_stationarity.loss_per_sample[sample_offset]
+            metrics["tangent_post_line_search_stationarity_ratio"] = ratio
+            if self.post_line_search_stationarity_optimized:
+                metrics["loss_tangent_post_line_search_stationarity"] = (
+                    self.post_line_search_stationarity_weight * ratio
+                )
+        if self.response_trust is not None:
+            response = self.response_trust
+            ratio = response.loss_per_sample[sample_offset]
             metrics.update(
                 {
-                    "loss_tangent_post_line_search_stationarity": (
-                        self.post_line_search_stationarity_weight * ratio
+                    "loss_tangent_response_trust": self.response_trust_weight * ratio,
+                    "tangent_response_trust_ratio": ratio,
+                    "tangent_response_post_mismatch_ratio": (
+                        response.post_mismatch_ratio_per_sample[sample_offset]
                     ),
-                    "tangent_post_line_search_stationarity_ratio": ratio,
+                    "tangent_response_correction_ratio": (
+                        response.correction_ratio_per_sample[sample_offset]
+                    ),
+                    "tangent_source_response_energy": (
+                        response.source_response_energy_per_sample[sample_offset]
+                    ),
                 }
             )
         return metrics
@@ -190,6 +225,8 @@ def compute_complex_coupling_objective(
     post_line_search_stationarity: (
         NormalizedPostLineSearchStationarityResult | None
     ) = None,
+    response_trust_config: ComplexResponseTrustConfig | None = None,
+    response_trust: TangentResponseTrustResult | None = None,
 ) -> ComplexCouplingObjectiveResult:
     """Compute the configured complex objective without reference targets."""
 
@@ -243,20 +280,41 @@ def compute_complex_coupling_objective(
             post_line_search_stationarity_config
         )
     )
-    if stationarity_config.enabled != (post_line_search_stationarity is not None):
+    resolved_response_trust = (
+        ComplexResponseTrustConfig()
+        if response_trust_config is None
+        else ComplexResponseTrustConfig.from_raw(response_trust_config)
+    )
+    stationarity_diagnostic_expected = (
+        stationarity_config.enabled or resolved_response_trust.enabled
+    )
+    if stationarity_diagnostic_expected != (post_line_search_stationarity is not None):
         raise ValueError(
-            "Enabled post-line-search stationarity config and computed result "
-            "must be provided together."
+            "Enabled stationarity or response-trust config and computed "
+            "stationarity diagnostic must be provided together."
         )
     if post_line_search_stationarity is not None:
         if post_line_search_stationarity.loss_per_sample.shape != loss_per_sample.shape:
             raise ValueError(
                 "Post-line-search stationarity batch shape does not match objective."
             )
+        if stationarity_config.enabled:
+            loss_per_sample = (
+                loss_per_sample
+                + float(stationarity_config.weight)
+                * post_line_search_stationarity.loss_per_sample
+            )
+    if resolved_response_trust.enabled != (response_trust is not None):
+        raise ValueError(
+            "Enabled response-trust config and computed result must be provided "
+            "together."
+        )
+    if response_trust is not None:
+        if response_trust.loss_per_sample.shape != loss_per_sample.shape:
+            raise ValueError("Response-trust batch shape does not match objective.")
         loss_per_sample = (
             loss_per_sample
-            + float(stationarity_config.weight)
-            * post_line_search_stationarity.loss_per_sample
+            + float(resolved_response_trust.weight) * response_trust.loss_per_sample
         )
 
     return ComplexCouplingObjectiveResult(
@@ -268,9 +326,12 @@ def compute_complex_coupling_objective(
         relative_split=relative_split,
         weak_closure=weak_closure,
         post_line_search_stationarity=post_line_search_stationarity,
+        response_trust=response_trust,
         relative_split_weight=float(relative_split_config.weight),
         relative_split_mass_weight=float(relative_split_config.mass_weight),
         weak_closure_weight=float(weak_closure_config.weight),
         post_line_search_stationarity_weight=float(stationarity_config.weight),
+        post_line_search_stationarity_optimized=stationarity_config.enabled,
+        response_trust_weight=float(resolved_response_trust.weight),
         boundary_weight=boundary_weight,
     )

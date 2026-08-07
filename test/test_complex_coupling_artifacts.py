@@ -1611,6 +1611,147 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         )
 
 
+def test_response_trust_artifact_records_formula_metrics_raw_fields_and_figures(
+    tmp_path,
+    monkeypatch,
+):
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coeff_path = write_coefficients(tmp_path / "coeffs.py")
+    data_dir = tmp_path / "test_data"
+    write_sample_npz(data_dir)
+    coupling_cfg = CouplingModelConfig(
+        branch_input_dim=4,
+        hidden_dim=4,
+        depth=1,
+        dtype=torch.float64,
+        balance_projection=BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={
+                "eta": 0.01,
+                "eta_strategy": "closed_loop_exact_line_search",
+                "line_search_relative_eps": 3.0e-12,
+                "relative_lambda": 0.1,
+                "denominator_relative_eps": 2.0e-12,
+            },
+        ),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            num_frequencies=2,
+            max_frequency=2.0,
+            transverse_trunk=TransverseTrunkConfig(
+                enabled=True,
+                fusion="product",
+                length_context=True,
+            ),
+        ),
+    )
+    green_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        branch_input_dim=4,
+        use_green=False,
+        dtype=torch.float64,
+    )
+    coupling_path = tmp_path / "complex_coupling.safetensors"
+    green_path = tmp_path / "green.safetensors"
+    save_state_dict_safetensors(
+        ComplexCouplingNet(coupling_cfg).state_dict(), coupling_path
+    )
+    save_model_with_config(GreenONetModel(green_cfg), green_cfg, green_path)
+    config_path = write_complex_config(
+        tmp_path / "config.json",
+        geometry_path=geometry_path,
+        train_path=None,
+        test_path=data_dir,
+        coefficient_path=coeff_path,
+    )
+    config_payload = json.loads(config_path.read_text())
+    config_payload["coupling_model"]["balance_projection"] = {
+        "enabled": True,
+        "mode": "symmetric_tangent_green_response",
+        "symmetric_tangent_green_response": {
+            "eta": 0.01,
+            "eta_strategy": "closed_loop_exact_line_search",
+            "line_search_relative_eps": 3.0e-12,
+            "relative_lambda": 0.1,
+            "denominator_relative_eps": 2.0e-12,
+        },
+    }
+    config_payload["coupling_training"]["response_trust"] = {
+        "enabled": True,
+        "weight": 1.0e-3,
+        "trust_weight": 0.01,
+        "eps": 2.0e-12,
+    }
+    config_path.write_text(json.dumps(config_payload))
+    outdir = tmp_path / "artifacts"
+
+    summary = export_complex_coupling_artifacts(
+        CouplingArtifactRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_path,
+            green_checkpoint=green_path,
+            outdir=outdir,
+            selected_samples=(0,),
+            device="cpu",
+            theme="plotly_white",
+        )
+    )
+
+    response_summary = summary["response_trust"]
+    assert response_summary["enabled"] is True
+    assert response_summary["weight"] == pytest.approx(1.0e-3)
+    assert response_summary["trust_weight"] == pytest.approx(0.01)
+    assert response_summary["eps"] == pytest.approx(2.0e-12)
+    assert response_summary["eta_source"] == "capped_eta_applied"
+    assert response_summary["stationarity_diagnostic_computed"] is True
+    assert response_summary["extra_forward_actions_per_enabled_batch"] == 1
+    assert response_summary["extra_adjoint_actions_per_enabled_batch"] == 1
+    assert response_summary["global_response_matrix_materialized"] is False
+    assert response_summary["full_gram_solve"] is False
+    assert response_summary["uses_reference_targets"] is False
+    stationarity_summary = summary["post_line_search_stationarity"]
+    assert stationarity_summary["enabled"] is False
+    assert stationarity_summary["optimized"] is False
+    assert stationarity_summary["diagnostic_computed"] is True
+    assert stationarity_summary["eps"] == pytest.approx(2.0e-12)
+
+    metric_rows = list(
+        csv.DictReader((outdir / "metrics" / "per_sample_metrics.csv").open())
+    )
+    assert "loss_tangent_response_trust" in metric_rows[0]
+    assert "tangent_response_trust_ratio" in metric_rows[0]
+    assert "tangent_response_post_mismatch_ratio" in metric_rows[0]
+    assert "tangent_response_correction_ratio" in metric_rows[0]
+    assert "tangent_source_response_energy" in metric_rows[0]
+    assert "tangent_post_line_search_stationarity_ratio" in metric_rows[0]
+    assert "loss_tangent_post_line_search_stationarity" not in metric_rows[0]
+
+    selected = np.load(outdir / "data" / "selected_raw_arrays.npz")
+    for suffix in (
+        "_tangent_source_response_phi",
+        "_tangent_source_response_psi",
+        "_tangent_source_response_energy_density",
+        "_tangent_response_correction",
+        "_tangent_source_response_energy",
+        "_tangent_response_post_mismatch_ratio",
+        "_tangent_response_correction_ratio",
+        "_tangent_response_trust_ratio",
+        "_tangent_stationarity_ratio",
+    ):
+        assert any(key.endswith(suffix) for key in selected.files)
+    for field in (
+        "tangent_source_response_energy_density",
+        "tangent_response_correction",
+        "tangent_mismatch_post",
+    ):
+        assert field in summary["figure_fields"]
+        assert (
+            outdir / "figures" / field / f"sample_0000_sample_0000_{field}.json"
+        ).is_file()
+
+
 def test_local_weak_reliability_artifact_uses_weighted_official_prediction(
     tmp_path,
     monkeypatch,
