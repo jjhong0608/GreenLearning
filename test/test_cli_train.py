@@ -210,21 +210,29 @@ class TestTrainCLIConfigCopy:
         assert canonical_energy == {"boundary_weight": 0.0}
         assert boundary_off == baseline
 
-    def test_stationarity_pilot_has_closed_loop_objective_and_checkpoint(self):
+    def test_joint_tangent_pilot_has_fixed_auxiliary_weights_and_checkpoint(self):
         root = Path(__file__).resolve().parents[1]
-        stationarity = json.loads(
+        joint = json.loads(
             (
-                root / "configs/complex_coupling_soap_tangent_stationarity.json"
+                root
+                / "configs/complex_coupling_soap_tangent_response_trust_stationarity.json"
             ).read_text()
         )
 
-        loss_config = stationarity["coupling_training"]["post_line_search_stationarity"]
-        best_physics = stationarity["coupling_training"]["best_physics_checkpoint"]
-        projection = stationarity["coupling_model"]["balance_projection"]
+        loss_config = joint["coupling_training"]["post_line_search_stationarity"]
+        response_trust = joint["coupling_training"]["response_trust"]
+        best_physics = joint["coupling_training"]["best_physics_checkpoint"]
+        projection = joint["coupling_model"]["balance_projection"]
 
         assert loss_config == {
             "enabled": True,
-            "weight": 1.0e-2,
+            "weight": 1.0e-4,
+            "eps": 1.0e-12,
+        }
+        assert response_trust == {
+            "enabled": True,
+            "weight": 1.0e-3,
+            "trust_weight": 0.01,
             "eps": 1.0e-12,
         }
         assert best_physics == {"enabled": True}

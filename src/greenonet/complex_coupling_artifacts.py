@@ -1634,18 +1634,29 @@ class ComplexCouplingArtifactExporter(
                 ),
                 "weight": post_line_search_stationarity.weight,
                 "eps": (
-                    response_trust.eps
-                    if response_trust.enabled
-                    else post_line_search_stationarity.eps
+                    post_line_search_stationarity.eps
+                    if post_line_search_stationarity.enabled
+                    else response_trust.eps
                 ),
                 "objective": (
+                    "mean((g-eta_star*A*z)^T*D^-1*(g-eta_star*A*z)"
+                    "/(||H_x(f/2)||_M^2+||H_y(f/2)||_M^2+eps))"
+                ),
+                "legacy_ratio_diagnostic": (
                     "mean((g-eta_star*A*z)^T*D^-1*(g-eta_star*A*z)/(g^T*D^-1*g+eps))"
                 ),
+                "optimization_normalization": "source_response_energy",
+                "legacy_ratio_optimized": False,
                 "eta_source": "uncapped_eta_star",
                 "forward_eta_source": "capped_eta_applied",
                 "hessian_action": "A*z=(H_x+H_y)^T*M_Omega*(H_x+H_y)*z",
                 "matrix_free": True,
+                "extra_adjoint_actions_per_computed_batch": 1,
                 "extra_adjoint_actions_per_enabled_batch": 1,
+                "shared_source_response_forward_actions_per_computed_batch": 1,
+                "joint_response_trust_enabled": (
+                    post_line_search_stationarity.enabled and response_trust.enabled
+                ),
                 "global_response_matrix_materialized": False,
                 "full_gram_solve": False,
                 "uses_reference_targets": False,
@@ -1665,7 +1676,14 @@ class ComplexCouplingArtifactExporter(
                 "source_normalization": "H_x(f/2)^2+H_y(f/2)^2",
                 "stationarity_diagnostic_computed": response_trust.enabled,
                 "stationarity_diagnostic_eta_source": "uncapped_eta_star",
+                "joint_stationarity_optimized": (
+                    response_trust.enabled and post_line_search_stationarity.enabled
+                ),
+                "source_response_shared_with_stationarity": (
+                    response_trust.enabled and post_line_search_stationarity.enabled
+                ),
                 "matrix_free": True,
+                "shared_source_response_forward_actions_per_enabled_batch": 1,
                 "extra_forward_actions_per_enabled_batch": 1,
                 "extra_adjoint_actions_per_enabled_batch": 1,
                 "global_response_matrix_materialized": False,
@@ -2109,6 +2127,7 @@ class ComplexCouplingArtifactExporter(
                         )
                 stationarity = prediction.objective.post_line_search_stationarity
                 if stationarity is not None:
+                    source_response = stationarity.source_response[0]
                     arrays.update(
                         {
                             "tangent_hessian_direction": (
@@ -2121,16 +2140,45 @@ class ComplexCouplingArtifactExporter(
                                 .numpy()
                             ),
                             "tangent_stationarity_ratio": np.asarray(
+                                stationarity.relative_ratio_per_sample[0]
+                                .detach()
+                                .cpu()
+                                .item(),
+                                dtype=np.float64,
+                            ),
+                            "tangent_stationarity_source_normalized": np.asarray(
                                 stationarity.loss_per_sample[0].detach().cpu().item(),
                                 dtype=np.float64,
                             ),
-                        }
-                    )
-                response_trust = prediction.objective.response_trust
-                if response_trust is not None:
-                    source_response = response_trust.source_response[0]
-                    arrays.update(
-                        {
+                            "tangent_stationarity_initial_source_ratio": np.asarray(
+                                stationarity.initial_source_ratio_per_sample[0]
+                                .detach()
+                                .cpu()
+                                .item(),
+                                dtype=np.float64,
+                            ),
+                            "tangent_stationarity_initial_preconditioned_energy": (
+                                np.asarray(
+                                    stationarity.initial_preconditioned_energy_per_sample[
+                                        0
+                                    ]
+                                    .detach()
+                                    .cpu()
+                                    .item(),
+                                    dtype=np.float64,
+                                )
+                            ),
+                            "tangent_stationarity_residual_preconditioned_energy": (
+                                np.asarray(
+                                    stationarity.residual_preconditioned_energy_per_sample[
+                                        0
+                                    ]
+                                    .detach()
+                                    .cpu()
+                                    .item(),
+                                    dtype=np.float64,
+                                )
+                            ),
                             "tangent_source_response_phi": (
                                 source_response[0].detach().cpu().numpy()
                             ),
@@ -2144,18 +2192,24 @@ class ComplexCouplingArtifactExporter(
                                 .cpu()
                                 .numpy()
                             ),
+                            "tangent_source_response_energy": np.asarray(
+                                stationarity.source_response_energy_per_sample[0]
+                                .detach()
+                                .cpu()
+                                .item(),
+                                dtype=np.float64,
+                            ),
+                        }
+                    )
+                response_trust = prediction.objective.response_trust
+                if response_trust is not None:
+                    arrays.update(
+                        {
                             "tangent_response_correction": (
                                 response_trust.correction_response[0]
                                 .detach()
                                 .cpu()
                                 .numpy()
-                            ),
-                            "tangent_source_response_energy": np.asarray(
-                                response_trust.source_response_energy_per_sample[0]
-                                .detach()
-                                .cpu()
-                                .item(),
-                                dtype=np.float64,
                             ),
                             "tangent_response_post_mismatch_ratio": np.asarray(
                                 response_trust.post_mismatch_ratio_per_sample[0]

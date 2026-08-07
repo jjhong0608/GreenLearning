@@ -17,8 +17,10 @@ from greenonet.complex_tangent_projection import (
     NormalizedPostLineSearchStationarityResult,
     SymmetricTangentGreenResponseContext,
     TangentResponseTrustResult,
+    TangentSourceResponseNormalization,
     normalized_post_line_search_stationarity_loss,
     tangent_response_trust_loss,
+    tangent_source_response_normalization,
 )
 from greenonet.config import (
     BalanceProjectionConfig,
@@ -73,6 +75,15 @@ class ComplexProjectionResult:
     sigma_y: torch.Tensor
     column_diagonal_context: ColumnDiagonalGreenResponseContext | None
     symmetric_tangent_diagnostics: SymmetricTangentProjectionDiagnostics | None
+
+
+@dataclass(frozen=True)
+class TangentAuxiliaryLossResult:
+    """Joint tangent diagnostics sharing one source-response normalization."""
+
+    stationarity: NormalizedPostLineSearchStationarityResult | None
+    response_trust: TangentResponseTrustResult | None
+    source_normalization: TangentSourceResponseNormalization | None
 
 
 def apply_complex_balance_projection(
@@ -343,6 +354,7 @@ def post_line_search_stationarity_from_projection(
     projection: ComplexProjectionResult,
     context: SymmetricTangentGreenResponseContext | None,
     config: ComplexPostLineSearchStationarityConfig | dict[str, Any],
+    source_normalization: TangentSourceResponseNormalization | None = None,
 ) -> NormalizedPostLineSearchStationarityResult | None:
     """Compute optional stationarity diagnostics from uncapped tangent data."""
 
@@ -363,11 +375,18 @@ def post_line_search_stationarity_from_projection(
         raise RuntimeError(
             "Closed-loop tangent diagnostics are incomplete for stationarity loss."
         )
+    normalization = source_normalization
+    if normalization is None:
+        normalization = tangent_source_response_normalization(
+            context=context,
+            rhs_phys=projection.projected_physical.sum(dim=1),
+        )
     return normalized_post_line_search_stationarity_loss(
         context=context,
         gradient=tangent.gradient,
         response_direction=tangent.response_direction,
         eta_star=tangent.eta_star,
+        source_normalization=normalization,
         config=resolved,
     )
 
@@ -377,12 +396,14 @@ def post_line_search_stationarity_diagnostic_from_projection(
     projection: ComplexProjectionResult,
     context: SymmetricTangentGreenResponseContext | None,
     eps: float,
+    source_normalization: TangentSourceResponseNormalization | None = None,
 ) -> NormalizedPostLineSearchStationarityResult:
-    """Compute the existing stationarity ratio without optimizing it."""
+    """Compute source-normalized stationarity and the legacy ratio diagnostically."""
 
     result = post_line_search_stationarity_from_projection(
         projection=projection,
         context=context,
+        source_normalization=source_normalization,
         config=ComplexPostLineSearchStationarityConfig(
             enabled=True,
             weight=0.0,
@@ -400,6 +421,7 @@ def response_trust_from_projection(
     context: SymmetricTangentGreenResponseContext | None,
     rhs_phys: torch.Tensor,
     config: ComplexResponseTrustConfig | dict[str, Any],
+    source_normalization: TangentSourceResponseNormalization | None = None,
 ) -> TangentResponseTrustResult | None:
     """Compute response trust from the actual applied tangent projection."""
 
@@ -416,12 +438,75 @@ def response_trust_from_projection(
         raise RuntimeError(
             "Closed-loop tangent diagnostics are incomplete for response-trust."
         )
+    normalization = source_normalization
+    if normalization is None:
+        normalization = tangent_source_response_normalization(
+            context=context,
+            rhs_phys=rhs_phys,
+        )
     return tangent_response_trust_loss(
         context=context,
-        rhs_phys=rhs_phys,
         mismatch_pre=tangent.mismatch_pre,
         mismatch_post=tangent.mismatch_post,
+        source_normalization=normalization,
         config=resolved,
+    )
+
+
+def tangent_auxiliary_losses_from_projection(
+    *,
+    projection: ComplexProjectionResult,
+    context: SymmetricTangentGreenResponseContext | None,
+    rhs_phys: torch.Tensor,
+    stationarity_config: ComplexPostLineSearchStationarityConfig | dict[str, Any],
+    response_trust_config: ComplexResponseTrustConfig | dict[str, Any],
+) -> TangentAuxiliaryLossResult:
+    """Compute optional tangent losses with one shared Hx(f/2), Hy(f/2) pass."""
+
+    stationarity_resolved = ComplexPostLineSearchStationarityConfig.from_raw(
+        stationarity_config
+    )
+    response_trust_resolved = ComplexResponseTrustConfig.from_raw(response_trust_config)
+    if not stationarity_resolved.enabled and not response_trust_resolved.enabled:
+        return TangentAuxiliaryLossResult(
+            stationarity=None,
+            response_trust=None,
+            source_normalization=None,
+        )
+    if projection.mode != "symmetric_tangent_green_response" or context is None:
+        raise ValueError(
+            "Tangent auxiliary losses require symmetric tangent projection and its "
+            "cached Green-response context."
+        )
+    source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=rhs_phys,
+    )
+    response_trust = response_trust_from_projection(
+        projection=projection,
+        context=context,
+        rhs_phys=rhs_phys,
+        config=response_trust_resolved,
+        source_normalization=source_normalization,
+    )
+    if stationarity_resolved.enabled:
+        stationarity = post_line_search_stationarity_from_projection(
+            projection=projection,
+            context=context,
+            config=stationarity_resolved,
+            source_normalization=source_normalization,
+        )
+    else:
+        stationarity = post_line_search_stationarity_diagnostic_from_projection(
+            projection=projection,
+            context=context,
+            eps=response_trust_resolved.eps,
+            source_normalization=source_normalization,
+        )
+    return TangentAuxiliaryLossResult(
+        stationarity=stationarity,
+        response_trust=response_trust,
+        source_normalization=source_normalization,
     )
 
 

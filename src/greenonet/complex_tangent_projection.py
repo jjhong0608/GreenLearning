@@ -91,14 +91,30 @@ class SymmetricTangentStepResult:
 
 @dataclass(frozen=True)
 class NormalizedPostLineSearchStationarityResult:
-    """Full stationarity residual after the uncapped scalar line search."""
+    """Source-normalized stationarity after the uncapped scalar line search."""
 
     loss: torch.Tensor
     loss_per_sample: torch.Tensor
+    relative_ratio: torch.Tensor
+    relative_ratio_per_sample: torch.Tensor
+    initial_source_ratio: torch.Tensor
+    initial_source_ratio_per_sample: torch.Tensor
     hessian_direction: torch.Tensor
     stationarity_residual: torch.Tensor
     initial_preconditioned_energy_per_sample: torch.Tensor
     residual_preconditioned_energy_per_sample: torch.Tensor
+    source_response_energy: torch.Tensor
+    source_response_energy_per_sample: torch.Tensor
+    source_response: torch.Tensor
+
+
+@dataclass(frozen=True)
+class TangentSourceResponseNormalization:
+    """Shared Hx(f/2), Hy(f/2) response and its per-sample energy."""
+
+    source_response: torch.Tensor
+    energy: torch.Tensor
+    energy_per_sample: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -320,9 +336,10 @@ def normalized_post_line_search_stationarity_loss(
     gradient: torch.Tensor,
     response_direction: torch.Tensor,
     eta_star: torch.Tensor,
+    source_normalization: TangentSourceResponseNormalization,
     config: (ComplexPostLineSearchStationarityConfig | dict[str, object]),
 ) -> NormalizedPostLineSearchStationarityResult:
-    """Measure full stationarity after the uncapped line-optimal tangent step."""
+    """Measure source-normalized stationarity after the uncapped tangent step."""
 
     resolved = ComplexPostLineSearchStationarityConfig.from_raw(config)
     if not resolved.enabled:
@@ -340,6 +357,11 @@ def normalized_post_line_search_stationarity_loss(
         raise ValueError("eta_star must share dtype and device with gradient.")
     if not torch.all(torch.isfinite(eta_star)) or torch.any(eta_star < 0.0):
         raise ValueError("eta_star must be finite and non-negative.")
+    _validate_source_normalization(
+        context=context,
+        reference=gradient,
+        source_normalization=source_normalization,
+    )
 
     # A z = S^T M S z uses one cached segment-local adjoint action.
     hessian_direction = context.tangent_gradient(response_direction)
@@ -347,25 +369,68 @@ def normalized_post_line_search_stationarity_loss(
     inverse_denominator = context.denominator.reciprocal().unsqueeze(0)
     initial_energy = (gradient.square() * inverse_denominator).sum(dim=1)
     residual_energy = (stationarity_residual.square() * inverse_denominator).sum(dim=1)
-    loss_per_sample = residual_energy / (initial_energy + float(resolved.eps))
-    if not torch.all(torch.isfinite(loss_per_sample)):
+    source_denominator = source_normalization.energy_per_sample + float(resolved.eps)
+    loss_per_sample = residual_energy / source_denominator
+    relative_ratio_per_sample = residual_energy / (initial_energy + float(resolved.eps))
+    initial_source_ratio_per_sample = initial_energy / source_denominator
+    outputs = (
+        loss_per_sample,
+        relative_ratio_per_sample,
+        initial_source_ratio_per_sample,
+    )
+    if any(not torch.all(torch.isfinite(value)) for value in outputs):
         raise ValueError("Post-line-search stationarity loss is non-finite.")
     return NormalizedPostLineSearchStationarityResult(
         loss=loss_per_sample.mean(),
         loss_per_sample=loss_per_sample,
+        relative_ratio=relative_ratio_per_sample.mean(),
+        relative_ratio_per_sample=relative_ratio_per_sample,
+        initial_source_ratio=initial_source_ratio_per_sample.mean(),
+        initial_source_ratio_per_sample=initial_source_ratio_per_sample,
         hessian_direction=hessian_direction,
         stationarity_residual=stationarity_residual,
         initial_preconditioned_energy_per_sample=initial_energy,
         residual_preconditioned_energy_per_sample=residual_energy,
+        source_response_energy=source_normalization.energy,
+        source_response_energy_per_sample=source_normalization.energy_per_sample,
+        source_response=source_normalization.source_response,
+    )
+
+
+def tangent_source_response_normalization(
+    *,
+    context: SymmetricTangentGreenResponseContext,
+    rhs_phys: torch.Tensor,
+) -> TangentSourceResponseNormalization:
+    """Evaluate the shared source-response denominator exactly once per batch."""
+
+    context.validate_for(rhs_phys)
+    if rhs_phys.dim() != 2:
+        raise ValueError("rhs_phys must have shape (B, P).")
+    half_rhs = 0.5 * rhs_phys
+    source_response = context.response_operator.forward_pair(
+        torch.stack((half_rhs, half_rhs), dim=1)
+    )
+    energy_per_sample = context.point_mass * source_response.square().sum(dim=(1, 2))
+    if not torch.all(torch.isfinite(source_response)) or not torch.all(
+        torch.isfinite(energy_per_sample)
+    ):
+        raise ValueError("Tangent source response contains non-finite values.")
+    if torch.any(energy_per_sample < 0.0):
+        raise ValueError("Tangent source-response energy must be non-negative.")
+    return TangentSourceResponseNormalization(
+        source_response=source_response,
+        energy=energy_per_sample.mean(),
+        energy_per_sample=energy_per_sample,
     )
 
 
 def tangent_response_trust_loss(
     *,
     context: SymmetricTangentGreenResponseContext,
-    rhs_phys: torch.Tensor,
     mismatch_pre: torch.Tensor,
     mismatch_post: torch.Tensor,
+    source_normalization: TangentSourceResponseNormalization,
     config: ComplexResponseTrustConfig | dict[str, object],
 ) -> TangentResponseTrustResult:
     """Measure the actual capped response mismatch and correction magnitude."""
@@ -373,22 +438,18 @@ def tangent_response_trust_loss(
     resolved = ComplexResponseTrustConfig.from_raw(config)
     if not resolved.enabled:
         raise ValueError("Response-trust must be enabled before computing its loss.")
-    context.validate_for(rhs_phys)
     context.validate_for(mismatch_pre)
     context.validate_for(mismatch_post)
-    if rhs_phys.dim() != 2:
-        raise ValueError("rhs_phys must have shape (B, P).")
-    if mismatch_pre.shape != rhs_phys.shape or mismatch_post.shape != rhs_phys.shape:
-        raise ValueError(
-            "rhs_phys, mismatch_pre, and mismatch_post must share shape (B, P)."
-        )
-
-    half_rhs = 0.5 * rhs_phys
-    source_response = context.response_operator.forward_pair(
-        torch.stack((half_rhs, half_rhs), dim=1)
+    if mismatch_pre.shape != mismatch_post.shape:
+        raise ValueError("mismatch_pre and mismatch_post must share shape (B, P).")
+    _validate_source_normalization(
+        context=context,
+        reference=mismatch_pre,
+        source_normalization=source_normalization,
     )
+
     correction_response = mismatch_post - mismatch_pre
-    source_energy = context.point_mass * source_response.square().sum(dim=(1, 2))
+    source_energy = source_normalization.energy_per_sample
     post_energy = context.point_mass * mismatch_post.square().sum(dim=1)
     correction_energy = context.point_mass * correction_response.square().sum(dim=1)
     denominator = source_energy + float(resolved.eps)
@@ -396,7 +457,7 @@ def tangent_response_trust_loss(
     correction_ratio = correction_energy / denominator
     loss_per_sample = post_ratio + float(resolved.trust_weight) * correction_ratio
     tensors = (
-        source_response,
+        source_normalization.source_response,
         correction_response,
         source_energy,
         post_energy,
@@ -414,14 +475,44 @@ def tangent_response_trust_loss(
         post_mismatch_ratio_per_sample=post_ratio,
         correction_ratio=correction_ratio.mean(),
         correction_ratio_per_sample=correction_ratio,
-        source_response_energy=source_energy.mean(),
+        source_response_energy=source_normalization.energy,
         source_response_energy_per_sample=source_energy,
         post_mismatch_energy_per_sample=post_energy,
         correction_energy_per_sample=correction_energy,
-        source_response=source_response,
+        source_response=source_normalization.source_response,
         correction_response=correction_response,
         trust_weight=float(resolved.trust_weight),
     )
+
+
+def _validate_source_normalization(
+    *,
+    context: SymmetricTangentGreenResponseContext,
+    reference: torch.Tensor,
+    source_normalization: TangentSourceResponseNormalization,
+) -> None:
+    expected_response_shape = (reference.shape[0], 2, context.num_points)
+    if source_normalization.source_response.shape != expected_response_shape:
+        raise ValueError(
+            "source_response must have shape "
+            f"{expected_response_shape}, got "
+            f"{tuple(source_normalization.source_response.shape)}."
+        )
+    if source_normalization.energy_per_sample.shape != (reference.shape[0],):
+        raise ValueError("source-response energy must have shape (B,).")
+    tensors = (
+        source_normalization.source_response,
+        source_normalization.energy,
+        source_normalization.energy_per_sample,
+    )
+    if any(value.dtype != reference.dtype for value in tensors):
+        raise ValueError("source normalization must share dtype with the batch.")
+    if any(value.device != reference.device for value in tensors):
+        raise ValueError("source normalization must share device with the batch.")
+    if any(not torch.all(torch.isfinite(value)) for value in tensors):
+        raise ValueError("source normalization contains non-finite values.")
+    if torch.any(source_normalization.energy_per_sample < 0.0):
+        raise ValueError("source-response energy must be non-negative.")
 
 
 class SymmetricTangentGreenResponseContextBuilder:

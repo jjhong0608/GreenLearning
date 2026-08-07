@@ -1611,7 +1611,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         )
 
 
-def test_response_trust_artifact_records_formula_metrics_raw_fields_and_figures(
+def test_joint_response_trust_stationarity_artifact_records_shared_provenance(
     tmp_path,
     monkeypatch,
 ):
@@ -1684,6 +1684,11 @@ def test_response_trust_artifact_records_formula_metrics_raw_fields_and_figures(
         "trust_weight": 0.01,
         "eps": 2.0e-12,
     }
+    config_payload["coupling_training"]["post_line_search_stationarity"] = {
+        "enabled": True,
+        "weight": 1.0e-4,
+        "eps": 3.0e-12,
+    }
     config_path.write_text(json.dumps(config_payload))
     outdir = tmp_path / "artifacts"
 
@@ -1706,16 +1711,30 @@ def test_response_trust_artifact_records_formula_metrics_raw_fields_and_figures(
     assert response_summary["eps"] == pytest.approx(2.0e-12)
     assert response_summary["eta_source"] == "capped_eta_applied"
     assert response_summary["stationarity_diagnostic_computed"] is True
+    assert response_summary["joint_stationarity_optimized"] is True
+    assert response_summary["source_response_shared_with_stationarity"] is True
     assert response_summary["extra_forward_actions_per_enabled_batch"] == 1
     assert response_summary["extra_adjoint_actions_per_enabled_batch"] == 1
     assert response_summary["global_response_matrix_materialized"] is False
     assert response_summary["full_gram_solve"] is False
     assert response_summary["uses_reference_targets"] is False
     stationarity_summary = summary["post_line_search_stationarity"]
-    assert stationarity_summary["enabled"] is False
-    assert stationarity_summary["optimized"] is False
+    assert stationarity_summary["enabled"] is True
+    assert stationarity_summary["optimized"] is True
     assert stationarity_summary["diagnostic_computed"] is True
-    assert stationarity_summary["eps"] == pytest.approx(2.0e-12)
+    assert stationarity_summary["weight"] == pytest.approx(1.0e-4)
+    assert stationarity_summary["eps"] == pytest.approx(3.0e-12)
+    assert stationarity_summary["optimization_normalization"] == (
+        "source_response_energy"
+    )
+    assert stationarity_summary["legacy_ratio_optimized"] is False
+    assert stationarity_summary["joint_response_trust_enabled"] is True
+    assert (
+        stationarity_summary[
+            "shared_source_response_forward_actions_per_computed_batch"
+        ]
+        == 1
+    )
 
     metric_rows = list(
         csv.DictReader((outdir / "metrics" / "per_sample_metrics.csv").open())
@@ -1725,8 +1744,10 @@ def test_response_trust_artifact_records_formula_metrics_raw_fields_and_figures(
     assert "tangent_response_post_mismatch_ratio" in metric_rows[0]
     assert "tangent_response_correction_ratio" in metric_rows[0]
     assert "tangent_source_response_energy" in metric_rows[0]
+    assert "tangent_post_line_search_stationarity_source_normalized" in metric_rows[0]
     assert "tangent_post_line_search_stationarity_ratio" in metric_rows[0]
-    assert "loss_tangent_post_line_search_stationarity" not in metric_rows[0]
+    assert "tangent_stationarity_initial_source_ratio" in metric_rows[0]
+    assert "loss_tangent_post_line_search_stationarity" in metric_rows[0]
 
     selected = np.load(outdir / "data" / "selected_raw_arrays.npz")
     for suffix in (
@@ -1739,6 +1760,10 @@ def test_response_trust_artifact_records_formula_metrics_raw_fields_and_figures(
         "_tangent_response_correction_ratio",
         "_tangent_response_trust_ratio",
         "_tangent_stationarity_ratio",
+        "_tangent_stationarity_source_normalized",
+        "_tangent_stationarity_initial_source_ratio",
+        "_tangent_stationarity_initial_preconditioned_energy",
+        "_tangent_stationarity_residual_preconditioned_energy",
     ):
         assert any(key.endswith(suffix) for key in selected.files)
     for field in (

@@ -261,7 +261,10 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   사용한다. `S=H_x+H_y`, `A=S^T*M_Omega*S`, `g=S^T*M_Omega*m0`, `z=D^-1*g`일 때
   scalar exact line search 이후의 full residual을
   `r_stat=g-eta_star*A*z`로 정의하고, sample별
-  `(r_stat^T*D^-1*r_stat)/(g^T*D^-1*g+eps)`를 정규화 loss로 사용한다. Loss는
+  `(r_stat^T*D^-1*r_stat)/(E_f+eps)`를 optimized loss로 사용한다. 여기서
+  `E_f=||H_x(f/2)||_M^2+||H_y(f/2)||_M^2`이다. 기존
+  `(r_stat^T*D^-1*r_stat)/(g^T*D^-1*g+eps)`는 수치를 바꾸지 않고
+  `tangent_post_line_search_stationarity_ratio` diagnostic으로만 유지한다. Loss는
   tangent line 자체를 평가하기 위해 uncapped `eta_star`를 사용하지만 forward
   correction은 기존 capped `eta_applied`를 유지한다. `A*z`는 cached segment-local
   operator에 `tangent_gradient(Sz)`를 한 번 더 적용해 계산하며 global matrix와 solve는
@@ -276,12 +279,14 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `||m_post||_M^2/(E_f+eps) + mu*||(H_x+H_y)delta||_M^2/(E_f+eps)`를 사용하며
   기본 `mu=0.01`이다. Correction response는 `m_post-m_pre`를 재사용하고 source
   normalization만 cached matrix-free operator의 `forward_pair` 한 번으로 계산한다.
-  이 loss는 existing stationarity loss와 상호 배타적이지만, response-trust가
-  enabled이면 uncapped stationarity ratio를 diagnostic으로 계속 계산한다.
-  따라서 weighted stationarity loss key는 없고 `loss_tangent_response_trust`,
-  unweighted response-trust component, source-response energy와 stationarity ratio를
-  함께 기록한다. Reference `sol/phi/psi`, global response matrix와 solve는 사용하지
-  않으며 model/checkpoint tensor contract는 변하지 않는다.
+  이 loss와 source-normalized stationarity는 독립적으로 활성화할 수 있다. 둘이
+  동시에 enabled이면 `H_x(f/2),H_y(f/2)`와 `E_f`를 한 번 계산해 공유하고,
+  total objective에는 각 fixed weight가 곱해진 두 항을 모두 더한다. Response-trust는
+  capped `eta_applied`, stationarity는 uncapped `eta_star`를 계속 사용한다.
+  Reference `sol/phi/psi`, global response matrix와 solve는 사용하지 않으며
+  model/checkpoint tensor contract는 변하지 않는다. Combined Pentagram pilot은
+  `configs/complex_coupling_soap_tangent_response_trust_stationarity.json`이며
+  response-trust `weight=1e-3`, stationarity `weight=1e-4`, `trust_weight=0.01`이다.
 - Frozen symmetric-tangent audit CLI도 `--closed-loop` opt-in으로 production과
   같은 sample-wise exact-line-search helper를 재사용한다. Post-hoc evaluation은
   warmup schedule 없이 final cap을 적용하며, 같은 checkpoint raw output에서
@@ -467,10 +472,11 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Nodal residual은 lumped directional mass와 physical source energy로 normalize한다.
   이는 reference-free variational closure이며 sparse matrix dependency 없이
   element gather/scatter로 구현한다.
-- Complex total objective는 selected split objective에 enabled weak closure를
-  더한다. Relative split이 꺼져 있으면 `loss_energy_optimized`가 split
-  objective다. Reported optimized energy, unweighted canonical, bulk, boundary
-  x/y, relative split, weak x/y/total metric은 실제 objective와 audit contribution을
+- Complex total objective는 selected split objective에 enabled weak closure,
+  response-trust, source-normalized post-line-search stationarity를 각각 fixed weight로
+  더한다. Relative split이 꺼져 있으면 `loss_energy_optimized`가 split objective다.
+  Reported optimized energy, unweighted canonical, bulk, boundary x/y, relative split,
+  weak x/y/total 및 tangent auxiliary metric은 실제 objective와 audit contribution을
   구분해 기록한다. Transition-specific training metric은 생성하지 않는다.
   Raw-balance gauge penalty는 이번 contract에서 구현하지 않으며 후속 현상이 남을
   때만 재검토한다.

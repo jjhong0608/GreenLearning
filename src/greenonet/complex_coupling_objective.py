@@ -91,13 +91,26 @@ class ComplexCouplingObjectiveResult:
                 }
             )
         if self.post_line_search_stationarity is not None:
-            metrics["tangent_post_line_search_stationarity_ratio"] = (
-                self.post_line_search_stationarity.loss
+            stationarity = self.post_line_search_stationarity
+            metrics.update(
+                {
+                    "tangent_post_line_search_stationarity_source_normalized": (
+                        stationarity.loss
+                    ),
+                    "tangent_post_line_search_stationarity_ratio": (
+                        stationarity.relative_ratio
+                    ),
+                    "tangent_stationarity_initial_source_ratio": (
+                        stationarity.initial_source_ratio
+                    ),
+                    "tangent_source_response_energy": (
+                        stationarity.source_response_energy
+                    ),
+                }
             )
             if self.post_line_search_stationarity_optimized:
                 metrics["loss_tangent_post_line_search_stationarity"] = (
-                    self.post_line_search_stationarity_weight
-                    * self.post_line_search_stationarity.loss
+                    self.post_line_search_stationarity_weight * stationarity.loss
                 )
         if self.response_trust is not None:
             metrics.update(
@@ -111,9 +124,6 @@ class ComplexCouplingObjectiveResult:
                     ),
                     "tangent_response_correction_ratio": (
                         self.response_trust.correction_ratio
-                    ),
-                    "tangent_source_response_energy": (
-                        self.response_trust.source_response_energy
                     ),
                 }
             )
@@ -165,11 +175,27 @@ class ComplexCouplingObjectiveResult:
                 }
             )
         if self.post_line_search_stationarity is not None:
-            ratio = self.post_line_search_stationarity.loss_per_sample[sample_offset]
-            metrics["tangent_post_line_search_stationarity_ratio"] = ratio
+            stationarity = self.post_line_search_stationarity
+            source_normalized = stationarity.loss_per_sample[sample_offset]
+            metrics.update(
+                {
+                    "tangent_post_line_search_stationarity_source_normalized": (
+                        source_normalized
+                    ),
+                    "tangent_post_line_search_stationarity_ratio": (
+                        stationarity.relative_ratio_per_sample[sample_offset]
+                    ),
+                    "tangent_stationarity_initial_source_ratio": (
+                        stationarity.initial_source_ratio_per_sample[sample_offset]
+                    ),
+                    "tangent_source_response_energy": (
+                        stationarity.source_response_energy_per_sample[sample_offset]
+                    ),
+                }
+            )
             if self.post_line_search_stationarity_optimized:
                 metrics["loss_tangent_post_line_search_stationarity"] = (
-                    self.post_line_search_stationarity_weight * ratio
+                    self.post_line_search_stationarity_weight * source_normalized
                 )
         if self.response_trust is not None:
             response = self.response_trust
@@ -183,9 +209,6 @@ class ComplexCouplingObjectiveResult:
                     ),
                     "tangent_response_correction_ratio": (
                         response.correction_ratio_per_sample[sample_offset]
-                    ),
-                    "tangent_source_response_energy": (
-                        response.source_response_energy_per_sample[sample_offset]
                     ),
                 }
             )

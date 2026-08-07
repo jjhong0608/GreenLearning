@@ -1757,14 +1757,6 @@ def validate_complex_response_trust_config(
     response_trust = ComplexResponseTrustConfig.from_raw(training.response_trust)
     if not response_trust.enabled:
         return response_trust
-    stationarity = ComplexPostLineSearchStationarityConfig.from_raw(
-        training.post_line_search_stationarity
-    )
-    if stationarity.enabled:
-        raise ValueError(
-            "coupling_training.response_trust and "
-            "coupling_training.post_line_search_stationarity are mutually exclusive."
-        )
     projection = BalanceProjectionConfig.from_raw(balance_projection)
     if not projection.enabled or projection.mode != "symmetric_tangent_green_response":
         raise ValueError(

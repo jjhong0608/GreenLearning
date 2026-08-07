@@ -16,12 +16,14 @@ from greenonet.complex_projection import (
     post_line_search_stationarity_from_projection,
     reconstruct_complex_projection,
     symmetric_tangent_metric_tensors,
+    tangent_auxiliary_losses_from_projection,
 )
 from greenonet.complex_tangent_projection import (
-    normalized_post_line_search_stationarity_loss,
-    tangent_response_trust_loss,
     SymmetricTangentEtaCapSchedule,
     SymmetricTangentGreenResponseContext,
+    normalized_post_line_search_stationarity_loss,
+    tangent_response_trust_loss,
+    tangent_source_response_normalization,
 )
 from greenonet.config import (
     BalanceProjectionConfig,
@@ -506,11 +508,16 @@ def test_normalized_stationarity_is_zero_when_tangent_line_reaches_minimizer(
         raise AssertionError("Stationarity loss must not solve a matrix.")
 
     monkeypatch.setattr(torch.linalg, "solve", fail_solve)
+    source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=torch.ones_like(mismatch),
+    )
     result = normalized_post_line_search_stationarity_loss(
         context=context,
         gradient=gradient,
         response_direction=step.response_direction,
         eta_star=step.eta_star,
+        source_normalization=source_normalization,
         config=ComplexPostLineSearchStationarityConfig(enabled=True),
     )
 
@@ -535,11 +542,16 @@ def test_normalized_stationarity_detects_tangent_line_missing_full_minimizer():
     assert step.eta_star is not None
     assert step.response_direction is not None
 
+    source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=torch.ones_like(mismatch),
+    )
     result = normalized_post_line_search_stationarity_loss(
         context=context,
         gradient=gradient,
         response_direction=step.response_direction,
         eta_star=step.eta_star,
+        source_normalization=source_normalization,
         config={"enabled": True, "eps": 1.0e-12},
     )
 
@@ -548,7 +560,7 @@ def test_normalized_stationarity_detects_tangent_line_missing_full_minimizer():
     assert result.stationarity_residual.shape == gradient.shape
 
 
-def test_normalized_stationarity_uses_uncapped_eta_and_is_scale_invariant():
+def test_normalized_stationarity_uses_uncapped_eta_and_preserves_legacy_ratio():
     context = _context(
         eta=1.0,
         relative_lambda=0.1,
@@ -574,11 +586,16 @@ def test_normalized_stationarity_uses_uncapped_eta_and_is_scale_invariant():
     assert not torch.equal(capped.eta_applied, uncapped.eta_applied)
 
     config = ComplexPostLineSearchStationarityConfig(enabled=True, eps=1.0e-14)
+    source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=torch.ones_like(mismatch),
+    )
     capped_result = normalized_post_line_search_stationarity_loss(
         context=context,
         gradient=gradient,
         response_direction=capped.response_direction,
         eta_star=capped.eta_star,
+        source_normalization=source_normalization,
         config=config,
     )
     uncapped_result = normalized_post_line_search_stationarity_loss(
@@ -586,6 +603,7 @@ def test_normalized_stationarity_uses_uncapped_eta_and_is_scale_invariant():
         gradient=gradient,
         response_direction=uncapped.response_direction,
         eta_star=uncapped.eta_star,
+        source_normalization=source_normalization,
         config=config,
     )
     scaled_result = normalized_post_line_search_stationarity_loss(
@@ -593,11 +611,37 @@ def test_normalized_stationarity_uses_uncapped_eta_and_is_scale_invariant():
         gradient=7.0 * gradient,
         response_direction=7.0 * capped.response_direction,
         eta_star=capped.eta_star,
+        source_normalization=source_normalization,
+        config=config,
+    )
+    scaled_source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=7.0 * torch.ones_like(mismatch),
+    )
+    jointly_scaled_result = normalized_post_line_search_stationarity_loss(
+        context=context,
+        gradient=7.0 * gradient,
+        response_direction=7.0 * capped.response_direction,
+        eta_star=capped.eta_star,
+        source_normalization=scaled_source_normalization,
         config=config,
     )
 
     torch.testing.assert_close(capped_result.loss, uncapped_result.loss)
-    torch.testing.assert_close(capped_result.loss, scaled_result.loss)
+    torch.testing.assert_close(scaled_result.loss, 49.0 * capped_result.loss)
+    torch.testing.assert_close(
+        scaled_result.relative_ratio,
+        capped_result.relative_ratio,
+    )
+    torch.testing.assert_close(
+        scaled_result.initial_source_ratio,
+        49.0 * capped_result.initial_source_ratio,
+    )
+    torch.testing.assert_close(jointly_scaled_result.loss, capped_result.loss)
+    torch.testing.assert_close(
+        jointly_scaled_result.relative_ratio,
+        capped_result.relative_ratio,
+    )
 
 
 def test_normalized_stationarity_zero_gradient_is_finite_and_differentiable():
@@ -612,12 +656,17 @@ def test_normalized_stationarity_zero_gradient_is_finite_and_differentiable():
     )
     response_direction = torch.zeros_like(gradient)
     eta_star = torch.zeros(2, dtype=torch.float64)
+    source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=torch.zeros_like(gradient),
+    )
 
     result = normalized_post_line_search_stationarity_loss(
         context=context,
         gradient=gradient,
         response_direction=response_direction,
         eta_star=eta_star,
+        source_normalization=source_normalization,
         config={"enabled": True, "eps": 1.0e-12},
     )
 
@@ -649,12 +698,16 @@ def test_response_trust_matches_source_normalized_capped_response_formula():
         requires_grad=True,
     )
     trust_weight = 0.025
+    source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=rhs,
+    )
 
     result = tangent_response_trust_loss(
         context=context,
-        rhs_phys=rhs,
         mismatch_pre=mismatch_pre,
         mismatch_post=mismatch_post,
+        source_normalization=source_normalization,
         config=ComplexResponseTrustConfig(
             enabled=True,
             trust_weight=trust_weight,
@@ -708,26 +761,34 @@ def test_response_trust_is_absolute_in_response_scale_and_zero_safe():
     mismatch_pre = torch.tensor([[0.8, -0.3, 0.4]], dtype=torch.float64)
     mismatch_post = torch.tensor([[0.2, -0.1, 0.3]], dtype=torch.float64)
     config = ComplexResponseTrustConfig(enabled=True, trust_weight=0.01)
+    source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=rhs,
+    )
 
     baseline = tangent_response_trust_loss(
         context=context,
-        rhs_phys=rhs,
         mismatch_pre=mismatch_pre,
         mismatch_post=mismatch_post,
+        source_normalization=source_normalization,
         config=config,
     )
     scaled = tangent_response_trust_loss(
         context=context,
-        rhs_phys=rhs,
         mismatch_pre=7.0 * mismatch_pre,
         mismatch_post=7.0 * mismatch_post,
+        source_normalization=source_normalization,
         config=config,
+    )
+    zero_source_normalization = tangent_source_response_normalization(
+        context=context,
+        rhs_phys=torch.zeros_like(rhs),
     )
     zero = tangent_response_trust_loss(
         context=context,
-        rhs_phys=torch.zeros_like(rhs),
         mismatch_pre=torch.zeros_like(mismatch_pre),
         mismatch_post=torch.zeros_like(mismatch_post),
+        source_normalization=zero_source_normalization,
         config=config,
     )
 
@@ -790,3 +851,96 @@ def test_stationarity_bridge_adds_one_adjoint_only_when_enabled(tmp_path, monkey
     )
     assert enabled is not None
     assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("stationarity_enabled", "response_trust_enabled", "expected_calls"),
+    (
+        (True, False, 1),
+        (False, True, 1),
+        (True, True, 1),
+        (False, False, 0),
+    ),
+)
+def test_tangent_auxiliary_losses_share_source_forward_and_stationarity_adjoint(
+    tmp_path,
+    monkeypatch,
+    stationarity_enabled,
+    response_trust_enabled,
+    expected_calls,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    context = _context(
+        eta=1.0,
+        eta_strategy="closed_loop_exact_line_search",
+    )
+    raw_physical = torch.tensor(
+        [[[0.2, -0.4, 0.8], [0.7, 0.1, -0.3]]],
+        dtype=torch.float64,
+    )
+    rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
+    projection = apply_complex_balance_projection(
+        _raw_response(geometry, raw_physical),
+        rhs,
+        geometry,
+        BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={
+                "eta": 1.0,
+                "eta_strategy": "closed_loop_exact_line_search",
+            },
+        ),
+        symmetric_tangent_context=context,
+    )
+
+    forward_calls = 0
+    adjoint_calls = 0
+    original_forward = FrozenBidirectionalResponseOperator.forward_pair
+    original_adjoint = FrozenBidirectionalResponseOperator.tangent_gradient
+
+    def counted_forward(self, source_pair):
+        nonlocal forward_calls
+        forward_calls += 1
+        return original_forward(self, source_pair)
+
+    def counted_adjoint(self, mismatch, *, point_mass):
+        nonlocal adjoint_calls
+        adjoint_calls += 1
+        return original_adjoint(self, mismatch, point_mass=point_mass)
+
+    monkeypatch.setattr(
+        FrozenBidirectionalResponseOperator,
+        "forward_pair",
+        counted_forward,
+    )
+    monkeypatch.setattr(
+        FrozenBidirectionalResponseOperator,
+        "tangent_gradient",
+        counted_adjoint,
+    )
+
+    result = tangent_auxiliary_losses_from_projection(
+        projection=projection,
+        context=context,
+        rhs_phys=rhs,
+        stationarity_config={
+            "enabled": stationarity_enabled,
+            "weight": 1.0e-4,
+        },
+        response_trust_config={
+            "enabled": response_trust_enabled,
+            "weight": 1.0e-3,
+        },
+    )
+
+    auxiliary_enabled = stationarity_enabled or response_trust_enabled
+    assert (result.stationarity is not None) is auxiliary_enabled
+    assert (result.response_trust is not None) is response_trust_enabled
+    assert (result.source_normalization is not None) is auxiliary_enabled
+    assert forward_calls == expected_calls
+    assert adjoint_calls == expected_calls
+    if result.stationarity is not None and result.response_trust is not None:
+        assert (
+            result.stationarity.source_response.data_ptr()
+            == result.response_trust.source_response.data_ptr()
+        )

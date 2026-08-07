@@ -1164,7 +1164,15 @@ def test_complex_stationarity_objective_uses_uncapped_eta_and_reference_free_tar
     )
     torch.testing.assert_close(
         result.metrics["tangent_post_line_search_stationarity_ratio"],
+        stationarity.relative_ratio.detach(),
+    )
+    torch.testing.assert_close(
+        result.metrics["tangent_post_line_search_stationarity_source_normalized"],
         stationarity.loss.detach(),
+    )
+    torch.testing.assert_close(
+        result.metrics["tangent_stationarity_initial_source_ratio"],
+        stationarity.initial_source_ratio.detach(),
     )
 
     changed_targets = replace(
@@ -1208,7 +1216,7 @@ def test_complex_stationarity_objective_uses_uncapped_eta_and_reference_free_tar
     ).is_file()
 
 
-def test_complex_response_trust_uses_applied_response_and_keeps_stationarity_diagnostic(
+def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
     tmp_path,
 ):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
@@ -1241,11 +1249,17 @@ def test_complex_response_trust_uses_applied_response_and_keeps_stationarity_dia
         )
     )
     weight = 0.25
+    stationarity_weight = 0.125
     config = CouplingTrainingConfig(
         epochs=1,
         batch_size=1,
         device="cpu",
         compile=CompileConfig(enabled=False),
+        post_line_search_stationarity=ComplexPostLineSearchStationarityConfig(
+            enabled=True,
+            weight=stationarity_weight,
+            eps=1.0e-12,
+        ),
         response_trust=ComplexResponseTrustConfig(
             enabled=True,
             weight=weight,
@@ -1284,7 +1298,9 @@ def test_complex_response_trust_uses_applied_response_and_keeps_stationarity_dia
     )
     torch.testing.assert_close(
         result.loss,
-        result.objective.energy_optimized + weight * response.loss,
+        result.objective.energy_optimized
+        + weight * response.loss
+        + stationarity_weight * stationarity.loss,
     )
     torch.testing.assert_close(
         result.metrics["loss_tangent_response_trust"],
@@ -1295,7 +1311,10 @@ def test_complex_response_trust_uses_applied_response_and_keeps_stationarity_dia
         response.loss.detach(),
     )
     assert "tangent_post_line_search_stationarity_ratio" in result.metrics
-    assert "loss_tangent_post_line_search_stationarity" not in result.metrics
+    torch.testing.assert_close(
+        result.metrics["loss_tangent_post_line_search_stationarity"],
+        stationarity_weight * stationarity.loss.detach(),
+    )
     torch.testing.assert_close(
         result.projection.projected_physical[:, 0]
         + result.projection.projected_physical[:, 1],
@@ -1355,8 +1374,10 @@ def test_complex_response_trust_uses_applied_response_and_keeps_stationarity_dia
     assert "tangent_response_post_mismatch_ratio" in rows[0]
     assert "tangent_response_correction_ratio" in rows[0]
     assert "tangent_source_response_energy" in rows[0]
+    assert "tangent_post_line_search_stationarity_source_normalized" in rows[0]
     assert "tangent_post_line_search_stationarity_ratio" in rows[0]
-    assert "loss_tangent_post_line_search_stationarity" not in rows[0]
+    assert "tangent_stationarity_initial_source_ratio" in rows[0]
+    assert "loss_tangent_post_line_search_stationarity" in rows[0]
 
 
 def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(tmp_path):

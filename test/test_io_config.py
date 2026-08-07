@@ -305,7 +305,7 @@ def test_response_trust_rejects_invalid_values(field, value, error_type):
         ComplexResponseTrustConfig.from_raw({"unknown": 1})
 
 
-def test_response_trust_requires_closed_loop_tangent_and_excludes_stationarity():
+def test_response_trust_requires_closed_loop_tangent_and_allows_stationarity():
     valid_projection = BalanceProjectionConfig(
         mode="symmetric_tangent_green_response",
         symmetric_tangent_green_response={
@@ -334,14 +334,18 @@ def test_response_trust_requires_closed_loop_tangent_and_excludes_stationarity()
                 symmetric_tangent_green_response={"eta_strategy": "fixed"},
             ),
         )
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        validate_complex_response_trust_config(
-            training=CouplingTrainingConfig(
-                response_trust={"enabled": True},
-                post_line_search_stationarity={"enabled": True},
-            ),
-            balance_projection=valid_projection,
-        )
+    joint_training = CouplingTrainingConfig(
+        response_trust={"enabled": True},
+        post_line_search_stationarity={"enabled": True},
+    )
+    assert validate_complex_response_trust_config(
+        training=joint_training,
+        balance_projection=valid_projection,
+    ).enabled
+    assert validate_complex_post_line_search_stationarity_config(
+        training=joint_training,
+        balance_projection=valid_projection,
+    ).enabled
 
 
 def test_unit_square_rejects_enabled_response_trust():
