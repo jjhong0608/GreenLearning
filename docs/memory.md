@@ -286,7 +286,7 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Reference `sol/phi/psi`, global response matrix와 solve는 사용하지 않으며
   model/checkpoint tensor contract는 변하지 않는다. Combined Pentagram pilot은
   `configs/complex_coupling_soap_tangent_response_trust_stationarity.json`이며
-  response-trust `weight=1e-3`, stationarity `weight=1e-4`, `trust_weight=0.01`이다.
+  response-trust `weight=1e-3`, stationarity `weight=1e-4`, `trust_weight=0.1`이다.
 - Frozen symmetric-tangent audit CLI도 `--closed-loop` opt-in으로 production과
   같은 sample-wise exact-line-search helper를 재사용한다. Post-hoc evaluation은
   warmup schedule 없이 final cap을 적용하며, 같은 checkpoint raw output에서
@@ -2076,6 +2076,126 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   causal claim against a separately symmetric-trained baseline. The asset
   builder reads NPZ/CSV/JSON only, uses a shared zero-centered pre/post mismatch
   scale within each PDE, and records source SHA-256 provenance.
+- Pentagram `coupling4/5/6` are a one-seed response-objective comparison on the
+  same 4,800/300 indexed-GP sources and 100 full-reference test samples. Their
+  response-trust weights are `0.001/1.0/0.1`; only `coupling6` optimizes the new
+  source-normalized stationarity with weight `0.01`. At best-energy checkpoints,
+  mean `rel_sol` is `3.103%/3.281%/2.691%`, mean `rel_flux` is
+  `38.603%/46.873%/47.118%`, and source-normalized stationarity is
+  `2.9921e-2/2.3768e-2/8.7781e-3`. Thus `coupling6` improves solution error and
+  the intended post-line-search diagnostic but worsens directional-source
+  fidelity versus `coupling4`; `coupling5` shows that trust weight `1.0`
+  over-regularizes and its validation total rises `18.22%` after the best epoch.
+  The result is not a clean stationarity causal ablation because the trust
+  weight also changes, and `coupling4` used CUDA while `coupling5/6` used CPU.
+  The next controlled pair must hold `response_trust.weight=0.1`, device, seed,
+  initialization, and all other settings fixed while toggling stationarity.
+  Canonical evidence is under
+  `checkpoints/pentagram/coupling4_6_comparison/analysis_report.md`.
+- The canonical six-run Pentagram comparison uses each run's best-energy
+  checkpoint, the shared 100-sample CDR test set, and the production evaluator.
+  Recomputed `rel_sol/rel_flux` agree with stored artifacts within `3.1e-15`.
+  Mean `rel_sol` ranks `coupling6=2.691%`, `coupling2=2.796%`, energy-only
+  `coupling=2.909%`, `coupling4=3.103%`, `coupling3=3.206%`, and
+  `coupling5=3.281%`. Full-test directional solution metrics show a different
+  ordering: mean `rel_u_phi` is best for energy-only (`4.921%`), mean
+  `rel_u_psi` is best for `coupling2` (`4.845%`, with `coupling6=4.869%`), and
+  mean `rel_flux` is best for `coupling4` (`38.603%`). `coupling6` gives the
+  best final weak-reliability blend, p90/max `rel_sol`, and improves equal mean
+  on 100/100 samples, but its `rel_flux=47.118%` confirms that response-based
+  solution improvement does not identify the reference directional-source
+  split. `coupling3` old-stationarity weight `0.01` and `coupling5` trust weight
+  `1.0` over-regularize: their final validation total rises `24.02%` and
+  `18.22%` from the best epoch. Model initialization seed is absent from the
+  saved configs and training hardware differs, so setting effects remain
+  one-run observational evidence. Canonical evidence is under
+  `checkpoints/pentagram/coupling1_6_comparison/analysis_report.md`.
+- Pentagram `coupling7` differs from `coupling6` only in the saved inner
+  response-trust coefficient `trust_weight=0.1` versus `0.01`; the effective
+  correction-response coefficient therefore changes from `0.001` to `0.01`
+  while outer trust weight and source-normalized stationarity remain `0.1` and
+  `0.01`. On the common 100-sample best-energy protocol, this lowers correction
+  response ratio by `69.2%`, tangent-delta RMS by `35.2%`, and correction/symmetric
+  pair norm by `40.6%`, but changes mean
+  `rel_sol/rel_u_phi/rel_u_psi/rel_flux` from
+  `2.691%/5.142%/4.869%/47.118%` to
+  `2.706%/5.341%/5.152%/56.570%`. Split mismatch rises `8.00%` and flux is
+  worse on 99/100 paired samples. `coupling7` nevertheless has the best
+  seven-run `rel_sol` p90/max (`4.195%/9.012%`), so it trades mean directional
+  fidelity for final-solution tail robustness. Prefer `coupling6` as the current
+  mean-solution setting; do not increase inner trust above `0.1`. A next sweep
+  must first fix model initialization seed and compare `0.01/0.025/0.05/0.1`
+  across paired seeds. Canonical evidence is under
+  `checkpoints/pentagram/coupling1_7_comparison/analysis_report.md`.
+- Pentagram `coupling8` fixes outer response-trust weight at `0.1` and new
+  source-normalized stationarity weight at `0.01`, but sets inner correction
+  trust `tau=0`; `coupling6/7` use `tau=0.01/0.1`. This does not disable
+  response trust: post-response mismatch remains optimized, while only
+  `tau*||S delta||^2` disappears. On the shared 100-sample best-energy protocol,
+  `coupling8` has the lowest eight-run mean/median `rel_sol`
+  (`2.678%/2.114%`), mean `rel_u_psi=4.832%`, and split mismatch `7.886%`.
+  Versus `coupling6`, mean `rel_sol` improves only `0.46%` relative with a
+  paired interval crossing zero, while `rel_u_phi` and split mismatch improve
+  `2.32%` and `2.09%`. Correction response ratio and tangent-delta RMS rise
+  `33.6%` and `13.6%`; maximum `rel_sol` worsens `9.144% -> 10.317%`. Increasing
+  `tau` monotonically suppresses correction but weakens mismatch reduction;
+  `tau=0.1` also degrades directional metrics strongly. Treat `tau=0` as the
+  best current mean-field run, not a fixed default. The next experiment must
+  record model initialization seed and compare `tau=0/0.005/0.01` over at least
+  three paired seeds, including mean and tail solution errors plus correction
+  diagnostics. Canonical evidence is under
+  `checkpoints/pentagram/coupling1_8_comparison/analysis_report.md`.
+- Interpret the Pentagram inner-trust result as a role-separation result, not as
+  proof that a symmetric-balanced proposal can never approximate an ideal
+  directional source. The inner term penalizes `||S delta||^2`, which is only a
+  proxy for proposal quality because the ideal directional split is unavailable
+  to the reference-free objective. Current evidence supports letting the network
+  learn a balance-plane proposal and letting the differentiable tangent step
+  remove response mismatch. This is a functional separation, not a detached
+  optimization path: post-correction energy, mismatch, and stationarity must
+  still backpropagate through the tangent operation. A small inner trust may
+  remain useful as a tail-safety regularizer, but should not be treated as the
+  primary proposal target.
+- Full-Gram tangent correction과 operator learning을 구분한다. `S=H_x+H_y`,
+  `A=S^T M_Omega S`일 때 full solve는 sample별 normal equation
+  `A delta_b=-S^T M_Omega m_{0,b}`의 discrete least-squares minimizer를 구한다.
+  Fixed geometry/coefficient/GreenNet run에서는 `A`를 한 번 구성 및 factorize하고
+  서로 다른 sample RHS에 재사용할 수 있으므로 유한한 모든 sample correction은
+  계산 가능하다. 다만 이는 true directional target을 알아내는 것이 아니라 learned
+  Green-response mismatch를 최소화하는 solver-in-the-loop이며, `A`가 nonsingular이면
+  최종 split이 network proposal과 무관해질 수 있다. Production tangent는 이 비용과
+  역할 붕괴를 피하기 위해 fixed-rank matrix-free correction만 허용한다.
+- `symmetric_tangent_green_response.subspace_dimension`은 strict integer `1` 또는
+  `2`이며 기본값 `1`은 기존 K=1 수치와 artifact schema를 보존한다. Opt-in K=2는
+  current `z0=D^-1 g`를 보존하고
+  `A z0=S^T M_Omega S z0`로 만든 residual의 preconditioned direction `z1`을
+  추가한다. 구현은 response inner product에서 `z1`을 `z0`에 직교화한 뒤 두 개의
+  sample-wise scalar exact coefficient를 계산하므로 dense `2x2` solve도 필요 없다.
+  이 방식은 current `K=1` space를 포함하므로 uncapped objective는 악화되지 않고,
+  correction을 항상 `(delta,-delta)`로 적용해 balance를 보존한다. Global matrix,
+  reference target, 새 network는 필요하지 않는다. 두 번째 response direction이
+  퇴화하면 `c1=0`으로 K=1에 fallback한다. K=2에서는 shared schema의 `eta`를
+  사용하지 않으며 eta cap과 eta warmup schedule도 생성하거나 적용하지 않는다.
+  Trainer/evaluator/export/audit는 같은 production helper와 geometry별 cached response
+  context를 공유한다. Stationarity는 final `r_K2=S^T M_Omega m_K2`, response-trust는
+  final `m_K2`와 `m_K2-m0`를 사용하고 두 loss는 `H_x(f/2),H_y(f/2)` normalization을
+  공유한다. Paired experiment config는
+  `configs/complex_coupling_soap_tangent_k2_pentagram.json`이다.
+- Pentagram `coupling8` best-energy frozen checkpoint의 100-sample post-hoc audit에서
+  matrix-free unconstrained `K=2`는 production capped `K=1` 대비 mean response
+  mismatch `-33.028%`, optimized bulk energy `-16.246%`, `rel_sol -25.794%`,
+  `rel_u_phi -17.891%`, `rel_u_psi -22.385%`를 보였다. Response mismatch와 세
+  solution metric은 `100/100` sample에서 개선됐고, optimized energy는 `92/100`,
+  `rel_flux`는 `72/100`에서 개선됐다. Mean `rel_flux` 변화는 `-0.139%`에 그친
+  반면 correction/symmetric-pair norm은 `+13.211%`이므로, 이 방법은 target
+  directional source 복원보다 downstream response alignment를 직접 개선한다.
+  Production cap `eta=0.015`는 2개 sample에만 걸려 uncapped `K=1`과 거의 같았고,
+  개선은 cap 제거가 아니라 second direction에서 왔다. `rel_sol` p95/max는
+  `5.131%/10.317% -> 3.820%/6.411%`로 감소했다. 이는 frozen checkpoint에서
+  subspace 확장의 가치가 있다는 강한 진단이지만, 해당 checkpoint는 K=2로 학습된
+  것이 아니다. K=2 production path는 opt-in으로만 유지하고 default 변경 전
+  same-seed paired retraining이 필요하다. Canonical outputs은
+  `checkpoints/pentagram/coupling8/tangent_subspace_k1_k2_audit/`에 둔다.
 
 ## Verification Defaults
 

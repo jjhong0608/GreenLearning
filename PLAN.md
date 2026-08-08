@@ -1,261 +1,207 @@
-# Source-Normalized Stationarity + Response-Trust Joint Objective 구현 계획
+# Optional Matrix-Free \(K=2\) Tangent Subspace Integration Plan
 
 ## Summary
 
-기존 post-line-search stationarity loss의 목적은 유지하되, initial-gradient 기준의 scale-invariant ratio를 **source-response 기준의 absolute-relative residual**로 교체한다. 기존 ratio는 tangent-line alignment diagnostic으로 계속 기록하고, 새로운 source-normalized stationarity와 response-trust를 동시에 total objective에 포함할 수 있도록 현재의 상호 배타 제약을 제거한다.
+현재 `symmetric_tangent_green_response`는 symmetric-balanced directional source에서 시작해 Jacobi-preconditioned 한 방향 \(z_0=D^{-1}g_0\) 위에서 response mismatch를 최소화하는 \(K=1\) correction을 적용한다. 새 기능은 두 번째 preconditioned Krylov direction을 추가해 2차원 부분공간에서 mismatch를 최소화하는 **matrix-free \(K=2\)** 경로다. 이는 full response Gram matrix를 구성하거나 선형 시스템을 푸는 방법이 아니다. Krylov 방법이 점진적으로 확장된 부분공간에서 해를 개선한다는 일반 원칙과 일치한다. [Netlib Templates for the Solution of Linear Systems](https://www.netlib.org/templates/templates.html)
 
-기존 수식은
+Frozen-checkpoint audit에서는 \(K=2\)가 \(K=1\) 대비 평균 response mismatch를 약 33.0%, `rel_sol`을 약 25.8%, `rel_u_phi`를 약 17.9%, `rel_u_psi`를 약 22.4% 줄였다. 반면 correction norm은 약 13.2% 증가했고 일부 sample에서 canonical energy가 악화됐다. 따라서 \(K=2\)는 기본값이 아니라 명시적인 opt-in 실험으로 추가한다.
+
+결정 사항은 다음과 같다.
+
+- 기존 \(K=1\)을 `subspace_dimension=1` 기본값으로 그대로 보존한다.
+- \(K=2\)는 `subspace_dimension=2`로 활성화한다.
+- Frozen audit에서 검증한 무제약 \(c_0,c_1\) 수식을 그대로 production에 적용한다.
+- \(K=2\)에서는 기존 `eta` cap과 tangent eta warmup을 적용하지 않는다.
+- Stationarity와 response-trust는 최종 \(K=2\) residual/correction을 기준으로 일반화한다.
+- CouplingNet architecture, model parameter, checkpoint tensor key는 변경하지 않는다.
+
+## \(K=2\) 수식
+
+Symmetric-balanced source를
 
 \[
-S=H_x+H_y,\qquad
-A=S^\top M_\Omega S,\qquad
-g=S^\top M_\Omega m_{\mathrm{pre}},\qquad
-z=D^{-1}g,
+\widetilde\phi=\frac{f+p-q}{2},
+\qquad
+\widetilde\psi=\frac{f-p+q}{2}
+\]
+
+라고 둔다. 이때 항상 \(\widetilde\phi+\widetilde\psi=f\)이다. Directional response operator와 mismatch를
+
+\[
+S=H_x+H_y,
+\qquad
+m_0=H_x\widetilde\phi-H_y\widetilde\psi,
+\qquad
+g_0=S^\top M_\Omega m_0
+\]
+
+로 정의한다. \(D\)는 현재 cached column-diagonal Jacobi denominator다.
+
+첫 번째 방향은 현재 uncapped \(K=1\)과 동일하다.
+
+\[
+z_0=D^{-1}g_0,
+\qquad
+v_0=Sz_0,
+\qquad
+c_0=
+\frac{\max(\langle g_0,z_0\rangle,0)}
+{\langle v_0,v_0\rangle_{M_\Omega}+\varepsilon_0}.
+\]
+
+첫 correction 이후 gradient residual에서 두 번째 방향을 만든다.
+
+\[
+r_1=g_0-c_0S^\top M_\Omega v_0,
+\qquad
+z_{1,\mathrm{raw}}=D^{-1}r_1.
+\]
+
+Response-space에서 첫 방향과 직교화한다.
+
+\[
+\beta=
+\frac{\langle v_0,Sz_{1,\mathrm{raw}}\rangle_{M_\Omega}}
+{\langle v_0,v_0\rangle_{M_\Omega}+\varepsilon_0},
 \]
 
 \[
-r_{\mathrm{stat}}
-=
-g-\eta^\star Az
+z_1=z_{1,\mathrm{raw}}-\beta z_0,
+\qquad
+v_1=Sz_1,
+\qquad
+c_1=
+\frac{\langle g_0,z_1\rangle}
+{\langle v_1,v_1\rangle_{M_\Omega}+\varepsilon_1}.
 \]
 
-에 대해
+최종 correction과 directional source는
 
 \[
-\mathcal L_{\mathrm{stat,old}}
-=
-\frac{
-r_{\mathrm{stat}}^\top D^{-1}r_{\mathrm{stat}}
-}{
-g^\top D^{-1}g+\varepsilon
-}
-\]
-
-를 사용한다. 이 값은 mismatch gradient의 전체 크기가 변해도 거의 변하지 않으므로 loss에서는 폐기하고 diagnostic으로만 유지한다.
-
-새 stationarity loss는 response-trust와 동일한 source-response normalization을 사용한다.
-
-\[
-E_f
-=
-\left\|H_x(f/2)\right\|_{M_\Omega}^{2}
-+
-\left\|H_y(f/2)\right\|_{M_\Omega}^{2},
+\delta_{K=2}=-c_0z_0-c_1z_1,
 \]
 
 \[
-\boxed{
-\mathcal L_{\mathrm{stat,new}}
-=
-\frac{
-r_{\mathrm{stat}}^\top D^{-1}r_{\mathrm{stat}}
-}{
-E_f+\varepsilon
-}
-}
+\phi=\widetilde\phi+\delta_{K=2},
+\qquad
+\psi=\widetilde\psi-\delta_{K=2}.
 \]
 
-Stationarity는 계속 **uncapped** \(\eta^\star\)를 사용하여 tangent-line alignment를 측정한다. Response-trust는 기존처럼 실제 production correction의
+따라서 모든 valid point에서 \(\phi+\psi=f\)가 정확히 보존된다. 최종 mismatch는
 
 \[
-\eta_{\mathrm{applied}}
-=
-\min(\eta^\star,\eta_{\mathrm{cap}})
+m_2=m_0-c_0v_0-c_1v_1
 \]
 
-를 사용한다.
+이며, \(K=2\)는 \(\operatorname{span}\{z_0,z_1\}\)에서 \(\|m_0+S\delta\|_{M_\Omega}^2\)를 최소화한다. 두 번째 response direction이 numerical tolerance 이하이면 `second_direction_active=false`, \(c_1=0\)으로 두어 uncapped \(K=1\)과 정확히 일치시킨다.
 
-Combined objective는
+## Public Configuration
 
-\[
-\boxed{
-\mathcal L_{\mathrm{total}}
-=
-\mathcal L_{\mathrm{split\ objective}}
-+
-\mathcal L_{\mathrm{weak}}
-+
-\lambda_{\mathrm{RT}}\mathcal L_{\mathrm{RT}}
-+
-\lambda_{\mathrm{stat}}\mathcal L_{\mathrm{stat,new}}
-}
-\]
-
-로 고정한다. Combined Pentagram pilot에서는 현재 설정을 보존하여 weak/relative-split은 비활성 상태이고,
-
-\[
-\mathcal L_{\mathrm{total}}
-=
-\mathcal L_{\mathrm{energy}}
-+
-10^{-3}\mathcal L_{\mathrm{RT}}
-+
-10^{-4}\mathcal L_{\mathrm{stat,new}}
-\]
-
-를 사용한다. Response-trust 내부 `trust_weight`는 기존 `0.01`을 유지한다.
-
-## Public Contract
-
-- 기존 `coupling_training.post_line_search_stationarity` schema를 그대로 유지한다.
+기존 config block에 strict integer field를 추가한다.
 
 ```json
-"post_line_search_stationarity": {
+"balance_projection": {
   "enabled": true,
-  "weight": 0.0001,
-  "eps": 1e-12
+  "mode": "symmetric_tangent_green_response",
+  "symmetric_tangent_green_response": {
+    "subspace_dimension": 2,
+    "eta_strategy": "closed_loop_exact_line_search",
+    "line_search_relative_eps": 1e-12,
+    "relative_lambda": 0.01,
+    "denominator_relative_eps": 1e-12
+  }
 }
 ```
 
-- `normalization` 또는 legacy-mode option을 추가하지 않는다. `enabled=true`이면 앞으로 항상 source-normalized stationarity를 최적화한다.
-- 기존 config를 다시 실행하면 stationarity loss 의미가 새 수식으로 바뀐다. 기존 model checkpoint tensor와 safetensors key는 바뀌지 않는다.
-- 기존 `tangent_post_line_search_stationarity_ratio`는 다음 old ratio diagnostic으로 유지한다.
+- `subspace_dimension`은 boolean이 아닌 정수 `1` 또는 `2`만 허용한다.
+- 생략하면 `1`로 해석해 기존 설정과 수치를 보존한다.
+- `subspace_dimension=2`는 `eta_strategy="closed_loop_exact_line_search"`만 허용한다.
+- \(K=2\)의 \(c_0,c_1\)은 exact subspace minimizer이므로 `eta`와 tangent eta schedule은 적용하지 않는다.
+- Shared schema 때문에 `eta`가 존재할 수는 있지만 provenance와 log에 `eta_applicability="k1_only"`를 명시하고 \(K=2\) 계산에는 사용하지 않는다.
+- `line_search_relative_eps`를 \(c_0,c_1\) denominator 안정화와 두 번째 방향의 degeneracy 판정에 공통 사용한다.
+- Unit-square CouplingNet의 허용 projection mode는 변경하지 않는다.
+
+## Implementation Steps And Affected Files
+
+1. `src/greenonet/config.py`에 `subspace_dimension` parsing, round-trip, strict validation과 \(K=2\)/`eta_strategy` 조합 검증을 추가한다. 기존 config는 자동으로 \(K=1\)이 된다.
+
+2. Frozen audit의 `matrix_free_krylov_k2_step(...)`와 결과 dataclass를 `src/greenonet/complex_tangent_projection.py`의 production core로 이전한다. `src/greenonet/complex_tangent_subspace_audit.py`는 이 공통 helper를 import하도록 바꿔 audit와 production 수식 중복을 제거한다.
+
+3. `SymmetricTangentGreenResponseContext.tangent_step(...)`를 `subspace_dimension` dispatcher로 확장한다. \(K=1\) branch는 기존 코드를 그대로 호출하고, \(K=2\) branch는 두 번의 matrix-free forward response action과 필요한 adjoint action만 사용한다. Global matrix, full Gram matrix, dense \(2\times2\) solve는 만들지 않는다.
+
+4. `src/greenonet/complex_projection.py`에서 \(K=2\)의 최종 `delta`, `projected_physical`, `projected_solution`, `mismatch_post`를 연결한다. \(H_xz_0,H_yz_0,H_xz_1,H_yz_1\)을 재사용해 projected solution을 구성하고 불필요한 Green reconstruction을 반복하지 않는다.
+
+5. Stationarity loss는
 
 \[
-\frac{E_{\mathrm{res}}}{E_{\mathrm{init}}+\varepsilon},
+r_2=S^\top M_\Omega m_2,
 \qquad
-E_{\mathrm{res}}=r_{\mathrm{stat}}^\top D^{-1}r_{\mathrm{stat}},
-\qquad
-E_{\mathrm{init}}=g^\top D^{-1}g.
+\mathcal L_{\mathrm{stat}}
+=
+\frac{r_2^\top D^{-1}r_2}{E_f+\varepsilon}
 \]
 
-- 새 metric contract는 다음으로 고정한다.
-  - `loss_tangent_post_line_search_stationarity`: config `weight`가 곱해진 새 optimized loss
-  - `tangent_post_line_search_stationarity_source_normalized`: 새 unweighted source-normalized loss
-  - `tangent_post_line_search_stationarity_ratio`: 기존 initial-gradient-relative diagnostic
-  - `tangent_stationarity_initial_source_ratio`: \(E_{\mathrm{init}}/(E_f+\varepsilon)\)
-  - `tangent_source_response_energy`: sample-mean \(E_f\)
-- `response_trust.enabled=true`와 `post_line_search_stationarity.enabled=true`를 동시에 허용한다.
-- 두 항 모두 complex `symmetric_tangent_green_response`와 `eta_strategy="closed_loop_exact_line_search"`를 계속 필수로 요구한다.
-- Unit-square CouplingNet에서는 두 항을 계속 거부한다.
-- Auxiliary weight는 fixed scalar로 적용한다. Scheduler, learnable weight, GradNorm은 추가하지 않는다.
+로 일반화한다. 기존 initial-gradient-relative diagnostic은
 
-## Implementation Changes
+\[
+\frac{r_2^\top D^{-1}r_2}
+{g_0^\top D^{-1}g_0+\varepsilon}
+\]
 
-1. **공통 source-response normalization**
-   - `f/2`에 대한 \(H_x,H_y\) response와 sample별 \(E_f\)를 반환하는 shared dataclass/helper를 `complex_tangent_projection`에 추가한다.
-   - Response-trust와 stationarity가 동일 helper 결과를 받도록 하여 \(H_x(f/2),H_y(f/2)\)를 중복 계산하지 않는다.
-   - 두 loss가 모두 비활성화되면 source-response forward를 수행하지 않는다.
-   - Stationarity-only는 source normalization을 위해 forward-pair 한 번, response-trust 또는 combined mode는 현재 response-trust와 동일하게 forward-pair 한 번만 사용한다.
+로 유지한다. Response-trust는 최종 \(m_2\)와 \(S\delta_{K=2}=m_2-m_0\)를 사용한다. 두 loss는 기존처럼 \(H_x(f/2),H_y(f/2)\) source normalization을 공유하며 reference `sol/phi/psi`를 사용하지 않는다.
 
-2. **Stationarity 수식 교체**
-   - `NormalizedPostLineSearchStationarityResult`의 optimized `loss/loss_per_sample`을 \(E_{\mathrm{res}}/(E_f+\varepsilon)\)로 변경한다.
-   - 기존 \(E_{\mathrm{res}}/(E_{\mathrm{init}}+\varepsilon)\)는 별도 `relative_ratio` 필드로 보존한다.
-   - `initial_source_ratio=E_{\mathrm{init}}/(E_f+\varepsilon)`와 source energy를 결과 contract에 추가한다.
-   - \(r_{\mathrm{stat}}=g-\eta^\star Az\), uncapped \(\eta^\star\), Jacobi \(D\), cached matrix-free adjoint 계산은 변경하지 않는다.
-   - Global matrix, full Gram matrix, linear solve를 추가하지 않는다.
+6. `src/greenonet/complex_coupling_trainer.py`와 evaluator에서 동일 dispatcher를 사용한다. \(K=2\)에서는 tangent eta schedule을 생성하거나 step하지 않고, `subspace_dimension`, \(c_0/c_1\) 평균, second-direction 활성 비율, \(K=1\)/\(K=2\) response cost와 correction norm을 로그와 CSV에 기록한다. Best-energy와 best-physics checkpoint 기준은 그대로 유지한다.
 
-3. **Joint trainer/evaluator objective**
-   - Config validation에서 response-trust와 stationarity의 mutual-exclusion 오류를 제거한다.
-   - Trainer와 evaluator의 현재 `if/elif` stationarity 분기를 독립적인 두 optional 계산으로 바꾼다.
-   - Stationarity residual은 stationarity가 optimized이거나 response-trust diagnostic이 필요한 경우 한 번만 계산한다.
-   - Shared objective가 response-trust와 stationarity weighted term을 각각 total loss에 더하도록 변경한다.
-   - `best_energy_checkpoint`는 계속 `loss_energy_optimized`만 사용하고, `best_physics_checkpoint`는 두 auxiliary term을 포함한 total `loss`를 사용한다.
-   - `sol`, target `phi/psi`, `rel_sol`, `rel_flux`는 loss나 checkpoint 선택에 사용하지 않는다.
+7. Artifact exporter는 기존 `tangent_delta`를 최종 correction으로 유지하면서 `tangent_direction_0/1`, `tangent_response_direction_0/1`, `tangent_coefficient_0/1`, `tangent_second_direction_active`, `tangent_mismatch_k1`, `tangent_mismatch_post`, `tangent_response_cost_k1/k2`, post-\(K=2\) stationarity residual을 raw NPZ와 summary에 추가한다. \(K=1\) artifact schema와 eta fields는 기존 동작을 유지한다.
 
-4. **Logging과 artifacts**
-   - Training/evaluation log에 stationarity normalization, uncapped eta source, response-trust와의 joint-enabled 여부, fixed weights, shared source-response reuse를 기록한다.
-   - CSV에 새 optimized/unweighted/legacy diagnostic metric을 모두 기록한다.
-   - Artifact summary에는 새 formula, old ratio의 diagnostic-only 상태, simultaneous optimization 여부, shared \(E_f\) convention을 기록한다.
-   - Selected raw NPZ에 source-normalized stationarity, old relative ratio, initial/source ratio, \(E_f\), 기존 stationarity residual과 Hessian-direction을 저장한다.
-   - `tangent_source_response_*` field는 response-trust 또는 stationarity 중 하나라도 활성화되면 한 번만 생성한다.
-   - Existing response-trust figures/raw fields와 cross-key 부재 contract를 유지한다.
+8. Frozen audit 결과를 재현하는 regression test를 추가하고, coupling8 설정을 기준으로 projection 차수만 `2`로 바꾼 별도 paired experiment config `configs/complex_coupling_soap_tangent_k2_pentagram.json`을 추가한다. 기존 config와 현재 사용자 변경은 덮어쓰지 않는다.
 
-5. **Config와 문서**
-   - 현재 사용자 수정 파일 `configs/complex_coupling_soap_tangent_stationarity.json`은 되돌리거나 덮어쓰지 않는다.
-   - 현재 Pentagram 설정을 기준으로 새 `configs/complex_coupling_soap_tangent_response_trust_stationarity.json`을 추가한다.
-   - 새 config는 `response_trust.weight=1e-3`, `trust_weight=0.01`, `post_line_search_stationarity.weight=1e-4`로 두 항을 모두 활성화한다.
-   - Geometry, source provider, optimizer, scheduler, tangent cap, boundary-off 및 cross-axis reconstruction 설정은 원본과 동일하게 유지한다.
-   - README와 `docs/memory.md`를 새 stationarity 의미, joint objective, metric 구분, fixed-weight pilot 설정에 맞게 갱신한다.
-   - `PLAN.md`는 사용자가 이 계획을 프로젝트 루트에 작성하며, 구현 과정에서는 해당 문서를 기준 문서로 사용한다.
-
-## Affected Files
-
-- Core math와 projection: `src/greenonet/complex_tangent_projection.py`, `src/greenonet/complex_projection.py`
-- Config와 objective: `src/greenonet/config.py`, `src/greenonet/complex_coupling_objective.py`
-- Runtime integration: `src/greenonet/complex_coupling_trainer.py`, `src/greenonet/complex_coupling_evaluator.py`
-- Artifact provenance: `src/greenonet/complex_coupling_artifacts.py`
-- Experiment config: 새 `configs/complex_coupling_soap_tangent_response_trust_stationarity.json`
-- Tests: `test/test_complex_tangent_projection.py`, `test/test_complex_coupling_trainer.py`, `test/test_complex_coupling_artifacts.py`, `test/test_io_config.py`, `test/test_cli_train.py`
-- Documentation: `README.md`, `docs/memory.md`
+9. `README.md`와 `docs/memory.md`에 \(K=1/K=2\) 수식, exact balance, matrix-free 정책, \(K=2\)에서 eta cap이 적용되지 않는 이유, frozen evidence와 retraining 필요성을 기록한다.
 
 ## Test Plan
 
-- **Stationarity math**
-  - 새 loss가 \(E_{\mathrm{res}}/(E_f+\varepsilon)\)와 정확히 일치하는지 검증한다.
-  - 기존 ratio가 동일한 값으로 diagnostic에 보존되는지 검증한다.
-  - Source를 고정하고 mismatch/gradient를 \(c\)배 하면 새 loss가 \(c^2\)배 되고 old ratio는 유지되는지 확인한다.
-  - Source와 prediction response를 함께 \(c\)배 하면 새 loss가 scale invariant한지 확인한다.
-  - Exact stationary case는 새 loss와 old ratio가 모두 0에 가까운지 확인한다.
-  - Zero/near-zero source에서 `eps`로 finite loss와 finite gradient가 유지되는지 검증한다.
-
-- **Shared computation**
-  - Stationarity-only에서 source-response forward-pair가 정확히 한 번 호출되는지 확인한다.
-  - Response-trust-only와 combined mode에서도 source-response forward-pair가 한 번만 호출되는지 확인한다.
-  - Combined mode의 stationarity adjoint 계산이 중복되지 않는지 확인한다.
-  - `torch.linalg.solve` 또는 global matrix materialization이 호출되지 않는지 검증한다.
-
-- **Config와 total objective**
-  - Response-trust와 stationarity 동시 enabled config가 strict parse/round-trip 되는지 확인한다.
-  - 두 항의 tangent-mode/eta-strategy 요구사항과 unit-square rejection을 유지한다.
-  - Total loss가 energy, weighted response-trust, weighted source-normalized stationarity의 정확한 합인지 확인한다.
-  - 각 항을 독립적으로 끌 수 있고 모두 끄면 기존 energy-only objective가 복원되는지 확인한다.
-  - Reference `sol/phi/psi`를 바꾸어도 training loss와 best-checkpoint 선택이 변하지 않는지 검증한다.
-
-- **Trainer/evaluator/artifact**
-  - Trainer와 evaluator가 같은 source normalization과 loss 값을 반환하는지 확인한다.
-  - Log/CSV에 weighted new loss, unweighted new loss, old ratio, initial/source ratio, source energy가 모두 기록되는지 확인한다.
-  - `best_energy`와 `best_physics`가 각각 기존 energy와 combined total 기준으로 저장되는지 확인한다.
-  - Artifact summary, raw NPZ와 Plotly field schema가 joint mode를 정확히 기록하는지 검증한다.
-  - Model checkpoint key, output contract, GreenNet, unit-square behavior와 기존 cross-key 부재에 regression이 없는지 확인한다.
-
-검증 명령은 다음 순서로 실행한다.
+- Config: 기본값 `1`, `1/2` round-trip, bool/float/0/3 거부, `K=2+fixed eta_strategy` 거부.
+- Math: \(K=2\) response cost가 uncapped \(K=1\)보다 tolerance 밖에서 증가하지 않는지 검증한다.
+- Degeneracy: 두 번째 direction이 0이면 \(c_1=0\)이고 \(K=2=K=1\)인지 확인한다.
+- Projection: 모든 sample과 point에서 \(\phi+\psi=f\), projected response contract, float64 finite output을 검증한다.
+- Regression: `subspace_dimension`을 생략하거나 `1`로 두었을 때 기존 \(K=1\) tensor와 metric이 동일한지 확인한다.
+- Autograd: \(K=2\), stationarity, response-trust의 gradient가 finite하고 reference target 변경에 영향을 받지 않는지 확인한다.
+- Integration: trainer/evaluator/export가 같은 cached context를 한 번만 만들고 동일한 \(K=2\) 결과를 사용하는지 확인한다.
+- Artifact: 새 NPZ/CSV/summary fields와 `second_direction_active` schema를 검증한다.
+- Audit: 공통 production helper로 리팩터링한 뒤 기존 frozen-checkpoint aggregate 수치가 tolerance 내에서 유지되는지 확인한다.
+- Compile: complex one-step training에서 `torch.compile` 경로와 SOAP/AdamW optimizer가 모두 동작하는지 smoke test한다.
 
 ```bash
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
   test/test_complex_tangent_projection.py \
+  test/test_complex_projection.py \
+  test/test_complex_tangent_subspace_audit.py \
   test/test_complex_coupling_trainer.py \
   test/test_complex_coupling_artifacts.py \
-  test/test_io_config.py \
-  test/test_cli_train.py
+  test/test_io_config.py
 
 PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
-
 ruff check src cli test
 ruff format src cli test
 ~/.conda/envs/green_net/bin/python -m mypy src
 git diff --check
 ```
 
-실제 장기 Pentagram/Annulus 재학습은 구현 범위에 포함하지 않는다.
+실제 장기 retraining은 구현 검증 범위에 포함하지 않는다.
 
 ## Rollback Strategy
 
-- Runtime rollback은 `response_trust.enabled=false`와 `post_line_search_stationarity.enabled=false`로 energy-only objective를 복원하는 것이다.
-- 개별 ablation은 둘 중 하나만 비활성화하여 energy+response-trust 또는 energy+stationarity로 실행한다.
-- Model architecture와 checkpoint tensor가 바뀌지 않으므로 checkpoint migration은 필요하지 않다.
-- Code rollback은 stationarity denominator를 `E_initial`로 되돌리고 mutual-exclusion validation을 복원하면 된다.
-- 기존 ratio 계산과 artifact field를 계속 보존하므로 새 normalization이 실패해도 legacy 수치 진단을 잃지 않는다.
-- AdamW/SOAP, scheduler, projection correction, reconstruction, geometry/sample NPZ 및 GreenNet에는 rollback 변경이 없어야 한다.
-
-## Acceptance Criteria
-
-- Optimized stationarity가 source-response-normalized residual을 사용한다.
-- Existing initial-gradient-relative ratio는 동일한 diagnostic 값으로 유지된다.
-- Response-trust와 stationarity를 동시에 활성화할 수 있다.
-- Combined mode의 total loss가 energy + fixed-weight response-trust + fixed-weight stationarity와 정확히 일치한다.
-- Source-response 계산과 stationarity residual 계산이 중복되지 않는다.
-- 모든 loss와 checkpoint 선택은 reference-free다.
-- 새 Pentagram combined pilot config가 `RT weight=1e-3`, `stationarity weight=1e-4`를 명시한다.
-- Model/GreenNet checkpoint key와 geometry/sample schema가 변경되지 않는다.
-- Focused/full tests와 Ruff, mypy, `git diff --check`가 통과한다.
+- Runtime rollback은 `subspace_dimension=1`로 바꾸거나 해당 field를 제거하는 것이다.
+- Model architecture와 safetensors key가 바뀌지 않으므로 checkpoint migration은 필요하지 않다.
+- Code rollback은 \(K=2\) dispatcher, diagnostics, artifact fields와 paired config만 제거하고 기존 \(K=1\) implementation을 유지한다.
+- \(K=1\) tensor 또는 frozen audit 수치를 보존하지 못하면 구현을 중단하고 수치 차이, 영향받는 config/artifact/test, 최소 rollback을 보고한다.
 
 ## Confidence
 
-- 구현 계획과 수식 정합성에 대한 확신도: **0.98**
-- 세 항의 joint optimization이 기존 response-trust-only보다 실제 solution quality를 개선할 가능성에 대한 경험적 확신도: **0.76**
-- 규칙 모호성이나 구현에 필요한 정보 부족은 없다.
-- 남은 불확실성은 fixed auxiliary weight의 실제 gradient 비율과 Pentagram/Annulus에서의 개선 폭에 관한 실험적 불확실성이다.
+- 수학 및 구현 계획 확신도: **0.98**.
+- Frozen-checkpoint 개선이 paired retraining에서도 유지될 가능성: **0.84**.
+- 규칙 모호성이나 필요한 정보 부족은 없다. 남은 불확실성은 \(K=2\)가 correction norm을 증가시키면서 일부 sample의 canonical energy를 악화시킨 현상이 재학습을 통해 얼마나 해소되는지에 관한 경험적 불확실성이다.
+- 이번 단계에서는 repository 파일을 수정하지 않으며, 사용자가 이 계획을 root `PLAN.md`에 작성한다.
 
 ## Executable `/goal` Draft
 
@@ -263,47 +209,48 @@ git diff --check
 /goal
 
 `/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/PLAN.md`의
-"Source-Normalized Stationarity + Response-Trust Joint Objective 구현 계획"을
-기준 문서로 참고하여 stationarity loss 교체와 joint objective integration을
-끝까지 구현한다.
+"Optional Matrix-Free K=2 Tangent Subspace Integration Plan"을 기준 문서로
+참고하여 K=2 tangent subspace integration을 끝까지 구현한다.
 
 완료는 다음 조건으로 검증한다.
 
-- 기존 post-line-search stationarity config schema를 유지하면서 optimized loss가
-  source-response-normalized residual을 사용할 것,
-- 기존 initial-gradient-relative stationarity ratio가 diagnostic으로 동일하게
-  유지될 것,
-- response-trust와 새 stationarity를 동시에 활성화할 수 있을 것,
-- combined total loss가 energy, fixed-weight response-trust 및 fixed-weight
-  stationarity의 정확한 합일 것,
-- response-trust와 stationarity가 Hx(f/2), Hy(f/2) source-response 계산을
-  중복하지 않을 것,
-- uncapped eta-star stationarity와 capped applied-eta response-trust 의미가
-  각각 유지될 것,
-- reference sol/phi/psi가 loss, gradient 또는 checkpoint selection에 사용되지
-  않을 것,
-- best-energy와 best-physics checkpoint 기준이 서로 구분되어 유지될 것,
-- 새 Pentagram combined pilot config가 response-trust weight 1e-3,
-  stationarity weight 1e-4, trust weight 0.01을 명시할 것,
-- model architecture, checkpoint tensor key, GreenNet, unit-square CouplingNet,
-  geometry/sample NPZ schema가 변경되지 않을 것,
+- 기존 config에서 subspace_dimension을 생략하면 K=1 동작과 수치가 유지될 것,
+- subspace_dimension=2가 frozen audit의 무제약 matrix-free K=2 수식을 사용할 것,
+- K=2가 두 개의 Jacobi-preconditioned response-orthogonal direction만 사용하고
+  global matrix, full Gram matrix 또는 linear solve를 만들지 않을 것,
+- 두 번째 direction이 퇴화하면 c1=0으로 K=1에 안전하게 fallback할 것,
+- 모든 valid point에서 phi+psi=rhs가 float64 tolerance 내에서 보존될 것,
+- K=2 response mismatch cost가 uncapped K=1보다 tolerance 밖에서 증가하지 않을 것,
+- K=2에서는 eta cap과 tangent eta schedule이 적용되지 않고 이 사실이 log와
+  provenance에 명시될 것,
+- stationarity는 post-K2 residual gradient를 사용하고 response-trust는 최종
+  K=2 mismatch와 correction response를 사용할 것,
+- 두 auxiliary loss가 source-response normalization을 공유하고 reference
+  sol/phi/psi를 loss, gradient, scheduler 또는 checkpoint 선택에 사용하지 않을 것,
+- trainer, evaluator, artifact exporter와 frozen audit CLI가 동일한 production
+  K=2 helper와 한 번 생성된 cached response context를 사용할 것,
+- raw NPZ, CSV, figures와 summary에 K=2 directions, coefficients, activity,
+  response costs와 final residual이 기록될 것,
+- CouplingNet architecture, model checkpoint tensor key, GreenNet, unit-square
+  CouplingNet, geometry/sample NPZ schema가 변경되지 않을 것,
 - focused tests와 전체 pytest, Ruff, mypy, git diff check가 통과할 것.
 
-수정 범위는 tangent stationarity/source normalization core, complex config와
-objective, trainer/evaluator, artifact provenance, 새 paired config, 관련 tests,
+수정 범위는 tangent projection config/core, complex projection dispatcher,
+stationarity와 response-trust의 K=2 일반화, trainer/evaluator/artifact provenance,
+기존 post-hoc audit의 공통 helper 재사용, paired experiment config, 관련 tests,
 README 및 docs/memory.md로 제한한다.
 
-Learnable/adaptive loss weight, auxiliary-weight scheduler, legacy normalization
-option, full response Gram matrix, linear solve, row-norm projection, model
-backbone, Green reconstruction 및 장기 retraining은 추가하지 않는다.
+Learnable K, K>2, eta network, K=2 correction cap/scheduler, full matrix,
+full-Gram solve, row-norm projection, model backbone 변경과 장기 retraining은
+추가하지 않는다.
 
-각 구현 단계 후 가장 작은 stationarity/config tests를 먼저 실행하고, joint
-trainer/artifact tests를 거쳐 전체 regression suite를 실행한다.
+각 구현 단계 후 가장 작은 config/math/projection tests를 먼저 실행하고,
+통과한 뒤 trainer/evaluator/artifact tests와 전체 regression suite를 실행한다.
 
-새 normalization을 적용하면서 기존 model checkpoint compatibility 또는
-reference-free 원칙을 유지할 수 없다면 작업을 중단하고 다음을 보고한다.
+기존 K=1 수치, frozen K=2 audit 수치 또는 checkpoint architecture compatibility를
+유지할 수 없다면 작업을 중단하고 다음을 보고한다.
 
-1. 정확히 충돌하는 loss, tensor 또는 config contract,
-2. 영향을 받는 config, checkpoint, metrics와 artifacts,
-3. 기존 ratio diagnostic과 energy-only 경로를 보존하는 가장 작은 rollback 전략.
+1. 정확히 달라지는 수식, tensor, config 또는 floating-point 결과,
+2. 영향을 받는 checkpoint, config, metric, artifact와 test,
+3. subspace_dimension=1 경로를 보존하는 가장 작은 rollback 전략.
 ```

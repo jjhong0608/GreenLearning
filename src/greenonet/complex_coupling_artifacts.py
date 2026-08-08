@@ -1164,7 +1164,14 @@ class ComplexCouplingArtifactExporter(
         "tangent_gradient",
         "tangent_delta",
         "tangent_mismatch_pre",
+        "tangent_mismatch_k1",
         "tangent_mismatch_post",
+        "tangent_direction_0",
+        "tangent_direction_1",
+        "tangent_response_direction_0",
+        "tangent_response_direction_1",
+        "tangent_residual_gradient_post",
+        "tangent_stationarity_residual",
         "tangent_source_response_energy_density",
         "tangent_response_correction",
     )
@@ -1188,7 +1195,14 @@ class ComplexCouplingArtifactExporter(
             "tangent_gradient",
             "tangent_delta",
             "tangent_mismatch_pre",
+            "tangent_mismatch_k1",
             "tangent_mismatch_post",
+            "tangent_direction_0",
+            "tangent_direction_1",
+            "tangent_response_direction_0",
+            "tangent_response_direction_1",
+            "tangent_residual_gradient_post",
+            "tangent_stationarity_residual",
             "tangent_response_correction",
         }
     )
@@ -1230,7 +1244,14 @@ class ComplexCouplingArtifactExporter(
         "tangent_gradient": "Tangent response objective gradient",
         "tangent_delta": "Balance-preserving tangent source correction",
         "tangent_mismatch_pre": "Directional response mismatch before tangent step",
+        "tangent_mismatch_k1": "Directional response mismatch after K=1",
         "tangent_mismatch_post": "Directional response mismatch after tangent step",
+        "tangent_direction_0": "First Jacobi-preconditioned tangent direction",
+        "tangent_direction_1": "Second response-orthogonal tangent direction",
+        "tangent_response_direction_0": "Response of first tangent direction",
+        "tangent_response_direction_1": "Response of second tangent direction",
+        "tangent_residual_gradient_post": "Post-subspace tangent gradient residual",
+        "tangent_stationarity_residual": "Tangent stationarity residual",
         "tangent_source_response_energy_density": (
             "Directional source-response energy density"
         ),
@@ -1410,6 +1431,13 @@ class ComplexCouplingArtifactExporter(
         )
         response_trust = ComplexResponseTrustConfig.from_raw(
             configs.coupling_training.response_trust
+        )
+        tangent_projection = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+            balance_projection.symmetric_tangent_green_response
+        )
+        tangent_k2 = (
+            balance_projection.mode == "symmetric_tangent_green_response"
+            and tangent_projection.subspace_dimension == 2
         )
         best_energy = CouplingBestEnergyCheckpointConfig.from_raw(
             configs.coupling_training.best_energy_checkpoint
@@ -1639,20 +1667,38 @@ class ComplexCouplingArtifactExporter(
                     else response_trust.eps
                 ),
                 "objective": (
-                    "mean((g-eta_star*A*z)^T*D^-1*(g-eta_star*A*z)"
-                    "/(||H_x(f/2)||_M^2+||H_y(f/2)||_M^2+eps))"
+                    "mean(r_K2^T*D^-1*r_K2/(||H_x(f/2)||_M^2+||H_y(f/2)||_M^2+eps))"
+                    if tangent_k2
+                    else (
+                        "mean((g-eta_star*A*z)^T*D^-1*(g-eta_star*A*z)"
+                        "/(||H_x(f/2)||_M^2+||H_y(f/2)||_M^2+eps))"
+                    )
                 ),
                 "legacy_ratio_diagnostic": (
-                    "mean((g-eta_star*A*z)^T*D^-1*(g-eta_star*A*z)/(g^T*D^-1*g+eps))"
+                    "mean(r_K2^T*D^-1*r_K2/(g0^T*D^-1*g0+eps))"
+                    if tangent_k2
+                    else (
+                        "mean((g-eta_star*A*z)^T*D^-1*"
+                        "(g-eta_star*A*z)/(g^T*D^-1*g+eps))"
+                    )
                 ),
                 "optimization_normalization": "source_response_energy",
                 "legacy_ratio_optimized": False,
-                "eta_source": "uncapped_eta_star",
-                "forward_eta_source": "capped_eta_applied",
-                "hessian_action": "A*z=(H_x+H_y)^T*M_Omega*(H_x+H_y)*z",
+                "eta_source": ("not_applicable" if tangent_k2 else "uncapped_eta_star"),
+                "forward_eta_source": (
+                    "not_applicable" if tangent_k2 else "capped_eta_applied"
+                ),
+                "residual_source": (
+                    "post_k2_residual_gradient" if tangent_k2 else "uncapped_eta_star"
+                ),
+                "hessian_action": (
+                    "r_K2=(H_x+H_y)^T*M_Omega*m_K2; reused from K=2 projection"
+                    if tangent_k2
+                    else "A*z=(H_x+H_y)^T*M_Omega*(H_x+H_y)*z"
+                ),
                 "matrix_free": True,
-                "extra_adjoint_actions_per_computed_batch": 1,
-                "extra_adjoint_actions_per_enabled_batch": 1,
+                "extra_adjoint_actions_per_computed_batch": 0 if tangent_k2 else 1,
+                "extra_adjoint_actions_per_enabled_batch": 0 if tangent_k2 else 1,
                 "shared_source_response_forward_actions_per_computed_batch": 1,
                 "joint_response_trust_enabled": (
                     post_line_search_stationarity.enabled and response_trust.enabled
@@ -1672,10 +1718,19 @@ class ComplexCouplingArtifactExporter(
                 ),
                 "post_mismatch": "m_post=H_x*phi-H_y*psi",
                 "correction_response": "S*delta=m_post-m_pre",
-                "eta_source": "capped_eta_applied",
+                "eta_source": (
+                    "not_applicable" if tangent_k2 else "capped_eta_applied"
+                ),
+                "correction_source": (
+                    "unconstrained_k2_coefficients"
+                    if tangent_k2
+                    else "capped_eta_applied"
+                ),
                 "source_normalization": "H_x(f/2)^2+H_y(f/2)^2",
                 "stationarity_diagnostic_computed": response_trust.enabled,
-                "stationarity_diagnostic_eta_source": "uncapped_eta_star",
+                "stationarity_diagnostic_eta_source": (
+                    "not_applicable" if tangent_k2 else "uncapped_eta_star"
+                ),
                 "joint_stationarity_optimized": (
                     response_trust.enabled and post_line_search_stationarity.enabled
                 ),
@@ -1685,7 +1740,7 @@ class ComplexCouplingArtifactExporter(
                 "matrix_free": True,
                 "shared_source_response_forward_actions_per_enabled_batch": 1,
                 "extra_forward_actions_per_enabled_batch": 1,
-                "extra_adjoint_actions_per_enabled_batch": 1,
+                "extra_adjoint_actions_per_enabled_batch": 0 if tangent_k2 else 1,
                 "global_response_matrix_materialized": False,
                 "full_gram_solve": False,
                 "uses_reference_targets": False,
@@ -2080,7 +2135,9 @@ class ComplexCouplingArtifactExporter(
                     )
                     if tangent.eta_star is not None:
                         if (
-                            tangent.eta_capped is None
+                            tangent.eta_applied is None
+                            or tangent.eta_cap is None
+                            or tangent.eta_capped is None
                             or tangent.line_search_numerator is None
                             or tangent.line_search_denominator is None
                             or tangent.response_direction is None
@@ -2122,6 +2179,88 @@ class ComplexCouplingArtifactExporter(
                                 "tangent_eta_capped": np.asarray(
                                     tangent.eta_capped[0].detach().cpu().item(),
                                     dtype=np.bool_,
+                                ),
+                            }
+                        )
+                    if tangent.subspace_dimension == 2:
+                        required_k2 = (
+                            tangent.direction_0,
+                            tangent.direction_1,
+                            tangent.response_direction_0,
+                            tangent.response_direction_1,
+                            tangent.coefficient_0,
+                            tangent.coefficient_1,
+                            tangent.second_direction_active,
+                            tangent.mismatch_k1,
+                            tangent.cost_k1,
+                            tangent.cost_k2,
+                            tangent.residual_gradient_post,
+                        )
+                        if any(value is None for value in required_k2):
+                            raise RuntimeError(
+                                "K=2 tangent artifact diagnostics are incomplete."
+                            )
+                        direction_0 = tangent.direction_0
+                        direction_1 = tangent.direction_1
+                        response_direction_0 = tangent.response_direction_0
+                        response_direction_1 = tangent.response_direction_1
+                        coefficient_0 = tangent.coefficient_0
+                        coefficient_1 = tangent.coefficient_1
+                        second_direction_active = tangent.second_direction_active
+                        mismatch_k1 = tangent.mismatch_k1
+                        cost_k1 = tangent.cost_k1
+                        cost_k2 = tangent.cost_k2
+                        residual_gradient_post = tangent.residual_gradient_post
+                        assert direction_0 is not None
+                        assert direction_1 is not None
+                        assert response_direction_0 is not None
+                        assert response_direction_1 is not None
+                        assert coefficient_0 is not None
+                        assert coefficient_1 is not None
+                        assert second_direction_active is not None
+                        assert mismatch_k1 is not None
+                        assert cost_k1 is not None
+                        assert cost_k2 is not None
+                        assert residual_gradient_post is not None
+                        arrays.update(
+                            {
+                                "tangent_direction_0": (
+                                    direction_0[0].detach().cpu().numpy()
+                                ),
+                                "tangent_direction_1": (
+                                    direction_1[0].detach().cpu().numpy()
+                                ),
+                                "tangent_response_direction_0": (
+                                    response_direction_0[0].detach().cpu().numpy()
+                                ),
+                                "tangent_response_direction_1": (
+                                    response_direction_1[0].detach().cpu().numpy()
+                                ),
+                                "tangent_coefficient_0": np.asarray(
+                                    coefficient_0[0].detach().cpu().item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_coefficient_1": np.asarray(
+                                    coefficient_1[0].detach().cpu().item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_second_direction_active": np.asarray(
+                                    second_direction_active[0].detach().cpu().item(),
+                                    dtype=np.bool_,
+                                ),
+                                "tangent_mismatch_k1": (
+                                    mismatch_k1[0].detach().cpu().numpy()
+                                ),
+                                "tangent_response_cost_k1": np.asarray(
+                                    cost_k1[0].detach().cpu().item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_response_cost_k2": np.asarray(
+                                    cost_k2[0].detach().cpu().item(),
+                                    dtype=np.float64,
+                                ),
+                                "tangent_residual_gradient_post": (
+                                    residual_gradient_post[0].detach().cpu().numpy()
                                 ),
                             }
                         )
@@ -2522,24 +2661,36 @@ class ComplexCouplingArtifactExporter(
             return
         data_dir = self.request.outdir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
-        np.savez(
-            data_dir / "symmetric_tangent_green_response_fields.npz",
-            gamma_x_squared=context.gamma_x_squared.detach().cpu().numpy(),
-            gamma_y_squared=context.gamma_y_squared.detach().cpu().numpy(),
-            preconditioner_base=(context.preconditioner_base.detach().cpu().numpy()),
-            denominator=context.denominator.detach().cpu().numpy(),
-            point_mass=context.point_mass.detach().cpu().numpy(),
-            eta=np.asarray(context.eta, dtype=np.float64),
-            eta_strategy=np.asarray(context.eta_strategy),
-            line_search_relative_eps=np.asarray(
+        payload = {
+            "gamma_x_squared": context.gamma_x_squared.detach().cpu().numpy(),
+            "gamma_y_squared": context.gamma_y_squared.detach().cpu().numpy(),
+            "preconditioner_base": (context.preconditioner_base.detach().cpu().numpy()),
+            "denominator": context.denominator.detach().cpu().numpy(),
+            "point_mass": context.point_mass.detach().cpu().numpy(),
+            "eta": np.asarray(context.eta, dtype=np.float64),
+            "eta_strategy": np.asarray(context.eta_strategy),
+            "line_search_relative_eps": np.asarray(
                 context.line_search_relative_eps,
                 dtype=np.float64,
             ),
-            relative_lambda=np.asarray(context.relative_lambda, dtype=np.float64),
-            denominator_relative_eps=np.asarray(
+            "relative_lambda": np.asarray(
+                context.relative_lambda,
+                dtype=np.float64,
+            ),
+            "denominator_relative_eps": np.asarray(
                 context.denominator_relative_eps,
                 dtype=np.float64,
             ),
+        }
+        if context.subspace_dimension == 2:
+            payload["subspace_dimension"] = np.asarray(
+                context.subspace_dimension,
+                dtype=np.int64,
+            )
+            payload["eta_applicability"] = np.asarray("k1_only_not_applied")
+        np.savez(
+            data_dir / "symmetric_tangent_green_response_fields.npz",
+            **payload,  # type: ignore[arg-type]
         )
 
     def _write_green_response_context_figures(
@@ -2594,10 +2745,14 @@ class ComplexCouplingArtifactExporter(
         }
         paths: list[str] = []
         for field, values in fields.items():
+            parameter_label = (
+                f"K=2, lambda={context.relative_lambda:g}"
+                if context.subspace_dimension == 2
+                else f"eta={context.eta:g}, lambda={context.relative_lambda:g}"
+            )
             figure = self._scatter_figure(
                 title=(
-                    f"{self.GREEN_RESPONSE_FIGURE_TITLES[field]} "
-                    f"(eta={context.eta:g}, lambda={context.relative_lambda:g})"
+                    f"{self.GREEN_RESPONSE_FIGURE_TITLES[field]} ({parameter_label})"
                 ),
                 coords=coords,
                 values=values,
@@ -2629,7 +2784,14 @@ class ComplexCouplingArtifactExporter(
             tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
                 projection.symmetric_tangent_green_response
             )
-            if tangent_config.eta_strategy == "closed_loop_exact_line_search":
+            if tangent_config.subspace_dimension == 2:
+                update = (
+                    "z0=D^-1*g; c0=argmin_c ||m0-c*S*z0||_M^2; "
+                    "z1=orthogonalized(D^-1*(g-c0*A*z0)); "
+                    "c1=argmin_c ||m0-c0*S*z0-c*S*z1||_M^2; "
+                    "delta=-c0*z0-c1*z1; "
+                )
+            elif tangent_config.eta_strategy == "closed_loop_exact_line_search":
                 update = (
                     "z=g/D; v=(H_x+H_y)*z; "
                     "eta_star=(g^T*z)/(<v,v>_M+eps_relative); "
@@ -2713,53 +2875,87 @@ class ComplexCouplingArtifactExporter(
         config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             projection.symmetric_tangent_green_response
         )
-        learning_rate_schedule = CouplingLearningRateSchedule.from_config(
-            training_config,
-            total_epochs=training_config.epochs,
-        )
-        eta_schedule = SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
-            config=config,
-            learning_rate_schedule=learning_rate_schedule,
-        )
+        k2 = config.subspace_dimension == 2
+        eta_schedule: SymmetricTangentEtaCapSchedule | None = None
+        if not k2:
+            learning_rate_schedule = CouplingLearningRateSchedule.from_config(
+                training_config,
+                total_epochs=training_config.epochs,
+            )
+            eta_schedule = SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
+                config=config,
+                learning_rate_schedule=learning_rate_schedule,
+            )
         adaptive = config.eta_strategy == "closed_loop_exact_line_search"
-        update = (
-            "z=g/D; v=(H_x+H_y)z; "
-            "eta_star=(g^T z)/(<v,v>_M+relative_eps); "
-            "eta_applied=min(eta_star,eta_cap); "
-            "delta=-eta_applied*z; phi=p_tilde+delta; psi=q_tilde-delta"
-            if adaptive
-            else "delta=-eta*g/D; phi=p_tilde+delta; psi=q_tilde-delta"
-        )
-        summary: dict[str, Any] = {
-            "active": active,
-            "eta": config.eta,
-            "eta_role": "final_safety_cap" if adaptive else "fixed_step",
-            "eta_strategy": config.eta_strategy,
-            "line_search_relative_eps": config.line_search_relative_eps,
-            "relative_lambda": config.relative_lambda,
-            "denominator_relative_eps": config.denominator_relative_eps,
-            "fixed_parameters": not adaptive,
-            "sample_adaptive": adaptive,
-            "batch_independent": True,
-            "differentiable_eta": adaptive,
-            "learnable_parameters": False,
-            "reference_targets_used": False,
-            "base_projection": "physical_symmetric",
-            "objective": "0.5*||H_x*phi-H_y*psi||_M_Omega^2",
-            "gradient": "g=(H_x+H_y)^T*M_Omega*m0",
-            "update": update,
-            "eta_cap_schedule": {
+        if k2:
+            update = (
+                "z0=D^-1*g0; c0=(g0^T*z0)/(<S*z0,S*z0>_M+eps0); "
+                "r1=g0-c0*S^T*M*S*z0; z1_raw=D^-1*r1; "
+                "z1=response_orthogonalize(z1_raw,z0); "
+                "c1=(g0^T*z1)/(<S*z1,S*z1>_M+eps1); "
+                "delta=-c0*z0-c1*z1; phi=p_tilde+delta; psi=q_tilde-delta"
+            )
+        elif adaptive:
+            update = (
+                "z=g/D; v=(H_x+H_y)z; "
+                "eta_star=(g^T z)/(<v,v>_M+relative_eps); "
+                "eta_applied=min(eta_star,eta_cap); "
+                "delta=-eta_applied*z; phi=p_tilde+delta; psi=q_tilde-delta"
+            )
+        else:
+            update = "delta=-eta*g/D; phi=p_tilde+delta; psi=q_tilde-delta"
+        if k2:
+            eta_schedule_summary: dict[str, Any] = {
+                "applicable": False,
+                "kind": "not_applicable_k2",
+                "reason": "K=2 uses unconstrained exact subspace coefficients",
+                "training_policy": "not_applied",
+                "validation_policy": "not_applied",
+                "evaluation_policy": "not_applied",
+                "artifact_policy": "not_applied",
+            }
+        else:
+            if eta_schedule is None:
+                raise RuntimeError("K=1 tangent eta schedule was not initialized.")
+            eta_schedule_summary = {
+                "applicable": True,
                 "kind": eta_schedule.kind,
                 "final_eta": eta_schedule.final_eta,
                 "shared_with_lr_warmup": eta_schedule.enabled,
-                "configured_warmup_epochs": (eta_schedule.configured_warmup_epochs),
+                "configured_warmup_epochs": eta_schedule.configured_warmup_epochs,
                 "effective_warmup_epochs": eta_schedule.effective_warmup_epochs,
                 "post_warmup_behavior": "hold_final_eta",
                 "training_policy": "scheduled_cap",
                 "validation_policy": "final_cap",
                 "evaluation_policy": "final_cap",
                 "artifact_policy": "final_cap",
-            },
+            }
+        summary: dict[str, Any] = {
+            "active": active,
+            "subspace_dimension": config.subspace_dimension,
+            "eta": config.eta,
+            "eta_role": (
+                "k1_only_not_applied"
+                if k2
+                else ("final_safety_cap" if adaptive else "fixed_step")
+            ),
+            "eta_applicability": "k1_only_not_applied" if k2 else "applied",
+            "eta_strategy": config.eta_strategy,
+            "line_search_relative_eps": config.line_search_relative_eps,
+            "relative_lambda": config.relative_lambda,
+            "denominator_relative_eps": config.denominator_relative_eps,
+            "fixed_parameters": not adaptive and not k2,
+            "sample_adaptive": adaptive or k2,
+            "batch_independent": True,
+            "differentiable_eta": adaptive and not k2,
+            "differentiable_subspace_coefficients": k2,
+            "learnable_parameters": False,
+            "reference_targets_used": False,
+            "base_projection": "physical_symmetric",
+            "objective": "0.5*||H_x*phi-H_y*psi||_M_Omega^2",
+            "gradient": "g=(H_x+H_y)^T*M_Omega*m0",
+            "update": update,
+            "eta_cap_schedule": eta_schedule_summary,
             "preconditioner": (
                 "D=gamma_x_squared+gamma_y_squared+"
                 "(relative_lambda+denominator_relative_eps)*mean(gamma_sum)"
@@ -2769,6 +2965,12 @@ class ComplexCouplingArtifactExporter(
             "row_norm_used": False,
             "global_response_matrix_materialized": False,
             "full_gram_solve": False,
+            "linear_solve_used": False,
+            "direction_contract": (
+                "two_jacobi_preconditioned_response_orthogonal_directions"
+                if k2
+                else "one_jacobi_preconditioned_direction"
+            ),
             "context_build_count": (
                 evaluator.symmetric_tangent_green_response_context_build_count
             ),
@@ -2784,6 +2986,40 @@ class ComplexCouplingArtifactExporter(
         if context is not None:
             summary["statistics"] = context.statistics()
             summary["point_mass"] = float(context.point_mass.item())
+        if k2:
+            for metric_key, summary_key in (
+                ("tangent_coefficient_0", "coefficient_0_statistics"),
+                ("tangent_coefficient_1", "coefficient_1_statistics"),
+                ("tangent_response_cost_k1", "response_cost_k1_statistics"),
+                ("tangent_response_cost_k2", "response_cost_k2_statistics"),
+                (
+                    "tangent_response_cost_k2_over_k1",
+                    "response_cost_k2_over_k1_statistics",
+                ),
+            ):
+                values = np.asarray(
+                    [
+                        float(row[metric_key])
+                        for row in metric_rows
+                        if metric_key in row
+                    ],
+                    dtype=np.float64,
+                )
+                if values.size:
+                    summary[summary_key] = self._scalar_distribution(values)
+            active_values = np.asarray(
+                [
+                    float(row["tangent_second_direction_active"])
+                    for row in metric_rows
+                    if "tangent_second_direction_active" in row
+                ],
+                dtype=np.float64,
+            )
+            if active_values.size:
+                summary["second_direction_active_fraction"] = float(
+                    active_values.mean()
+                )
+            return summary
         eta_star = np.asarray(
             [
                 float(row["tangent_eta_star"])

@@ -72,6 +72,7 @@ from greenonet.config import (
     CouplingBestEnergyCheckpointConfig,
     CouplingBestPhysicsCheckpointConfig,
     CouplingTrainingConfig,
+    SymmetricTangentGreenResponseProjectionConfig,
     validate_complex_post_line_search_stationarity_config,
     validate_complex_response_trust_config,
 )
@@ -125,6 +126,13 @@ class ComplexCouplingTrainer(LoggingMixin):
         "tangent_delta_rms",
         "tangent_delta_max_abs",
         "tangent_correction_rel_symmetric_pair",
+        "tangent_subspace_dimension",
+        "tangent_coefficient_0_mean",
+        "tangent_coefficient_1_mean",
+        "tangent_second_direction_active_fraction",
+        "tangent_response_cost_k1_mean",
+        "tangent_response_cost_k2_mean",
+        "tangent_response_cost_k2_over_k1",
         "tangent_eta_cap",
         "tangent_eta_star_mean",
         "tangent_eta_applied_mean",
@@ -548,14 +556,17 @@ class ComplexCouplingTrainer(LoggingMixin):
             stats = context.statistics()
             self.logger.info(
                 "symmetric-tangent Green-response context build_seconds=%.6f "
-                "eta=%.6e eta_strategy=%s line_search_relative_eps=%.6e "
+                "subspace_dimension=%d eta=%.6e eta_strategy=%s "
+                "eta_applicability=%s line_search_relative_eps=%.6e "
                 "relative_lambda=%.6e denominator_relative_eps=%.6e "
                 "gain_scale=%.6e denominator=[%.6e, %.6e] "
                 "x_blocks=%d y_blocks=%d row_norm_used=false "
                 "global_matrix_materialized=false full_gram_solve=false",
                 self._tangent_context_cache.build_seconds,
+                context.subspace_dimension,
                 context.eta,
                 context.eta_strategy,
+                stats["eta_applicability"],
                 context.line_search_relative_eps,
                 context.relative_lambda,
                 context.denominator_relative_eps,
@@ -573,8 +584,17 @@ class ComplexCouplingTrainer(LoggingMixin):
     ) -> SymmetricTangentEtaCapSchedule | None:
         if self.balance_projection.mode != "symmetric_tangent_green_response":
             return None
+        tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+            self.balance_projection.symmetric_tangent_green_response
+        )
+        if tangent_config.subspace_dimension == 2:
+            self.logger.info(
+                "tangent-eta schedule disabled subspace_dimension=2 "
+                "eta_applicability=k1_only_not_applied"
+            )
+            return None
         return SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
-            config=self.balance_projection.symmetric_tangent_green_response,
+            config=tangent_config,
             learning_rate_schedule=learning_rate_schedule,
         )
 
@@ -674,9 +694,23 @@ class ComplexCouplingTrainer(LoggingMixin):
 
     def _log_post_line_search_stationarity(self) -> None:
         config = self.post_line_search_stationarity_config
+        tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+            self.balance_projection.symmetric_tangent_green_response
+        )
+        residual_source = (
+            "post_k2_residual_gradient"
+            if tangent.subspace_dimension == 2
+            else "uncapped_eta_star"
+        )
+        forward_source = (
+            "unconstrained_k2_coefficients"
+            if tangent.subspace_dimension == 2
+            else "capped_eta_applied"
+        )
         self.logger.info(
             "post-line-search stationarity enabled=%s weight=%.6e eps=%.6e "
-            "eta_source=uncapped_eta_star forward_eta_source=capped_eta_applied "
+            "eta_source=%s forward_eta_source=%s "
+            "subspace_dimension=%d residual_source=%s forward_source=%s "
             "optimization_normalization=source_response "
             "legacy_initial_gradient_ratio=diagnostic_only "
             "matrix_free=true extra_adjoint_when_computed=%s "
@@ -685,15 +719,30 @@ class ComplexCouplingTrainer(LoggingMixin):
             config.enabled,
             config.weight,
             config.eps,
-            config.enabled or self.response_trust_config.enabled,
+            "not_applicable" if tangent.subspace_dimension == 2 else residual_source,
+            "not_applicable" if tangent.subspace_dimension == 2 else forward_source,
+            tangent.subspace_dimension,
+            residual_source,
+            forward_source,
+            tangent.subspace_dimension == 1
+            and (config.enabled or self.response_trust_config.enabled),
             config.enabled and self.response_trust_config.enabled,
         )
 
     def _log_response_trust(self) -> None:
         config = self.response_trust_config
+        tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+            self.balance_projection.symmetric_tangent_green_response
+        )
+        correction_source = (
+            "unconstrained_k2_coefficients"
+            if tangent.subspace_dimension == 2
+            else "capped_eta_applied"
+        )
         self.logger.info(
             "response-trust enabled=%s weight=%.6e trust_weight=%.6e eps=%.6e "
-            "eta_source=capped_eta_applied "
+            "eta_source=%s "
+            "subspace_dimension=%d correction_source=%s "
             "source_normalization=Hx(f/2)^2+Hy(f/2)^2 "
             "matrix_free=true extra_forward_when_enabled=%s "
             "stationarity_diagnostic_when_enabled=%s "
@@ -704,9 +753,12 @@ class ComplexCouplingTrainer(LoggingMixin):
             config.weight,
             config.trust_weight,
             config.eps,
+            "not_applicable" if tangent.subspace_dimension == 2 else correction_source,
+            tangent.subspace_dimension,
+            correction_source,
             config.enabled,
             config.enabled,
-            config.enabled,
+            tangent.subspace_dimension == 1 and config.enabled,
             config.enabled and self.post_line_search_stationarity_config.enabled,
             config.enabled and self.post_line_search_stationarity_config.enabled,
         )

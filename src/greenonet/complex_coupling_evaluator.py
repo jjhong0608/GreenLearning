@@ -57,6 +57,7 @@ from greenonet.config import (
     ComplexRelativeSplitConsistencyConfig,
     ComplexWeakOperatorClosureConfig,
     CouplingTrainingConfig,
+    SymmetricTangentGreenResponseProjectionConfig,
     validate_complex_post_line_search_stationarity_config,
     validate_complex_response_trust_config,
 )
@@ -140,6 +141,19 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self._tangent_context_cache = SymmetricTangentGreenResponseContextCache(
             self.balance_projection.symmetric_tangent_green_response
         )
+        tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+            self.balance_projection.symmetric_tangent_green_response
+        )
+        stationarity_residual_source = (
+            "post_k2_residual_gradient"
+            if tangent_config.subspace_dimension == 2
+            else "uncapped_eta_star"
+        )
+        tangent_forward_source = (
+            "unconstrained_k2_coefficients"
+            if tangent_config.subspace_dimension == 2
+            else "capped_eta_applied"
+        )
         self.logger.info(
             "canonical energy boundary_weight=%.6e "
             "boundary_in_optimization=%s boundary_diagnostic_always=true "
@@ -161,7 +175,8 @@ class ComplexCouplingEvaluator(LoggingMixin):
         )
         self.logger.info(
             "post-line-search stationarity enabled=%s weight=%.6e eps=%.6e "
-            "eta_source=uncapped_eta_star forward_eta_source=capped_eta_applied "
+            "eta_source=%s forward_eta_source=%s "
+            "subspace_dimension=%d residual_source=%s forward_source=%s "
             "optimization_normalization=source_response "
             "legacy_initial_gradient_ratio=diagnostic_only "
             "matrix_free=true extra_adjoint_when_computed=%s "
@@ -170,14 +185,31 @@ class ComplexCouplingEvaluator(LoggingMixin):
             self.post_line_search_stationarity_config.enabled,
             self.post_line_search_stationarity_config.weight,
             self.post_line_search_stationarity_config.eps,
-            self.post_line_search_stationarity_config.enabled
-            or self.response_trust_config.enabled,
+            (
+                "not_applicable"
+                if tangent_config.subspace_dimension == 2
+                else stationarity_residual_source
+            ),
+            (
+                "not_applicable"
+                if tangent_config.subspace_dimension == 2
+                else tangent_forward_source
+            ),
+            tangent_config.subspace_dimension,
+            stationarity_residual_source,
+            tangent_forward_source,
+            tangent_config.subspace_dimension == 1
+            and (
+                self.post_line_search_stationarity_config.enabled
+                or self.response_trust_config.enabled
+            ),
             self.post_line_search_stationarity_config.enabled
             and self.response_trust_config.enabled,
         )
         self.logger.info(
             "response-trust enabled=%s weight=%.6e trust_weight=%.6e eps=%.6e "
-            "eta_source=capped_eta_applied "
+            "eta_source=%s "
+            "subspace_dimension=%d correction_source=%s "
             "source_normalization=Hx(f/2)^2+Hy(f/2)^2 "
             "matrix_free=true extra_forward_when_enabled=%s "
             "stationarity_diagnostic_when_enabled=%s "
@@ -188,9 +220,17 @@ class ComplexCouplingEvaluator(LoggingMixin):
             self.response_trust_config.weight,
             self.response_trust_config.trust_weight,
             self.response_trust_config.eps,
+            (
+                "not_applicable"
+                if tangent_config.subspace_dimension == 2
+                else tangent_forward_source
+            ),
+            tangent_config.subspace_dimension,
+            tangent_forward_source,
             self.response_trust_config.enabled,
             self.response_trust_config.enabled,
-            self.response_trust_config.enabled,
+            tangent_config.subspace_dimension == 1
+            and self.response_trust_config.enabled,
             self.response_trust_config.enabled
             and self.post_line_search_stationarity_config.enabled,
             self.response_trust_config.enabled
@@ -383,14 +423,17 @@ class ComplexCouplingEvaluator(LoggingMixin):
             stats = context.statistics()
             self.logger.info(
                 "symmetric-tangent Green-response context build_seconds=%.6f "
-                "eta=%.6e eta_strategy=%s line_search_relative_eps=%.6e "
+                "subspace_dimension=%d eta=%.6e eta_strategy=%s "
+                "eta_applicability=%s line_search_relative_eps=%.6e "
                 "relative_lambda=%.6e denominator_relative_eps=%.6e "
                 "gain_scale=%.6e denominator=[%.6e, %.6e] "
                 "x_blocks=%d y_blocks=%d row_norm_used=false "
                 "global_matrix_materialized=false full_gram_solve=false",
                 self._tangent_context_cache.build_seconds,
+                context.subspace_dimension,
                 context.eta,
                 context.eta_strategy,
+                stats["eta_applicability"],
                 context.line_search_relative_eps,
                 context.relative_lambda,
                 context.denominator_relative_eps,
@@ -477,7 +520,9 @@ class ComplexCouplingEvaluator(LoggingMixin):
             )
             if tangent.eta_star is not None:
                 if (
-                    tangent.eta_capped is None
+                    tangent.eta_applied is None
+                    or tangent.eta_cap is None
+                    or tangent.eta_capped is None
                     or tangent.line_search_numerator is None
                     or tangent.line_search_denominator is None
                 ):
@@ -499,6 +544,36 @@ class ComplexCouplingEvaluator(LoggingMixin):
                         ),
                         "tangent_line_search_denominator": float(
                             tangent.line_search_denominator[sample_offset].item()
+                        ),
+                    }
+                )
+            if tangent.subspace_dimension == 2:
+                if (
+                    tangent.coefficient_0 is None
+                    or tangent.coefficient_1 is None
+                    or tangent.second_direction_active is None
+                    or tangent.cost_k1 is None
+                    or tangent.cost_k2 is None
+                ):
+                    raise RuntimeError("K=2 tangent diagnostics are incomplete.")
+                cost_k1 = tangent.cost_k1[sample_offset]
+                cost_k2 = tangent.cost_k2[sample_offset]
+                row.update(
+                    {
+                        "tangent_subspace_dimension": 2,
+                        "tangent_coefficient_0": float(
+                            tangent.coefficient_0[sample_offset].item()
+                        ),
+                        "tangent_coefficient_1": float(
+                            tangent.coefficient_1[sample_offset].item()
+                        ),
+                        "tangent_second_direction_active": int(
+                            tangent.second_direction_active[sample_offset].item()
+                        ),
+                        "tangent_response_cost_k1": float(cost_k1.item()),
+                        "tangent_response_cost_k2": float(cost_k2.item()),
+                        "tangent_response_cost_k2_over_k1": float(
+                            (cost_k2 / cost_k1.clamp_min(eps)).item()
                         ),
                     }
                 )

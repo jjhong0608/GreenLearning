@@ -232,7 +232,7 @@ class TestTrainCLIConfigCopy:
         assert response_trust == {
             "enabled": True,
             "weight": 1.0e-3,
-            "trust_weight": 0.01,
+            "trust_weight": 0.1,
             "eps": 1.0e-12,
         }
         assert best_physics == {"enabled": True}
@@ -241,6 +241,35 @@ class TestTrainCLIConfigCopy:
             projection["symmetric_tangent_green_response"]["eta_strategy"]
             == "closed_loop_exact_line_search"
         )
+
+    def test_k2_pentagram_pilot_uses_unconstrained_subspace_configuration(self):
+        root = Path(__file__).resolve().parents[1]
+        pilot = json.loads(
+            (
+                root / "configs/complex_coupling_soap_tangent_k2_pentagram.json"
+            ).read_text()
+        )
+
+        tangent = pilot["coupling_model"]["balance_projection"][
+            "symmetric_tangent_green_response"
+        ]
+
+        assert tangent["subspace_dimension"] == 2
+        assert tangent["eta_strategy"] == "closed_loop_exact_line_search"
+        assert tangent["line_search_relative_eps"] == pytest.approx(1.0e-12)
+        assert pilot["coupling_training"]["response_trust"] == {
+            "enabled": True,
+            "weight": 0.1,
+            "trust_weight": 0.0,
+            "eps": 1.0e-12,
+        }
+        assert pilot["coupling_training"]["post_line_search_stationarity"] == {
+            "enabled": True,
+            "weight": 0.01,
+            "eps": 1.0e-12,
+        }
+        assert "optimizer_provenance" not in pilot
+        assert "complex_source_provenance" not in pilot
 
     def test_uses_custom_coefficient_functions_for_green_training(
         self, tmp_path, monkeypatch

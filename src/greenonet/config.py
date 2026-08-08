@@ -543,8 +543,9 @@ class ColumnDiagonalGreenResponseProjectionConfig:
 
 @dataclass
 class SymmetricTangentGreenResponseProjectionConfig:
-    """One-step tangent Green-response correction settings."""
+    """Matrix-free tangent Green-response correction settings."""
 
+    subspace_dimension: Literal[1, 2] = 1
     eta: float = 0.01
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"] = "fixed"
     line_search_relative_eps: float = 1.0e-12
@@ -552,6 +553,18 @@ class SymmetricTangentGreenResponseProjectionConfig:
     denominator_relative_eps: float = 1.0e-12
 
     def __post_init__(self) -> None:
+        if isinstance(self.subspace_dimension, bool) or not isinstance(
+            self.subspace_dimension, int
+        ):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                "subspace_dimension must be an integer."
+            )
+        if self.subspace_dimension not in {1, 2}:
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                "subspace_dimension must be 1 or 2."
+            )
         self._validate_nonnegative("eta", self.eta)
         if not isinstance(self.eta_strategy, str):
             raise TypeError(
@@ -563,6 +576,15 @@ class SymmetricTangentGreenResponseProjectionConfig:
                 "balance_projection.symmetric_tangent_green_response."
                 "eta_strategy must be 'fixed' or "
                 "'closed_loop_exact_line_search'."
+            )
+        if (
+            self.subspace_dimension == 2
+            and self.eta_strategy != "closed_loop_exact_line_search"
+        ):
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                "subspace_dimension=2 requires "
+                "eta_strategy='closed_loop_exact_line_search'."
             )
         self._validate_positive(
             "line_search_relative_eps",
@@ -614,6 +636,7 @@ class SymmetricTangentGreenResponseProjectionConfig:
             unknown = sorted(
                 set(data)
                 - {
+                    "subspace_dimension",
                     "eta",
                     "eta_strategy",
                     "line_search_relative_eps",

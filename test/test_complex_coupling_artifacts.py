@@ -1398,13 +1398,18 @@ def test_column_diagonal_green_response_artifact_provenance_and_fields(
 
 
 @pytest.mark.parametrize(
-    "eta_strategy",
-    ["fixed", "closed_loop_exact_line_search"],
+    ("eta_strategy", "subspace_dimension"),
+    [
+        ("fixed", 1),
+        ("closed_loop_exact_line_search", 1),
+        ("closed_loop_exact_line_search", 2),
+    ],
 )
 def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     tmp_path,
     monkeypatch,
     eta_strategy,
+    subspace_dimension,
 ):
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
@@ -1419,6 +1424,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         balance_projection=BalanceProjectionConfig(
             mode="symmetric_tangent_green_response",
             symmetric_tangent_green_response={
+                "subspace_dimension": subspace_dimension,
                 "eta": 0.01,
                 "eta_strategy": eta_strategy,
                 "line_search_relative_eps": 3.0e-12,
@@ -1462,6 +1468,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         "enabled": True,
         "mode": "symmetric_tangent_green_response",
         "symmetric_tangent_green_response": {
+            "subspace_dimension": subspace_dimension,
             "eta": 0.01,
             "eta_strategy": eta_strategy,
             "line_search_relative_eps": 3.0e-12,
@@ -1495,16 +1502,19 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert projection["mode"] == "symmetric_tangent_green_response"
     assert projection["uses_reference_targets"] is False
     assert tangent["active"] is True
+    assert tangent["subspace_dimension"] == subspace_dimension
     assert tangent["eta"] == pytest.approx(0.01)
     assert tangent["eta_strategy"] == eta_strategy
     assert tangent["line_search_relative_eps"] == pytest.approx(3.0e-12)
     assert tangent["relative_lambda"] == pytest.approx(0.1)
     assert tangent["denominator_relative_eps"] == pytest.approx(2.0e-12)
     adaptive = eta_strategy == "closed_loop_exact_line_search"
-    assert tangent["fixed_parameters"] is (not adaptive)
-    assert tangent["sample_adaptive"] is adaptive
+    k2 = subspace_dimension == 2
+    assert tangent["fixed_parameters"] is (not adaptive and not k2)
+    assert tangent["sample_adaptive"] is (adaptive or k2)
     assert tangent["batch_independent"] is True
-    assert tangent["differentiable_eta"] is adaptive
+    assert tangent["differentiable_eta"] is (adaptive and not k2)
+    assert tangent["differentiable_subspace_coefficients"] is k2
     assert tangent["learnable_parameters"] is False
     assert tangent["row_norm_used"] is False
     assert tangent["global_response_matrix_materialized"] is False
@@ -1519,10 +1529,16 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert stationarity_summary["eps"] == pytest.approx(
         2.0e-12 if adaptive else 1.0e-12
     )
-    assert stationarity_summary["eta_source"] == "uncapped_eta_star"
-    assert stationarity_summary["forward_eta_source"] == "capped_eta_applied"
+    assert stationarity_summary["eta_source"] == (
+        "not_applicable" if k2 else "uncapped_eta_star"
+    )
+    assert stationarity_summary["forward_eta_source"] == (
+        "not_applicable" if k2 else "capped_eta_applied"
+    )
     assert stationarity_summary["matrix_free"] is True
-    assert stationarity_summary["extra_adjoint_actions_per_enabled_batch"] == 1
+    assert stationarity_summary["extra_adjoint_actions_per_enabled_batch"] == (
+        0 if k2 else 1
+    )
     assert stationarity_summary["global_response_matrix_materialized"] is False
     assert stationarity_summary["full_gram_solve"] is False
     assert stationarity_summary["uses_reference_targets"] is False
@@ -1535,7 +1551,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     context_fields = np.load(
         outdir / "data" / "symmetric_tangent_green_response_fields.npz"
     )
-    assert set(context_fields.files) == {
+    expected_context_fields = {
         "gamma_x_squared",
         "gamma_y_squared",
         "preconditioner_base",
@@ -1547,6 +1563,9 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         "relative_lambda",
         "denominator_relative_eps",
     }
+    if k2:
+        expected_context_fields.update({"subspace_dimension", "eta_applicability"})
+    assert set(context_fields.files) == expected_context_fields
     assert context_fields["eta"].item() == pytest.approx(0.01)
     assert context_fields["eta_strategy"].item() == eta_strategy
     assert context_fields["line_search_relative_eps"].item() == pytest.approx(3.0e-12)
@@ -1578,7 +1597,45 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     )
     assert "tangent_response_mismatch_pre" in metric_rows[0]
     assert "tangent_response_mismatch_post" in metric_rows[0]
-    if adaptive:
+    if k2:
+        assert tangent["eta_role"] == "k1_only_not_applied"
+        assert tangent["eta_applicability"] == "k1_only_not_applied"
+        assert tangent["eta_cap_schedule"]["applicable"] is False
+        assert tangent["eta_cap_schedule"]["training_policy"] == "not_applied"
+        assert tangent["direction_contract"] == (
+            "two_jacobi_preconditioned_response_orthogonal_directions"
+        )
+        assert tangent["linear_solve_used"] is False
+        assert context_fields["subspace_dimension"].item() == 2
+        assert context_fields["eta_applicability"].item() == ("k1_only_not_applied")
+        assert "z0=D^-1*g" in projection["formula"]
+        assert "eta_star_statistics" not in tangent
+        assert "coefficient_0_statistics" in tangent
+        assert "coefficient_1_statistics" in tangent
+        assert "response_cost_k1_statistics" in tangent
+        assert "response_cost_k2_statistics" in tangent
+        assert "second_direction_active_fraction" in tangent
+        for suffix in (
+            "_tangent_direction_0",
+            "_tangent_direction_1",
+            "_tangent_response_direction_0",
+            "_tangent_response_direction_1",
+            "_tangent_coefficient_0",
+            "_tangent_coefficient_1",
+            "_tangent_second_direction_active",
+            "_tangent_mismatch_k1",
+            "_tangent_response_cost_k1",
+            "_tangent_response_cost_k2",
+            "_tangent_residual_gradient_post",
+            "_tangent_stationarity_residual",
+        ):
+            assert any(key.endswith(suffix) for key in selected.files)
+        assert metric_rows[0]["tangent_subspace_dimension"] == "2"
+        assert "tangent_coefficient_0" in metric_rows[0]
+        assert "tangent_coefficient_1" in metric_rows[0]
+        assert "tangent_response_cost_k1" in metric_rows[0]
+        assert "tangent_response_cost_k2" in metric_rows[0]
+    elif adaptive:
         assert tangent["eta_role"] == "final_safety_cap"
         assert tangent["eta_cap_schedule"]["validation_policy"] == "final_cap"
         assert tangent["eta_cap_schedule"]["post_warmup_behavior"] == ("hold_final_eta")

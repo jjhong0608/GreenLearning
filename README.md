@@ -255,12 +255,15 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   }
   ```
 - Complex optional column-diagonal Green-response projection: set `mode="column_diagonal_green_response"` to distribute the raw physical balance residual `r=rhs-p-q` using each source point's downstream solution-response cost. For direction `s`, production reconstruction defines `H_s=K_s W_s L_s^2` and the cached gain is `gamma_s^2=diag(H_s^T M_Omega H_s)` with `M_Omega=(hx*hy)I`. This is the squared norm of each source column, not a row/evaluation sensitivity. With `gx_bar=gamma_x^2+eps` and `gy_bar=gamma_y^2+eps`, the fixed tempered weight is `w_phi=sigmoid(alpha*(log(gy_bar)-log(gx_bar)))`, `w_psi=1-w_phi`; then `delta_phi=w_phi*r` and `delta_psi=w_psi*r`. `gain_exponent=0` gives the physical symmetric correction, while `gain_exponent=1` uses the legacy direct column-diagonal ratio. The default is `1.0`, so configs that omit the field preserve the existing numerical path. Intermediate values such as `0.25` temper gain anisotropy without adding a learnable parameter, sample-dependent gate, row method, or full-Gram solve. The frozen GreenNet context and fixed weights are built segment-by-segment once per trainer/evaluator instance. Artifact export writes the exponent, run-level gains, and weights to `data/column_diagonal_green_response_fields.npz`, selected-sample correction diagnostics to `data/selected_raw_arrays.npz`, and gain/weight Plotly figures under `figures/balance_projection/`. Exponent comparisons require paired retraining from the same initialization and data; changing alpha only at export time is not a fair comparison. See `docs/complex_column_diagonal_green_response_projection.md` for the full contract.
-- Complex optional symmetric-tangent Green-response projection: set `mode="symmetric_tangent_green_response"` to start from the exact-balanced symmetric pair `p_tilde=(rhs+p-q)/2`, `q_tilde=(rhs-p+q)/2`. With `m0=H_x p_tilde-H_y q_tilde`, the reference-free gradient is `g=(H_x+H_y)^T M_Omega m0`, and the cached Jacobi denominator is `D=gamma_x^2+gamma_y^2+(relative_lambda+denominator_relative_eps)*mean(gamma_x^2+gamma_y^2)`. The backward-compatible default `eta_strategy="fixed"` uses `delta=-eta*g/D`. The opt-in `eta_strategy="closed_loop_exact_line_search"` forms `z=g/D`, `v=(H_x+H_y)z`, computes the sample-wise `eta_star=(g^T z)/(<v,v>_M+eps_sample)`, and applies `eta_applied=min(eta_star,eta_cap)`. Here `eta` is the final safety cap, not a learned parameter. When the CouplingNet LR schedule is enabled, the training cap uses a half-cosine rise over the same effective warmup epochs and then remains at `eta`; LR cosine decay is not reused. Validation, checkpoint selection, standalone evaluation, and artifact export always use the final cap. Both strategies use `phi=p_tilde+delta`, `psi=q_tilde-delta`, preserve `phi+psi=rhs`, remain differentiable through the sample-wise eta, and use no reference target, batch-global statistic, row norm, global response matrix, full-Gram matrix, or linear solve. Frozen segment-local response blocks are built once and reused. `eta=0` is exactly the physical-symmetric ablation.
+- Complex optional symmetric-tangent Green-response projection: set `mode="symmetric_tangent_green_response"` to start from the exact-balanced symmetric pair `p_tilde=(rhs+p-q)/2`, `q_tilde=(rhs-p+q)/2`. With `m0=H_x p_tilde-H_y q_tilde`, the reference-free gradient is `g=(H_x+H_y)^T M_Omega m0`, and the cached Jacobi denominator is `D=gamma_x^2+gamma_y^2+(relative_lambda+denominator_relative_eps)*mean(gamma_x^2+gamma_y^2)`. `subspace_dimension` defaults to `1`, preserving the existing fixed or closed-loop scalar line-search path exactly. The backward-compatible `eta_strategy="fixed"` uses `delta=-eta*g/D`; `eta_strategy="closed_loop_exact_line_search"` forms `z=g/D`, `v=(H_x+H_y)z`, computes sample-wise `eta_star=(g^T z)/(<v,v>_M+eps_sample)`, and applies `eta_applied=min(eta_star,eta_cap)`. Here `eta` is the final K=1 safety cap, not a learned parameter. When the CouplingNet LR schedule is enabled, the K=1 training cap uses a half-cosine rise over the same effective warmup epochs and then remains at `eta`; LR cosine decay is not reused. Validation, checkpoint selection, standalone evaluation, and artifact export use the final K=1 cap. All tangent paths use `phi=p_tilde+delta`, `psi=q_tilde-delta`, preserve `phi+psi=rhs`, and use no reference target, row norm, global response matrix, full-Gram matrix, or linear solve. Frozen segment-local response blocks are built once and reused. For K=1, `eta=0` is exactly the physical-symmetric ablation.
+- A hypothetical full-Gram alternative would solve the per-sample normal equation `A*delta_b=-g_b`, with `A=(H_x+H_y)^T M_Omega (H_x+H_y)`. For fixed geometry, coefficients, and GreenNet, `A` is shared: it can be assembled and factorized once, then applied to every current or future sample through a different right-hand side. This gives the exact discrete least-squares minimizer of the learned response mismatch, not an exact unavailable target directional split. It also turns projection into a solver-in-the-loop and can make the CouplingNet proposal irrelevant when `A` is nonsingular, so production deliberately retains the matrix-free one-step Jacobi path.
+- The opt-in `subspace_dimension=2` path is a fixed-rank matrix-free tangent subspace correction. It keeps `z0=D^-1*g0`, computes the exact scalar `c0` for the first response direction, forms `z1_raw=D^-1*(g0-c0*S^T*M_Omega*S*z0)`, and response-orthogonalizes `z1_raw` against `z0`. A second exact scalar `c1` gives `delta=-c0*z0-c1*z1`. No dense `2x2` solve is needed. If the second response direction is numerically degenerate, `c1=0` and the result falls back to uncapped K=1. Since the K=1 direction is contained in the enlarged subspace, the K=2 response cost is checked not to exceed uncapped K=1 beyond float64 tolerance. K=2 deliberately ignores `eta`, the tangent eta cap, and the tangent eta warmup schedule; those fields remain in the shared schema only for K=1 compatibility. The coefficients are deterministic, sample-wise, differentiable, and not model parameters. K=2 is available for paired retraining but remains opt-in rather than the default.
   ```json
   "balance_projection": {
     "enabled": true,
     "mode": "symmetric_tangent_green_response",
     "symmetric_tangent_green_response": {
+      "subspace_dimension": 2,
       "eta": 0.01,
       "eta_strategy": "closed_loop_exact_line_search",
       "line_search_relative_eps": 1e-12,
@@ -269,8 +272,8 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     }
   }
   ```
-  `configs/complex_coupling_soap_tangent.json` is the separate SOAP adaptive-tangent experiment config; existing canonical and column-diagonal configs remain unchanged. Omit `eta_strategy` to retain the fixed update. Training logs and CSV record the scheduled cap and aggregate eta statistics; evaluation artifacts record per-sample `eta_star`, applied eta, cap hits, and line-search numerator/denominator. The method must be compared with physical symmetric through paired retraining; the frozen-checkpoint audit remains diagnostic evidence rather than a training result.
-- Complex optional source-normalized post-line-search stationarity: `coupling_training.post_line_search_stationarity.enabled=true` is available only with symmetric-tangent `eta_strategy="closed_loop_exact_line_search"`. Let `S=H_x+H_y`, `A=S^T M_Omega S`, `g=S^T M_Omega m0`, `z=D^-1 g`, and `r_stat=g-eta_star*A*z`. The optimized per-sample regularizer is `(r_stat^T D^-1 r_stat)/(E_f+eps)`, where `E_f=||H_x(f/2)||_M^2+||H_y(f/2)||_M^2`; its fixed `weight` adds the batch mean to the reference-free objective. It deliberately uses uncapped `eta_star` to measure tangent-line alignment while the forward projection continues to use capped `eta_applied`. The previous initial-gradient-relative ratio `(r_stat^T D^-1 r_stat)/(g^T D^-1 g+eps)` is preserved unchanged as the diagnostic `tangent_post_line_search_stationarity_ratio`; it is no longer optimized. Logs and CSV additionally report the unweighted optimized value as `tangent_post_line_search_stationarity_source_normalized`, `tangent_stationarity_initial_source_ratio`, and `tangent_source_response_energy`. `A*z` remains one cached segment-local adjoint action with no global matrix or solve. The option defaults to disabled and does not change model or checkpoint tensor keys.
+  `configs/complex_coupling_soap_tangent.json` is the K=1 SOAP adaptive-tangent experiment config. `configs/complex_coupling_soap_tangent_k2_pentagram.json` preserves the Pentagram `coupling8` pilot conditions and changes only the production tangent subspace to K=2. Existing canonical, column-diagonal, and user experiment configs remain unchanged. K=1 logs/CSV retain scheduled-cap and eta statistics. K=2 logs/CSV instead record `c0/c1`, second-direction activity, K=1/K=2 response costs, and explicitly report that eta scheduling is not applicable. Selected artifact NPZ files also include both source directions, both response directions, final residual gradient, and final mismatch. Either path requires paired retraining; the frozen-checkpoint audit remains diagnostic evidence rather than a training result.
+- Complex optional source-normalized post-line-search stationarity: `coupling_training.post_line_search_stationarity.enabled=true` is available only with symmetric-tangent `eta_strategy="closed_loop_exact_line_search"`. For K=1, let `S=H_x+H_y`, `A=S^T M_Omega S`, `g=S^T M_Omega m0`, `z=D^-1 g`, and `r_stat=g-eta_star*A*z`. For K=2, stationarity uses the final subspace residual gradient `r_stat=S^T M_Omega m2` already computed by the projection. In both cases the optimized per-sample regularizer is `(r_stat^T D^-1 r_stat)/(E_f+eps)`, where `E_f=||H_x(f/2)||_M^2+||H_y(f/2)||_M^2`; its fixed `weight` adds the batch mean to the reference-free objective. The initial-gradient-relative ratio `(r_stat^T D^-1 r_stat)/(g^T D^-1 g+eps)` remains the diagnostic `tangent_post_line_search_stationarity_ratio` and is not optimized. K=2 needs no additional eta or adjoint action for this loss because its final residual gradient is reused. Logs and CSV also report `tangent_post_line_search_stationarity_source_normalized`, `tangent_stationarity_initial_source_ratio`, and `tangent_source_response_energy`. The option defaults to disabled and does not change model or checkpoint tensor keys.
   ```json
   "post_line_search_stationarity": {
     "enabled": true,
@@ -279,7 +282,7 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   }
   ```
   Best-energy selection remains based on `loss_energy_optimized`; best-physics selection uses the stationarity-augmented total loss. The stationarity term measures the learned Green-response surrogate and therefore complements rather than replaces canonical energy.
-- Complex optional response-trust loss: `coupling_training.response_trust.enabled=true` is available only with symmetric-tangent `eta_strategy="closed_loop_exact_line_search"` and may be enabled together with source-normalized stationarity. Let `m_pre=H_x*p_tilde-H_y*q_tilde`, let the production correction use the actual capped `delta=-eta_applied*D^-1*g`, and let `m_post=m_pre+(H_x+H_y)*delta`. Per sample, response trust evaluates `||m_post||_M^2/(E_f+eps) + trust_weight*||(H_x+H_y)delta||_M^2/(E_f+eps)`, with `trust_weight=0.01` by default. This directly penalizes the applied post-correction mismatch and discourages a large response correction without reading `sol` or target `phi/psi`. Response trust and stationarity share the same single matrix-free `forward_pair` result for `H_x(f/2),H_y(f/2)`; they do not duplicate source-response reconstruction. The stationarity diagnostic uses uncapped `eta_star`, while response trust always uses the capped correction actually applied in production. Logs, CSV, and artifacts record both components and the shared source-response provenance.
+- Complex optional response-trust loss: `coupling_training.response_trust.enabled=true` is available only with symmetric-tangent `eta_strategy="closed_loop_exact_line_search"` and may be enabled together with source-normalized stationarity. Let `m_pre=H_x*p_tilde-H_y*q_tilde`, let `delta` be the actual K=1 capped correction or final K=2 subspace correction, and let `m_post=m_pre+(H_x+H_y)*delta`. Per sample, response trust evaluates `||m_post||_M^2/(E_f+eps) + trust_weight*||(H_x+H_y)delta||_M^2/(E_f+eps)`, with `trust_weight=0.01` by default. This directly penalizes the applied post-correction mismatch and discourages a large response correction without reading `sol` or target `phi/psi`. Response trust and stationarity share one `H_x(f/2),H_y(f/2)` source normalization. K=1 stationarity uses uncapped `eta_star` while response trust uses the capped applied correction; K=2 uses its final `m2`, correction response `m2-m0`, and post-K2 residual gradient, with no eta semantics. Logs, CSV, and artifacts record both components and the shared source-response provenance.
   ```json
   "post_line_search_stationarity": {"enabled": false},
   "response_trust": {
@@ -289,7 +292,77 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     "eps": 1e-12
   }
   ```
-  The block defaults to disabled, so existing training and checkpoint tensors are unchanged. A conservative first paired ablation can use `weight=1e-3`; this is an experiment setting rather than the dataclass default. `configs/complex_coupling_soap_tangent_response_trust_stationarity.json` is the Pentagram combined pilot with response-trust weight `1e-3`, stationarity weight `1e-4`, and `trust_weight=0.01`. Best-energy selection remains on `loss_energy_optimized`, while best-physics selection uses the complete auxiliary-augmented total loss.
+  The block defaults to disabled, so existing training and checkpoint tensors are unchanged. A conservative first paired ablation can use `weight=1e-3`; this is an experiment setting rather than the dataclass default. `configs/complex_coupling_soap_tangent_response_trust_stationarity.json` is the Pentagram combined pilot with response-trust weight `1e-3`, stationarity weight `1e-4`, and `trust_weight=0.1`. Best-energy selection remains on `loss_energy_optimized`, while best-physics selection uses the complete auxiliary-augmented total loss.
+- Pentagram response-objective comparison: `checkpoints/pentagram/coupling4`,
+  `coupling5`, and `coupling6` use the same 4,800/300 indexed-GP source split,
+  tangent projection, boundary-off canonical energy, and weak-residual final
+  reconstruction. Their actual response-trust weights are `0.001`, `1.0`, and
+  `0.1`; only `coupling6` optimizes source-normalized stationarity with weight
+  `0.01`. On the common 100-sample test set at best-energy checkpoints, mean
+  `rel_sol` is `3.103%`, `3.281%`, and `2.691%`, while mean `rel_flux` is
+  `38.603%`, `46.873%`, and `47.118%`. `coupling6` lowers source-normalized
+  stationarity by `70.7%` versus `coupling4` and improves `rel_sol` by `0.412`
+  percentage points, but its flux error rises by `8.514` points. The matched
+  causal stationarity ablation is still missing because response-trust weight
+  changes between runs; `coupling4` also ran on CUDA while `coupling5/6` ran on
+  CPU. See
+  `checkpoints/pentagram/coupling4_6_comparison/analysis_report.md` for paired
+  bootstrap intervals, checkpoint-selection effects, sample-15 spatial
+  diagnostics, CSV summaries, and Plotly figures.
+- Pentagram six-run directional comparison: the common best-energy checkpoints
+  from `coupling` through `coupling6` were re-evaluated on the same 100 test
+  samples, including full-test `u_phi` and `u_psi` errors that are absent from
+  the standard per-sample artifact CSV. The re-evaluated `rel_sol/rel_flux`
+  agree with every stored artifact to at most `3.1e-15`. Mean
+  `rel_sol/rel_u_phi/rel_u_psi/rel_flux` is respectively
+  `2.691%/5.142%/4.869%/47.118%` for `coupling6`; the best individual values are
+  `coupling6/coupling/coupling2/coupling4`. Thus the joint objective gives the
+  best common reconstruction and tail error but not the best x-direction
+  reconstruction or physical directional-source fidelity. The local weak-
+  residual final blend improves equal mean on 100/100 `coupling6` samples.
+  See `checkpoints/pentagram/coupling1_6_comparison/analysis_report.md` for the
+  common-checkpoint protocol, directional tables, sample-paired intervals,
+  training trends, CSVs, and Plotly figures.
+- Pentagram `coupling7` trust-strength comparison: `coupling7` changes only the
+  saved `response_trust.trust_weight` from `0.01` to `0.1` relative to
+  `coupling6`; outer trust weight `0.1`, source-normalized stationarity weight
+  `0.01`, data, optimizer, tangent projection and final reconstruction remain
+  the same. On the shared 100-sample best-energy evaluation, correction response
+  ratio decreases `69.2%` and tangent-delta RMS decreases `35.2%`, so the
+  stronger inner trust does reduce correction dependence. Mean `rel_sol`
+  changes only `2.691% -> 2.706%`, while p90 improves `4.656% -> 4.195%` and
+  maximum improves `9.144% -> 9.012%`. The directional tradeoff is unfavorable:
+  mean `rel_u_phi/rel_u_psi/rel_flux` changes from
+  `5.142%/4.869%/47.118%` to `5.341%/5.152%/56.570%`, and flux is worse on
+  99/100 samples. Treat `coupling7` as a tail-robust but over-constrained
+  correction ablation, not as a replacement for `coupling6`. The saved configs
+  do not fix model initialization seed, so this remains a one-run observational
+  comparison despite the one-field config diff. See
+  `checkpoints/pentagram/coupling1_7_comparison/analysis_report.md` for full
+  directional tables, paired bootstrap intervals, tangent diagnostics and
+  reproducible Plotly/CSV outputs.
+- Pentagram `coupling8` zero-inner-trust comparison: `coupling8` differs from
+  `coupling6/7` only in saved `response_trust.trust_weight=0`, versus
+  `0.01/0.1`. The post-response mismatch term remains active; only the explicit
+  correction-response penalty is removed. On the shared 100-sample best-energy
+  evaluation, `coupling8` has the lowest eight-run mean/median `rel_sol`
+  (`2.678%/2.114%`), lowest mean `rel_u_psi` (`4.832%`), and lowest split
+  mismatch (`7.886%`). Versus `coupling6`, mean `rel_sol` improves only `0.46%`
+  relative and its paired interval includes zero, while `rel_u_phi` and split
+  mismatch improve `2.32%` and `2.09%`. Removing inner trust raises correction
+  response ratio `33.6%` and tangent-delta RMS `13.6%`; the maximum `rel_sol`
+  worsens `9.144% -> 10.317%`. Thus zero trust improves distribution center and
+  directional balance but gives up correction suppression and worst-sample
+  robustness. The model initialization seed is not recorded, so a fixed-seed
+  `0/0.005/0.01` sweep is required before selecting a default. See
+  `checkpoints/pentagram/coupling1_8_comparison/analysis_report.md` for all eight
+  runs, paired intervals, training-component trends, CSVs, and Plotly figures.
+  The current evidence favors a functional role split: the network supplies a
+  balance-plane proposal, while the deterministic tangent step removes response
+  mismatch. Inner trust is only a proxy that asks this correction to stay
+  small; it does not directly measure distance from an unavailable ideal
+  directional split. Keep gradients through the tangent step even when this
+  correction-size proxy is disabled.
   ```json
   "balance_projection": {
     "enabled": true,
@@ -389,6 +462,38 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   `rel_sol_equal_mean`, so the same frozen candidates can be audited with
   `local_weak_residual_reliability` enabled in a diagnostic config without
   changing the checkpoint or directional projection.
+
+  A dedicated frozen-checkpoint audit compares symmetric balance, the configured
+  capped `K=1`, uncapped exact-line-search `K=1`, and matrix-free unconstrained
+  `K=2` on identical raw output. It reports response mismatch, optimized and
+  full canonical energy, `rel_sol`, directional `rel_u_phi/rel_u_psi`,
+  `rel_flux`, correction norm, p90/p95/max tails, and paired sample counts.
+
+  ```bash
+  PYTHONPATH=src ~/.conda/envs/green_net/bin/python \
+    cli/audit_tangent_subspace.py \
+    --config checkpoints/pentagram/coupling8/config_used.json \
+    --coupling-checkpoint \
+      checkpoints/pentagram/coupling8/complex_coupling_model_best_energy.safetensors \
+    --green-checkpoint checkpoints/pentagram/green/model.safetensors \
+    --outdir checkpoints/pentagram/coupling8/tangent_subspace_k1_k2_audit \
+    --device cpu --batch-size 10
+  ```
+
+  On the 100-sample Pentagram `coupling8` test set, `K=2` versus production
+  `K=1` changes mean response mismatch by `-33.028%`, optimized bulk energy by
+  `-16.246%`, `rel_sol` by `-25.794%`, `rel_u_phi` by `-17.891%`, and
+  `rel_u_psi` by `-22.385%`; response mismatch and all three solution metrics
+  improve on `100/100` samples. Mean `rel_flux` changes only `-0.139%` and
+  improves on `72/100`, while relative correction norm increases `13.211%`.
+  Only two samples hit the production `eta=0.015` cap, so capped and uncapped
+  `K=1` are nearly identical: the gain comes from the second response direction,
+  not cap removal. The p95/max `rel_sol` falls from `5.131%/10.317%` to
+  `3.820%/6.411%`. These are strong frozen-checkpoint findings, but `K=2` was
+  not used during that checkpoint's training. The production implementation is
+  therefore opt-in and requires paired retraining before any default change.
+  Outputs are under
+  `checkpoints/pentagram/coupling8/tangent_subspace_k1_k2_audit/`.
 - Paired fixed-vs-closed-loop CDR result: `annulus_CDR/coupling8` and
   `annulus_CDR/coupling9` have identical saved configs except that coupling8
   uses fixed `eta=0.01`, while coupling9 uses sample-wise

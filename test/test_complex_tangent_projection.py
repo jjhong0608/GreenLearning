@@ -57,6 +57,7 @@ def _response_operator(
 def _context(
     *,
     eta: float,
+    subspace_dimension: int = 1,
     relative_lambda: float = 0.01,
     eta_strategy: str = "fixed",
     line_search_relative_eps: float = 1.0e-12,
@@ -76,6 +77,7 @@ def _context(
         response_operator=operator,
         point_mass=torch.tensor(0.125, dtype=dtype),
         config={
+            "subspace_dimension": subspace_dimension,
             "eta": eta,
             "eta_strategy": eta_strategy,
             "line_search_relative_eps": line_search_relative_eps,
@@ -149,6 +151,64 @@ def test_tangent_projection_matches_fixed_preconditioned_step_and_balance(tmp_pa
     assert result.column_diagonal_context is None
     assert context.statistics()["global_matrix_materialized"] is False
     assert context.statistics()["full_gram_solve"] is False
+
+
+def test_omitted_subspace_dimension_is_bitwise_identical_to_explicit_k1(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    raw_physical = torch.tensor(
+        [[[0.2, -0.4, 0.8], [0.7, 0.1, -0.3]]],
+        dtype=torch.float64,
+    )
+    raw_response = _raw_response(geometry, raw_physical)
+    rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
+    shared = {
+        "eta": 0.05,
+        "eta_strategy": "closed_loop_exact_line_search",
+        "line_search_relative_eps": 1.0e-12,
+        "relative_lambda": 0.1,
+    }
+    omitted = apply_complex_balance_projection(
+        raw_response,
+        rhs,
+        geometry,
+        BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response=shared,
+        ),
+        symmetric_tangent_context=_context(
+            eta=0.05,
+            eta_strategy="closed_loop_exact_line_search",
+            relative_lambda=0.1,
+        ),
+    )
+    explicit = apply_complex_balance_projection(
+        raw_response,
+        rhs,
+        geometry,
+        BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={**shared, "subspace_dimension": 1},
+        ),
+        symmetric_tangent_context=_context(
+            eta=0.05,
+            subspace_dimension=1,
+            eta_strategy="closed_loop_exact_line_search",
+            relative_lambda=0.1,
+        ),
+    )
+
+    assert torch.equal(omitted.projected_physical, explicit.projected_physical)
+    assert torch.equal(omitted.projected_response, explicit.projected_response)
+    omitted_tangent = omitted.symmetric_tangent_diagnostics
+    explicit_tangent = explicit.symmetric_tangent_diagnostics
+    assert omitted_tangent is not None
+    assert explicit_tangent is not None
+    assert omitted_tangent.subspace_dimension == 1
+    assert explicit_tangent.subspace_dimension == 1
+    assert torch.equal(omitted_tangent.delta, explicit_tangent.delta)
+    assert torch.equal(omitted_tangent.mismatch_post, explicit_tangent.mismatch_post)
+    assert torch.equal(omitted_tangent.eta_star, explicit_tangent.eta_star)
+    assert torch.equal(omitted_tangent.eta_applied, explicit_tangent.eta_applied)
 
 
 def test_zero_eta_is_bitwise_physical_symmetric_projection(tmp_path):
@@ -230,6 +290,171 @@ def test_tangent_projection_preserves_autograd_and_reuses_cached_solution(tmp_pa
         "tangent_correction_rel_symmetric_pair",
     }
     assert all(torch.isfinite(value) for value in metrics.values())
+
+
+def test_k2_projection_is_balanced_matrix_free_and_improves_k1_cost(
+    tmp_path,
+    monkeypatch,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    context = _context(
+        eta=0.015,
+        subspace_dimension=2,
+        relative_lambda=0.1,
+        eta_strategy="closed_loop_exact_line_search",
+        line_search_relative_eps=1.0e-15,
+    )
+    raw_physical = torch.tensor(
+        [[[0.2, -0.4, 0.8], [0.7, 0.1, -0.3]]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
+
+    def fail_solve(*args, **kwargs):
+        raise AssertionError("K=2 tangent projection must not solve a matrix.")
+
+    monkeypatch.setattr(torch.linalg, "solve", fail_solve)
+    result = apply_complex_balance_projection(
+        _raw_response(geometry, raw_physical),
+        rhs,
+        geometry,
+        BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={
+                "subspace_dimension": 2,
+                "eta_strategy": "closed_loop_exact_line_search",
+                "line_search_relative_eps": 1.0e-15,
+                "relative_lambda": 0.1,
+            },
+        ),
+        symmetric_tangent_context=context,
+    )
+    tangent = result.symmetric_tangent_diagnostics
+    assert tangent is not None
+    assert tangent.subspace_dimension == 2
+    assert tangent.eta_applied is None
+    assert tangent.eta_cap is None
+    assert tangent.coefficient_0 is not None
+    assert tangent.coefficient_1 is not None
+    assert tangent.second_direction_active is not None
+    assert tangent.mismatch_k1 is not None
+    assert tangent.cost_k1 is not None
+    assert tangent.cost_k2 is not None
+    assert tangent.residual_gradient_post is not None
+    torch.testing.assert_close(
+        context.point_mass * tangent.mismatch_post.square().sum(dim=1),
+        tangent.cost_k2,
+    )
+    assert torch.all(tangent.cost_k2 <= tangent.cost_k1 * (1.0 + 1.0e-10))
+    torch.testing.assert_close(
+        result.projected_physical.sum(dim=1),
+        rhs,
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )
+    direct_solution = context.response_operator.forward_pair(result.projected_physical)
+    torch.testing.assert_close(tangent.projected_solution, direct_solution)
+    metrics = symmetric_tangent_metric_tensors(result)
+    assert metrics["tangent_subspace_dimension"].item() == 2
+    assert "tangent_eta_cap" not in metrics
+    tangent.projected_solution.square().mean().backward()
+    assert raw_physical.grad is not None
+    assert torch.all(torch.isfinite(raw_physical.grad))
+
+
+def test_k2_rejects_eta_cap_and_degenerate_second_direction_falls_back():
+    dtype = torch.float64
+    context = SymmetricTangentGreenResponseContext.from_response_operator(
+        response_operator=_response_operator(
+            torch.ones((1, 1), dtype=dtype),
+            torch.zeros((1, 1), dtype=dtype),
+        ),
+        point_mass=1.0,
+        config={
+            "subspace_dimension": 2,
+            "eta_strategy": "closed_loop_exact_line_search",
+            "line_search_relative_eps": 1.0e-12,
+            "relative_lambda": 0.0,
+            "denominator_relative_eps": 1.0e-12,
+        },
+    )
+    mismatch = torch.tensor([[2.0]], dtype=dtype)
+    gradient = context.tangent_gradient(mismatch)
+    with pytest.raises(ValueError, match="eta_cap is not applicable"):
+        context.tangent_step(mismatch=mismatch, gradient=gradient, eta_cap=0.01)
+
+    step = context.tangent_step(mismatch=mismatch, gradient=gradient)
+    assert step.second_direction_active is not None
+    assert step.coefficient_1 is not None
+    assert step.mismatch_k1 is not None
+    assert step.mismatch_k2 is not None
+    assert not bool(step.second_direction_active.item())
+    assert step.coefficient_1.item() == 0.0
+    torch.testing.assert_close(step.mismatch_k2, step.mismatch_k1)
+
+
+def test_k2_stationarity_and_response_trust_use_final_subspace_residual(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    context = _context(
+        eta=0.015,
+        subspace_dimension=2,
+        relative_lambda=0.1,
+        eta_strategy="closed_loop_exact_line_search",
+        line_search_relative_eps=1.0e-15,
+    )
+    raw_physical = torch.tensor(
+        [[[0.2, -0.4, 0.8], [0.7, 0.1, -0.3]]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
+    projection = apply_complex_balance_projection(
+        _raw_response(geometry, raw_physical),
+        rhs,
+        geometry,
+        BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={
+                "subspace_dimension": 2,
+                "eta_strategy": "closed_loop_exact_line_search",
+                "line_search_relative_eps": 1.0e-15,
+                "relative_lambda": 0.1,
+            },
+        ),
+        symmetric_tangent_context=context,
+    )
+    auxiliary = tangent_auxiliary_losses_from_projection(
+        projection=projection,
+        context=context,
+        rhs_phys=rhs,
+        stationarity_config={"enabled": True, "weight": 1.0e-4},
+        response_trust_config={
+            "enabled": True,
+            "weight": 1.0e-3,
+            "trust_weight": 0.01,
+        },
+    )
+    tangent = projection.symmetric_tangent_diagnostics
+    assert tangent is not None
+    assert tangent.residual_gradient_post is not None
+    assert auxiliary.stationarity is not None
+    assert auxiliary.response_trust is not None
+    torch.testing.assert_close(
+        auxiliary.stationarity.stationarity_residual,
+        tangent.residual_gradient_post,
+    )
+    torch.testing.assert_close(
+        auxiliary.response_trust.correction_response,
+        tangent.mismatch_post - tangent.mismatch_pre,
+    )
+    assert (
+        auxiliary.stationarity.source_response.data_ptr()
+        == auxiliary.response_trust.source_response.data_ptr()
+    )
+    (auxiliary.stationarity.loss + auxiliary.response_trust.loss).backward()
+    assert raw_physical.grad is not None
+    assert torch.all(torch.isfinite(raw_physical.grad))
 
 
 def test_tangent_projection_requires_context(tmp_path):
@@ -479,6 +704,15 @@ def test_tangent_eta_cap_schedule_reuses_lr_warmup_and_holds_final_eta():
     )
     assert [immediate.cap_for_epoch_index(index) for index in range(8)] == [0.02] * 8
     assert immediate.kind == "closed_loop_final_cap"
+
+    with pytest.raises(ValueError, match="subspace_dimension=1"):
+        SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
+            config={
+                "subspace_dimension": 2,
+                "eta_strategy": "closed_loop_exact_line_search",
+            },
+            learning_rate_schedule=fixed_lr,
+        )
 
 
 def test_normalized_stationarity_is_zero_when_tangent_line_reaches_minimizer(

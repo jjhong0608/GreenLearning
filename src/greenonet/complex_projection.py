@@ -31,7 +31,7 @@ from greenonet.config import (
 
 @dataclass(frozen=True)
 class SymmetricTangentProjectionDiagnostics:
-    """Audit tensors from one balance-preserving tangent response step."""
+    """Audit tensors from a balance-preserving tangent subspace step."""
 
     symmetric_physical: torch.Tensor
     symmetric_solution: torch.Tensor
@@ -42,14 +42,26 @@ class SymmetricTangentProjectionDiagnostics:
     delta: torch.Tensor
     projected_solution: torch.Tensor
     mismatch_post: torch.Tensor
+    subspace_dimension: int
     eta_strategy: str
-    eta_applied: torch.Tensor
-    eta_cap: float
+    eta_applied: torch.Tensor | None
+    eta_cap: float | None
     eta_star: torch.Tensor | None
     eta_capped: torch.Tensor | None
     line_search_numerator: torch.Tensor | None
     line_search_denominator: torch.Tensor | None
     response_direction: torch.Tensor | None
+    direction_0: torch.Tensor | None
+    direction_1: torch.Tensor | None
+    response_direction_0: torch.Tensor | None
+    response_direction_1: torch.Tensor | None
+    coefficient_0: torch.Tensor | None
+    coefficient_1: torch.Tensor | None
+    second_direction_active: torch.Tensor | None
+    mismatch_k1: torch.Tensor | None
+    cost_k1: torch.Tensor | None
+    cost_k2: torch.Tensor | None
+    residual_gradient_post: torch.Tensor | None
 
 
 @dataclass(frozen=True)
@@ -172,7 +184,38 @@ def apply_complex_balance_projection(
             eta_cap=symmetric_tangent_eta_cap,
         )
         delta = tangent_step.delta
-        if (
+        if tangent_step.subspace_dimension == 2:
+            required_k2 = (
+                tangent_step.directional_response_0,
+                tangent_step.directional_response_1,
+                tangent_step.coefficient_0,
+                tangent_step.coefficient_1,
+                tangent_step.mismatch_k2,
+            )
+            if any(value is None for value in required_k2):
+                raise RuntimeError("K=2 tangent diagnostics are incomplete.")
+            response_pair_0 = tangent_step.directional_response_0
+            response_pair_1 = tangent_step.directional_response_1
+            coefficient_0 = tangent_step.coefficient_0
+            coefficient_1 = tangent_step.coefficient_1
+            assert response_pair_0 is not None
+            assert response_pair_1 is not None
+            assert coefficient_0 is not None
+            assert coefficient_1 is not None
+            phi = symmetric_physical[:, 0] + delta
+            projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
+            projected_solution = torch.stack(
+                (
+                    symmetric_solution[:, 0]
+                    - coefficient_0.unsqueeze(1) * response_pair_0[:, 0]
+                    - coefficient_1.unsqueeze(1) * response_pair_1[:, 0],
+                    symmetric_solution[:, 1]
+                    + coefficient_0.unsqueeze(1) * response_pair_0[:, 1]
+                    + coefficient_1.unsqueeze(1) * response_pair_1[:, 1],
+                ),
+                dim=1,
+            )
+        elif (
             symmetric_tangent_context.eta_strategy == "fixed"
             or tangent_step.directional_response is None
         ):
@@ -190,6 +233,8 @@ def apply_complex_balance_projection(
             projected_physical = symmetric_physical
             projected_solution = symmetric_solution
         else:
+            if tangent_step.eta_applied is None:
+                raise RuntimeError("K=1 adaptive eta diagnostics are incomplete.")
             phi = symmetric_physical[:, 0] + delta
             projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
             applied = tangent_step.eta_applied.unsqueeze(1)
@@ -217,6 +262,7 @@ def apply_complex_balance_projection(
             delta=delta,
             projected_solution=projected_solution,
             mismatch_post=mismatch_post,
+            subspace_dimension=tangent_step.subspace_dimension,
             eta_strategy=symmetric_tangent_context.eta_strategy,
             eta_applied=tangent_step.eta_applied,
             eta_cap=tangent_step.eta_cap,
@@ -225,6 +271,17 @@ def apply_complex_balance_projection(
             line_search_numerator=tangent_step.line_search_numerator,
             line_search_denominator=tangent_step.line_search_denominator,
             response_direction=tangent_step.response_direction,
+            direction_0=tangent_step.direction_0,
+            direction_1=tangent_step.direction_1,
+            response_direction_0=tangent_step.response_direction_0,
+            response_direction_1=tangent_step.response_direction_1,
+            coefficient_0=tangent_step.coefficient_0,
+            coefficient_1=tangent_step.coefficient_1,
+            second_direction_active=tangent_step.second_direction_active,
+            mismatch_k1=tangent_step.mismatch_k1,
+            cost_k1=tangent_step.cost_k1,
+            cost_k2=tangent_step.cost_k2,
+            residual_gradient_post=tangent_step.residual_gradient_post,
         )
     correction_phi = projected_physical[:, 0] - raw_physical[:, 0]
     correction_psi = projected_physical[:, 1] - raw_physical[:, 1]
@@ -325,7 +382,9 @@ def symmetric_tangent_metric_tensors(
     }
     if tangent.eta_star is not None:
         if (
-            tangent.eta_capped is None
+            tangent.eta_applied is None
+            or tangent.eta_cap is None
+            or tangent.eta_capped is None
             or tangent.line_search_numerator is None
             or tangent.line_search_denominator is None
         ):
@@ -346,6 +405,32 @@ def symmetric_tangent_metric_tensors(
                 ),
             }
         )
+    if tangent.subspace_dimension == 2:
+        if (
+            tangent.coefficient_0 is None
+            or tangent.coefficient_1 is None
+            or tangent.second_direction_active is None
+            or tangent.cost_k1 is None
+            or tangent.cost_k2 is None
+        ):
+            raise RuntimeError("K=2 tangent metric diagnostics are incomplete.")
+        metrics.update(
+            {
+                "tangent_subspace_dimension": tangent.mismatch_pre.new_tensor(2),
+                "tangent_coefficient_0_mean": tangent.coefficient_0.mean(),
+                "tangent_coefficient_1_mean": tangent.coefficient_1.mean(),
+                "tangent_second_direction_active_fraction": (
+                    tangent.second_direction_active.to(
+                        tangent.mismatch_pre.dtype
+                    ).mean()
+                ),
+                "tangent_response_cost_k1_mean": tangent.cost_k1.mean(),
+                "tangent_response_cost_k2_mean": tangent.cost_k2.mean(),
+                "tangent_response_cost_k2_over_k1": (
+                    tangent.cost_k2.mean() / tangent.cost_k1.mean().clamp_min(eps)
+                ),
+            }
+        )
     return metrics
 
 
@@ -356,7 +441,7 @@ def post_line_search_stationarity_from_projection(
     config: ComplexPostLineSearchStationarityConfig | dict[str, Any],
     source_normalization: TangentSourceResponseNormalization | None = None,
 ) -> NormalizedPostLineSearchStationarityResult | None:
-    """Compute optional stationarity diagnostics from uncapped tangent data."""
+    """Compute optional stationarity from the final tangent subspace residual."""
 
     resolved = ComplexPostLineSearchStationarityConfig.from_raw(config)
     if not resolved.enabled:
@@ -367,11 +452,7 @@ def post_line_search_stationarity_from_projection(
             "and its cached Green-response context."
         )
     tangent = projection.symmetric_tangent_diagnostics
-    if (
-        tangent is None
-        or tangent.eta_star is None
-        or tangent.response_direction is None
-    ):
+    if tangent is None:
         raise RuntimeError(
             "Closed-loop tangent diagnostics are incomplete for stationarity loss."
         )
@@ -380,6 +461,22 @@ def post_line_search_stationarity_from_projection(
         normalization = tangent_source_response_normalization(
             context=context,
             rhs_phys=projection.projected_physical.sum(dim=1),
+        )
+    if tangent.subspace_dimension == 2:
+        if tangent.residual_gradient_post is None:
+            raise RuntimeError(
+                "K=2 post-subspace residual gradient is missing for stationarity."
+            )
+        return normalized_post_line_search_stationarity_loss(
+            context=context,
+            gradient=tangent.gradient,
+            stationarity_residual=tangent.residual_gradient_post,
+            source_normalization=normalization,
+            config=resolved,
+        )
+    if tangent.eta_star is None or tangent.response_direction is None:
+        raise RuntimeError(
+            "K=1 closed-loop diagnostics are incomplete for stationarity loss."
         )
     return normalized_post_line_search_stationarity_loss(
         context=context,
@@ -434,7 +531,9 @@ def response_trust_from_projection(
             "Green-response context."
         )
     tangent = projection.symmetric_tangent_diagnostics
-    if tangent is None or tangent.eta_star is None:
+    if tangent is None or (
+        tangent.subspace_dimension == 1 and tangent.eta_star is None
+    ):
         raise RuntimeError(
             "Closed-loop tangent diagnostics are incomplete for response-trust."
         )

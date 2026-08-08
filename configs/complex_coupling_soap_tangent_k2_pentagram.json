@@ -41,6 +41,7 @@
       "enabled": true,
       "mode": "symmetric_tangent_green_response",
       "symmetric_tangent_green_response": {
+        "subspace_dimension": 2,
         "eta": 0.015,
         "eta_strategy": "closed_loop_exact_line_search",
         "line_search_relative_eps": 1e-12,
@@ -85,7 +86,7 @@
     "batch_size": 200,
     "weight_decay": 0.05,
     "log_interval": 1,
-    "device": "cuda:1",
+    "device": "cpu",
     "gradient_clip_max_norm": 1.0,
     "use_lr_schedule": true,
     "warmup_epochs": 10,
@@ -95,13 +96,13 @@
     },
     "post_line_search_stationarity": {
       "enabled": true,
-      "weight": 0.0001,
+      "weight": 0.01,
       "eps": 1e-12
     },
     "response_trust": {
       "enabled": true,
-      "weight": 0.001,
-      "trust_weight": 0.1,
+      "weight": 0.1,
+      "trust_weight": 0.0,
       "eps": 1e-12
     },
     "optimizer": {
