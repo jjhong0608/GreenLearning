@@ -4,7 +4,7 @@ import csv
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -46,9 +46,10 @@ from greenonet.complex_symmetric_tangent_audit import (
     TangentMethod,
 )
 from greenonet.complex_tangent_projection import (
-    KrylovK2StepResult,
+    KrylovSubspaceStepResult,
     SymmetricTangentGreenResponseContext,
-    matrix_free_krylov_k2_step,
+    matrix_free_krylov_k2_step as matrix_free_krylov_k2_step,
+    matrix_free_krylov_subspace_step,
 )
 from greenonet.config import (
     BalanceProjectionConfig,
@@ -65,7 +66,7 @@ from greenonet.plotly_io import save_plotly_figure
 
 @dataclass(frozen=True)
 class TangentSubspaceAuditRequest:
-    """Inputs for the frozen K=1 versus K=2 tangent comparison."""
+    """Inputs for the frozen matrix-free tangent subspace comparison."""
 
     config: Path
     coupling_checkpoint: Path
@@ -83,6 +84,7 @@ class TangentSubspaceAuditRequest:
     metric_eps: float = 1.0e-30
     operator_equivalence_tol: float = 1.0e-10
     monotonicity_relative_tol: float = 1.0e-10
+    max_subspace_dimension: int = 2
     save_generated_data: bool = True
 
     def __post_init__(self) -> None:
@@ -92,6 +94,12 @@ class TangentSubspaceAuditRequest:
             or self.batch_size < 1
         ):
             raise ValueError("batch_size must be a positive integer.")
+        if (
+            isinstance(self.max_subspace_dimension, bool)
+            or not isinstance(self.max_subspace_dimension, int)
+            or self.max_subspace_dimension not in {2, 3, 4}
+        ):
+            raise ValueError("max_subspace_dimension must be 2, 3, or 4.")
         for name, value, allow_zero in (
             ("transition_log_threshold", self.transition_log_threshold, True),
             ("subspace_relative_eps", self.subspace_relative_eps, False),
@@ -115,18 +123,35 @@ class TangentSubspaceAuditRequest:
                 raise ValueError("selected_samples must be non-negative.")
 
 
+KrylovSubspaceAuditResult = KrylovSubspaceStepResult
+
+
+def matrix_free_krylov_subspace_audit(
+    *,
+    context: SymmetricTangentGreenResponseContext,
+    mismatch: torch.Tensor,
+    gradient: torch.Tensor,
+    max_dimension: int,
+    relative_eps: float,
+    monotonicity_relative_tol: float,
+) -> KrylovSubspaceStepResult:
+    """Reuse the production K=2 through K=4 matrix-free subspace helper."""
+
+    return matrix_free_krylov_subspace_step(
+        context=context,
+        mismatch=mismatch,
+        gradient=gradient,
+        max_dimension=max_dimension,
+        relative_eps=relative_eps,
+        monotonicity_relative_tol=monotonicity_relative_tol,
+    )
+
+
 class ComplexTangentSubspaceAudit(
     SymmetricTangentMetricMixin,
     SymmetricTangentPlotMixin,
 ):
-    """Compare the configured K=1 tangent step with a matrix-free K=2 step."""
-
-    METHODS = (
-        TangentMethod("symmetric", "symmetric", "symmetric"),
-        TangentMethod("k1_production", "K=1 production cap", "k1_production"),
-        TangentMethod("k1_uncapped", "K=1 uncapped", "k1_uncapped"),
-        TangentMethod("k2_unconstrained", "K=2 unconstrained", "k2_unconstrained"),
-    )
+    """Compare frozen K=1 candidates with nested matrix-free K=2 through K=4."""
 
     def __init__(
         self,
@@ -136,7 +161,19 @@ class ComplexTangentSubspaceAudit(
     ) -> None:
         self.request = request
         self.logger = logger
-        self.methods = self.METHODS
+        self.methods = (
+            TangentMethod("symmetric", "symmetric", "symmetric"),
+            TangentMethod("k1_production", "K=1 configured cap", "k1_capped"),
+            TangentMethod("k1_uncapped", "K=1 uncapped", "k1_uncapped"),
+            *tuple(
+                TangentMethod(
+                    f"k{dimension}_unconstrained",
+                    f"K={dimension} unconstrained",
+                    f"k{dimension}_unconstrained",
+                )
+                for dimension in range(2, request.max_subspace_dimension + 1)
+            ),
+        )
         self.geometry: ComplexGeometryMetadata
         self.response_operator: FrozenBidirectionalResponseOperator
         self.tangent_context: SymmetricTangentGreenResponseContext
@@ -233,7 +270,8 @@ class ComplexTangentSubspaceAudit(
         aggregate = self._aggregate_rows(rows)
         paired = self._paired_comparisons(rows)
         selected, roles = self._select_samples(rows, dataset_offset_by_sample)
-        metric_path = self.request.outdir / "metrics" / "per_sample_k1_k2.csv"
+        suffix = self._subspace_suffix
+        metric_path = self.request.outdir / "metrics" / f"per_sample_{suffix}.csv"
         self._write_csv(metric_path, rows)
         figure_paths = [
             self._write_aggregate_figure(aggregate),
@@ -282,10 +320,15 @@ class ComplexTangentSubspaceAudit(
         self._write_report(summary)
         if self.logger is not None:
             self.logger.info(
-                "K=1/K=2 tangent subspace audit complete: samples=%d",
+                "K=1 through K=%d tangent subspace audit complete: samples=%d",
+                self.request.max_subspace_dimension,
                 len(dataset),
             )
         return summary
+
+    @property
+    def _subspace_suffix(self) -> str:
+        return f"k1_k{self.request.max_subspace_dimension}"
 
     def _load_models(self) -> None:
         loader_request = CouplingArtifactRequest(
@@ -320,6 +363,7 @@ class ComplexTangentSubspaceAudit(
         tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             projection.symmetric_tangent_green_response
         )
+        diagnostic_tangent = replace(tangent, subspace_dimension=1)
         self.tangent_context = (
             SymmetricTangentGreenResponseContext.from_response_operator(
                 response_operator=self.response_operator,
@@ -331,7 +375,7 @@ class ComplexTangentSubspaceAudit(
                     device=self._device,
                     dtype=batch.rhs_valid.dtype,
                 ),
-                config=tangent,
+                config=diagnostic_tangent,
             )
         )
         self._context_build_count += 1
@@ -380,7 +424,7 @@ class ComplexTangentSubspaceAudit(
     def _evaluate_batch(
         self,
         batch: ComplexCouplingBatch,
-    ) -> tuple[TangentBatchEvaluation, KrylovK2StepResult]:
+    ) -> tuple[TangentBatchEvaluation, KrylovSubspaceAuditResult]:
         raw_response, _fusion = self._coupling_model.forward_with_fusion_diagnostics(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
@@ -421,10 +465,11 @@ class ComplexTangentSubspaceAudit(
             gradient=gradient,
             eta_cap=self.tangent_context.eta,
         )
-        krylov = matrix_free_krylov_k2_step(
+        krylov = matrix_free_krylov_subspace_audit(
             context=self.tangent_context,
             mismatch=mismatch,
             gradient=gradient,
+            max_dimension=self.request.max_subspace_dimension,
             relative_eps=self.request.subspace_relative_eps,
             monotonicity_relative_tol=self.request.monotonicity_relative_tol,
         )
@@ -443,8 +488,10 @@ class ComplexTangentSubspaceAudit(
             (
                 torch.zeros_like(gradient),
                 production_step.delta,
-                krylov.delta_k1,
-                krylov.delta_k2,
+                *tuple(
+                    krylov.deltas[dimension]
+                    for dimension in range(krylov.deltas.shape[0])
+                ),
             ),
             dim=0,
         )
@@ -538,10 +585,10 @@ class ComplexTangentSubspaceAudit(
                     ClosedLoopTangentBatchDiagnostics(
                         method_id="k1_uncapped",
                         eta_cap=None,
-                        eta_star=krylov.coefficient_0,
-                        eta_applied=krylov.coefficient_0,
+                        eta_star=krylov.coefficients[0],
+                        eta_applied=krylov.coefficients[0],
                         eta_capped=torch.zeros_like(
-                            krylov.coefficient_0,
+                            krylov.coefficients[0],
                             dtype=torch.bool,
                         ),
                         line_search_numerator=krylov.line_search_numerator_0,
@@ -556,7 +603,7 @@ class ComplexTangentSubspaceAudit(
         self,
         batch: ComplexCouplingBatch,
         evaluation: TangentBatchEvaluation,
-        krylov: KrylovK2StepResult,
+        krylov: KrylovSubspaceAuditResult,
         edges: ProjectionTransitionEdges,
     ) -> list[dict[str, float | int | str]]:
         rows = self.build_metric_rows(
@@ -622,20 +669,52 @@ class ComplexTangentSubspaceAudit(
                         eps=self.request.metric_eps,
                     ).item()
                 )
-            row["k1_eta_star"] = float(krylov.coefficient_0[sample_offset].item())
-            row["k2_coefficient_1"] = float(krylov.coefficient_1[sample_offset].item())
-            row["k2_second_direction_active"] = int(
-                krylov.second_direction_active[sample_offset].item()
-            )
-            if row["method_id"] == "k2_unconstrained":
-                row["k2_response_cost_nonincrease"] = int(
-                    bool(
-                        krylov.cost_k2[sample_offset]
-                        <= krylov.cost_k1[sample_offset]
-                        * (1.0 + self.request.monotonicity_relative_tol)
-                        + torch.finfo(krylov.cost_k2.dtype).tiny
-                    )
+            row["k1_eta_star"] = float(krylov.coefficients[0, sample_offset].item())
+            for direction_index in range(krylov.coefficients.shape[0]):
+                dimension = direction_index + 1
+                row[f"k{dimension}_coefficient_{direction_index}"] = float(
+                    krylov.coefficients[direction_index, sample_offset].item()
                 )
+                row[f"k{dimension}_direction_active"] = int(
+                    krylov.direction_active[direction_index, sample_offset].item()
+                )
+                row[f"k{dimension}_response_cost"] = float(
+                    krylov.costs[direction_index, sample_offset].item()
+                )
+                row[f"k{dimension}_response_orthogonality_max"] = float(
+                    krylov.response_orthogonality_max[
+                        direction_index,
+                        sample_offset,
+                    ].item()
+                )
+                if direction_index > 0:
+                    previous_cost = krylov.costs[
+                        direction_index - 1,
+                        sample_offset,
+                    ].clamp_min(torch.finfo(krylov.costs.dtype).tiny)
+                    row[f"k{dimension}_response_cost_ratio_vs_k{dimension - 1}"] = (
+                        float(
+                            (
+                                krylov.costs[direction_index, sample_offset]
+                                / previous_cost
+                            ).item()
+                        )
+                    )
+            method_id = str(row["method_id"])
+            if method_id.startswith("k") and method_id.endswith("_unconstrained"):
+                dimension = int(method_id[1 : method_id.index("_")])
+                if dimension >= 2:
+                    current_cost = krylov.costs[dimension - 1, sample_offset]
+                    previous_cost = krylov.costs[dimension - 2, sample_offset]
+                    row["subspace_dimension"] = dimension
+                    row["response_cost_nonincrease_vs_previous"] = int(
+                        bool(
+                            current_cost
+                            <= previous_cost
+                            * (1.0 + self.request.monotonicity_relative_tol)
+                            + torch.finfo(current_cost.dtype).tiny
+                        )
+                    )
         return rows
 
     def _aggregate_rows(
@@ -685,51 +764,67 @@ class ComplexTangentSubspaceAudit(
             "rel_flux",
             "tangent_correction_rel_symmetric_pair",
         )
+        method_ids = {str(row["method_id"]) for row in rows}
+        subspace_method_ids = sorted(
+            (
+                method_id
+                for method_id in method_ids
+                if method_id.startswith("k")
+                and method_id.endswith("_unconstrained")
+                and method_id != "k1_uncapped"
+            ),
+            key=lambda method_id: int(method_id[1 : method_id.index("_")]),
+        )
         by_method = {
             method_id: {
                 int(row["sample_id"]): row
                 for row in rows
                 if row["method_id"] == method_id
             }
-            for method_id in ("k1_production", "k1_uncapped", "k2_unconstrained")
+            for method_id in method_ids
         }
         output: dict[str, dict[str, dict[str, float | int]]] = {}
-        for baseline in ("k1_production", "k1_uncapped"):
-            comparison: dict[str, dict[str, float | int]] = {}
-            common = sorted(
-                set(by_method[baseline]) & set(by_method["k2_unconstrained"])
+        for candidate_id in subspace_method_ids:
+            dimension = int(candidate_id[1 : candidate_id.index("_")])
+            candidate_label = f"k{dimension}"
+            previous_id = (
+                "k1_uncapped" if dimension == 2 else f"k{dimension - 1}_unconstrained"
             )
-            for metric in metrics:
-                pairs = [
-                    (
-                        float(by_method[baseline][sample_id][metric]),
-                        float(by_method["k2_unconstrained"][sample_id][metric]),
-                    )
-                    for sample_id in common
-                    if metric in by_method[baseline][sample_id]
-                    and metric in by_method["k2_unconstrained"][sample_id]
-                ]
-                if not pairs:
-                    continue
-                baseline_values = np.asarray([pair[0] for pair in pairs])
-                k2_values = np.asarray([pair[1] for pair in pairs])
-                delta = k2_values - baseline_values
-                comparison[metric] = {
-                    "sample_count": len(pairs),
-                    "baseline_mean": float(baseline_values.mean()),
-                    "k2_mean": float(k2_values.mean()),
-                    "mean_delta": float(delta.mean()),
-                    "relative_mean_change": ComplexTangentSubspaceAudit._relative_change(
-                        baseline=float(baseline_values.mean()),
-                        candidate=float(k2_values.mean()),
-                    ),
-                    "improved_sample_count": int(np.count_nonzero(delta < 0.0)),
-                    "worsened_sample_count": int(np.count_nonzero(delta > 0.0)),
-                    "unchanged_sample_count": int(np.count_nonzero(delta == 0.0)),
-                    "max_improvement": float(max(0.0, -float(delta.min()))),
-                    "max_worsening": float(max(0.0, float(delta.max()))),
-                }
-            output[f"k2_vs_{baseline}"] = comparison
+            for baseline in dict.fromkeys(("k1_production", previous_id)):
+                comparison: dict[str, dict[str, float | int]] = {}
+                common = sorted(set(by_method[baseline]) & set(by_method[candidate_id]))
+                for metric in metrics:
+                    pairs = [
+                        (
+                            float(by_method[baseline][sample_id][metric]),
+                            float(by_method[candidate_id][sample_id][metric]),
+                        )
+                        for sample_id in common
+                        if metric in by_method[baseline][sample_id]
+                        and metric in by_method[candidate_id][sample_id]
+                    ]
+                    if not pairs:
+                        continue
+                    baseline_values = np.asarray([pair[0] for pair in pairs])
+                    candidate_values = np.asarray([pair[1] for pair in pairs])
+                    delta = candidate_values - baseline_values
+                    comparison[metric] = {
+                        "sample_count": len(pairs),
+                        "baseline_mean": float(baseline_values.mean()),
+                        "candidate_mean": float(candidate_values.mean()),
+                        f"{candidate_label}_mean": float(candidate_values.mean()),
+                        "mean_delta": float(delta.mean()),
+                        "relative_mean_change": ComplexTangentSubspaceAudit._relative_change(
+                            baseline=float(baseline_values.mean()),
+                            candidate=float(candidate_values.mean()),
+                        ),
+                        "improved_sample_count": int(np.count_nonzero(delta < 0.0)),
+                        "worsened_sample_count": int(np.count_nonzero(delta > 0.0)),
+                        "unchanged_sample_count": int(np.count_nonzero(delta == 0.0)),
+                        "max_improvement": float(max(0.0, -float(delta.min()))),
+                        "max_worsening": float(max(0.0, float(delta.max()))),
+                    }
+                output[f"{candidate_label}_vs_{baseline}"] = comparison
         return output
 
     @staticmethod
@@ -759,10 +854,21 @@ class ComplexTangentSubspaceAudit(
             for row in rows
             if row["method_id"] == "k1_production" and "rel_sol" in row
         }
-        k2 = {
+        subspace_dimensions = sorted(
+            {
+                int(str(row["method_id"])[1 : str(row["method_id"]).index("_")])
+                for row in rows
+                if str(row["method_id"]).startswith("k")
+                and str(row["method_id"]).endswith("_unconstrained")
+                and str(row["method_id"]) != "k1_uncapped"
+            }
+        )
+        final_dimension = subspace_dimensions[-1]
+        final_method_id = f"k{final_dimension}_unconstrained"
+        final = {
             int(row["sample_id"]): row
             for row in rows
-            if row["method_id"] == "k2_unconstrained" and "rel_sol" in row
+            if row["method_id"] == final_method_id and "rel_sol" in row
         }
         ordered = sorted(k1, key=lambda sample_id: float(k1[sample_id]["rel_sol"]))
         if not ordered:
@@ -774,9 +880,10 @@ class ComplexTangentSubspaceAudit(
             (ordered[len(ordered) // 2], "k1_rel_sol_q50"),
             (ordered[-1], "k1_rel_sol_worst"),
         ]
-        common = sorted(set(k1) & set(k2))
+        common = sorted(set(k1) & set(final))
         deltas = {
-            sample_id: float(k2[sample_id]["rel_sol"]) - float(k1[sample_id]["rel_sol"])
+            sample_id: float(final[sample_id]["rel_sol"])
+            - float(k1[sample_id]["rel_sol"])
             for sample_id in common
         }
         largest_delta_sample = max(
@@ -784,15 +891,15 @@ class ComplexTangentSubspaceAudit(
             key=lambda sample_id: deltas[sample_id],
         )
         largest_delta_role = (
-            "largest_k2_rel_sol_worsening"
+            f"largest_k{final_dimension}_rel_sol_worsening"
             if deltas[largest_delta_sample] > 0.0
-            else "smallest_k2_rel_sol_improvement"
+            else f"smallest_k{final_dimension}_rel_sol_improvement"
         )
         candidates.extend(
             (
                 (
                     min(deltas, key=lambda sample_id: deltas[sample_id]),
-                    "largest_k2_rel_sol_improvement",
+                    f"largest_k{final_dimension}_rel_sol_improvement",
                 ),
                 (
                     largest_delta_sample,
@@ -841,6 +948,7 @@ class ComplexTangentSubspaceAudit(
             rows=2, cols=3, subplot_titles=[label for _, label in metrics]
         )
         labels = [method.label for method in self.methods]
+        colors = ["#64748b", "#2563eb", "#0f766e", "#dc2626", "#9333ea", "#ea580c"]
         for index, (metric, _label) in enumerate(metrics):
             base_value = float(baseline[metric])
             ratios = [
@@ -851,7 +959,7 @@ class ComplexTangentSubspaceAudit(
                 go.Bar(
                     x=labels,
                     y=ratios,
-                    marker_color=["#64748b", "#2563eb", "#0f766e", "#dc2626"],
+                    marker_color=colors[: len(self.methods)],
                     hovertemplate="%{x}<br>ratio=%{y:.6f}<extra></extra>",
                 ),
                 row=index // 3 + 1,
@@ -866,7 +974,10 @@ class ComplexTangentSubspaceAudit(
             )
         fig.update_layout(
             template=self.request.theme,
-            title="Matrix-free K=1 versus K=2 tangent correction",
+            title=(
+                "Matrix-free K=1 through "
+                f"K={self.request.max_subspace_dimension} tangent correction"
+            ),
             width=1500,
             height=850,
             showlegend=False,
@@ -874,7 +985,12 @@ class ComplexTangentSubspaceAudit(
         )
         fig.update_xaxes(tickangle=-20)
         fig.update_yaxes(title_text="ratio to K=1 production")
-        path = self.request.outdir / "figures" / "aggregate" / "k1_k2_metric_ratios"
+        path = (
+            self.request.outdir
+            / "figures"
+            / "aggregate"
+            / f"{self._subspace_suffix}_metric_ratios"
+        )
         save_plotly_figure(fig, path, self.logger)
         return path.with_suffix(".json")
 
@@ -895,18 +1011,19 @@ class ComplexTangentSubspaceAudit(
             for row in rows
             if row["method_id"] == "k1_production"
         }
-        k2 = {
+        final_method_id = f"k{self.request.max_subspace_dimension}_unconstrained"
+        final = {
             int(row["sample_id"]): row
             for row in rows
-            if row["method_id"] == "k2_unconstrained"
+            if row["method_id"] == final_method_id
         }
-        common = sorted(set(k1) & set(k2))
+        common = sorted(set(k1) & set(final))
         fig = make_subplots(
             rows=2, cols=3, subplot_titles=[label for _, label in metrics]
         )
         for index, (metric, _label) in enumerate(metrics):
             x = np.asarray([float(k1[sample_id][metric]) for sample_id in common])
-            y = np.asarray([float(k2[sample_id][metric]) for sample_id in common])
+            y = np.asarray([float(final[sample_id][metric]) for sample_id in common])
             lower = float(min(x.min(), y.min()))
             upper = float(max(x.max(), y.max()))
             fig.add_trace(
@@ -918,7 +1035,8 @@ class ComplexTangentSubspaceAudit(
                     marker={"size": 7, "color": "#0f766e", "opacity": 0.75},
                     hovertemplate=(
                         "sample=%{customdata}<br>K1=%{x:.6e}<br>"
-                        "K2=%{y:.6e}<extra></extra>"
+                        f"K{self.request.max_subspace_dimension}=%{{y:.6e}}"
+                        "<extra></extra>"
                     ),
                 ),
                 row=index // 3 + 1,
@@ -937,14 +1055,24 @@ class ComplexTangentSubspaceAudit(
             )
         fig.update_layout(
             template=self.request.theme,
-            title="Per-sample K=2 versus production K=1",
+            title=(
+                f"Per-sample K={self.request.max_subspace_dimension} "
+                "versus configured-cap K=1"
+            ),
             width=1450,
             height=850,
             showlegend=False,
         )
         fig.update_xaxes(title_text="K=1 production")
-        fig.update_yaxes(title_text="K=2 unconstrained")
-        path = self.request.outdir / "figures" / "aggregate" / "k1_k2_paired"
+        fig.update_yaxes(
+            title_text=f"K={self.request.max_subspace_dimension} unconstrained"
+        )
+        path = (
+            self.request.outdir
+            / "figures"
+            / "aggregate"
+            / f"{self._subspace_suffix}_paired"
+        )
         save_plotly_figure(fig, path, self.logger)
         return path.with_suffix(".json")
 
@@ -952,44 +1080,78 @@ class ComplexTangentSubspaceAudit(
         self,
         batch: ComplexCouplingBatch,
         evaluation: TangentBatchEvaluation,
-        krylov: KrylovK2StepResult,
+        krylov: KrylovSubspaceAuditResult,
     ) -> None:
         data_dir = self.request.outdir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            data_dir / "selected_k1_k2_tangent_subspace.npz",
-            coords_valid=self.geometry.coords_valid.detach().cpu().numpy(),
-            selected_sample_ids=batch.sample_indices.detach().cpu().numpy(),
-            selected_file_stems=np.asarray(batch.file_stems),
-            method_ids=np.asarray([method.method_id for method in self.methods]),
-            rhs=batch.rhs_valid.detach().cpu().numpy(),
-            sol=batch.sol_valid.detach().cpu().numpy(),
-            has_solution=batch.has_solution.detach().cpu().numpy(),
-            flux_target=batch.flux_valid.detach().cpu().numpy(),
-            has_flux=batch.has_flux.detach().cpu().numpy(),
-            raw_physical=evaluation.raw_physical.detach().cpu().numpy(),
-            symmetric_physical=evaluation.symmetric_physical.detach().cpu().numpy(),
-            tangent_gradient=evaluation.tangent_gradient.detach().cpu().numpy(),
-            tangent_denominator=self.tangent_context.denominator.detach().cpu().numpy(),
-            direction_0=krylov.direction_0.detach().cpu().numpy(),
-            direction_1=krylov.direction_1.detach().cpu().numpy(),
-            response_direction_0=krylov.response_direction_0.detach().cpu().numpy(),
-            response_direction_1=krylov.response_direction_1.detach().cpu().numpy(),
-            coefficient_0=krylov.coefficient_0.detach().cpu().numpy(),
-            coefficient_1=krylov.coefficient_1.detach().cpu().numpy(),
-            line_search_numerator_0=(
-                krylov.line_search_numerator_0.detach().cpu().numpy()
+        payload: dict[str, Any] = {
+            "coords_valid": self.geometry.coords_valid.detach().cpu().numpy(),
+            "selected_sample_ids": batch.sample_indices.detach().cpu().numpy(),
+            "selected_file_stems": np.asarray(batch.file_stems),
+            "method_ids": np.asarray([method.method_id for method in self.methods]),
+            "subspace_dimensions": np.arange(
+                1,
+                self.request.max_subspace_dimension + 1,
+                dtype=np.int64,
             ),
-            line_search_denominator_0=(
-                krylov.line_search_denominator_0.detach().cpu().numpy()
-            ),
-            second_direction_active=krylov.second_direction_active.detach()
+            "rhs": batch.rhs_valid.detach().cpu().numpy(),
+            "sol": batch.sol_valid.detach().cpu().numpy(),
+            "has_solution": batch.has_solution.detach().cpu().numpy(),
+            "flux_target": batch.flux_valid.detach().cpu().numpy(),
+            "has_flux": batch.has_flux.detach().cpu().numpy(),
+            "raw_physical": evaluation.raw_physical.detach().cpu().numpy(),
+            "symmetric_physical": evaluation.symmetric_physical.detach().cpu().numpy(),
+            "tangent_gradient": evaluation.tangent_gradient.detach().cpu().numpy(),
+            "tangent_denominator": self.tangent_context.denominator.detach()
             .cpu()
             .numpy(),
-            tangent_delta=evaluation.tangent_delta.detach().cpu().numpy(),
-            candidate_physical=evaluation.candidate_physical.detach().cpu().numpy(),
-            candidate_solution=evaluation.candidate_solution.detach().cpu().numpy(),
-            candidate_prediction=evaluation.candidate_prediction.detach().cpu().numpy(),
+            "directions": krylov.directions.detach().cpu().numpy(),
+            "directional_responses": krylov.directional_responses.detach()
+            .cpu()
+            .numpy(),
+            "response_directions": krylov.response_directions.detach().cpu().numpy(),
+            "coefficients": krylov.coefficients.detach().cpu().numpy(),
+            "direction_active": krylov.direction_active.detach().cpu().numpy(),
+            "subspace_deltas": krylov.deltas.detach().cpu().numpy(),
+            "subspace_mismatches": krylov.mismatches.detach().cpu().numpy(),
+            "subspace_costs": krylov.costs.detach().cpu().numpy(),
+            "response_gram": krylov.response_gram.detach().cpu().numpy(),
+            "response_orthogonality_max": (
+                krylov.response_orthogonality_max.detach().cpu().numpy()
+            ),
+            "residual_gradient_post": (
+                krylov.residual_gradient_post.detach().cpu().numpy()
+            ),
+            "line_search_numerator_0": (
+                krylov.line_search_numerator_0.detach().cpu().numpy()
+            ),
+            "line_search_denominator_0": (
+                krylov.line_search_denominator_0.detach().cpu().numpy()
+            ),
+            "tangent_delta": evaluation.tangent_delta.detach().cpu().numpy(),
+            "candidate_physical": evaluation.candidate_physical.detach().cpu().numpy(),
+            "candidate_solution": evaluation.candidate_solution.detach().cpu().numpy(),
+            "candidate_prediction": evaluation.candidate_prediction.detach()
+            .cpu()
+            .numpy(),
+            # Keep the original K=2 field names for existing audit consumers.
+            "direction_0": krylov.directions[0].detach().cpu().numpy(),
+            "direction_1": krylov.directions[1].detach().cpu().numpy(),
+            "response_direction_0": (
+                krylov.response_directions[0].detach().cpu().numpy()
+            ),
+            "response_direction_1": (
+                krylov.response_directions[1].detach().cpu().numpy()
+            ),
+            "coefficient_0": krylov.coefficients[0].detach().cpu().numpy(),
+            "coefficient_1": krylov.coefficients[1].detach().cpu().numpy(),
+            "second_direction_active": (
+                krylov.direction_active[1].detach().cpu().numpy()
+            ),
+        }
+        np.savez_compressed(
+            data_dir / f"selected_{self._subspace_suffix}_tangent_subspace.npz",
+            **payload,
         )
 
     def _build_summary(
@@ -1015,9 +1177,21 @@ class ComplexTangentSubspaceAudit(
         canonical = ComplexCanonicalEnergyConfig.from_raw(
             self._configs.coupling_training.canonical_energy
         )
-        monotone = paired["k2_vs_k1_uncapped"]["response_mismatch_cost"]
+        adjacent_monotonicity: dict[str, dict[str, int]] = {}
+        for dimension in range(2, self.request.max_subspace_dimension + 1):
+            baseline = (
+                "k1_uncapped" if dimension == 2 else f"k{dimension - 1}_unconstrained"
+            )
+            comparison = paired[f"k{dimension}_vs_{baseline}"]["response_mismatch_cost"]
+            adjacent_monotonicity[f"k{dimension}_vs_k{dimension - 1}"] = {
+                "improved_sample_count": int(comparison["improved_sample_count"]),
+                "worsened_sample_count": int(comparison["worsened_sample_count"]),
+                "unchanged_sample_count": int(comparison["unchanged_sample_count"]),
+            }
         return {
-            "diagnostic": "matrix_free_k1_k2_tangent_subspace_posthoc_audit",
+            "diagnostic": (
+                f"matrix_free_{self._subspace_suffix}_tangent_subspace_posthoc_audit"
+            ),
             "status": "frozen_checkpoint_posthoc",
             "production_code_changed": False,
             "training_or_checkpoint_updated": False,
@@ -1030,6 +1204,8 @@ class ComplexTangentSubspaceAudit(
             "sample_count": len(dataset),
             "configured_eta_cap": tangent.eta,
             "configured_relative_lambda": tangent.relative_lambda,
+            "frozen_training_subspace_dimension": tangent.subspace_dimension,
+            "maximum_audited_subspace_dimension": (self.request.max_subspace_dimension),
             "subspace_relative_eps": self.request.subspace_relative_eps,
             "canonical_boundary_weight": canonical.boundary_weight,
             "methods": [
@@ -1043,16 +1219,23 @@ class ComplexTangentSubspaceAudit(
             "formula": {
                 "objective": "J(delta)=||m0+(H_x+H_y)delta||_M^2",
                 "k1": "z0=D^-1*g; delta1=-c0*z0",
-                "residual": "r1=g-c0*A*z0; A*v=S^T*M*S*v",
-                "k2": ("z1=A-orthogonalize(D^-1*r1,z0); delta2=-c0*z0-c1*z1"),
+                "residual": "r_k=S^T*M*(m0+S*delta_k); A*v=S^T*M*S*v",
+                "next_direction": (
+                    "z_k=response_modified_gram_schmidt(D^-1*r_k, z_0,...,z_{k-1})"
+                ),
+                "coefficient": "c_k=<m_k,S*z_k>_M/(<S*z_k,S*z_k>_M+eps_k)",
+                "update": "delta_{k+1}=delta_k-c_k*z_k",
                 "balance": "phi=p_tilde+delta; psi=q_tilde-delta",
             },
             "matrix_policy": {
                 "global_matrix_materialized": False,
                 "global_matrix_solve": False,
-                "subspace_dimension": 2,
+                "subspace_dimension": self.request.max_subspace_dimension,
                 "sample_local_dense_solve_dimension": 0,
-                "sample_local_scalar_line_search_coefficients": 2,
+                "sample_local_scalar_line_search_coefficients": (
+                    self.request.max_subspace_dimension
+                ),
+                "orthogonalization": "two_pass_modified_gram_schmidt_in_response_space",
                 "segment_local_forward_adjoint_actions": True,
                 "response_context_build_count": self._context_build_count,
                 "operator_production_equivalence_max_abs": (
@@ -1063,14 +1246,7 @@ class ComplexTangentSubspaceAudit(
                 "sol_and_flux_used_for_correction": False,
                 "sol_and_flux_used_for_evaluation_only": True,
             },
-            "response_objective_monotonicity": {
-                "k2_vs_k1_uncapped_improved_sample_count": monotone[
-                    "improved_sample_count"
-                ],
-                "k2_vs_k1_uncapped_worsened_sample_count": monotone[
-                    "worsened_sample_count"
-                ],
-            },
+            "response_objective_monotonicity": adjacent_monotonicity,
             "transition_definition": {
                 "log_threshold": self.request.transition_log_threshold,
                 "phi_transition_edge_count": int(edges.phi_transition.shape[0]),
@@ -1080,9 +1256,9 @@ class ComplexTangentSubspaceAudit(
             "paired_comparisons": paired,
             "selected_samples": list(selected),
             "selected_sample_roles": roles,
-            "metric_csv": "metrics/per_sample_k1_k2.csv",
+            "metric_csv": f"metrics/per_sample_{self._subspace_suffix}.csv",
             "raw_archive": (
-                "data/selected_k1_k2_tangent_subspace.npz"
+                f"data/selected_{self._subspace_suffix}_tangent_subspace.npz"
                 if self.request.save_generated_data
                 else None
             ),
@@ -1094,8 +1270,9 @@ class ComplexTangentSubspaceAudit(
     def _write_report(self, summary: dict[str, Any]) -> None:
         aggregate = summary["aggregate_metrics"]
         paired = summary["paired_comparisons"]
+        maximum_dimension = self.request.max_subspace_dimension
         lines = [
-            "# Matrix-Free K=1 versus K=2 Tangent Subspace Audit",
+            f"# Matrix-Free K=1 through K={maximum_dimension} Tangent Subspace Audit",
             "",
             "The CouplingNet and GreenNet checkpoints are frozen. Reference solution",
             "and directional targets are used only for evaluation metrics.",
@@ -1118,16 +1295,19 @@ class ComplexTangentSubspaceAudit(
                 f"{100.0 * float(payload['rel_flux_mean']):.4f}% | "
                 f"{float(payload['tangent_correction_rel_symmetric_pair_mean']):.6f} |"
             )
-        k2_vs_production = paired["k2_vs_k1_production"]
-        k2_vs_uncapped = paired["k2_vs_k1_uncapped"]
         production = aggregate["k1_production"]
-        k2 = aggregate["k2_unconstrained"]
+        final_method_id = f"k{maximum_dimension}_unconstrained"
+        final = aggregate[final_method_id]
         lines.extend(
             [
                 "",
                 "## Upper-Tail Results",
                 "",
-                "| metric | K=1 p95 | K=2 p95 | K=1 max | K=2 max |",
+                (
+                    "| metric | K=1 capped p95 | "
+                    f"K={maximum_dimension} p95 | K=1 capped max | "
+                    f"K={maximum_dimension} max |"
+                ),
                 "|---|---:|---:|---:|---:|",
             ]
         )
@@ -1143,30 +1323,46 @@ class ComplexTangentSubspaceAudit(
             lines.append(
                 f"| {metric} | "
                 f"{float(production[f'{metric}_p95']):.6e} | "
-                f"{float(k2[f'{metric}_p95']):.6e} | "
+                f"{float(final[f'{metric}_p95']):.6e} | "
                 f"{float(production[f'{metric}_max']):.6e} | "
-                f"{float(k2[f'{metric}_max']):.6e} |"
+                f"{float(final[f'{metric}_max']):.6e} |"
             )
         lines.extend(
             [
                 "",
                 "## Paired Findings",
                 "",
-                "- K=2 versus production K=1 response mismatch relative mean change: "
-                f"`{100.0 * float(k2_vs_production['response_mismatch_cost']['relative_mean_change']):.3f}%`.",
-                "- K=2 versus uncapped K=1 response mismatch improved samples: "
-                f"`{k2_vs_uncapped['response_mismatch_cost']['improved_sample_count']}/{k2_vs_uncapped['response_mismatch_cost']['sample_count']}`.",
-                "- K=2 versus production K=1 rel_sol relative mean change: "
-                f"`{100.0 * float(k2_vs_production['rel_sol']['relative_mean_change']):.3f}%`.",
-                "- K=2 versus production K=1 rel_sol improved samples: "
-                f"`{k2_vs_production['rel_sol']['improved_sample_count']}/{k2_vs_production['rel_sol']['sample_count']}`.",
+            ]
+        )
+        for dimension in range(2, maximum_dimension + 1):
+            baseline = (
+                "k1_uncapped" if dimension == 2 else f"k{dimension - 1}_unconstrained"
+            )
+            adjacent = paired[f"k{dimension}_vs_{baseline}"]
+            versus_capped = paired[f"k{dimension}_vs_k1_production"]
+            lines.extend(
+                [
+                    f"- K={dimension} versus K={dimension - 1} response mismatch "
+                    "relative mean change: "
+                    f"`{100.0 * float(adjacent['response_mismatch_cost']['relative_mean_change']):.3f}%`.",
+                    f"- K={dimension} versus K={dimension - 1} response mismatch "
+                    "improved samples: "
+                    f"`{adjacent['response_mismatch_cost']['improved_sample_count']}/"
+                    f"{adjacent['response_mismatch_cost']['sample_count']}`.",
+                    f"- K={dimension} versus configured-cap K=1 rel_sol relative mean "
+                    "change: "
+                    f"`{100.0 * float(versus_capped['rel_sol']['relative_mean_change']):.3f}%`.",
+                ]
+            )
+        lines.extend(
+            [
                 "",
                 "## Interpretation Boundary",
                 "",
-                "K=2 is an unconstrained frozen-checkpoint diagnostic. It proves only",
-                "whether a second matrix-free response direction helps the configured",
-                "surrogate. It is not a fair production comparison until paired retraining",
-                "and a bounded K=2 safety policy are evaluated.",
+                f"K=2 through K={maximum_dimension} are unconstrained frozen-checkpoint ",
+                "diagnostics. They show whether additional matrix-free response directions",
+                "help the configured surrogate on identical raw output. They do not establish",
+                "the effect of training with the larger subspace; that requires paired retraining.",
             ]
         )
         (self.request.outdir / "diagnosis_report.md").write_text(

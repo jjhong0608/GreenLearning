@@ -144,14 +144,15 @@ class ComplexCouplingEvaluator(LoggingMixin):
         tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
+        tangent_subspace = tangent_config.subspace_dimension >= 2
         stationarity_residual_source = (
-            "post_k2_residual_gradient"
-            if tangent_config.subspace_dimension == 2
+            f"post_k{tangent_config.subspace_dimension}_residual_gradient"
+            if tangent_subspace
             else "uncapped_eta_star"
         )
         tangent_forward_source = (
-            "unconstrained_k2_coefficients"
-            if tangent_config.subspace_dimension == 2
+            f"unconstrained_k{tangent_config.subspace_dimension}_coefficients"
+            if tangent_subspace
             else "capped_eta_applied"
         )
         self.logger.info(
@@ -185,16 +186,8 @@ class ComplexCouplingEvaluator(LoggingMixin):
             self.post_line_search_stationarity_config.enabled,
             self.post_line_search_stationarity_config.weight,
             self.post_line_search_stationarity_config.eps,
-            (
-                "not_applicable"
-                if tangent_config.subspace_dimension == 2
-                else stationarity_residual_source
-            ),
-            (
-                "not_applicable"
-                if tangent_config.subspace_dimension == 2
-                else tangent_forward_source
-            ),
+            ("not_applicable" if tangent_subspace else stationarity_residual_source),
+            ("not_applicable" if tangent_subspace else tangent_forward_source),
             tangent_config.subspace_dimension,
             stationarity_residual_source,
             tangent_forward_source,
@@ -220,11 +213,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             self.response_trust_config.weight,
             self.response_trust_config.trust_weight,
             self.response_trust_config.eps,
-            (
-                "not_applicable"
-                if tangent_config.subspace_dimension == 2
-                else tangent_forward_source
-            ),
+            ("not_applicable" if tangent_subspace else tangent_forward_source),
             tangent_config.subspace_dimension,
             tangent_forward_source,
             self.response_trust_config.enabled,
@@ -547,35 +536,37 @@ class ComplexCouplingEvaluator(LoggingMixin):
                         ),
                     }
                 )
-            if tangent.subspace_dimension == 2:
-                if (
-                    tangent.coefficient_0 is None
-                    or tangent.coefficient_1 is None
-                    or tangent.second_direction_active is None
-                    or tangent.cost_k1 is None
-                    or tangent.cost_k2 is None
-                ):
-                    raise RuntimeError("K=2 tangent diagnostics are incomplete.")
-                cost_k1 = tangent.cost_k1[sample_offset]
-                cost_k2 = tangent.cost_k2[sample_offset]
-                row.update(
-                    {
-                        "tangent_subspace_dimension": 2,
-                        "tangent_coefficient_0": float(
-                            tangent.coefficient_0[sample_offset].item()
-                        ),
-                        "tangent_coefficient_1": float(
-                            tangent.coefficient_1[sample_offset].item()
-                        ),
-                        "tangent_second_direction_active": int(
-                            tangent.second_direction_active[sample_offset].item()
-                        ),
-                        "tangent_response_cost_k1": float(cost_k1.item()),
-                        "tangent_response_cost_k2": float(cost_k2.item()),
-                        "tangent_response_cost_k2_over_k1": float(
-                            (cost_k2 / cost_k1.clamp_min(eps)).item()
-                        ),
-                    }
+            if tangent.subspace_dimension >= 2:
+                subspace = tangent.subspace_result
+                if subspace is None:
+                    raise RuntimeError(
+                        "K>=2 tangent subspace diagnostics are incomplete."
+                    )
+                row["tangent_subspace_dimension"] = tangent.subspace_dimension
+                for direction_index in range(tangent.subspace_dimension):
+                    row[f"tangent_coefficient_{direction_index}"] = float(
+                        subspace.coefficients[direction_index, sample_offset].item()
+                    )
+                    row[f"tangent_direction_{direction_index}_active"] = int(
+                        subspace.direction_active[direction_index, sample_offset].item()
+                    )
+                    row[f"tangent_response_cost_k{direction_index + 1}"] = float(
+                        subspace.costs[direction_index, sample_offset].item()
+                    )
+                    if direction_index > 0:
+                        previous = subspace.costs[direction_index - 1, sample_offset]
+                        ratio = subspace.costs[
+                            direction_index, sample_offset
+                        ] / previous.clamp_min(eps)
+                        row[
+                            f"tangent_response_cost_k{direction_index + 1}_over_k"
+                            f"{direction_index}"
+                        ] = float(ratio.item())
+                row["tangent_second_direction_active"] = int(
+                    subspace.direction_active[1, sample_offset].item()
+                )
+                row["tangent_response_orthogonality_max"] = float(
+                    subspace.response_orthogonality_max[-1, sample_offset].item()
                 )
         if bool(prediction.batch.has_solution[sample_offset].item()):
             row["rel_sol"] = float(

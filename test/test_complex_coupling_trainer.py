@@ -1380,7 +1380,7 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
     assert "loss_tangent_post_line_search_stationarity" in rows[0]
 
 
-@pytest.mark.parametrize("subspace_dimension", [1, 2])
+@pytest.mark.parametrize("subspace_dimension", [1, 2, 3, 4])
 def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(
     tmp_path,
     subspace_dimension,
@@ -1402,7 +1402,7 @@ def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(
                     "subspace_dimension": subspace_dimension,
                     "eta_strategy": (
                         "closed_loop_exact_line_search"
-                        if subspace_dimension == 2
+                        if subspace_dimension >= 2
                         else "fixed"
                     ),
                 },
@@ -1433,19 +1433,25 @@ def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(
     assert "tangent_response_mismatch_pre" in row
     assert "tangent_response_mismatch_post" in row
     assert "tangent_correction_rel_symmetric_pair" in row
-    if subspace_dimension == 2:
-        assert row["tangent_subspace_dimension"] == 2
-        assert "tangent_coefficient_0" in row
-        assert "tangent_coefficient_1" in row
+    if subspace_dimension >= 2:
+        assert row["tangent_subspace_dimension"] == subspace_dimension
+        for direction_index in range(subspace_dimension):
+            assert f"tangent_coefficient_{direction_index}" in row
+            assert f"tangent_direction_{direction_index}_active" in row
+            assert f"tangent_response_cost_k{direction_index + 1}" in row
         assert "tangent_second_direction_active" in row
-        assert "tangent_response_cost_k1" in row
-        assert "tangent_response_cost_k2" in row
-        log_text = (tmp_path / "tangent_evaluation_k2" / "training.log").read_text()
+        log_text = (
+            tmp_path / f"tangent_evaluation_k{subspace_dimension}" / "training.log"
+        ).read_text()
         assert "eta_source=not_applicable" in log_text
-        assert "subspace_dimension=2" in log_text
+        assert f"subspace_dimension={subspace_dimension}" in log_text
 
 
-def test_complex_k2_trainer_disables_eta_schedule_and_logs_subspace_metrics(tmp_path):
+@pytest.mark.parametrize("subspace_dimension", [2, 3, 4])
+def test_complex_k2_plus_trainer_disables_eta_schedule_and_logs_subspace_metrics(
+    tmp_path,
+    subspace_dimension,
+):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
     data_dir = tmp_path / "data"
@@ -1460,7 +1466,7 @@ def test_complex_k2_trainer_disables_eta_schedule_and_logs_subspace_metrics(tmp_
             balance_projection=BalanceProjectionConfig(
                 mode="symmetric_tangent_green_response",
                 symmetric_tangent_green_response={
-                    "subspace_dimension": 2,
+                    "subspace_dimension": subspace_dimension,
                     "eta": 0.01,
                     "eta_strategy": "closed_loop_exact_line_search",
                     "line_search_relative_eps": 1.0e-12,
@@ -1495,7 +1501,7 @@ def test_complex_k2_trainer_disables_eta_schedule_and_logs_subspace_metrics(tmp_
             trust_weight=0.01,
         ),
     )
-    work_dir = tmp_path / "k2_training"
+    work_dir = tmp_path / f"k{subspace_dimension}_training"
     trainer = ComplexCouplingTrainer(
         model=model,
         config=training,
@@ -1508,22 +1514,28 @@ def test_complex_k2_trainer_disables_eta_schedule_and_logs_subspace_metrics(tmp_
     rows = trainer.metric_rows
     assert rows
     for row in rows:
-        assert row["tangent_subspace_dimension"] == pytest.approx(2.0)
-        assert "tangent_coefficient_0_mean" in row
-        assert "tangent_coefficient_1_mean" in row
+        assert row["tangent_subspace_dimension"] == pytest.approx(
+            float(subspace_dimension)
+        )
+        for direction_index in range(subspace_dimension):
+            assert f"tangent_coefficient_{direction_index}_mean" in row
+            assert f"tangent_direction_{direction_index}_active_fraction" in row
+            assert f"tangent_response_cost_k{direction_index + 1}_mean" in row
         assert "tangent_second_direction_active_fraction" in row
-        assert "tangent_response_cost_k1_mean" in row
-        assert "tangent_response_cost_k2_mean" in row
+        assert "tangent_response_orthogonality_max" in row
         assert "tangent_eta_cap" not in row
         assert "tangent_eta_star_mean" not in row
         assert "loss_tangent_response_trust" in row
         assert "loss_tangent_post_line_search_stationarity" in row
     assert trainer.symmetric_tangent_green_response_context_build_count == 1
     log_text = (work_dir / "training.log").read_text()
-    assert "tangent-eta schedule disabled subspace_dimension=2" in log_text
+    assert (
+        f"tangent-eta schedule disabled subspace_dimension={subspace_dimension}"
+        in log_text
+    )
     assert "eta_applicability=k1_only_not_applied" in log_text
     assert "eta_source=not_applicable" in log_text
-    assert "residual_source=post_k2_residual_gradient" in log_text
+    assert f"residual_source=post_k{subspace_dimension}_residual_gradient" in log_text
 
 
 def test_complex_trainer_rejects_reference_based_checkpoint_selection(tmp_path):

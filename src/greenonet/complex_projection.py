@@ -14,6 +14,7 @@ from greenonet.complex_reconstruction import (
     reconstruct_from_projected_response,
 )
 from greenonet.complex_tangent_projection import (
+    KrylovSubspaceStepResult,
     NormalizedPostLineSearchStationarityResult,
     SymmetricTangentGreenResponseContext,
     TangentResponseTrustResult,
@@ -62,6 +63,7 @@ class SymmetricTangentProjectionDiagnostics:
     cost_k1: torch.Tensor | None
     cost_k2: torch.Tensor | None
     residual_gradient_post: torch.Tensor | None
+    subspace_result: KrylovSubspaceStepResult | None
 
 
 @dataclass(frozen=True)
@@ -184,37 +186,20 @@ def apply_complex_balance_projection(
             eta_cap=symmetric_tangent_eta_cap,
         )
         delta = tangent_step.delta
-        if tangent_step.subspace_dimension == 2:
-            required_k2 = (
-                tangent_step.directional_response_0,
-                tangent_step.directional_response_1,
-                tangent_step.coefficient_0,
-                tangent_step.coefficient_1,
-                tangent_step.mismatch_k2,
-            )
-            if any(value is None for value in required_k2):
-                raise RuntimeError("K=2 tangent diagnostics are incomplete.")
-            response_pair_0 = tangent_step.directional_response_0
-            response_pair_1 = tangent_step.directional_response_1
-            coefficient_0 = tangent_step.coefficient_0
-            coefficient_1 = tangent_step.coefficient_1
-            assert response_pair_0 is not None
-            assert response_pair_1 is not None
-            assert coefficient_0 is not None
-            assert coefficient_1 is not None
+        if tangent_step.subspace_dimension >= 2:
+            subspace = tangent_step.subspace_result
+            if subspace is None:
+                raise RuntimeError("K>=2 tangent subspace diagnostics are incomplete.")
             phi = symmetric_physical[:, 0] + delta
             projected_physical = torch.stack((phi, rhs_phys - phi), dim=1)
-            projected_solution = torch.stack(
-                (
-                    symmetric_solution[:, 0]
-                    - coefficient_0.unsqueeze(1) * response_pair_0[:, 0]
-                    - coefficient_1.unsqueeze(1) * response_pair_1[:, 0],
-                    symmetric_solution[:, 1]
-                    + coefficient_0.unsqueeze(1) * response_pair_0[:, 1]
-                    + coefficient_1.unsqueeze(1) * response_pair_1[:, 1],
-                ),
-                dim=1,
-            )
+            projected_phi = symmetric_solution[:, 0]
+            projected_psi = symmetric_solution[:, 1]
+            for direction_index in range(tangent_step.subspace_dimension):
+                coefficient = subspace.coefficients[direction_index].unsqueeze(1)
+                response_pair = subspace.directional_responses[direction_index]
+                projected_phi = projected_phi - coefficient * response_pair[:, 0]
+                projected_psi = projected_psi + coefficient * response_pair[:, 1]
+            projected_solution = torch.stack((projected_phi, projected_psi), dim=1)
         elif (
             symmetric_tangent_context.eta_strategy == "fixed"
             or tangent_step.directional_response is None
@@ -282,6 +267,7 @@ def apply_complex_balance_projection(
             cost_k1=tangent_step.cost_k1,
             cost_k2=tangent_step.cost_k2,
             residual_gradient_post=tangent_step.residual_gradient_post,
+            subspace_result=tangent_step.subspace_result,
         )
     correction_phi = projected_physical[:, 0] - raw_physical[:, 0]
     correction_psi = projected_physical[:, 1] - raw_physical[:, 1]
@@ -405,31 +391,36 @@ def symmetric_tangent_metric_tensors(
                 ),
             }
         )
-    if tangent.subspace_dimension == 2:
-        if (
-            tangent.coefficient_0 is None
-            or tangent.coefficient_1 is None
-            or tangent.second_direction_active is None
-            or tangent.cost_k1 is None
-            or tangent.cost_k2 is None
-        ):
-            raise RuntimeError("K=2 tangent metric diagnostics are incomplete.")
-        metrics.update(
-            {
-                "tangent_subspace_dimension": tangent.mismatch_pre.new_tensor(2),
-                "tangent_coefficient_0_mean": tangent.coefficient_0.mean(),
-                "tangent_coefficient_1_mean": tangent.coefficient_1.mean(),
-                "tangent_second_direction_active_fraction": (
-                    tangent.second_direction_active.to(
-                        tangent.mismatch_pre.dtype
-                    ).mean()
-                ),
-                "tangent_response_cost_k1_mean": tangent.cost_k1.mean(),
-                "tangent_response_cost_k2_mean": tangent.cost_k2.mean(),
-                "tangent_response_cost_k2_over_k1": (
-                    tangent.cost_k2.mean() / tangent.cost_k1.mean().clamp_min(eps)
-                ),
-            }
+    if tangent.subspace_dimension >= 2:
+        subspace = tangent.subspace_result
+        if subspace is None:
+            raise RuntimeError("K>=2 tangent metric diagnostics are incomplete.")
+        metrics["tangent_subspace_dimension"] = tangent.mismatch_pre.new_tensor(
+            tangent.subspace_dimension
+        )
+        for direction_index in range(tangent.subspace_dimension):
+            metrics[f"tangent_coefficient_{direction_index}_mean"] = (
+                subspace.coefficients[direction_index].mean()
+            )
+            metrics[f"tangent_direction_{direction_index}_active_fraction"] = (
+                subspace.direction_active[direction_index]
+                .to(tangent.mismatch_pre.dtype)
+                .mean()
+            )
+            metrics[f"tangent_response_cost_k{direction_index + 1}_mean"] = (
+                subspace.costs[direction_index].mean()
+            )
+            if direction_index > 0:
+                previous = subspace.costs[direction_index - 1].mean()
+                metrics[
+                    f"tangent_response_cost_k{direction_index + 1}_over_k"
+                    f"{direction_index}"
+                ] = subspace.costs[direction_index].mean() / previous.clamp_min(eps)
+        metrics["tangent_second_direction_active_fraction"] = (
+            subspace.direction_active[1].to(tangent.mismatch_pre.dtype).mean()
+        )
+        metrics["tangent_response_orthogonality_max"] = (
+            subspace.response_orthogonality_max[-1].max()
         )
     return metrics
 
@@ -462,10 +453,10 @@ def post_line_search_stationarity_from_projection(
             context=context,
             rhs_phys=projection.projected_physical.sum(dim=1),
         )
-    if tangent.subspace_dimension == 2:
+    if tangent.subspace_dimension >= 2:
         if tangent.residual_gradient_post is None:
             raise RuntimeError(
-                "K=2 post-subspace residual gradient is missing for stationarity."
+                "K>=2 post-subspace residual gradient is missing for stationarity."
             )
         return normalized_post_line_search_stationarity_loss(
             context=context,

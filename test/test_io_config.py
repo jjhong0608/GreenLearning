@@ -384,7 +384,8 @@ def test_column_diagonal_green_response_config_round_trip():
     )
 
 
-def test_symmetric_tangent_green_response_config_round_trip():
+@pytest.mark.parametrize("subspace_dimension", [2, 3, 4])
+def test_symmetric_tangent_green_response_config_round_trip(subspace_dimension):
     from greenonet.io import _deserialize_config, _serialize_config
 
     config = CouplingModelConfig(
@@ -392,7 +393,7 @@ def test_symmetric_tangent_green_response_config_round_trip():
             "enabled": True,
             "mode": "symmetric_tangent_green_response",
             "symmetric_tangent_green_response": {
-                "subspace_dimension": 2,
+                "subspace_dimension": subspace_dimension,
                 "eta": 0.025,
                 "eta_strategy": "closed_loop_exact_line_search",
                 "line_search_relative_eps": 4.0e-12,
@@ -409,7 +410,7 @@ def test_symmetric_tangent_green_response_config_round_trip():
     assert loaded == config
     assert loaded.balance_projection.mode == "symmetric_tangent_green_response"
     tangent = loaded.balance_projection.symmetric_tangent_green_response
-    assert tangent.subspace_dimension == 2
+    assert tangent.subspace_dimension == subspace_dimension
     assert tangent.eta == pytest.approx(0.025)
     assert tangent.eta_strategy == "closed_loop_exact_line_search"
     assert tangent.line_search_relative_eps == pytest.approx(4.0e-12)
@@ -423,7 +424,7 @@ def test_symmetric_tangent_green_response_config_round_trip():
         ("eta", -0.1, ValueError),
         ("eta", True, TypeError),
         ("subspace_dimension", 0, ValueError),
-        ("subspace_dimension", 3, ValueError),
+        ("subspace_dimension", 5, ValueError),
         ("subspace_dimension", 1.0, TypeError),
         ("subspace_dimension", True, TypeError),
         ("eta_strategy", "adaptive", ValueError),
@@ -471,13 +472,16 @@ def test_symmetric_tangent_green_response_defaults_to_fixed_eta_strategy():
     assert tangent.line_search_relative_eps == pytest.approx(1.0e-12)
 
 
-def test_k2_tangent_requires_closed_loop_exact_line_search():
-    with pytest.raises(ValueError, match="subspace_dimension=2 requires"):
+@pytest.mark.parametrize("subspace_dimension", [2, 3, 4])
+def test_k2_plus_tangent_requires_closed_loop_exact_line_search(
+    subspace_dimension,
+):
+    with pytest.raises(ValueError, match="subspace_dimension>=2 requires"):
         CouplingModelConfig(
             balance_projection={
                 "mode": "symmetric_tangent_green_response",
                 "symmetric_tangent_green_response": {
-                    "subspace_dimension": 2,
+                    "subspace_dimension": subspace_dimension,
                     "eta_strategy": "fixed",
                 },
             }

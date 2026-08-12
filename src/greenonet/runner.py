@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -20,6 +19,7 @@ from greenonet.config import ModelConfig, TrainingConfig
 from greenonet.data import AxialDataset
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.model import GreenONetModel
+from greenonet.reproducibility import TrainingSeedContext
 from greenonet.sampler import ForwardSampler
 from greenonet.trainer import Trainer
 
@@ -79,15 +79,25 @@ class GreenONetRunner(LoggingMixin):
         model_cfg: ModelConfig | None = None,
         training_cfg: TrainingConfig | None = None,
     ) -> Trainer:
-        torch.manual_seed(seed)
-        random.seed(seed)
-
         cfg_training = training_cfg or TrainingConfig(
             learning_rate=5e-3,
             epochs=max(5, ndata * 2),
             batch_size=32,
             log_interval=1,
+            seed=seed,
         )
+        base_seed = seed if cfg_training.seed is None else cfg_training.seed
+        if cfg_training.seed is not None and cfg_training.seed != seed:
+            raise ValueError(
+                "run_green_o_net seed must match training.seed when both are set."
+            )
+        seed_context = TrainingSeedContext(
+            stage="green",
+            base_seed=base_seed,
+            deterministic_algorithms=cfg_training.deterministic_algorithms,
+            device=cfg_training.device,
+        )
+        seed_context.configure_process()
 
         axial_lines = self._build_axial_lines(
             use_operator_learning, step_size, n_points_per_line
@@ -116,6 +126,7 @@ class GreenONetRunner(LoggingMixin):
                 integration_rule=cfg_training.integration_rule,
             )
 
+        seed_context.apply("data_train")
         sampler = make_sampler(sampler_mode, ndata, scale_length)
         self.logger.info(
             "Sampling data: mode=%s, ndata=%s, scale_length=%s, lines=%s",
@@ -164,6 +175,7 @@ class GreenONetRunner(LoggingMixin):
                 if validation_sampler_mode is not None
                 else sampler_mode
             )
+            seed_context.apply("data_valid")
             validation_sampler = make_sampler(
                 val_sampler_mode, validation_ndata, val_scale_length
             )
@@ -203,13 +215,16 @@ class GreenONetRunner(LoggingMixin):
                     "activation": activation,
                 }
             )
+        seed_context.apply("model")
         model = GreenONetModel(cfg_model)
+        seed_context.apply("runtime")
         trainer = Trainer(
             model=model,
             config=cfg_training,
             work_dir=self.work_dir,
             model_cfg=cfg_model,
             terminal_width=self.terminal_width,
+            seed_context=seed_context,
         )
         trainer.train(dataset, validation_dataset)
         return trainer
@@ -288,15 +303,25 @@ def run_complex_green_o_net(
     training_cfg: TrainingConfig | None = None,
     terminal_width: int | None = None,
 ) -> ComplexGreenTrainer:
-    torch.manual_seed(seed)
-    random.seed(seed)
-
     cfg_training = training_cfg or TrainingConfig(
         learning_rate=5e-3,
         epochs=max(5, ndata * 2),
         batch_size=32,
         log_interval=1,
+        seed=seed,
     )
+    base_seed = seed if cfg_training.seed is None else cfg_training.seed
+    if cfg_training.seed is not None and cfg_training.seed != seed:
+        raise ValueError(
+            "run_complex_green_o_net seed must match training.seed when both are set."
+        )
+    seed_context = TrainingSeedContext(
+        stage="green",
+        base_seed=base_seed,
+        deterministic_algorithms=cfg_training.deterministic_algorithms,
+        device=cfg_training.device,
+    )
+    seed_context.configure_process()
     cfg_model = model_cfg or ModelConfig(
         input_dim=2,
         hidden_dim=64,
@@ -331,6 +356,7 @@ def run_complex_green_o_net(
         geometry.num_x_segments + geometry.num_y_segments,
         ndata,
     )
+    seed_context.apply("data_train")
     train_data = generate_complex_green_data(
         geometry,
         coeffs,
@@ -370,6 +396,7 @@ def run_complex_green_o_net(
             val_sampler_mode,
             validation_ndata,
         )
+        seed_context.apply("data_valid")
         validation_data = generate_complex_green_data(
             geometry,
             coeffs,
@@ -388,7 +415,9 @@ def run_complex_green_o_net(
         )
         validation_dataset = ComplexGreenDataset(validation_data)
 
+    seed_context.apply("model")
     model = GreenONetModel(cfg_model)
+    seed_context.apply("runtime")
     trainer = ComplexGreenTrainer(
         model=model,
         config=cfg_training,
@@ -396,6 +425,7 @@ def run_complex_green_o_net(
         model_cfg=cfg_model,
         coeffs=coeffs,
         terminal_width=terminal_width,
+        seed_context=seed_context,
     )
     trainer.train(train_dataset, validation_dataset)
     return trainer

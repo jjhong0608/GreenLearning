@@ -113,6 +113,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `sin(n*pi*t)`, `cos(n*pi*t)` for `n=1..k`만 사용한다.
 - Complex geometry mode는 `dataset.geometry_mode="complex"`일 때만 사용한다.
   기존 unit-square path는 기본값 `unit_square`로 보존한다.
+- Unit square는 각 interior horizontal/vertical line을 하나의 connected segment로
+  기록하면 complex geometry contract의 특수한 경우로 표현할 수 있다. `[0,1]^2`에서는
+  모든 segment length가 1이므로 physical/reference response scaling이 identity가 된다.
+  Loader, ComplexCouplingDataset, ComplexCouplingNet, physical projection, reconstruction은
+  이 표현을 허용하며 `cli/make_rectangular_geometry.py`가 geometry NPZ를 생성한다.
+  `examples/rectangle_gmsh.py`가 같은 NPZ metadata에서 matching single-surface Gmsh
+  domain을 생성한다. Paired config와 generated sample bundle은 별도 후속 asset이다.
 - Complex geometry v1 입력 계약은 precomputed geometry `.npz`와 full-grid sample
   `.npz` 조합이다. geometry 추출 자체는 이 repo의 v1 구현 범위가 아니다.
 - Complex geometry full-reference sample은 full-grid `rhs`, `sol`을 필수로 갖고,
@@ -1198,6 +1205,20 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   핵심 claim으로 전면화하지 않고, numerical results 문장에서도 disk-type 등 특정
   domain family를 전면화하지 않는다. Keyword line은 `Neural operators` 대신
   `Operator learning`을 사용한다.
+- Rectangular complex geometry generator는 `cli/make_rectangular_geometry.py`이다.
+  Default bounds는 unit square `[0,1]^2`이고 `--x-min/--x-max/--y-min/--y-max`로
+  axis-aligned rectangle을 지정한다. 하나의 uniform `--step-size`가 두 side length를
+  모두 정수 개 interval로 분할해야 하며 각 축에 interior point가 하나 이상 있어야
+  한다. Boundary point는 제외하고 각 interior y-line에는 full-width x-segment 하나,
+  각 interior x-line에는 full-height y-segment 하나를 저장한다. Reconstruction은
+  unit-coordinate trapezoid weight와 `valid_index=-1` hard-zero endpoint를 사용한다.
+  Metadata는 `domain_type="rectangle"`, bounds, width/height, center, CCW
+  `boundary_vertices`, `has_hole=false`, grid와 spacing provenance를 기록한다.
+- Rectangular FEniCSx sample generation은 `examples/rectangle_gmsh.py`를 사용한다.
+  이 script는 geometry NPZ의 `domain_type`, x/y bounds, width/height, center,
+  `has_hole=false`와 lower-left에서 시작하는 4개 CCW `boundary_vertices`를 서로
+  검증한다. 저장된 vertices로 Gmsh OCC line loop와 one plane surface를 만들고 one
+  `surface_tag`와 4개 `boundary_tags`를 반환하므로 `point_surface_tags`는 필요 없다.
 - Circular complex geometry generator는 `cli/make_circular_geometry.py`이며
   center `(0, 0)` 고정, radius CLI option default `1.0`, `2 * radius / step_size`
   정수 조건을 사용한다. Grid interval은 `[-radius, radius]`이고, boundary grid point와
@@ -1360,6 +1381,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   boundary-edge connectivity, geometry/Gmsh-script SHA-256, Gmsh version,
   boundary/auxiliary masks, auxiliary adjacency stencil을 저장한다. Geometry hash나
   exact coordinate mapping이 다르면 artifact 시작 시 fail fast한다.
+- Complex-path unit-square visualization cache는
+  `data/visualization_mesh/unit_square_h_1_128_mesh.npz`이다. 이 cache는
+  `data/geometry/unit_square_h_1_128.npz`와 `examples/rectangle_gmsh.py`에서
+  `boundary_size_factor=3.0`, `max_auxiliary_fraction=0.001`로 생성한다. 저장된 mesh는
+  16,301 vertices, 32,428 triangles, 16,129 exact valid mappings, 172 boundary
+  vertices와 zero auxiliary vertices를 가지며 loader가 geometry SHA-256과 point
+  mapping을 검증한다.
 - Mesh scalar figure는 selected sample의 `sol`, `u_pred`, `u_pred_error`, `rhs`,
   `phi`, `psi`와, target flux가 있을 때 `target_phi`, `target_psi`, `phi_error`,
   `psi_error`에 additive로 생성하며 기존 scatter를 대체하지 않는다. Solution
@@ -2165,22 +2193,22 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Green-response mismatch를 최소화하는 solver-in-the-loop이며, `A`가 nonsingular이면
   최종 split이 network proposal과 무관해질 수 있다. Production tangent는 이 비용과
   역할 붕괴를 피하기 위해 fixed-rank matrix-free correction만 허용한다.
-- `symmetric_tangent_green_response.subspace_dimension`은 strict integer `1` 또는
-  `2`이며 기본값 `1`은 기존 K=1 수치와 artifact schema를 보존한다. Opt-in K=2는
-  current `z0=D^-1 g`를 보존하고
-  `A z0=S^T M_Omega S z0`로 만든 residual의 preconditioned direction `z1`을
-  추가한다. 구현은 response inner product에서 `z1`을 `z0`에 직교화한 뒤 두 개의
-  sample-wise scalar exact coefficient를 계산하므로 dense `2x2` solve도 필요 없다.
-  이 방식은 current `K=1` space를 포함하므로 uncapped objective는 악화되지 않고,
-  correction을 항상 `(delta,-delta)`로 적용해 balance를 보존한다. Global matrix,
-  reference target, 새 network는 필요하지 않는다. 두 번째 response direction이
-  퇴화하면 `c1=0`으로 K=1에 fallback한다. K=2에서는 shared schema의 `eta`를
-  사용하지 않으며 eta cap과 eta warmup schedule도 생성하거나 적용하지 않는다.
-  Trainer/evaluator/export/audit는 같은 production helper와 geometry별 cached response
-  context를 공유한다. Stationarity는 final `r_K2=S^T M_Omega m_K2`, response-trust는
-  final `m_K2`와 `m_K2-m0`를 사용하고 두 loss는 `H_x(f/2),H_y(f/2)` normalization을
-  공유한다. Paired experiment config는
-  `configs/complex_coupling_soap_tangent_k2_pentagram.json`이다.
+- `symmetric_tangent_green_response.subspace_dimension`은 strict integer
+  `{1,2,3,4}`이며 기본값 `1`은 기존 K=1 수치와 artifact schema를 보존한다. Opt-in
+  K=2는 current `z0=D^-1 g`와 기존 연산 순서를 그대로 보존하고, residual의
+  preconditioned direction `z1`을 response inner product에서 `z0`에 직교화한 뒤 두
+  sample-wise exact scalar coefficient를 계산한다. K=3/K=4는 frozen audit와 같은
+  방식으로 `z_k_raw=D^-1 g_{k-1}`을 만들고 이전 모든 response direction에 two-pass
+  modified Gram-Schmidt를 적용한 뒤 scalar `c_k`를 계산한다. Dense `K x K` solve,
+  global matrix, reference target 또는 새 network는 만들지 않는다. 각 nested space는
+  이전 space를 포함하므로 adjacent response cost는 tolerance 밖에서 증가할 수 없고,
+  새 direction이 퇴화하면 `c_k=0`으로 직전 K에 fallback한다. Correction은 항상
+  `(delta,-delta)`라서 balance를 보존한다. 모든 K>=2에서는 shared schema의 `eta`, eta
+  cap, eta warmup schedule을 적용하지 않는다. Trainer/evaluator/export/audit는 같은
+  production helper와 geometry별 cached response context를 공유한다. Stationarity는
+  final `r_K=S^T M_Omega m_K`, response-trust는 final `m_K`와 `m_K-m0`를 사용하며 두
+  loss는 `H_x(f/2),H_y(f/2)` normalization을 공유한다. Paired experiment config는
+  `configs/complex_coupling_soap_tangent_k{2,3,4}_pentagram.json`이다.
 - Pentagram `coupling8` best-energy frozen checkpoint의 100-sample post-hoc audit에서
   matrix-free unconstrained `K=2`는 production capped `K=1` 대비 mean response
   mismatch `-33.028%`, optimized bulk energy `-16.246%`, `rel_sol -25.794%`,
@@ -2196,8 +2224,91 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   것이 아니다. K=2 production path는 opt-in으로만 유지하고 default 변경 전
   same-seed paired retraining이 필요하다. Canonical outputs은
   `checkpoints/pentagram/coupling8/tangent_subspace_k1_k2_audit/`에 둔다.
+- Pentagram `coupling9`은 frozen audit 이후 K=2를 실제 training graph에 넣은 첫
+  run이다. 저장 config는 `coupling8`과
+  `symmetric_tangent_green_response.subspace_dimension=2` 한 field만 다르고,
+  나머지 data, SOAP, boundary-off energy, response-trust outer `0.1`, inner `0`,
+  source-normalized stationarity `0.01`, weak-residual final reconstruction은 같다.
+  Shared 100-sample best-energy 재평가에서 mean
+  `rel_sol/rel_u_phi/rel_u_psi/split_mismatch/rel_flux`는
+  `2.678%/5.022%/4.832%/7.886%/46.558%`에서
+  `1.590%/3.289%/2.711%/4.740%/39.658%`로 감소했다. `rel_sol`, `rel_u_psi`, split
+  mismatch는 100/100 sample에서 개선됐고 max `rel_sol`은
+  `10.317% -> 5.104%`다. Frozen `coupling8+K2`보다도 trained K2의 mean
+  `rel_sol`은 `20.00%`, optimized energy는 `39.72%` 낮으므로 second direction을
+  training에 포함한 효과가 post-hoc correction을 넘어선다. 동시에 tangent-delta
+  RMS는 trained K1 대비 `102.91%`, correction/symmetric-pair norm은 `89.67%`
+  증가한다. 따라서 network proposal 자체가 target split에 가까워졌다고 단정하지
+  말고, K=2 correction이 효과적으로 작동하는 proposal을 함께 학습한 role-separation
+  결과로 해석한다. Model initialization seed가 저장되지 않았고 초기 SOAP objective가
+  매우 큰 값을 거쳐 회복하므로 default 전환 전 same-seed multi-run 확인이 필요하다.
+  Canonical evidence는
+  `checkpoints/pentagram/coupling1_9_comparison/analysis_report.md`에 둔다.
+- Pentagram trained `K=1..4` 비교에서 `coupling8/9/10/11`의 shared 100-sample
+  best-energy mean `rel_sol`은 `2.678%/1.590%/1.234%/1.112%`, mean
+  `rel_u_phi`는 `5.022%/3.289%/2.552%/2.394%`, mean `rel_u_psi`는
+  `4.832%/2.711%/2.120%/1.865%`, mean `rel_flux`는
+  `46.558%/39.658%/35.261%/31.930%`다. K1-to-K2가 가장 큰 improvement이고,
+  K2-to-K3도 명확하지만 K3-to-K4 mean `rel_sol` 개선은 `9.87%`, optimized
+  energy 개선은 `4.20%`로 감소한다. K3-to-K4는 test sample에서 `rel_sol`
+  `72/100`, `rel_u_phi` `60/100`, `rel_u_psi` `91/100`, `rel_flux` `98/100`을
+  개선한다. Transition solution-error jump는 `0.75%`만 감소하고 split
+  transition jump는 `0.80%` 증가하므로 K4의 추가 이득은 주로 global/flux/tail
+  quality이며 transition regularity가 아니다. 동일 frozen input의 isolated CPU
+  tangent/auxiliary forward+backward cost는 K1/K2/K3/K4에서
+  `141.4/211.8/282.2/361.8 ms`다. 따라서 absolute accuracy는 K4, 현재
+  cost-quality knee는 K3로 해석한다. 실제 training wall은 K3만 `cuda:1` 및 다른
+  host를 사용해 직접 비교하지 않는다. Config에는 GP source seed만 있고 model
+  initialization seed가 없으므로 default 선택 전 same-device fixed-seed 3-run
+  comparison이 필요하다. Canonical report는
+  `checkpoints/pentagram/coupling8_11_k_comparison/analysis_report.md`다.
+- Frozen tangent-subspace audit는 production `subspace_dimension`과 독립적으로
+  동일 raw output에서 nested matrix-free `K=1..4`를 비교할 수 있다.
+  `cli/audit_tangent_subspace.py --max-subspace-dimension {2,3,4}`를 사용하며
+  기본값 `2`는 기존 K1/K2 audit를 보존한다. K3/K4는 이전 모든 response
+  direction에 두 번 modified Gram-Schmidt를 적용하고 sample-wise scalar
+  coefficient만 계산한다. Global matrix, dense solve, reference target correction은
+  사용하지 않으며 각 adjacent response cost의 비증가를 검사한다.
+- Pentagram `coupling9` best-energy frozen checkpoint의 100-sample K1..K4 audit에서
+  K3 대 K2 mean response cost/optimized energy/`rel_sol`은
+  `-22.609%/-12.942%/-14.834%`, K4 대 K3는
+  `-21.252%/-5.064%/-9.371%`다. K4 대 K2는
+  `rel_sol/rel_u_phi/rel_u_psi`를 `22.815%/21.883%/22.300%` 낮추며 세 metric
+  모두 `100/100` sample에서 개선하고, optimized energy는 `17.351%` 낮춘다.
+  Correction/symmetric-pair norm 증가는 `3.147%`에 그친다. K2에서 K4로
+  `rel_sol` p95/max는 `2.866%/5.104% -> 2.147%/3.471%`다. 네 방향 모두
+  `100/100`에서 active이고 adjacent response cost는 모두 감소하며 response
+  non-orthogonality max는 `4.8e-13` 미만, balance max error는 `6.3e-15` 미만이다.
+  반면 mean `rel_flux` 개선은 `0.309%`이므로 추가 subspace도 target directional
+  source보다 learned response alignment를 주로 개선한다. 다음 production 실험은
+  이 frozen evidence를 근거로 K3/K4 production path를 optional로 제공하되, 기본값은
+  K=1로 유지하고 K3 paired retraining을 우선한다. K4의 기본 채택 여부는 K3와의
+  paired training 품질 및 계산 비용을 확인한 뒤 결정한다.
+  Frozen evidence는
+  `checkpoints/pentagram/coupling9/tangent_subspace_k1_k4_audit/`에 둔다.
 
 ## Verification Defaults
+
+- Official training runs require independent explicit base seeds:
+  `training.seed` for GreenNet and `coupling_training.seed` for CouplingNet. Both
+  are uint32 values. Active stages without their seed fail in `cli/train.py`,
+  while legacy seedless `config_used.json` files remain loadable for evaluation
+  and artifact export.
+- Training sub-seeds are derived with stable SHA-256 namespaces rather than
+  Python `hash()`. Green uses separate `data_train`, `data_valid`, `model`,
+  `runtime`, `loader_train`, and `loader_lbfgs` streams; Coupling uses `model`,
+  `runtime`, and `loader_train`. Model construction is bracketed by model and
+  runtime reseeding so sample count and parameter-count differences do not shift
+  later stochastic behavior.
+- `dataset.coupling_source.indexed_gp.seed` remains the source-identity seed and
+  is independent of `coupling_training.seed`. Paired experiments must pin both.
+  `deterministic_algorithms=true` is the paper-config default and enables strict
+  PyTorch/cuDNN/cuBLAS behavior, but bitwise reproducibility is scoped to the
+  same hardware and software environment.
+- Training provenance in `config_used.json`, `training.log`, and artifact
+  summaries records the base and resolved sub-seeds. Model-only safetensors do
+  not store RNG or optimizer state, so exact interrupted-training resume remains
+  unsupported.
 
 - `.venv`가 없으면 `/home/jjhong0608/.conda/envs/green_net/bin/python`을 사용한다.
 - Focused pytest를 먼저 실행하고, 이후 touched files에 대해 `ruff check`와

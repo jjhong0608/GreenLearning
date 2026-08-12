@@ -135,6 +135,7 @@ class TestRunGreenONet:
         monkeypatch.setattr(ForwardSampler, "generate_dataset", fake_generate_dataset)
         monkeypatch.setattr("greenonet.trainer.Trainer.train", fake_train)
 
+        work_dir = tmp_path / "run_b_c"
         run_green_o_net(
             a_fun=a_fun,
             apx_fun=apx_fun,
@@ -142,7 +143,7 @@ class TestRunGreenONet:
             b_fun=b_fun,
             c_fun=c_fun,
             activation="tanh",
-            work_dir=tmp_path / "run_b_c",
+            work_dir=work_dir,
             ndata=1,
             seed=0,
             scale_length=0.1,
@@ -155,6 +156,9 @@ class TestRunGreenONet:
         assert captured["by_fun"] is b_fun
         assert captured["c_fun"] is c_fun
         assert captured["trainer_terminal_width"] == 210
+        training_log = (work_dir / "training.log").read_text()
+        assert "training reproducibility stage=green base_seed=0" in training_log
+        assert "loader_train=" in training_log
         logging.getLogger("GreenONetRunner").handlers.clear()
         logging.getLogger("Trainer").handlers.clear()
 

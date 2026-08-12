@@ -106,6 +106,7 @@ class SymmetricTangentStepResult:
     cost_k1: torch.Tensor | None = None
     cost_k2: torch.Tensor | None = None
     residual_gradient_post: torch.Tensor | None = None
+    subspace_result: KrylovSubspaceStepResult | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,41 @@ class KrylovK2StepResult:
     cost_k1: torch.Tensor
     cost_k2: torch.Tensor
     residual_gradient_post: torch.Tensor
+
+
+@dataclass(frozen=True)
+class KrylovSubspaceStepResult:
+    """Nested matrix-free tangent candidates from K=1 through K=max_dimension."""
+
+    directions: torch.Tensor
+    directional_responses: torch.Tensor
+    response_directions: torch.Tensor
+    coefficients: torch.Tensor
+    direction_active: torch.Tensor
+    deltas: torch.Tensor
+    mismatches: torch.Tensor
+    costs: torch.Tensor
+    residual_gradient_post: torch.Tensor
+    response_gram: torch.Tensor
+    response_orthogonality_max: torch.Tensor
+    line_search_numerator_0: torch.Tensor
+    line_search_denominator_0: torch.Tensor
+
+    @property
+    def subspace_dimension(self) -> int:
+        return int(self.directions.shape[0])
+
+    @property
+    def final_delta(self) -> torch.Tensor:
+        return self.deltas[-1]
+
+    @property
+    def final_mismatch(self) -> torch.Tensor:
+        return self.mismatches[-1]
+
+    @property
+    def final_cost(self) -> torch.Tensor:
+        return self.costs[-1]
 
 
 @dataclass(frozen=True)
@@ -190,7 +226,7 @@ class SymmetricTangentGreenResponseContext:
     gain_scale: torch.Tensor
     denominator: torch.Tensor
     point_mass: torch.Tensor
-    subspace_dimension: Literal[1, 2]
+    subspace_dimension: Literal[1, 2, 3, 4]
     eta: float
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"]
     line_search_relative_eps: float
@@ -297,32 +333,35 @@ class SymmetricTangentGreenResponseContext:
     ) -> SymmetricTangentStepResult:
         self.validate_for(mismatch)
         self.validate_for(gradient)
-        if self.subspace_dimension == 2:
+        if self.subspace_dimension >= 2:
             if eta_cap is not None:
-                raise ValueError("eta_cap is not applicable to subspace_dimension=2.")
-            result = matrix_free_krylov_k2_step(
+                raise ValueError("eta_cap is not applicable to subspace_dimension>=2.")
+            result = matrix_free_krylov_subspace_step(
                 context=self,
                 mismatch=mismatch,
                 gradient=gradient,
+                max_dimension=self.subspace_dimension,
                 relative_eps=self.line_search_relative_eps,
+                monotonicity_relative_tol=1.0e-10,
             )
             return SymmetricTangentStepResult(
-                delta=result.delta_k2,
-                subspace_dimension=2,
-                direction_0=result.direction_0,
-                direction_1=result.direction_1,
-                response_direction_0=result.response_direction_0,
-                response_direction_1=result.response_direction_1,
-                directional_response_0=result.directional_response_0,
-                directional_response_1=result.directional_response_1,
-                coefficient_0=result.coefficient_0,
-                coefficient_1=result.coefficient_1,
-                second_direction_active=result.second_direction_active,
-                mismatch_k1=result.mismatch_k1,
-                mismatch_k2=result.mismatch_k2,
-                cost_k1=result.cost_k1,
-                cost_k2=result.cost_k2,
+                delta=result.final_delta,
+                subspace_dimension=self.subspace_dimension,
+                direction_0=result.directions[0],
+                direction_1=result.directions[1],
+                response_direction_0=result.response_directions[0],
+                response_direction_1=result.response_directions[1],
+                directional_response_0=result.directional_responses[0],
+                directional_response_1=result.directional_responses[1],
+                coefficient_0=result.coefficients[0],
+                coefficient_1=result.coefficients[1],
+                second_direction_active=result.direction_active[1],
+                mismatch_k1=result.mismatches[0],
+                mismatch_k2=result.mismatches[1],
+                cost_k1=result.costs[0],
+                cost_k2=result.costs[1],
                 residual_gradient_post=result.residual_gradient_post,
+                subspace_result=result,
             )
         resolved_cap = self._resolve_eta_cap(eta_cap)
         if self.eta_strategy == "fixed":
@@ -383,7 +422,7 @@ class SymmetricTangentGreenResponseContext:
             "subspace_dimension": self.subspace_dimension,
             "eta": self.eta,
             "eta_applicability": (
-                "k1_only_not_applied" if self.subspace_dimension == 2 else "applied"
+                "k1_only_not_applied" if self.subspace_dimension >= 2 else "applied"
             ),
             "eta_strategy": self.eta_strategy,
             "line_search_relative_eps": self.line_search_relative_eps,
@@ -532,6 +571,196 @@ def matrix_free_krylov_k2_step(
         cost_k1=cost_k1,
         cost_k2=cost_k2,
         residual_gradient_post=residual_gradient_post,
+    )
+
+
+def matrix_free_krylov_subspace_step(
+    *,
+    context: SymmetricTangentGreenResponseContext,
+    mismatch: torch.Tensor,
+    gradient: torch.Tensor,
+    max_dimension: int,
+    relative_eps: float,
+    monotonicity_relative_tol: float | None = None,
+) -> KrylovSubspaceStepResult:
+    """Extend the unchanged K=2 seed with nested response-orthogonal directions."""
+
+    if isinstance(max_dimension, bool) or max_dimension not in {2, 3, 4}:
+        raise ValueError("max_dimension must be 2, 3, or 4.")
+    if monotonicity_relative_tol is not None and (
+        not math.isfinite(monotonicity_relative_tol) or monotonicity_relative_tol <= 0.0
+    ):
+        raise ValueError(
+            "monotonicity_relative_tol must be finite and positive when provided."
+        )
+    k2 = matrix_free_krylov_k2_step(
+        context=context,
+        mismatch=mismatch,
+        gradient=gradient,
+        relative_eps=relative_eps,
+        monotonicity_relative_tol=monotonicity_relative_tol,
+    )
+    mass = context.point_mass
+    inverse_denominator = context.denominator.reciprocal().unsqueeze(0)
+    mismatch_energy = mass * mismatch.square().sum(dim=1)
+    response_0_energy = mass * k2.response_direction_0.square().sum(dim=1)
+    eps_0 = (
+        relative_eps * torch.maximum(mismatch_energy, response_0_energy)
+        + torch.finfo(mismatch.dtype).tiny
+    )
+    active_0 = response_0_energy > eps_0
+
+    directions = [k2.direction_0, k2.direction_1]
+    directional_responses = [
+        k2.directional_response_0,
+        k2.directional_response_1,
+    ]
+    response_directions = [k2.response_direction_0, k2.response_direction_1]
+    coefficients = [k2.coefficient_0, k2.coefficient_1]
+    active = [active_0, k2.second_direction_active]
+    deltas = [k2.delta_k1, k2.delta_k2]
+    mismatches = [k2.mismatch_k1, k2.mismatch_k2]
+    costs = [k2.cost_k1, k2.cost_k2]
+    residual_gradient = k2.residual_gradient_post
+
+    for _direction_index in range(2, max_dimension):
+        direction = inverse_denominator * residual_gradient
+        directional_response = context.response_operator.forward_pair(
+            torch.stack((direction, direction), dim=1)
+        )
+        response = directional_response[:, 0] + directional_response[:, 1]
+
+        # Two MGS passes retain response-space orthogonality in float64.
+        for _pass_index in range(2):
+            for (
+                previous_direction,
+                previous_pair,
+                previous_response,
+                previous_active,
+            ) in zip(
+                directions,
+                directional_responses,
+                response_directions,
+                active,
+                strict=True,
+            ):
+                previous_energy = mass * previous_response.square().sum(dim=1)
+                cross = mass * (response * previous_response).sum(dim=1)
+                scale = torch.where(
+                    previous_active,
+                    cross / previous_energy.clamp_min(torch.finfo(mismatch.dtype).tiny),
+                    torch.zeros_like(cross),
+                )
+                direction = direction - scale.unsqueeze(1) * previous_direction
+                directional_response = (
+                    directional_response - scale.view(-1, 1, 1) * previous_pair
+                )
+                response = response - scale.unsqueeze(1) * previous_response
+
+        response_energy = mass * response.square().sum(dim=1)
+        eps_direction = (
+            relative_eps * torch.maximum(mismatch_energy, response_energy)
+            + torch.finfo(mismatch.dtype).tiny
+        )
+        direction_is_active = response_energy > eps_direction
+        numerator = (residual_gradient * direction).sum(dim=1)
+        coefficient = torch.where(
+            direction_is_active,
+            numerator / (response_energy + eps_direction),
+            torch.zeros_like(numerator),
+        )
+        direction = torch.where(
+            direction_is_active.unsqueeze(1),
+            direction,
+            torch.zeros_like(direction),
+        )
+        directional_response = torch.where(
+            direction_is_active.view(-1, 1, 1),
+            directional_response,
+            torch.zeros_like(directional_response),
+        )
+        response = torch.where(
+            direction_is_active.unsqueeze(1),
+            response,
+            torch.zeros_like(response),
+        )
+        delta = deltas[-1] - coefficient.unsqueeze(1) * direction
+        mismatch_next = mismatches[-1] - coefficient.unsqueeze(1) * response
+        cost = mass * mismatch_next.square().sum(dim=1)
+        if monotonicity_relative_tol is not None:
+            tolerance = (
+                monotonicity_relative_tol * torch.maximum(costs[-1], mismatch_energy)
+                + torch.finfo(mismatch.dtype).tiny
+            )
+            if torch.any(cost > costs[-1] + tolerance):
+                maximum = float((cost - costs[-1]).max().item())
+                raise RuntimeError(
+                    "Nested tangent response cost increased beyond tolerance: "
+                    f"max_increase={maximum:.6e}."
+                )
+        residual_gradient = context.tangent_gradient(mismatch_next)
+        outputs = (
+            direction,
+            directional_response,
+            response,
+            coefficient,
+            delta,
+            mismatch_next,
+            cost,
+            residual_gradient,
+        )
+        if any(not torch.all(torch.isfinite(value)) for value in outputs):
+            raise RuntimeError(
+                "Krylov tangent subspace calculation produced non-finite values."
+            )
+        directions.append(direction)
+        directional_responses.append(directional_response)
+        response_directions.append(response)
+        coefficients.append(coefficient)
+        active.append(direction_is_active)
+        deltas.append(delta)
+        mismatches.append(mismatch_next)
+        costs.append(cost)
+
+    response_stack = torch.stack(response_directions, dim=0)
+    response_gram = mass * torch.einsum(
+        "kbp,lbp->bkl",
+        response_stack,
+        response_stack,
+    )
+    diagonal = torch.diagonal(response_gram, dim1=1, dim2=2)
+    normalization = torch.sqrt(diagonal.unsqueeze(2) * diagonal.unsqueeze(1)).clamp_min(
+        torch.finfo(mismatch.dtype).tiny
+    )
+    normalized_gram = response_gram.abs() / normalization
+    identity = torch.eye(
+        max_dimension,
+        dtype=torch.bool,
+        device=mismatch.device,
+    ).unsqueeze(0)
+    normalized_gram = torch.where(
+        identity,
+        torch.zeros_like(normalized_gram),
+        normalized_gram,
+    )
+    prefix_orthogonality = [
+        normalized_gram[:, :dimension, :dimension].amax(dim=(1, 2))
+        for dimension in range(1, max_dimension + 1)
+    ]
+    return KrylovSubspaceStepResult(
+        directions=torch.stack(directions, dim=0),
+        directional_responses=torch.stack(directional_responses, dim=0),
+        response_directions=response_stack,
+        coefficients=torch.stack(coefficients, dim=0),
+        direction_active=torch.stack(active, dim=0),
+        deltas=torch.stack(deltas, dim=0),
+        mismatches=torch.stack(mismatches, dim=0),
+        costs=torch.stack(costs, dim=0),
+        residual_gradient_post=residual_gradient,
+        response_gram=response_gram,
+        response_orthogonality_max=torch.stack(prefix_orthogonality, dim=0),
+        line_search_numerator_0=k2.line_search_numerator_0,
+        line_search_denominator_0=k2.line_search_denominator_0,
     )
 
 

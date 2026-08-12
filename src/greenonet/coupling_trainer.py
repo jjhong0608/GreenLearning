@@ -18,6 +18,7 @@ from greenonet.config import (
     validate_unit_square_coupling_training_config,
 )
 from greenonet.logging_mixin import LoggingMixin
+from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
 from greenonet.numerics import integrate, line_operator_fd, uniform_spacing
 from greenonet.visualizer import LossVisualizer
 from greenonet.io import (
@@ -55,9 +56,20 @@ class CouplingTrainer(LoggingMixin):
         green_kernel: torch.Tensor,
         model_cfg: CouplingModelConfig | None = None,
         terminal_width: int | None = None,
+        seed_context: TrainingSeedContext | None = None,
     ) -> None:
         self.model = model
         self.config = config
+        self.seed_context = seed_context
+        if self.seed_context is None and config.seed is not None:
+            self.seed_context = TrainingSeedContext(
+                stage="coupling",
+                base_seed=config.seed,
+                deterministic_algorithms=config.deterministic_algorithms,
+                device=config.device,
+            )
+        if self.seed_context is not None and self.seed_context.stage != "coupling":
+            raise ValueError("CouplingTrainer requires a coupling seed context.")
         validate_unit_square_coupling_training_config(config)
         self.model_cfg = model_cfg
         self.work_dir = Path(work_dir)
@@ -78,6 +90,16 @@ class CouplingTrainer(LoggingMixin):
                 model_name="CouplingNet",
             ),
         )
+        self._train_loader_generator: torch.Generator | None
+        if self.seed_context is not None:
+            self.seed_context.configure_process()
+            self.seed_context.apply("runtime")
+            self.seed_context.log(self.logger)
+            self._train_loader_generator = self.seed_context.make_generator(
+                "loader_train"
+            )
+        else:
+            self._train_loader_generator = None
         self._validate_balance_loss_config()
         self._validate_symmetric_boundary_loss_config()
         self.green_kernel = green_kernel.to(self.device)  # (2, n, m, m)
@@ -745,6 +767,12 @@ class CouplingTrainer(LoggingMixin):
             shuffle=shuffle,
             collate_fn=coupling_collate_fn,
             pin_memory=True,
+            generator=self._train_loader_generator if shuffle else None,
+            worker_init_fn=(
+                seed_dataloader_worker
+                if shuffle and self._train_loader_generator is not None
+                else None
+            ),
         )
 
     def _save_checkpoint(self, path: Path) -> None:

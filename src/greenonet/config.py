@@ -545,7 +545,7 @@ class ColumnDiagonalGreenResponseProjectionConfig:
 class SymmetricTangentGreenResponseProjectionConfig:
     """Matrix-free tangent Green-response correction settings."""
 
-    subspace_dimension: Literal[1, 2] = 1
+    subspace_dimension: Literal[1, 2, 3, 4] = 1
     eta: float = 0.01
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"] = "fixed"
     line_search_relative_eps: float = 1.0e-12
@@ -560,10 +560,10 @@ class SymmetricTangentGreenResponseProjectionConfig:
                 "balance_projection.symmetric_tangent_green_response."
                 "subspace_dimension must be an integer."
             )
-        if self.subspace_dimension not in {1, 2}:
+        if self.subspace_dimension not in {1, 2, 3, 4}:
             raise ValueError(
                 "balance_projection.symmetric_tangent_green_response."
-                "subspace_dimension must be 1 or 2."
+                "subspace_dimension must be 1, 2, 3, or 4."
             )
         self._validate_nonnegative("eta", self.eta)
         if not isinstance(self.eta_strategy, str):
@@ -578,12 +578,12 @@ class SymmetricTangentGreenResponseProjectionConfig:
                 "'closed_loop_exact_line_search'."
             )
         if (
-            self.subspace_dimension == 2
+            self.subspace_dimension >= 2
             and self.eta_strategy != "closed_loop_exact_line_search"
         ):
             raise ValueError(
                 "balance_projection.symmetric_tangent_green_response."
-                "subspace_dimension=2 requires "
+                "subspace_dimension>=2 requires "
                 "eta_strategy='closed_loop_exact_line_search'."
             )
         self._validate_positive(
@@ -1616,6 +1616,8 @@ class CouplingTrainingConfig:
     batch_size: int = 4
     log_interval: int = 1
     device: str = "cpu"
+    seed: int | None = None
+    deterministic_algorithms: bool = False
     losses: CouplingLossesConfig = field(default_factory=CouplingLossesConfig)
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
@@ -1654,6 +1656,13 @@ class CouplingTrainingConfig:
     )
 
     def __post_init__(self) -> None:
+        from greenonet.reproducibility import validate_training_seed
+
+        validate_training_seed(self.seed, field_name="coupling_training.seed")
+        if not isinstance(self.deterministic_algorithms, bool):
+            raise TypeError(
+                "coupling_training.deterministic_algorithms must be a boolean."
+            )
         self.best_energy_checkpoint = CouplingBestEnergyCheckpointConfig.from_raw(
             self.best_energy_checkpoint
         )
@@ -1950,6 +1959,8 @@ class TrainingConfig:
     batch_size: int = 32
     log_interval: int = 1
     device: str = "cpu"
+    seed: int | None = None
+    deterministic_algorithms: bool = False
     compute_validation_rel_sol: bool = False
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
@@ -1969,6 +1980,11 @@ class TrainingConfig:
     lbfgs_epochs: int = 1
 
     def __post_init__(self) -> None:
+        from greenonet.reproducibility import validate_training_seed
+
+        validate_training_seed(self.seed, field_name="training.seed")
+        if not isinstance(self.deterministic_algorithms, bool):
+            raise TypeError("training.deterministic_algorithms must be a boolean.")
         self.green_quadrature = GreenQuadratureConfig.from_raw(self.green_quadrature)
         self.optimizer = GreenOptimizerConfig.from_raw(self.optimizer)
 
@@ -1981,3 +1997,19 @@ class PipelineConfig:
     run_coupling: bool = False
     green_pretrained_path: Optional[Path] = None
     coupling_pretrained_path: Optional[Path] = None
+
+
+def validate_active_training_seeds(
+    *,
+    training: TrainingConfig,
+    coupling_training: CouplingTrainingConfig,
+    pipeline: PipelineConfig,
+) -> None:
+    """Require explicit seeds only for stages started by the training CLI."""
+
+    if pipeline.run_green and training.seed is None:
+        raise ValueError("training.seed is required when pipeline.run_green=true.")
+    if pipeline.run_coupling and coupling_training.seed is None:
+        raise ValueError(
+            "coupling_training.seed is required when pipeline.run_coupling=true."
+        )

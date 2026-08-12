@@ -32,6 +32,7 @@ from greenonet.config import (
     TerminalConfig,
     TrainingConfig,
     reject_retired_coupling_training_options,
+    validate_active_training_seeds,
     validate_complex_coupling_source_config,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
@@ -61,6 +62,7 @@ from greenonet.green_optimizer import GreenOptimizerFactory
 from greenonet.model import GreenONetModel
 from greenonet.runner import run_complex_green_o_net, run_green_o_net
 from greenonet.runtime import apply_runtime_cpu_settings, write_runtime_cpu_summary
+from greenonet.reproducibility import TrainingSeedContext
 
 
 class TrainCLI:
@@ -207,10 +209,11 @@ class TrainCLI:
     ) -> None:
         destination = work_dir / "config_used.json"
         materialize_green = pipeline_cfg.run_green
+        materialize_coupling = pipeline_cfg.run_coupling
         materialize_complex_coupling = (
-            dataset_cfg.geometry_mode == "complex" and pipeline_cfg.run_coupling
+            dataset_cfg.geometry_mode == "complex" and materialize_coupling
         )
-        if not materialize_green and not materialize_complex_coupling:
+        if not materialize_green and not materialize_coupling:
             shutil.copy2(config_path, destination)
             return
         with config_path.open() as fp:
@@ -229,13 +232,39 @@ class TrainCLI:
                 total_epochs=training_cfg.epochs,
             )
             training["optimizer"] = green_factory.resolved_config()
+            training["seed"] = training_cfg.seed
+            training["deterministic_algorithms"] = training_cfg.deterministic_algorithms
             payload["green_optimizer_provenance"] = green_factory.provenance().as_dict()
             payload["green_learning_rate_schedule"] = green_schedule.as_dict()
+            if training_cfg.seed is not None:
+                payload["green_training_seed_provenance"] = TrainingSeedContext(
+                    stage="green",
+                    base_seed=training_cfg.seed,
+                    deterministic_algorithms=training_cfg.deterministic_algorithms,
+                    device=training_cfg.device,
+                ).as_dict()
 
-        if materialize_complex_coupling:
+        if materialize_coupling:
             coupling_training = payload.setdefault("coupling_training", {})
             if not isinstance(coupling_training, dict):
                 raise TypeError("coupling_training must be an object.")
+            coupling_training["seed"] = coupling_training_cfg.seed
+            coupling_training["deterministic_algorithms"] = (
+                coupling_training_cfg.deterministic_algorithms
+            )
+            if coupling_training_cfg.seed is not None:
+                payload["coupling_training_seed_provenance"] = TrainingSeedContext(
+                    stage="coupling",
+                    base_seed=coupling_training_cfg.seed,
+                    deterministic_algorithms=(
+                        coupling_training_cfg.deterministic_algorithms
+                    ),
+                    device=coupling_training_cfg.device,
+                ).as_dict()
+
+        if materialize_complex_coupling:
+            coupling_training = payload["coupling_training"]
+            assert isinstance(coupling_training, dict)
             factory = ComplexCouplingOptimizerFactory(coupling_training_cfg)
             coupling_training["optimizer"] = factory.resolved_config()
             canonical_energy = ComplexCanonicalEnergyConfig.from_raw(
@@ -253,6 +282,12 @@ class TrainCLI:
                 "backend": dataset_cfg.coupling_source.mode,
                 "sample_identity": "base_seed_split_id_sample_index",
                 "test_reference_backend": "npz",
+                "training_seed_independent": True,
+                "indexed_gp_base_seed": (
+                    dataset_cfg.coupling_source.indexed_gp.seed
+                    if dataset_cfg.coupling_source.mode == "indexed_gp"
+                    else None
+                ),
             }
         destination.write_text(json.dumps(payload, indent=2) + "\n")
 
@@ -538,6 +573,17 @@ class TrainCLI:
         green_model: torch.nn.Module,
         work_dir: Path,
     ) -> None:
+        if coupling_training_cfg.seed is None:
+            raise ValueError(
+                "coupling_training.seed is required for complex CouplingNet training."
+            )
+        seed_context = TrainingSeedContext(
+            stage="coupling",
+            base_seed=coupling_training_cfg.seed,
+            deterministic_algorithms=coupling_training_cfg.deterministic_algorithms,
+            device=coupling_training_cfg.device,
+        )
+        seed_context.configure_process()
         if dataset_cfg.geometry_path is None:
             raise ValueError("dataset.geometry_path is required for complex mode.")
         validate_complex_coupling_source_config(
@@ -579,15 +625,18 @@ class TrainCLI:
                 reference_diagnostics=True,
             )
 
+        seed_context.apply("model")
         coupling_model = ComplexCouplingNet(coupling_model_cfg)
         if pipeline_cfg.coupling_pretrained_path is not None:
             load_state_dict_auto(coupling_model, pipeline_cfg.coupling_pretrained_path)
+        seed_context.apply("runtime")
         trainer = ComplexCouplingTrainer(
             model=coupling_model,
             config=coupling_training_cfg,
             work_dir=work_dir,
             green_model=green_model,
             terminal_width=terminal_cfg.width,
+            seed_context=seed_context,
         )
         trainer.train(train_dataset, validation_dataset)
         if test_dataset is not None:
@@ -685,6 +734,12 @@ class TrainCLI:
             terminal_cfg,
         ) = self._build_configs(config_path)
 
+        validate_active_training_seeds(
+            training=training_cfg,
+            coupling_training=coupling_training_cfg,
+            pipeline=pipeline_cfg,
+        )
+
         if pipeline_cfg.run_coupling:
             validate_complex_coupling_source_config(
                 dataset_cfg,
@@ -726,7 +781,7 @@ class TrainCLI:
                     work_dir=work_dir,
                     ndata=dataset_cfg.samples_per_line,
                     validation_ndata=dataset_cfg.validation_samples_per_line,
-                    seed=training_cfg.epochs,
+                    seed=cast(int, training_cfg.seed),
                     scale_length=dataset_cfg.scale_length,
                     validation_scale_length=dataset_cfg.validation_scale_length,
                     deterministic=dataset_cfg.deterministic,
@@ -748,7 +803,7 @@ class TrainCLI:
                     work_dir=work_dir,
                     ndata=dataset_cfg.samples_per_line,
                     validation_ndata=dataset_cfg.validation_samples_per_line,
-                    seed=training_cfg.epochs,
+                    seed=cast(int, training_cfg.seed),
                     scale_length=dataset_cfg.scale_length,
                     validation_scale_length=dataset_cfg.validation_scale_length,
                     use_operator_learning=dataset_cfg.use_operator_learning,
@@ -787,6 +842,19 @@ class TrainCLI:
                     work_dir=work_dir,
                 )
                 return
+            if coupling_training_cfg.seed is None:
+                raise ValueError(
+                    "coupling_training.seed is required for CouplingNet training."
+                )
+            coupling_seed_context = TrainingSeedContext(
+                stage="coupling",
+                base_seed=coupling_training_cfg.seed,
+                deterministic_algorithms=(
+                    coupling_training_cfg.deterministic_algorithms
+                ),
+                device=coupling_training_cfg.device,
+            )
+            coupling_seed_context.configure_process()
             train_dir = dataset_cfg.training_path or Path("2D_data_variable")
             val_dir = dataset_cfg.validation_path
             coupling_train_dataset = CouplingDataset(
@@ -858,6 +926,7 @@ class TrainCLI:
                     b_vals=sample_b.to(device),
                     c_vals=sample_c.to(device),
                 )
+            coupling_seed_context.apply("model")
             coupling_model = CouplingNet(coupling_model_cfg)
             if pipeline_cfg.coupling_pretrained_path is not None:
                 try:
@@ -868,6 +937,7 @@ class TrainCLI:
                     load_state_dict_auto(
                         coupling_model, pipeline_cfg.coupling_pretrained_path
                     )
+            coupling_seed_context.apply("runtime")
             coupling_trainer = CouplingTrainer(
                 model=coupling_model,
                 config=coupling_training_cfg,
@@ -875,6 +945,7 @@ class TrainCLI:
                 green_kernel=green_kernel,
                 model_cfg=coupling_model_cfg,
                 terminal_width=terminal_cfg.width,
+                seed_context=coupling_seed_context,
             )
             coupling_trainer.train(coupling_train_dataset, coupling_val_dataset)
             if coupling_test_dataset is not None:

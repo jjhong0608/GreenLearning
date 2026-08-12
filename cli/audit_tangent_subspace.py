@@ -14,13 +14,13 @@ from greenonet.complex_tangent_subspace_audit import (
 
 
 class AuditTangentSubspaceCLI:
-    """Run a frozen-checkpoint matrix-free K=1 versus K=2 comparison."""
+    """Run a frozen-checkpoint matrix-free K=1 through K=4 comparison."""
 
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(
             description=(
-                "Compare the configured K=1 tangent correction with an "
-                "unconstrained matrix-free K=2 subspace correction."
+                "Compare the configured-cap K=1 tangent correction with nested "
+                "unconstrained matrix-free tangent subspaces through K=4."
             )
         )
         parser.add_argument("--config", type=Path, required=True)
@@ -33,6 +33,13 @@ class AuditTangentSubspaceCLI:
         parser.add_argument("--device", type=str, default=None)
         parser.add_argument("--theme", type=str, default="plotly_white")
         parser.add_argument("--batch-size", type=self._positive_int, default=10)
+        parser.add_argument(
+            "--max-subspace-dimension",
+            type=self._subspace_dimension,
+            choices=(2, 3, 4),
+            default=2,
+            help="Largest unconstrained diagnostic tangent subspace (default: 2).",
+        )
         parser.add_argument("--selected-samples", type=int, nargs="*", default=None)
         parser.add_argument(
             "--transition-log-threshold",
@@ -76,6 +83,13 @@ class AuditTangentSubspaceCLI:
         return parsed
 
     @staticmethod
+    def _subspace_dimension(value: str) -> int:
+        parsed = int(value)
+        if parsed not in {2, 3, 4}:
+            raise argparse.ArgumentTypeError("value must be 2, 3, or 4")
+        return parsed
+
+    @staticmethod
     def _nonnegative_float(value: str) -> float:
         parsed = float(value)
         if not math.isfinite(parsed) or parsed < 0.0:
@@ -113,7 +127,8 @@ class AuditTangentSubspaceCLI:
     def run(self) -> None:
         args = self.parser.parse_args()
         outdir = args.outdir or (
-            args.coupling_checkpoint.parent / "tangent_subspace_k1_k2_audit"
+            args.coupling_checkpoint.parent
+            / f"tangent_subspace_k1_k{args.max_subspace_dimension}_audit"
         )
         logger = self._build_logger(outdir)
         summary = run_tangent_subspace_audit(
@@ -137,14 +152,19 @@ class AuditTangentSubspaceCLI:
                 subspace_relative_eps=args.subspace_relative_eps,
                 operator_equivalence_tol=args.operator_equivalence_tol,
                 monotonicity_relative_tol=args.monotonicity_relative_tol,
+                max_subspace_dimension=args.max_subspace_dimension,
                 save_generated_data=args.save_generated_data,
             ),
             logger=logger,
         )
         logger.info("Summary written to %s", outdir / "summary.json")
-        comparison = summary["paired_comparisons"]["k2_vs_k1_production"]
+        maximum_dimension = args.max_subspace_dimension
+        comparison = summary["paired_comparisons"][
+            f"k{maximum_dimension}_vs_k1_production"
+        ]
         logger.info(
-            "K2 vs K1 production: response_change=%.6f rel_sol_change=%.6f",
+            "K%d vs configured-cap K1: response_change=%.6f rel_sol_change=%.6f",
+            maximum_dimension,
             comparison["response_mismatch_cost"]["relative_mean_change"],
             comparison["rel_sol"]["relative_mean_change"],
         )

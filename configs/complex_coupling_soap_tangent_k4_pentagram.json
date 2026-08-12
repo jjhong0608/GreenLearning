@@ -1,9 +1,9 @@
 {
   "dataset": {
     "geometry_mode": "complex",
-    "geometry_path": "data/geometry/annulus_02_05_1_128.npz",
-    "test_path": "data/complex_samples/annulus_02_05_1_128_poisson/test",
-    "coefficient_functions_path": "coefficients/Pure_Poisson.py",
+    "geometry_path": "data/geometry/pentagram_r05_h00078125.npz",
+    "test_path": "data/complex_samples/pentagram_r05_h00078125/test",
+    "coefficient_functions_path": "coefficients/CDR_pentagram.py",
     "coupling_source": {
       "mode": "indexed_gp",
       "indexed_gp": {
@@ -33,15 +33,16 @@
     "dropout": 0.0,
     "dtype": "float64",
     "coefficient_terms": {
-      "diffusion": false,
-      "convection": false,
-      "reaction": false
+      "diffusion": true,
+      "convection": true,
+      "reaction": true
     },
     "balance_projection": {
       "enabled": true,
       "mode": "symmetric_tangent_green_response",
       "symmetric_tangent_green_response": {
-        "eta": 0.01,
+        "subspace_dimension": 4,
+        "eta": 0.015,
         "eta_strategy": "closed_loop_exact_line_search",
         "line_search_relative_eps": 1e-12,
         "relative_lambda": 0.01,
@@ -85,7 +86,7 @@
     "batch_size": 200,
     "weight_decay": 0.05,
     "log_interval": 1,
-    "device": "cuda:1",
+    "device": "cpu",
     "seed": 0,
     "deterministic_algorithms": true,
     "gradient_clip_max_norm": 1.0,
@@ -94,6 +95,17 @@
     "min_lr": 1e-5,
     "canonical_energy": {
       "boundary_weight": 0.0
+    },
+    "post_line_search_stationarity": {
+      "enabled": true,
+      "weight": 0.01,
+      "eps": 1e-12
+    },
+    "response_trust": {
+      "enabled": true,
+      "weight": 0.1,
+      "trust_weight": 0.0,
+      "eps": 1e-12
     },
     "optimizer": {
       "name": "soap",
@@ -122,11 +134,14 @@
     },
     "best_energy_checkpoint": {
       "enabled": true
+    },
+    "best_physics_checkpoint": {
+      "enabled": true
     }
   },
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Annulus_poisson/green/model.safetensors"
+    "green_pretrained_path": "checkpoints/pentagram/green/model.safetensors"
   }
 }

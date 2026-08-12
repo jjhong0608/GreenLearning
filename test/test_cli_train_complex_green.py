@@ -30,6 +30,7 @@ def _write_complex_green_config(path, *, geometry_path=None):
             "dtype": "float64",
         },
         "training": {
+            "seed": 0,
             "epochs": 1,
             "batch_size": 1,
             "device": "cpu",
@@ -75,6 +76,7 @@ def test_cli_train_complex_green_dispatches_to_complex_runner(tmp_path, monkeypa
     assert captured["geometry_path"] == geometry_path
     assert captured["ndata"] == 1
     assert captured["sampler_mode"] == "forward"
+    assert captured["seed"] == 0
     assert captured["model_cfg"].branch_input_dim == 5
 
 

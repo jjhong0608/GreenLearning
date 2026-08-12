@@ -35,7 +35,7 @@ class TestTrainCLIConfigCopy:
                 "domain": {"x_min": 0.0, "x_max": 1.0, "y_min": 0.0, "y_max": 1.0}
             },
             "model": {},
-            "training": {},
+            "training": {"seed": 0},
             "terminal": {"width": 250},
             "pipeline": {"run_green": True, "run_coupling": False},
         }
@@ -70,6 +70,18 @@ class TestTrainCLIConfigCopy:
             "torch.optim.AdamW"
         )
         assert used["green_learning_rate_schedule"]["kind"] == "fixed"
+        assert used["training"]["seed"] == 0
+        seed_provenance = used["green_training_seed_provenance"]
+        assert seed_provenance["base_seed"] == 0
+        assert seed_provenance["stage"] == "green"
+        assert set(seed_provenance["subseeds"]) == {
+            "data_train",
+            "data_valid",
+            "model",
+            "runtime",
+            "loader_train",
+            "loader_lbfgs",
+        }
         assert captured["terminal_width"] == 250
 
     def test_green_config_copy_materializes_soap_provenance(self, tmp_path):
@@ -146,6 +158,8 @@ class TestTrainCLIConfigCopy:
                 {
                     "dataset": {"geometry_mode": "complex"},
                     "coupling_training": {
+                        "seed": 11,
+                        "deterministic_algorithms": True,
                         "learning_rate": 0.002,
                         "canonical_energy": {"boundary_weight": 0.0},
                         "optimizer": {
@@ -160,6 +174,8 @@ class TestTrainCLIConfigCopy:
         work_dir = tmp_path / "work"
         work_dir.mkdir()
         training = CouplingTrainingConfig(
+            seed=11,
+            deterministic_algorithms=True,
             learning_rate=0.002,
             canonical_energy={"boundary_weight": 0.0},
             optimizer={
@@ -193,6 +209,15 @@ class TestTrainCLIConfigCopy:
             "validation": True,
         }
         assert used["complex_source_provenance"]["fixed_across_epochs"] is True
+        seed_provenance = used["coupling_training_seed_provenance"]
+        assert seed_provenance["stage"] == "coupling"
+        assert seed_provenance["base_seed"] == 11
+        assert seed_provenance["deterministic_algorithms"] is True
+        assert set(seed_provenance["subseeds"]) == {
+            "model",
+            "runtime",
+            "loader_train",
+        }
 
     def test_boundary_off_paired_config_differs_only_by_canonical_weight(self):
         root = Path(__file__).resolve().parents[1]
@@ -242,11 +267,19 @@ class TestTrainCLIConfigCopy:
             == "closed_loop_exact_line_search"
         )
 
-    def test_k2_pentagram_pilot_uses_unconstrained_subspace_configuration(self):
+    @pytest.mark.parametrize("subspace_dimension", [2, 3, 4])
+    def test_k2_plus_pentagram_pilot_uses_unconstrained_subspace_configuration(
+        self,
+        subspace_dimension,
+    ):
         root = Path(__file__).resolve().parents[1]
         pilot = json.loads(
             (
-                root / "configs/complex_coupling_soap_tangent_k2_pentagram.json"
+                root
+                / (
+                    "configs/complex_coupling_soap_tangent_"
+                    f"k{subspace_dimension}_pentagram.json"
+                )
             ).read_text()
         )
 
@@ -254,7 +287,7 @@ class TestTrainCLIConfigCopy:
             "symmetric_tangent_green_response"
         ]
 
-        assert tangent["subspace_dimension"] == 2
+        assert tangent["subspace_dimension"] == subspace_dimension
         assert tangent["eta_strategy"] == "closed_loop_exact_line_search"
         assert tangent["line_search_relative_eps"] == pytest.approx(1.0e-12)
         assert pilot["coupling_training"]["response_trust"] == {

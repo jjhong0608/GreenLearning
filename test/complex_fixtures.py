@@ -192,6 +192,8 @@ def write_complex_config(
             "dtype": "float64",
         },
         "training": {
+            "seed": 5,
+            "deterministic_algorithms": True,
             "epochs": 1,
             "batch_size": 1,
             "device": "cpu",
@@ -220,6 +222,8 @@ def write_complex_config(
             },
         },
         "coupling_training": {
+            "seed": 7,
+            "deterministic_algorithms": True,
             "epochs": 1,
             "batch_size": 1,
             "learning_rate": 1e-3,

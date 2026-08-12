@@ -23,6 +23,7 @@ from greenonet.green_lr_scheduler import GreenLearningRateSchedule
 from greenonet.green_optimizer import GreenOptimizerFactory, GreenTrainingRecorder
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
 from greenonet.optimizer_support import OptimizerStepProfiler
+from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
 
 
 AxialBatch = tuple[
@@ -46,10 +47,21 @@ class Trainer(LoggingMixin):
         work_dir: Path | str,
         model_cfg: ModelConfig | None = None,
         terminal_width: int | None = None,
+        seed_context: TrainingSeedContext | None = None,
     ) -> None:
         self.model = model
         self.config = config
         self.model_cfg = model_cfg
+        self.seed_context = seed_context
+        if self.seed_context is None and config.seed is not None:
+            self.seed_context = TrainingSeedContext(
+                stage="green",
+                base_seed=config.seed,
+                deterministic_algorithms=config.deterministic_algorithms,
+                device=config.device,
+            )
+        if self.seed_context is not None and self.seed_context.stage != "green":
+            raise ValueError("Trainer requires a green seed context.")
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         super().__init__(
@@ -66,6 +78,21 @@ class Trainer(LoggingMixin):
             logger=self.logger,
             model_name="GreenONetModel",
         )
+        self._train_loader_generator: torch.Generator | None
+        self._lbfgs_loader_generator: torch.Generator | None
+        if self.seed_context is not None:
+            self.seed_context.configure_process()
+            self.seed_context.apply("runtime")
+            self.seed_context.log(self.logger)
+            self._train_loader_generator = self.seed_context.make_generator(
+                "loader_train"
+            )
+            self._lbfgs_loader_generator = self.seed_context.make_generator(
+                "loader_lbfgs"
+            )
+        else:
+            self._train_loader_generator = None
+            self._lbfgs_loader_generator = None
         self.loss_history: List[float] = []
         self.rel_sol_history: List[float] = []
         self.val_rel_sol_history: List[float] = []
@@ -669,13 +696,20 @@ class Trainer(LoggingMixin):
             summary["mean_rel_green_line"],
         )
 
-    def _make_loader(self, dataset: Dataset[AxialBatch]) -> DataLoader[AxialBatch]:
+    def _make_loader(
+        self,
+        dataset: Dataset[AxialBatch],
+        *,
+        generator: torch.Generator | None = None,
+    ) -> DataLoader[AxialBatch]:
         return DataLoader(
             dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
             collate_fn=axial_collate_fn,
             pin_memory=True,
+            generator=generator,
+            worker_init_fn=seed_dataloader_worker if generator is not None else None,
         )
 
     def _make_eval_loader(self, dataset: Dataset[AxialBatch]) -> DataLoader[AxialBatch]:
@@ -747,7 +781,10 @@ class Trainer(LoggingMixin):
         validation_dataset: Dataset[AxialBatch] | None = None,
     ) -> None:
         self.model.train()
-        loader = self._make_loader(dataset)
+        loader = self._make_loader(
+            dataset,
+            generator=self._train_loader_generator,
+        )
         if self.config.compute_validation_rel_sol and validation_dataset is None:
             raise ValueError(
                 "validation_dataset must be provided when compute_validation_rel_sol=True."
@@ -938,7 +975,10 @@ class Trainer(LoggingMixin):
 
             for lbfgs_epoch in range(1, self.config.lbfgs_epochs + 1):
                 lbfgs_losses: List[float] = []
-                lbfgs_loader = self._make_loader(dataset)
+                lbfgs_loader = self._make_loader(
+                    dataset,
+                    generator=self._lbfgs_loader_generator,
+                )
                 for (
                     coords,
                     solution,

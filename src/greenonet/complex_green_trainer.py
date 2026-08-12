@@ -41,6 +41,7 @@ from greenonet.logging_mixin import LoggingMixin
 from greenonet.numerics import IntegrationRule, integrate
 from greenonet.optimizer_support import OptimizerStepProfiler
 from greenonet.plotly_io import save_plotly_figure
+from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
 from greenonet.visualizer import LossVisualizer
 
 
@@ -65,11 +66,22 @@ class ComplexGreenTrainer(LoggingMixin):
         model_cfg: ModelConfig | None = None,
         coeffs: CoefficientFunctions | None = None,
         terminal_width: int | None = None,
+        seed_context: TrainingSeedContext | None = None,
     ) -> None:
         self.model = model
         self.config = config
         self.model_cfg = model_cfg
         self.coeffs = coeffs
+        self.seed_context = seed_context
+        if self.seed_context is None and config.seed is not None:
+            self.seed_context = TrainingSeedContext(
+                stage="green",
+                base_seed=config.seed,
+                deterministic_algorithms=config.deterministic_algorithms,
+                device=config.device,
+            )
+        if self.seed_context is not None and self.seed_context.stage != "green":
+            raise ValueError("ComplexGreenTrainer requires a green seed context.")
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         super().__init__(
@@ -86,6 +98,21 @@ class ComplexGreenTrainer(LoggingMixin):
             logger=self.logger,
             model_name="ComplexGreenONetModel",
         )
+        self._train_loader_generator: torch.Generator | None
+        self._lbfgs_loader_generator: torch.Generator | None
+        if self.seed_context is not None:
+            self.seed_context.configure_process()
+            self.seed_context.apply("runtime")
+            self.seed_context.log(self.logger)
+            self._train_loader_generator = self.seed_context.make_generator(
+                "loader_train"
+            )
+            self._lbfgs_loader_generator = self.seed_context.make_generator(
+                "loader_lbfgs"
+            )
+        else:
+            self._train_loader_generator = None
+            self._lbfgs_loader_generator = None
         self.loss_history: List[float] = []
         self.rel_sol_history: List[float] = []
         self.val_rel_sol_history: List[float] = []
@@ -382,6 +409,7 @@ class ComplexGreenTrainer(LoggingMixin):
         dataset: Dataset[ComplexGreenItem],
         *,
         shuffle: bool,
+        generator: torch.Generator | None = None,
     ) -> DataLoader[ComplexGreenBatch]:
         return cast(
             DataLoader[ComplexGreenBatch],
@@ -391,6 +419,10 @@ class ComplexGreenTrainer(LoggingMixin):
                 shuffle=shuffle,
                 collate_fn=complex_green_collate_fn,
                 pin_memory=self.device.type == "cuda",
+                generator=generator,
+                worker_init_fn=(
+                    seed_dataloader_worker if generator is not None else None
+                ),
             ),
         )
 
@@ -650,7 +682,11 @@ class ComplexGreenTrainer(LoggingMixin):
                 "validation_dataset must be provided when compute_validation_rel_sol=True."
             )
         self.model.train()
-        loader = self._make_loader(dataset, shuffle=True)
+        loader = self._make_loader(
+            dataset,
+            shuffle=True,
+            generator=self._train_loader_generator,
+        )
         schedule_config = GreenLearningRateSchedule.from_config(
             self.config,
             total_epochs=self.config.epochs,
@@ -811,7 +847,11 @@ class ComplexGreenTrainer(LoggingMixin):
         for lbfgs_epoch in range(1, self.config.lbfgs_epochs + 1):
             losses: list[float] = []
             last_batch: ComplexGreenBatch | None = None
-            for batch in self._make_loader(dataset, shuffle=True):
+            for batch in self._make_loader(
+                dataset,
+                shuffle=True,
+                generator=self._lbfgs_loader_generator,
+            ):
                 batch = batch.to(self.device)
                 last_batch = batch
 

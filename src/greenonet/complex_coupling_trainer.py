@@ -78,6 +78,7 @@ from greenonet.config import (
 )
 from greenonet.io import save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
+from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
 
 
 @dataclass(frozen=True)
@@ -129,10 +130,21 @@ class ComplexCouplingTrainer(LoggingMixin):
         "tangent_subspace_dimension",
         "tangent_coefficient_0_mean",
         "tangent_coefficient_1_mean",
+        "tangent_coefficient_2_mean",
+        "tangent_coefficient_3_mean",
+        "tangent_direction_0_active_fraction",
+        "tangent_direction_1_active_fraction",
+        "tangent_direction_2_active_fraction",
+        "tangent_direction_3_active_fraction",
         "tangent_second_direction_active_fraction",
         "tangent_response_cost_k1_mean",
         "tangent_response_cost_k2_mean",
+        "tangent_response_cost_k3_mean",
+        "tangent_response_cost_k4_mean",
         "tangent_response_cost_k2_over_k1",
+        "tangent_response_cost_k3_over_k2",
+        "tangent_response_cost_k4_over_k3",
+        "tangent_response_orthogonality_max",
         "tangent_eta_cap",
         "tangent_eta_star_mean",
         "tangent_eta_applied_mean",
@@ -156,6 +168,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         work_dir: Path | str,
         green_model: torch.nn.Module,
         terminal_width: int | None = None,
+        seed_context: TrainingSeedContext | None = None,
     ) -> None:
         self.model: torch.nn.Module = model
         self.balance_projection = BalanceProjectionConfig.from_raw(
@@ -173,6 +186,16 @@ class ComplexCouplingTrainer(LoggingMixin):
             self.cross_axis_reconstruction_config
         )
         self.config = config
+        self.seed_context = seed_context
+        if self.seed_context is None and config.seed is not None:
+            self.seed_context = TrainingSeedContext(
+                stage="coupling",
+                base_seed=config.seed,
+                deterministic_algorithms=config.deterministic_algorithms,
+                device=config.device,
+            )
+        if self.seed_context is not None and self.seed_context.stage != "coupling":
+            raise ValueError("ComplexCouplingTrainer requires a coupling seed context.")
         self.canonical_energy_config = ComplexCanonicalEnergyConfig.from_raw(
             config.canonical_energy
         )
@@ -244,6 +267,16 @@ class ComplexCouplingTrainer(LoggingMixin):
             logger=self.logger,
             model_name="ComplexCouplingNet",
         )
+        self._train_loader_generator: torch.Generator | None
+        if self.seed_context is not None:
+            self.seed_context.configure_process()
+            self.seed_context.apply("runtime")
+            self.seed_context.log(self.logger)
+            self._train_loader_generator = self.seed_context.make_generator(
+                "loader_train"
+            )
+        else:
+            self._train_loader_generator = None
         self.green_model.to(self.device)
         self.green_model.eval()
         for parameter in self.green_model.parameters():
@@ -268,6 +301,12 @@ class ComplexCouplingTrainer(LoggingMixin):
             batch_size=self.config.batch_size,
             shuffle=True,
             collate_fn=complex_coupling_collate_fn,
+            generator=self._train_loader_generator,
+            worker_init_fn=(
+                seed_dataloader_worker
+                if self._train_loader_generator is not None
+                else None
+            ),
         )
         validation_loader = (
             None
@@ -587,10 +626,11 @@ class ComplexCouplingTrainer(LoggingMixin):
         tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
-        if tangent_config.subspace_dimension == 2:
+        if tangent_config.subspace_dimension >= 2:
             self.logger.info(
-                "tangent-eta schedule disabled subspace_dimension=2 "
-                "eta_applicability=k1_only_not_applied"
+                "tangent-eta schedule disabled subspace_dimension=%d "
+                "eta_applicability=k1_only_not_applied",
+                tangent_config.subspace_dimension,
             )
             return None
         return SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
@@ -697,14 +737,15 @@ class ComplexCouplingTrainer(LoggingMixin):
         tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
+        subspace = tangent.subspace_dimension >= 2
         residual_source = (
-            "post_k2_residual_gradient"
-            if tangent.subspace_dimension == 2
+            f"post_k{tangent.subspace_dimension}_residual_gradient"
+            if subspace
             else "uncapped_eta_star"
         )
         forward_source = (
-            "unconstrained_k2_coefficients"
-            if tangent.subspace_dimension == 2
+            f"unconstrained_k{tangent.subspace_dimension}_coefficients"
+            if subspace
             else "capped_eta_applied"
         )
         self.logger.info(
@@ -719,8 +760,8 @@ class ComplexCouplingTrainer(LoggingMixin):
             config.enabled,
             config.weight,
             config.eps,
-            "not_applicable" if tangent.subspace_dimension == 2 else residual_source,
-            "not_applicable" if tangent.subspace_dimension == 2 else forward_source,
+            "not_applicable" if subspace else residual_source,
+            "not_applicable" if subspace else forward_source,
             tangent.subspace_dimension,
             residual_source,
             forward_source,
@@ -734,9 +775,10 @@ class ComplexCouplingTrainer(LoggingMixin):
         tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
+        subspace = tangent.subspace_dimension >= 2
         correction_source = (
-            "unconstrained_k2_coefficients"
-            if tangent.subspace_dimension == 2
+            f"unconstrained_k{tangent.subspace_dimension}_coefficients"
+            if subspace
             else "capped_eta_applied"
         )
         self.logger.info(
@@ -753,7 +795,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             config.weight,
             config.trust_weight,
             config.eps,
-            "not_applicable" if tangent.subspace_dimension == 2 else correction_source,
+            "not_applicable" if subspace else correction_source,
             tangent.subspace_dimension,
             correction_source,
             config.enabled,

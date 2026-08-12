@@ -1,207 +1,107 @@
-# Optional Matrix-Free \(K=2\) Tangent Subspace Integration Plan
+# Explicit Global Training Seed 구현 계획
 
 ## Summary
 
-현재 `symmetric_tangent_green_response`는 symmetric-balanced directional source에서 시작해 Jacobi-preconditioned 한 방향 \(z_0=D^{-1}g_0\) 위에서 response mismatch를 최소화하는 \(K=1\) correction을 적용한다. 새 기능은 두 번째 preconditioned Krylov direction을 추가해 2차원 부분공간에서 mismatch를 최소화하는 **matrix-free \(K=2\)** 경로다. 이는 full response Gram matrix를 구성하거나 선형 시스템을 푸는 방법이 아니다. Krylov 방법이 점진적으로 확장된 부분공간에서 해를 개선한다는 일반 원칙과 일치한다. [Netlib Templates for the Solution of Linear Systems](https://www.netlib.org/templates/templates.html)
+GreenNet과 CouplingNet에 독립적인 base training seed를 추가하고, model initialization, synthetic Green data, DataLoader shuffle, dropout 및 CPU/CUDA RNG를 재현 가능하게 만든다. 공식 training CLI의 활성 학습 단계에는 seed를 필수로 요구하고, 논문용 config에서는 PyTorch deterministic algorithms도 활성화한다.
 
-Frozen-checkpoint audit에서는 \(K=2\)가 \(K=1\) 대비 평균 response mismatch를 약 33.0%, `rel_sol`을 약 25.8%, `rel_u_phi`를 약 17.9%, `rel_u_psi`를 약 22.4% 줄였다. 반면 correction norm은 약 13.2% 증가했고 일부 sample에서 canonical energy가 악화됐다. 따라서 \(K=2\)는 기본값이 아니라 명시적인 opt-in 실험으로 추가한다.
+현재 `dataset.coupling_source.indexed_gp.seed`는 CouplingNet source realization만 결정하며 새 training seed와 독립적으로 유지한다. Model architecture, optimizer 수식, checkpoint tensor key와 dataset schema는 변경하지 않는다.
 
-결정 사항은 다음과 같다.
-
-- 기존 \(K=1\)을 `subspace_dimension=1` 기본값으로 그대로 보존한다.
-- \(K=2\)는 `subspace_dimension=2`로 활성화한다.
-- Frozen audit에서 검증한 무제약 \(c_0,c_1\) 수식을 그대로 production에 적용한다.
-- \(K=2\)에서는 기존 `eta` cap과 tangent eta warmup을 적용하지 않는다.
-- Stationarity와 response-trust는 최종 \(K=2\) residual/correction을 기준으로 일반화한다.
-- CouplingNet architecture, model parameter, checkpoint tensor key는 변경하지 않는다.
-
-## \(K=2\) 수식
-
-Symmetric-balanced source를
-
-\[
-\widetilde\phi=\frac{f+p-q}{2},
-\qquad
-\widetilde\psi=\frac{f-p+q}{2}
-\]
-
-라고 둔다. 이때 항상 \(\widetilde\phi+\widetilde\psi=f\)이다. Directional response operator와 mismatch를
-
-\[
-S=H_x+H_y,
-\qquad
-m_0=H_x\widetilde\phi-H_y\widetilde\psi,
-\qquad
-g_0=S^\top M_\Omega m_0
-\]
-
-로 정의한다. \(D\)는 현재 cached column-diagonal Jacobi denominator다.
-
-첫 번째 방향은 현재 uncapped \(K=1\)과 동일하다.
-
-\[
-z_0=D^{-1}g_0,
-\qquad
-v_0=Sz_0,
-\qquad
-c_0=
-\frac{\max(\langle g_0,z_0\rangle,0)}
-{\langle v_0,v_0\rangle_{M_\Omega}+\varepsilon_0}.
-\]
-
-첫 correction 이후 gradient residual에서 두 번째 방향을 만든다.
-
-\[
-r_1=g_0-c_0S^\top M_\Omega v_0,
-\qquad
-z_{1,\mathrm{raw}}=D^{-1}r_1.
-\]
-
-Response-space에서 첫 방향과 직교화한다.
-
-\[
-\beta=
-\frac{\langle v_0,Sz_{1,\mathrm{raw}}\rangle_{M_\Omega}}
-{\langle v_0,v_0\rangle_{M_\Omega}+\varepsilon_0},
-\]
-
-\[
-z_1=z_{1,\mathrm{raw}}-\beta z_0,
-\qquad
-v_1=Sz_1,
-\qquad
-c_1=
-\frac{\langle g_0,z_1\rangle}
-{\langle v_1,v_1\rangle_{M_\Omega}+\varepsilon_1}.
-\]
-
-최종 correction과 directional source는
-
-\[
-\delta_{K=2}=-c_0z_0-c_1z_1,
-\]
-
-\[
-\phi=\widetilde\phi+\delta_{K=2},
-\qquad
-\psi=\widetilde\psi-\delta_{K=2}.
-\]
-
-따라서 모든 valid point에서 \(\phi+\psi=f\)가 정확히 보존된다. 최종 mismatch는
-
-\[
-m_2=m_0-c_0v_0-c_1v_1
-\]
-
-이며, \(K=2\)는 \(\operatorname{span}\{z_0,z_1\}\)에서 \(\|m_0+S\delta\|_{M_\Omega}^2\)를 최소화한다. 두 번째 response direction이 numerical tolerance 이하이면 `second_direction_active=false`, \(c_1=0\)으로 두어 uncapped \(K=1\)과 정확히 일치시킨다.
+구현 확신도는 **0.98**이다. 규칙이나 정보 부족은 없다. 다만 서로 다른 GPU, CUDA, cuBLAS, PyTorch 또는 compiler version 사이의 bitwise 동일성은 seed만으로 보장할 수 없으며, 동일 software/hardware 환경에서의 재현성을 보장 대상으로 둔다.
 
 ## Public Configuration
 
-기존 config block에 strict integer field를 추가한다.
+GreenNet과 CouplingNet에 각각 독립적인 seed를 둔다.
 
 ```json
-"balance_projection": {
-  "enabled": true,
-  "mode": "symmetric_tangent_green_response",
-  "symmetric_tangent_green_response": {
-    "subspace_dimension": 2,
-    "eta_strategy": "closed_loop_exact_line_search",
-    "line_search_relative_eps": 1e-12,
-    "relative_lambda": 0.01,
-    "denominator_relative_eps": 1e-12
-  }
+"training": {
+  "seed": 0,
+  "deterministic_algorithms": true
+},
+"coupling_training": {
+  "seed": 0,
+  "deterministic_algorithms": true
 }
 ```
 
-- `subspace_dimension`은 boolean이 아닌 정수 `1` 또는 `2`만 허용한다.
-- 생략하면 `1`로 해석해 기존 설정과 수치를 보존한다.
-- `subspace_dimension=2`는 `eta_strategy="closed_loop_exact_line_search"`만 허용한다.
-- \(K=2\)의 \(c_0,c_1\)은 exact subspace minimizer이므로 `eta`와 tangent eta schedule은 적용하지 않는다.
-- Shared schema 때문에 `eta`가 존재할 수는 있지만 provenance와 log에 `eta_applicability="k1_only"`를 명시하고 \(K=2\) 계산에는 사용하지 않는다.
-- `line_search_relative_eps`를 \(c_0,c_1\) denominator 안정화와 두 번째 방향의 degeneracy 판정에 공통 사용한다.
-- Unit-square CouplingNet의 허용 projection mode는 변경하지 않는다.
+- `training.seed`는 GreenNet data generation, model initialization, shuffle 및 runtime RNG의 base seed다.
+- `coupling_training.seed`는 CouplingNet model initialization, shuffle 및 runtime RNG의 base seed다.
+- Seed는 boolean이 아닌 정수이며 범위는 `[0, 2^32-1]`로 검증한다.
+- `deterministic_algorithms`는 strict boolean이며 기본값은 `false`로 둔다.
+- `pipeline.run_green=true`인데 `training.seed`가 누락되면 fail fast한다.
+- `pipeline.run_coupling=true`인데 `coupling_training.seed`가 누락되면 fail fast한다.
+- 실행하지 않는 stage의 seed는 생략할 수 있어 pretrained GreenNet 기반 CouplingNet config를 간결하게 유지한다.
+- 기존 checkpoint의 evaluation/export는 seed가 없는 과거 `config_used.json`도 계속 허용한다. 명시적 seed 요구는 새 training 시작에만 적용한다.
+- 논문 실험용 complex config에는 해당 활성 stage의 seed와 `deterministic_algorithms=true`를 명시한다.
 
-## Implementation Steps And Affected Files
+## Seed Semantics
 
-1. `src/greenonet/config.py`에 `subspace_dimension` parsing, round-trip, strict validation과 \(K=2\)/`eta_strategy` 조합 검증을 추가한다. 기존 config는 자동으로 \(K=1\)이 된다.
+Base seed 하나에서 SHA-256 기반의 stable namespace derivation으로 다음 uint32 sub-seed를 만든다.
 
-2. Frozen audit의 `matrix_free_krylov_k2_step(...)`와 결과 dataclass를 `src/greenonet/complex_tangent_projection.py`의 production core로 이전한다. `src/greenonet/complex_tangent_subspace_audit.py`는 이 공통 helper를 import하도록 바꿔 audit와 production 수식 중복을 제거한다.
+```text
+green:data_train
+green:data_valid
+green:model
+green:runtime
+green:loader_train
+green:loader_lbfgs
 
-3. `SymmetricTangentGreenResponseContext.tangent_step(...)`를 `subspace_dimension` dispatcher로 확장한다. \(K=1\) branch는 기존 코드를 그대로 호출하고, \(K=2\) branch는 두 번의 matrix-free forward response action과 필요한 adjoint action만 사용한다. Global matrix, full Gram matrix, dense \(2\times2\) solve는 만들지 않는다.
+coupling:model
+coupling:runtime
+coupling:loader_train
+```
 
-4. `src/greenonet/complex_projection.py`에서 \(K=2\)의 최종 `delta`, `projected_physical`, `projected_solution`, `mismatch_post`를 연결한다. \(H_xz_0,H_yz_0,H_xz_1,H_yz_1\)을 재사용해 projected solution을 구성하고 불필요한 Green reconstruction을 반복하지 않는다.
+- Python의 process-randomized `hash()`는 사용하지 않는다.
+- Green train/validation data seed를 분리해 training sample 수가 달라져도 validation data가 변하지 않게 한다.
+- DataLoader는 전용 CPU `torch.Generator`를 사용해 global RNG 소비와 shuffle 순서를 분리한다.
+- Model 생성 직전에 model seed를 적용하고, 생성 직후 runtime seed를 다시 적용해 parameter 수 차이가 dropout/runtime RNG를 이동시키지 않게 한다.
+- Coupling indexed-GP source는 계속 `dataset.coupling_source.indexed_gp.seed`로 결정한다.
+- 같은 Coupling training seed에서 `num_train`이 달라도 model initialization은 동일해야 한다.
+- 현재 constructor 순서상 `product`와 `product_fuser`의 공통 parameter는 같은 seed에서 동일하게 초기화하고, `product_fuser`의 추가 layer만 별도 parameter로 존재하는 것을 테스트로 고정한다.
 
-5. Stationarity loss는
+## Implementation Changes
 
-\[
-r_2=S^\top M_\Omega m_2,
-\qquad
-\mathcal L_{\mathrm{stat}}
-=
-\frac{r_2^\top D^{-1}r_2}{E_f+\varepsilon}
-\]
+1. `src/greenonet/config.py`의 `TrainingConfig`와 `CouplingTrainingConfig`에 `seed: int | None`과 `deterministic_algorithms: bool`을 추가한다. 공통 validator로 type/range를 검증하고, pipeline-aware validator가 활성 stage의 missing seed를 거부한다.
 
-로 일반화한다. 기존 initial-gradient-relative diagnostic은
+2. 새 `src/greenonet/reproducibility.py`에 seed dataclass와 적용 helper를 둔다. Helper는 `random.seed`, `numpy.random.seed`, `torch.manual_seed`, `torch.cuda.manual_seed_all`을 적용하고 named sub-seed 및 DataLoader generator를 생성한다.
 
-\[
-\frac{r_2^\top D^{-1}r_2}
-{g_0^\top D^{-1}g_0+\varepsilon}
-\]
+3. Strict mode에서는 `torch.use_deterministic_algorithms(True, warn_only=False)`, `torch.backends.cudnn.deterministic=True`, `torch.backends.cudnn.benchmark=False`를 적용한다. CUDA가 활성화되기 전에 `CUBLAS_WORKSPACE_CONFIG=:4096:8`을 설정하고 unsupported nondeterministic operation은 조용히 fallback하지 않고 오류로 노출한다.
 
-로 유지한다. Response-trust는 최종 \(m_2\)와 \(S\delta_{K=2}=m_2-m_0\)를 사용한다. 두 loss는 기존처럼 \(H_x(f/2),H_y(f/2)\) source normalization을 공유하며 reference `sol/phi/psi`를 사용하지 않는다.
+4. `cli/train.py`는 config parsing 직후 활성 stage seed를 검증한다. GreenNet과 CouplingNet을 순차 실행하더라도 각 stage 시작 시 자기 seed context를 다시 적용해 GreenNet RNG 소비가 CouplingNet initialization에 영향을 주지 않게 한다.
 
-6. `src/greenonet/complex_coupling_trainer.py`와 evaluator에서 동일 dispatcher를 사용한다. \(K=2\)에서는 tangent eta schedule을 생성하거나 step하지 않고, `subspace_dimension`, \(c_0/c_1\) 평균, second-direction 활성 비율, \(K=1\)/\(K=2\) response cost와 correction norm을 로그와 CSV에 기록한다. Best-energy와 best-physics checkpoint 기준은 그대로 유지한다.
+5. GreenNet runner에서 현재 `seed=training_cfg.epochs` 전달을 제거하고 `training.seed`를 source of truth로 사용한다. Train data, validation data, model 및 runtime seed를 각각 적용하고, complex 및 legacy Green trainer의 shuffled DataLoader와 LBFGS loader에 명시적 generator를 전달한다.
 
-7. Artifact exporter는 기존 `tangent_delta`를 최종 correction으로 유지하면서 `tangent_direction_0/1`, `tangent_response_direction_0/1`, `tangent_coefficient_0/1`, `tangent_second_direction_active`, `tangent_mismatch_k1`, `tangent_mismatch_post`, `tangent_response_cost_k1/k2`, post-\(K=2\) stationarity residual을 raw NPZ와 summary에 추가한다. \(K=1\) artifact schema와 eta fields는 기존 동작을 유지한다.
+6. CouplingNet은 model 생성 전에 coupling model seed를 적용하고 생성 후 runtime seed를 재설정한다. Complex 및 legacy Coupling trainer의 shuffled DataLoader에 coupling loader generator를 전달한다. Validation/evaluation loader는 계속 `shuffle=false`로 유지한다.
 
-8. Frozen audit 결과를 재현하는 regression test를 추가하고, coupling8 설정을 기준으로 projection 차수만 `2`로 바꾼 별도 paired experiment config `configs/complex_coupling_soap_tangent_k2_pentagram.json`을 추가한다. 기존 config와 현재 사용자 변경은 덮어쓰지 않는다.
+7. Direct trainer에 이미 생성된 model을 전달하는 API는 유지한다. 공식 reproducibility guarantee는 `cli/train.py`와 runner path에 적용하며, direct caller가 model initialization까지 재현하려면 공개 seed helper를 model 생성 전에 호출하도록 문서화한다.
 
-9. `README.md`와 `docs/memory.md`에 \(K=1/K=2\) 수식, exact balance, matrix-free 정책, \(K=2\)에서 eta cap이 적용되지 않는 이유, frozen evidence와 retraining 필요성을 기록한다.
+8. `config_used.json`에는 입력한 base seed와 deterministic flag를 materialize하고, Green/Coupling별 resolved sub-seed, 적용 범위, device, strict mode 및 source-seed 분리 정책을 provenance block으로 기록한다.
+
+9. `training.log`에는 stage 시작 시 base/model/runtime/loader/data seed, deterministic mode, CUDA/cuDNN 상태를 한 번 기록한다. Artifact summary에도 base seed와 deterministic provenance를 전달한다.
+
+10. Canonical GreenNet 및 ComplexCouplingNet config에 명시적 seed를 추가한다. Archived checkpoint의 `config_used.json`은 수정하지 않으며 model-only safetensors 형식과 state-dict key는 유지한다.
+
+11. README와 `docs/memory.md`에 source seed와 training seed의 차이, paired-ablation 절차, strict determinism의 환경 한계, model-only checkpoint가 RNG/optimizer state resume를 지원하지 않는다는 점을 기록한다.
 
 ## Test Plan
 
-- Config: 기본값 `1`, `1/2` round-trip, bool/float/0/3 거부, `K=2+fixed eta_strategy` 거부.
-- Math: \(K=2\) response cost가 uncapped \(K=1\)보다 tolerance 밖에서 증가하지 않는지 검증한다.
-- Degeneracy: 두 번째 direction이 0이면 \(c_1=0\)이고 \(K=2=K=1\)인지 확인한다.
-- Projection: 모든 sample과 point에서 \(\phi+\psi=f\), projected response contract, float64 finite output을 검증한다.
-- Regression: `subspace_dimension`을 생략하거나 `1`로 두었을 때 기존 \(K=1\) tensor와 metric이 동일한지 확인한다.
-- Autograd: \(K=2\), stationarity, response-trust의 gradient가 finite하고 reference target 변경에 영향을 받지 않는지 확인한다.
-- Integration: trainer/evaluator/export가 같은 cached context를 한 번만 만들고 동일한 \(K=2\) 결과를 사용하는지 확인한다.
-- Artifact: 새 NPZ/CSV/summary fields와 `second_direction_active` schema를 검증한다.
-- Audit: 공통 production helper로 리팩터링한 뒤 기존 frozen-checkpoint aggregate 수치가 tolerance 내에서 유지되는지 확인한다.
-- Compile: complex one-step training에서 `torch.compile` 경로와 SOAP/AdamW optimizer가 모두 동작하는지 smoke test한다.
-
-```bash
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_complex_tangent_projection.py \
-  test/test_complex_projection.py \
-  test/test_complex_tangent_subspace_audit.py \
-  test/test_complex_coupling_trainer.py \
-  test/test_complex_coupling_artifacts.py \
-  test/test_io_config.py
-
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
-ruff check src cli test
-ruff format src cli test
-~/.conda/envs/green_net/bin/python -m mypy src
-git diff --check
-```
-
-실제 장기 retraining은 구현 검증 범위에 포함하지 않는다.
+- Config tests: valid boundary seed, negative/overflow/bool/float rejection, non-boolean deterministic flag, active-stage missing seed rejection, inactive-stage omission 허용, save/load round-trip.
+- Seed helper tests: 같은 base/namespace는 같은 sub-seed, 다른 stage/namespace는 다른 sub-seed, Python/NumPy/Torch RNG 반복 일치.
+- GreenNet tests: 같은 seed에서 generated train/validation data, initial state, shuffle order와 one-step result 일치; 다른 seed에서 차이 발생; training sample 수가 달라도 model 및 validation seed가 불변.
+- CouplingNet tests: 같은 seed에서 state dict, minibatch order와 one-step parameter update 일치; 다른 seed에서 차이 발생; indexed-GP source seed는 training seed 변경에 영향받지 않음.
+- Paired fusion tests: 같은 seed의 `product`와 `product_fuser`에서 공통 state-dict tensor가 정확히 같고 추가 fuser tensor만 다름.
+- Pipeline tests: Green과 Coupling을 같이 실행하거나 pretrained Green을 사용할 때 Coupling initialization이 동일함.
+- Determinism tests: CPU strict mode의 반복 결과가 exact match하고, CUDA strict test는 가용 환경에서 실행하며 unsupported op는 명시적 오류로 검증한다.
+- Provenance tests: `config_used.json`, logs, artifacts에 base/resolved seed와 deterministic mode가 기록됨.
+- Regression tests: 기존 checkpoint load/export, indexed-GP identity, optimizer, scheduler, GreenNet LBFGS, unit-square 및 complex paths의 기존 behavior 유지.
+- 검증 순서: focused config/reproducibility tests, Green/Coupling trainer tests, 전체 `pytest test`, `ruff check src cli test`, `ruff format src cli test`, `mypy src`, `git diff --check`.
 
 ## Rollback Strategy
 
-- Runtime rollback은 `subspace_dimension=1`로 바꾸거나 해당 field를 제거하는 것이다.
-- Model architecture와 safetensors key가 바뀌지 않으므로 checkpoint migration은 필요하지 않다.
-- Code rollback은 \(K=2\) dispatcher, diagnostics, artifact fields와 paired config만 제거하고 기존 \(K=1\) implementation을 유지한다.
-- \(K=1\) tensor 또는 frozen audit 수치를 보존하지 못하면 구현을 중단하고 수치 차이, 영향받는 config/artifact/test, 최소 rollback을 보고한다.
-
-## Confidence
-
-- 수학 및 구현 계획 확신도: **0.98**.
-- Frozen-checkpoint 개선이 paired retraining에서도 유지될 가능성: **0.84**.
-- 규칙 모호성이나 필요한 정보 부족은 없다. 남은 불확실성은 \(K=2\)가 correction norm을 증가시키면서 일부 sample의 canonical energy를 악화시킨 현상이 재학습을 통해 얼마나 해소되는지에 관한 경험적 불확실성이다.
-- 이번 단계에서는 repository 파일을 수정하지 않으며, 사용자가 이 계획을 root `PLAN.md`에 작성한다.
+- Runtime rollback은 `deterministic_algorithms=false`로 strict kernel enforcement만 끄되 seed 기반 initialization/shuffle 재현성은 유지한다.
+- Code rollback은 reproducibility helper, 두 config field, CLI stage seeding, DataLoader generator 및 provenance만 제거한다.
+- Model architecture와 checkpoint key가 바뀌지 않으므로 checkpoint migration은 필요하지 않다.
+- Strict CUDA mode가 특정 SOAP 또는 compiled operation과 충돌하면 seed 기능은 유지하고, 정확한 unsupported operation과 환경을 보고한 뒤 해당 experiment config에서만 strict mode를 끈다.
+- Model-only checkpoint는 중간 epoch RNG/optimizer state를 저장하지 않으므로 exact resume는 이번 범위에 포함하지 않는다.
 
 ## Executable `/goal` Draft
 
@@ -209,48 +109,41 @@ git diff --check
 /goal
 
 `/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/PLAN.md`의
-"Optional Matrix-Free K=2 Tangent Subspace Integration Plan"을 기준 문서로
-참고하여 K=2 tangent subspace integration을 끝까지 구현한다.
+"Explicit Global Training Seed 구현 계획"을 기준 문서로 참고하여 GreenNet과
+CouplingNet의 명시적 training seed 및 deterministic reproducibility integration을
+끝까지 구현한다.
 
 완료는 다음 조건으로 검증한다.
 
-- 기존 config에서 subspace_dimension을 생략하면 K=1 동작과 수치가 유지될 것,
-- subspace_dimension=2가 frozen audit의 무제약 matrix-free K=2 수식을 사용할 것,
-- K=2가 두 개의 Jacobi-preconditioned response-orthogonal direction만 사용하고
-  global matrix, full Gram matrix 또는 linear solve를 만들지 않을 것,
-- 두 번째 direction이 퇴화하면 c1=0으로 K=1에 안전하게 fallback할 것,
-- 모든 valid point에서 phi+psi=rhs가 float64 tolerance 내에서 보존될 것,
-- K=2 response mismatch cost가 uncapped K=1보다 tolerance 밖에서 증가하지 않을 것,
-- K=2에서는 eta cap과 tangent eta schedule이 적용되지 않고 이 사실이 log와
-  provenance에 명시될 것,
-- stationarity는 post-K2 residual gradient를 사용하고 response-trust는 최종
-  K=2 mismatch와 correction response를 사용할 것,
-- 두 auxiliary loss가 source-response normalization을 공유하고 reference
-  sol/phi/psi를 loss, gradient, scheduler 또는 checkpoint 선택에 사용하지 않을 것,
-- trainer, evaluator, artifact exporter와 frozen audit CLI가 동일한 production
-  K=2 helper와 한 번 생성된 cached response context를 사용할 것,
-- raw NPZ, CSV, figures와 summary에 K=2 directions, coefficients, activity,
-  response costs와 final residual이 기록될 것,
-- CouplingNet architecture, model checkpoint tensor key, GreenNet, unit-square
-  CouplingNet, geometry/sample NPZ schema가 변경되지 않을 것,
+- `training.seed`와 `coupling_training.seed`가 독립적인 base seed로 동작할 것,
+- 활성 training stage에서 seed가 누락되면 fail fast할 것,
+- source-generation seed와 training seed의 의미가 분리되어 유지될 것,
+- 같은 seed에서 model initialization, DataLoader order 및 one-step update가
+  반복 실행 간 일치할 것,
+- 다른 seed에서는 initialization과 shuffle order가 달라질 것,
+- GreenNet 실행 여부가 CouplingNet initialization을 변경하지 않을 것,
+- training sample 수가 달라도 같은 seed의 model initialization이 유지될 것,
+- `product`와 `product_fuser`의 공통 parameter가 paired seed에서 동일할 것,
+- configurable strict deterministic mode와 CUDA fail-fast 동작이 구현될 것,
+- config_used, training log 및 artifact provenance에 base/resolved seed가 기록될 것,
+- 기존 model checkpoint tensor key와 safetensors 형식이 변경되지 않을 것,
+- indexed-GP source identity, optimizer, scheduler, LBFGS, projection,
+  reconstruction 및 loss semantics가 변경되지 않을 것,
 - focused tests와 전체 pytest, Ruff, mypy, git diff check가 통과할 것.
 
-수정 범위는 tangent projection config/core, complex projection dispatcher,
-stationarity와 response-trust의 K=2 일반화, trainer/evaluator/artifact provenance,
-기존 post-hoc audit의 공통 helper 재사용, paired experiment config, 관련 tests,
-README 및 docs/memory.md로 제한한다.
+수정 범위는 training config, reproducibility helper, Green/Coupling runner와
+DataLoader wiring, seed provenance, canonical configs, 관련 tests와 문서로 제한한다.
 
-Learnable K, K>2, eta network, K=2 correction cap/scheduler, full matrix,
-full-Gram solve, row-norm projection, model backbone 변경과 장기 retraining은
-추가하지 않는다.
+Model backbone, objective, projection, reconstruction, source-generation formula,
+geometry/sample NPZ schema, optimizer 수식 및 exact-resume 기능은 변경하지 않는다.
 
-각 구현 단계 후 가장 작은 config/math/projection tests를 먼저 실행하고,
-통과한 뒤 trainer/evaluator/artifact tests와 전체 regression suite를 실행한다.
+각 구현 단계 후 가장 작은 config/seed tests를 먼저 실행하고, Green/Coupling
+trainer integration tests를 거쳐 전체 regression suite를 실행한다.
 
-기존 K=1 수치, frozen K=2 audit 수치 또는 checkpoint architecture compatibility를
-유지할 수 없다면 작업을 중단하고 다음을 보고한다.
+동일 software/hardware 환경에서도 deterministic execution을 유지할 수 없다면
+작업을 중단하고 다음을 보고한다.
 
-1. 정확히 달라지는 수식, tensor, config 또는 floating-point 결과,
-2. 영향을 받는 checkpoint, config, metric, artifact와 test,
-3. subspace_dimension=1 경로를 보존하는 가장 작은 rollback 전략.
+1. nondeterministic한 정확한 operation과 실행 환경,
+2. 영향을 받는 GreenNet 또는 CouplingNet stage와 test,
+3. seed 기반 paired initialization/shuffle을 보존하는 가장 작은 fallback 전략.
 ```

@@ -42,12 +42,32 @@ from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.model import GreenONetModel
 from greenonet.numerics import IntegrationRule, integrate
 from greenonet.plotly_io import save_plotly_figure
+from greenonet.reproducibility import TrainingSeedContext
 from greenonet.sampler import ForwardSampler
 
 
 ScaleLength = float | tuple[float, float]
 EvalSplit = Literal["train_like", "validation_like", "custom"]
 SamplerMode = Literal["forward", "backward"]
+
+
+def _training_reproducibility_summary(
+    training: TrainingConfig,
+) -> dict[str, object]:
+    if training.seed is None:
+        return {
+            "available": False,
+            "reason": "legacy_config_without_training_seed",
+        }
+    return {
+        "available": True,
+        **TrainingSeedContext(
+            stage="green",
+            base_seed=training.seed,
+            deterministic_algorithms=training.deterministic_algorithms,
+            device=training.device,
+        ).as_dict(),
+    }
 
 
 @dataclass(frozen=True)
@@ -344,6 +364,7 @@ class GreenArtifactExporter:
             "device": str(device),
             "theme": self.request.theme,
             "integration_rule": training_cfg.integration_rule,
+            "training_reproducibility": _training_reproducibility_summary(training_cfg),
             **self._optimization_summary(training_cfg),
             "eval_seed": self.request.eval_seed,
             "eval_split": self.request.eval_split,
@@ -663,6 +684,7 @@ class GreenArtifactExporter:
             "device": str(device),
             "theme": self.request.theme,
             "integration_rule": training_cfg.integration_rule,
+            "training_reproducibility": _training_reproducibility_summary(training_cfg),
             **self._optimization_summary(training_cfg),
             "eval_seed": self.request.eval_seed,
             "eval_split": self.request.eval_split,
