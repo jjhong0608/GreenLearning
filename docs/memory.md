@@ -74,6 +74,22 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   절반과 마지막 epoch에 생성된다.
   Validation source 수는 `300`, indexed-GP seed와 CouplingNet training seed는
   각각 `0`으로 고정하며 다른 model/training 설정은 base config와 동일하다.
+- 논문용 Unit-square Poisson source-count study는
+  `numerical_examples/unit_square/unit_square_train{600,1200,2400,4800}_seed{0,1,2,3}.json`
+  16개 config로 고정한다. Fusion은 모든 run에서 `product_fuser`를 사용하며,
+  train count `600/1200/2400/4800`에 대해 epoch는 `800/400/200/100`, periodic
+  checkpoint interval은 `400/200/100/50`으로 둔다. 모든 run은 batch size `200`,
+  총 `2400` optimizer call, `warmup_steps=240`, `validation_every_steps=24`,
+  validation source `300`을 공유한다. Seed별 run에서는 indexed-GP source seed와
+  CouplingNet training seed를 동일한 `0/1/2/3`으로 설정하며 test dataset은 고정한다.
+  문제는 `a=1`, `b=0`, `c=0`인 fixed Pure Poisson operator이므로 모든 config에서
+  `coefficient_terms.diffusion/convection/reaction=false`로 둔다. 이는 PDE coefficient를
+  제거한다는 뜻이 아니라, sample-independent fixed coefficient를 CouplingNet의
+  variable coefficient branch input으로 사용하지 않는다는 뜻이다.
+  16개 run의 순차 실행은 `cli/run_unit_square_experiment_queue.py`를 사용한다.
+  Queue는 각 child가 끝날 때까지 기다리고 run별 log file descriptor를 새로 열며,
+  `_SUCCESS`가 있는 run만 재시작 시 skip한다. 실패 또는 non-empty incomplete work
+  directory에서는 중단하여 서로 다른 run의 checkpoint/log가 섞이지 않게 한다.
 - `Divergence_Free_Convection_Diffusion.py`: variable diffusion,
   divergence-free convection with amplitude `2.0`, zero reaction.
 - 새 coefficient file을 추가할 때는 `a_fun`, `apx_fun`, `apy_fun`,
