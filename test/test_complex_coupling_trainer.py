@@ -91,6 +91,7 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
     )
     training = CouplingTrainingConfig(
         epochs=1,
+        validation_every_steps=1,
         batch_size=1,
         log_interval=1,
         learning_rate=1e-3,
@@ -196,6 +197,7 @@ def test_column_diagonal_green_response_context_is_cached_in_train_and_eval(
     )
     training = CouplingTrainingConfig(
         epochs=1,
+        validation_every_steps=1,
         batch_size=1,
         log_interval=1,
         learning_rate=1e-3,
@@ -291,6 +293,7 @@ def test_complex_trainer_omits_reference_metrics_for_rhs_only_data(tmp_path):
         model=model,
         config=CouplingTrainingConfig(
             epochs=1,
+            validation_every_steps=1,
             batch_size=1,
             log_interval=1,
             device="cpu",
@@ -601,6 +604,7 @@ def test_complex_trainer_applies_and_records_warmup_cosine_schedule(tmp_path):
         model=model,
         config=CouplingTrainingConfig(
             epochs=3,
+            validation_every_steps=1,
             batch_size=1,
             log_interval=1,
             learning_rate=6.0e-3,
@@ -633,9 +637,14 @@ def test_complex_trainer_applies_and_records_warmup_cosine_schedule(tmp_path):
     training_log = (work_dir / "training.log").read_text()
     assert "kind=linear_warmup_cosine_decay" in training_log
     assert "configured_warmup_epochs=2" in training_log
-    assert "effective_warmup_epochs=2" in training_log
+    assert "effective_warmup_steps=2" in training_log
     assert "learning_rate=3.000000e-03" in training_log
     assert "learning_rate=1.000000e-03" in training_log
+    provenance = json.loads((work_dir / "optimizer_provenance.json").read_text())
+    assert provenance["learning_rate_schedule"]["steps_per_epoch"] == 1
+    assert provenance["learning_rate_schedule"]["total_optimizer_steps"] == 3
+    assert provenance["validation_schedule"]["every_steps"] == 1
+    assert provenance["validation_schedule"]["expected_event_count"] == 3
 
 
 def test_complex_trainer_soap_smoke_records_provenance_and_telemetry(
@@ -668,6 +677,7 @@ def test_complex_trainer_soap_smoke_records_provenance_and_telemetry(
         model=model,
         config=CouplingTrainingConfig(
             epochs=2,
+            validation_every_steps=1,
             batch_size=1,
             log_interval=1,
             learning_rate=2.0e-3,
@@ -712,6 +722,8 @@ def test_complex_trainer_soap_smoke_records_provenance_and_telemetry(
     assert provenance["betas"] == [0.95, 0.95]
     assert provenance["soap"]["precondition_frequency"] == 1
     assert provenance["checkpoint_policy"] == "model_only_no_optimizer_resume"
+    assert provenance["learning_rate_schedule"]["total_optimizer_steps"] == 2
+    assert provenance["validation_schedule"]["expected_event_count"] == 2
     train_rows = [row for row in trainer.metric_rows if row["split"] == "train"]
     val_rows = [row for row in trainer.metric_rows if row["split"] == "val"]
     assert [float(row["learning_rate"]) for row in train_rows] == pytest.approx(
@@ -759,6 +771,7 @@ def test_complex_trainer_selects_best_checkpoint_by_reference_free_energy(tmp_pa
         model=model,
         config=CouplingTrainingConfig(
             epochs=1,
+            validation_every_steps=1,
             batch_size=1,
             device="cpu",
             compile=CompileConfig(enabled=False),
@@ -815,6 +828,7 @@ def test_complex_trainer_selects_best_energy_checkpoint_by_optimized_energy(
         model=model,
         config=CouplingTrainingConfig(
             epochs=2,
+            validation_every_steps=1,
             batch_size=1,
             device="cpu",
             compile=CompileConfig(enabled=False),
@@ -839,15 +853,24 @@ def test_complex_trainer_selects_best_energy_checkpoint_by_optimized_energy(
         )
     )
     saved: list[str] = []
-    monkeypatch.setattr(
-        trainer,
-        "_run_epoch",
-        lambda *_args, **_kwargs: {
+
+    def fake_run_epoch(*_args, **kwargs):
+        state = kwargs["state"]
+        state.global_step += 1
+        trainer._run_validation_event(
+            loader=kwargs["validation_loader"],
+            epoch=kwargs["epoch"],
+            step_in_epoch=1,
+            learning_rate=1.0e-3,
+            state=state,
+        )
+        return {
             "loss": 1.0,
             "loss_energy_optimized": 1.0,
             "loss_energy_consistency": 1.0,
-        },
-    )
+        }
+
+    monkeypatch.setattr(trainer, "_run_epoch", fake_run_epoch)
     monkeypatch.setattr(
         trainer,
         "_evaluate_loader",
@@ -1037,6 +1060,7 @@ def test_complex_adaptive_tangent_uses_scheduled_training_cap_and_final_validati
         model=model,
         config=CouplingTrainingConfig(
             epochs=3,
+            validation_every_steps=1,
             batch_size=1,
             log_interval=1,
             learning_rate=1e-3,
@@ -1114,6 +1138,7 @@ def test_complex_stationarity_objective_uses_uncapped_eta_and_reference_free_tar
         model=model,
         config=CouplingTrainingConfig(
             epochs=1,
+            validation_every_steps=1,
             batch_size=1,
             device="cpu",
             compile=CompileConfig(enabled=False),
@@ -1252,6 +1277,7 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
     stationarity_weight = 0.125
     config = CouplingTrainingConfig(
         epochs=1,
+        validation_every_steps=1,
         batch_size=1,
         device="cpu",
         compile=CompileConfig(enabled=False),
@@ -1484,6 +1510,7 @@ def test_complex_k2_plus_trainer_disables_eta_schedule_and_logs_subspace_metrics
     )
     training = CouplingTrainingConfig(
         epochs=1,
+        validation_every_steps=1,
         batch_size=1,
         log_interval=1,
         learning_rate=1.0e-3,

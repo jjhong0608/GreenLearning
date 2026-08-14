@@ -24,6 +24,7 @@ from greenonet.green_optimizer import GreenOptimizerFactory, GreenTrainingRecord
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
 from greenonet.optimizer_support import OptimizerStepProfiler
 from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
+from greenonet.training_step_schedule import StepValidationSchedule
 
 
 AxialBatch = tuple[
@@ -789,9 +790,21 @@ class Trainer(LoggingMixin):
             raise ValueError(
                 "validation_dataset must be provided when compute_validation_rel_sol=True."
             )
+        steps_per_epoch = len(loader)
+        if steps_per_epoch < 1:
+            raise ValueError("GreenNet training loader must not be empty.")
         schedule_config = GreenLearningRateSchedule.from_config(
             self.config,
-            total_epochs=self.config.epochs,
+            steps_per_epoch=steps_per_epoch,
+        )
+        validation_schedule = (
+            StepValidationSchedule.for_validation(
+                validation_every_steps=self.config.validation_every_steps,
+                total_optimizer_steps=schedule_config.total_optimizer_steps,
+                field_prefix="training",
+            )
+            if self.config.compute_validation_rel_sol
+            else None
         )
         optimizer = self.optimizer_factory.build(self.model.parameters())
         optimizer_profiler = OptimizerStepProfiler(
@@ -800,15 +813,21 @@ class Trainer(LoggingMixin):
             device=self.device,
         )
         scheduler = schedule_config.build(optimizer)
-        self.training_recorder.log_startup(schedule_config)
-        self.training_recorder.write_provenance(schedule_config)
+        self.training_recorder.log_startup(schedule_config, validation_schedule)
+        self.training_recorder.write_provenance(
+            schedule_config,
+            validation_schedule,
+        )
+        global_step = 0
+        validation_index = 0
 
         for epoch in range(1, self.config.epochs + 1):
-            learning_rate = float(optimizer.param_groups[0]["lr"])
             epoch_losses: List[float] = []
             last_batch = None
+            first_learning_rate: float | None = None
+            last_learning_rate: float | None = None
             optimizer_profiler.begin_epoch()
-            for (
+            for step_in_epoch, (
                 coords,
                 solution,
                 source,
@@ -816,8 +835,12 @@ class Trainer(LoggingMixin):
                 ap_val,
                 b_val,
                 c_val,
-            ) in loader:
+            ) in enumerate(loader, start=1):
                 # coords: (2, n, m, 2) shared; fields: (B, 2, n, m)
+                learning_rate = float(optimizer.param_groups[0]["lr"])
+                if first_learning_rate is None:
+                    first_learning_rate = learning_rate
+                last_learning_rate = learning_rate
                 coords = coords.to(self.device)
                 solution = solution.to(self.device)
                 source = source.to(self.device)
@@ -846,6 +869,9 @@ class Trainer(LoggingMixin):
                 )
                 cast(Any, loss).backward()
                 optimizer_profiler.step()
+                global_step += 1
+                if scheduler is not None:
+                    scheduler.step()
 
                 epoch_losses.append(loss.detach().item())
                 last_batch = (
@@ -858,13 +884,43 @@ class Trainer(LoggingMixin):
                     c_val,
                     trunk_grid,
                 )
+                if validation_schedule is not None and validation_schedule.is_due(
+                    global_step
+                ):
+                    assert validation_dataset is not None
+                    validation_index += 1
+                    val_rel_sol = self._dataset_rel_sol(validation_dataset)
+                    self.val_rel_sol_history.append(val_rel_sol)
+                    self.training_recorder.record(
+                        phase=self.optimizer_provenance.name,
+                        epoch=epoch,
+                        split="val",
+                        global_step=global_step,
+                        step_in_epoch=step_in_epoch,
+                        validation_index=validation_index,
+                        learning_rate=learning_rate,
+                        loss=float("nan"),
+                        rel_sol=val_rel_sol,
+                    )
+                    self.logger.info(
+                        "Green validation epoch=%d global_step=%d "
+                        "step_in_epoch=%d validation_index=%d "
+                        "learning_rate=%.6e rel_sol=%.6e",
+                        epoch,
+                        global_step,
+                        step_in_epoch,
+                        validation_index,
+                        learning_rate,
+                        val_rel_sol,
+                    )
 
             mean_loss = float(sum(epoch_losses) / max(len(epoch_losses), 1))
             self.loss_history.append(mean_loss)
             optimizer_metrics = optimizer_profiler.finish_epoch()
             epoch_rel_sol: float | None = None
-            epoch_val_rel_sol: float | None = None
             epoch_rel_green: float | None = None
+            if first_learning_rate is None or last_learning_rate is None:
+                raise ValueError("GreenNet training loader must not be empty.")
 
             # Logging metrics at interval using the last processed batch
             if epoch % self.config.log_interval == 0 and last_batch is not None:
@@ -890,12 +946,8 @@ class Trainer(LoggingMixin):
                     )
                     if self.config.compute_validation_rel_sol:
                         train_rel_sol = self._dataset_rel_sol(dataset)
-                        assert validation_dataset is not None
-                        val_rel_sol = self._dataset_rel_sol(validation_dataset)
                         self.rel_sol_history.append(train_rel_sol)
-                        self.val_rel_sol_history.append(val_rel_sol)
                         epoch_rel_sol = train_rel_sol
-                        epoch_val_rel_sol = val_rel_sol
                     else:
                         _, rel_sol = self._green_reconstruction_loss(
                             prediction=pred_eval,
@@ -910,22 +962,29 @@ class Trainer(LoggingMixin):
                     self.rel_green_history.append(epoch_rel_green)
                 if self.config.compute_validation_rel_sol:
                     self.logger.info(
-                        "Epoch %s: lr=%.6e | loss=%.4e | train_rel_sol=%.4e | "
-                        "val_rel_sol=%.4e | rel_green=%.4e%s",
+                        "Epoch %s train global_step=%d: learning_rate=%.6e "
+                        "learning_rate_first=%.6e learning_rate_last=%.6e | "
+                        "loss=%.4e | train_rel_sol=%.4e | rel_green=%.4e%s",
                         epoch,
-                        learning_rate,
+                        global_step,
+                        last_learning_rate,
+                        first_learning_rate,
+                        last_learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
-                        self.val_rel_sol_history[-1],
                         self.rel_green_history[-1],
                         self._optimizer_metrics_log_suffix(optimizer_metrics),
                     )
                 else:
                     self.logger.info(
-                        "Epoch %s: lr=%.6e | loss=%.4e | rel_sol=%.4e | "
-                        "rel_green=%.4e%s",
+                        "Epoch %s train global_step=%d: learning_rate=%.6e "
+                        "learning_rate_first=%.6e learning_rate_last=%.6e | "
+                        "loss=%.4e | rel_sol=%.4e | rel_green=%.4e%s",
                         epoch,
-                        learning_rate,
+                        global_step,
+                        last_learning_rate,
+                        first_learning_rate,
+                        last_learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
                         self.rel_green_history[-1],
@@ -933,24 +992,31 @@ class Trainer(LoggingMixin):
                     )
             elif epoch % self.config.log_interval == 0:
                 self.logger.info(
-                    "Epoch %s: lr=%.6e | loss=%.4e%s",
+                    "Epoch %s train global_step=%d: learning_rate=%.6e "
+                    "learning_rate_first=%.6e learning_rate_last=%.6e | "
+                    "loss=%.4e%s",
                     epoch,
-                    learning_rate,
+                    global_step,
+                    last_learning_rate,
+                    first_learning_rate,
+                    last_learning_rate,
                     mean_loss,
                     self._optimizer_metrics_log_suffix(optimizer_metrics),
                 )
             self.training_recorder.record(
                 phase=self.optimizer_provenance.name,
                 epoch=epoch,
-                learning_rate=learning_rate,
+                split="train",
+                global_step=global_step,
+                step_in_epoch=steps_per_epoch,
+                learning_rate=last_learning_rate,
+                learning_rate_first=first_learning_rate,
+                learning_rate_last=last_learning_rate,
                 loss=mean_loss,
                 rel_sol=epoch_rel_sol,
-                val_rel_sol=epoch_val_rel_sol,
                 rel_green=epoch_rel_green,
                 telemetry=optimizer_metrics,
             )
-            if scheduler is not None:
-                scheduler.step()
 
         self._save_model_checkpoint("model_pre_lbfgs.safetensors")
 

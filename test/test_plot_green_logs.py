@@ -63,6 +63,46 @@ def test_parse_green_log_legacy_rel_sol_maps_to_train_rel_sol(
     assert metrics["rel_green"] == [3.0000e-01, 6.0000e-02]
 
 
+def test_parse_green_log_uses_global_optimizer_step_for_step_events(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "training.log"
+    path.write_text(
+        "\n".join(
+            [
+                (
+                    "train - Green validation epoch=1 global_step=2 "
+                    "step_in_epoch=2 validation_index=1 "
+                    "learning_rate=5.000000e-04 rel_sol=3.000000e-01"
+                ),
+                (
+                    "train - Epoch 1 train global_step=3: "
+                    "learning_rate=4.000000e-04 | loss=1.0000e-02 | "
+                    "train_rel_sol=2.0000e-01 | rel_green=4.0000e-01"
+                ),
+            ]
+        )
+    )
+
+    metrics = parse_green_log(path)
+
+    assert metrics["epoch"] == [2, 3]
+    assert metrics["global_step"] == [2.0, 3.0]
+    assert metrics["val_rel_sol"][0] == 3.0e-1
+    assert math.isnan(metrics["loss"][0])
+    assert metrics["loss"][1] == 1.0e-2
+    assert metrics["train_rel_sol"][1] == 2.0e-1
+
+    fig = make_fig(
+        "loss",
+        "Training Loss",
+        {"run": metrics},
+        {"family": "Times New Roman", "size": 14},
+        "plotly_white",
+    )
+    assert fig.layout.xaxis.title.text == "Cumulative Optimizer Step"
+
+
 def test_make_fig_applies_plotly_theme() -> None:
     fig = make_fig(
         "loss",

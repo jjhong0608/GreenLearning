@@ -27,9 +27,9 @@ class SymmetricTangentEtaCapSchedule:
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"]
     final_eta: float
     enabled: bool
-    configured_warmup_epochs: int
-    effective_warmup_epochs: int
-    total_epochs: int
+    configured_warmup_steps: int
+    effective_warmup_steps: int
+    total_optimizer_steps: int
 
     @classmethod
     def from_learning_rate_schedule(
@@ -49,32 +49,34 @@ class SymmetricTangentEtaCapSchedule:
             eta_strategy=resolved.eta_strategy,
             final_eta=float(resolved.eta),
             enabled=enabled,
-            configured_warmup_epochs=(
-                learning_rate_schedule.configured_warmup_epochs if enabled else 0
+            configured_warmup_steps=(
+                learning_rate_schedule.configured_warmup_steps if enabled else 0
             ),
-            effective_warmup_epochs=(
-                learning_rate_schedule.effective_warmup_epochs if enabled else 0
+            effective_warmup_steps=(
+                learning_rate_schedule.effective_warmup_steps if enabled else 0
             ),
-            total_epochs=learning_rate_schedule.total_epochs,
+            total_optimizer_steps=learning_rate_schedule.total_optimizer_steps,
         )
 
     @property
     def kind(self) -> str:
         if self.eta_strategy == "fixed":
             return "fixed_eta"
-        if not self.enabled or self.effective_warmup_epochs == 0:
+        if not self.enabled or self.effective_warmup_steps == 0:
             return "closed_loop_final_cap"
         return "closed_loop_half_cosine_warmup_hold"
 
-    def cap_for_epoch_index(self, epoch_index: int) -> float:
-        if not isinstance(epoch_index, int) or isinstance(epoch_index, bool):
-            raise TypeError("epoch_index must be an integer.")
-        if epoch_index < 0 or epoch_index >= self.total_epochs:
-            raise ValueError(f"epoch_index must be in [0, {self.total_epochs - 1}].")
-        warmup = self.effective_warmup_epochs
-        if not self.enabled or warmup == 0 or epoch_index >= warmup:
+    def cap_for_step_index(self, step_index: int) -> float:
+        if not isinstance(step_index, int) or isinstance(step_index, bool):
+            raise TypeError("step_index must be an integer.")
+        if step_index < 0 or step_index >= self.total_optimizer_steps:
+            raise ValueError(
+                f"step_index must be in [0, {self.total_optimizer_steps - 1}]."
+            )
+        warmup = self.effective_warmup_steps
+        if not self.enabled or warmup == 0 or step_index >= warmup:
             return self.final_eta
-        progress = float(epoch_index + 1) / float(warmup)
+        progress = float(step_index + 1) / float(warmup)
         return self.final_eta * 0.5 * (1.0 - math.cos(math.pi * progress))
 
 

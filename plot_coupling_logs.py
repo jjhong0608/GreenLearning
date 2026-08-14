@@ -21,9 +21,13 @@ def _parse_float(value: str | None, default: float = float("nan")) -> float:
     return float(value)
 
 
-def _empty_entry(raw_epoch: float) -> Dict[str, float]:
+def _empty_entry(
+    raw_epoch: float,
+    raw_global_step: float = float("nan"),
+) -> Dict[str, float]:
     return {
         "raw_epoch": raw_epoch,
+        "raw_global_step": raw_global_step,
         "loss_train": float("nan"),
         "loss_val": float("nan"),
         "l2_cons_train": float("nan"),
@@ -35,6 +39,18 @@ def _empty_entry(raw_epoch: float) -> Dict[str, float]:
         "rel_flux_val": float("nan"),
         "rel_sol_val": float("nan"),
     }
+
+
+def _metric_value(line: str, *keys: str) -> float:
+    for key in keys:
+        match = re.search(
+            rf"(?:^|[\s|]){re.escape(key)}=(?P<value>{VALUE_RE})(?=$|\s|\|)",
+            line,
+            re.IGNORECASE,
+        )
+        if match is not None:
+            return _parse_float(match.group("value"))
+    return float("nan")
 
 
 def _set_complex_split(
@@ -105,10 +121,41 @@ def _parse_entries(lines: Iterable[str]) -> List[Dict[str, float]]:
         rf"\s+rel_flux=(?P<rflux>{VALUE_RE})",
         re.IGNORECASE,
     )
+    pattern_step_event = re.compile(
+        r"epoch\s+(?P<epoch>\d+)\s+(?P<split>train|val)\s+"
+        r"global_step=(?P<global_step>\d+)\s+step_in_epoch=(?P<step_in_epoch>\d+)",
+        re.IGNORECASE,
+    )
     entries: List[Dict[str, float]] = []
     complex_pending: Dict[float, Dict[str, float]] = {}
+    step_pending: Dict[float, Dict[str, float]] = {}
 
     for line in lines:
+        match = pattern_step_event.search(line)
+        if match:
+            raw_epoch = _parse_float(match.group("epoch"))
+            global_step = _parse_float(match.group("global_step"))
+            split = match.group("split").lower()
+            entry = step_pending.get(global_step)
+            if entry is None:
+                entry = _empty_entry(raw_epoch, global_step)
+                entries.append(entry)
+                step_pending[global_step] = entry
+            suffix = "train" if split == "train" else "val"
+            entry[f"loss_{suffix}"] = _metric_value(line, "loss")
+            entry[f"l2_cons_{suffix}"] = _metric_value(
+                line,
+                "loss_l2_consistency",
+                "l2_cons",
+            )
+            entry[f"energy_cons_{suffix}"] = _metric_value(
+                line,
+                "loss_energy_consistency",
+                "energy_cons",
+            )
+            entry[f"rel_flux_{suffix}"] = _metric_value(line, "rel_flux")
+            entry[f"rel_sol_{suffix}"] = _metric_value(line, "rel_sol")
+            continue
         match = pattern_current.search(line)
         if match:
             entries.append(
@@ -193,6 +240,7 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
     entries = _parse_entries(path.read_text().splitlines())
     metrics: Dict[str, List[float]] = {
         "epoch": [],
+        "global_step": [],
         "loss_train": [],
         "loss_val": [],
         "l2_cons_train": [],
@@ -209,14 +257,19 @@ def parse_log(path: Path) -> Dict[str, List[float]]:
     last_raw = None
     last_effective = 0.0
     for entry in entries:
+        raw_global_step = entry.get("raw_global_step", float("nan"))
         raw_epoch = entry["raw_epoch"]
-        if last_raw is not None and raw_epoch <= last_raw:
-            offset = last_effective
-        effective_epoch = raw_epoch + offset
-        last_raw = raw_epoch
-        last_effective = effective_epoch
+        if math.isfinite(raw_global_step):
+            effective_epoch = raw_global_step
+        else:
+            if last_raw is not None and raw_epoch <= last_raw:
+                offset = last_effective
+            effective_epoch = raw_epoch + offset
+            last_raw = raw_epoch
+            last_effective = effective_epoch
 
         metrics["epoch"].append(effective_epoch)
+        metrics["global_step"].append(raw_global_step)
         metrics["loss_train"].append(entry["loss_train"])
         metrics["loss_val"].append(entry["loss_val"])
         metrics["l2_cons_train"].append(entry["l2_cons_train"])
@@ -295,7 +348,14 @@ def _xaxis_config(
     series: List[Tuple[str, Dict[str, List[float]]]],
     show_annotations: bool,
 ) -> dict[str, object]:
-    config: dict[str, object] = {"title": "Epoch"}
+    uses_global_step = any(
+        math.isfinite(step)
+        for _, metrics in series
+        for step in metrics.get("global_step", [])
+    )
+    config: dict[str, object] = {
+        "title": "Cumulative Optimizer Step" if uses_global_step else "Epoch"
+    }
     if not show_annotations:
         return config
 

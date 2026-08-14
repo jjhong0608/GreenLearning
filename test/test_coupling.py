@@ -1,3 +1,5 @@
+import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -2837,6 +2839,7 @@ def test_coupling_trainer_runs(tmp_path):
         model=model,
         config=CouplingTrainingConfig(
             epochs=2,
+            validation_every_steps=1,
             batch_size=1,
             log_interval=1,
             use_lr_schedule=True,
@@ -3138,6 +3141,14 @@ def test_coupling_trainer_saves_periodic_adam_checkpoints(tmp_path):
     assert not (tmp_path / "coupling_model_epoch_0001.safetensors").exists()
     assert not (tmp_path / "coupling_model_epoch_0003.safetensors").exists()
     assert not (tmp_path / "coupling_model_lbfgs_best_rel_sol.safetensors").exists()
+    provenance = json.loads(
+        (tmp_path / "coupling_optimizer_provenance.json").read_text()
+    )
+    assert provenance["learning_rate_schedule"]["total_optimizer_steps"] == 3
+    assert provenance["validation_schedule"] == {"active": False}
+    rows = list(csv.DictReader((tmp_path / "coupling_training_metrics.csv").open()))
+    assert [row["split"] for row in rows] == ["train", "train", "train"]
+    assert [int(row["global_step"]) for row in rows] == [1, 2, 3]
 
 
 def test_coupling_trainer_saves_best_validation_rel_sol_checkpoint(tmp_path):
@@ -3164,6 +3175,7 @@ def test_coupling_trainer_saves_best_validation_rel_sol_checkpoint(tmp_path):
         model=model,
         config=CouplingTrainingConfig(
             epochs=2,
+            validation_every_steps=1,
             batch_size=1,
             log_interval=1,
             best_rel_sol_checkpoint=CouplingBestRelSolCheckpointConfig(enabled=True),
@@ -3202,6 +3214,7 @@ def test_coupling_trainer_skips_best_validation_checkpoint_when_disabled(tmp_pat
         model=model,
         config=CouplingTrainingConfig(
             epochs=1,
+            validation_every_steps=1,
             batch_size=1,
             best_rel_sol_checkpoint=CouplingBestRelSolCheckpointConfig(enabled=False),
         ),

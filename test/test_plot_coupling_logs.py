@@ -124,6 +124,47 @@ def test_parse_log_complex_coupling_format_pairs_separate_train_val(
     assert not any("cross" in key for key in metrics)
 
 
+def test_parse_log_uses_global_optimizer_step_for_new_step_events(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "training.log"
+    path.write_text(
+        "\n".join(
+            [
+                (
+                    "_log_step_metrics - epoch 0001 val global_step=2 "
+                    "step_in_epoch=2 loss=2.000000e-02 "
+                    "loss_energy_consistency=3.000000e-02 "
+                    "rel_sol=4.000000e-01 rel_flux=5.000000e-01"
+                ),
+                (
+                    "_run_training_phase - epoch 1 train global_step=3 "
+                    "step_in_epoch=3 | loss=1.0000e-02 l2_cons=2.0000e-03 "
+                    "energy_cons=3.0000e-03 cross_cons=4.0000e-03 "
+                    "balance_loss=5.0000e-03 symmetric_boundary_loss=6.0000e-03 "
+                    "rel_flux=7.0000e-01 rel_sol=8.0000e-01"
+                ),
+            ]
+        )
+    )
+
+    metrics = parse_log(path)
+
+    assert metrics["epoch"] == [2.0, 3.0]
+    assert metrics["global_step"] == [2.0, 3.0]
+    assert math.isnan(metrics["loss_train"][0])
+    assert metrics["loss_val"][0] == 2.0e-2
+    assert metrics["loss_train"][1] == 1.0e-2
+    assert math.isnan(metrics["loss_val"][1])
+
+    fig = make_fig_loss(
+        [("run", metrics)],
+        {"family": "Times New Roman", "size": 14},
+        "plotly_white",
+    )
+    assert fig.layout.xaxis.title.text == "Cumulative Optimizer Step"
+
+
 def test_main_skips_l2_figure_when_complex_log_has_no_l2(
     tmp_path: Path,
     monkeypatch,

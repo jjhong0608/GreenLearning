@@ -501,6 +501,7 @@ class TestTrainer:
                 batch_size=4,
                 log_interval=1,
                 compute_validation_rel_sol=True,
+                validation_every_steps=1,
             ),
             work_dir=tmp_path,
             model_cfg=model_cfg,

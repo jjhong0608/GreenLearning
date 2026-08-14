@@ -802,7 +802,9 @@ def test_tangent_eta_cap_schedule_reuses_lr_warmup_and_holds_final_eta():
         base_learning_rate=1.0e-3,
         min_learning_rate=1.0e-5,
         warmup_epochs=4,
+        warmup_steps=None,
         total_epochs=8,
+        steps_per_epoch=1,
         field_prefix="coupling_training",
     )
     eta_schedule = SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
@@ -816,7 +818,7 @@ def test_tangent_eta_cap_schedule_reuses_lr_warmup_and_holds_final_eta():
     expected = [
         0.02 * 0.5 * (1.0 - math.cos(math.pi * step / 4.0)) for step in (1, 2, 3, 4)
     ]
-    assert [eta_schedule.cap_for_epoch_index(index) for index in range(8)] == (
+    assert [eta_schedule.cap_for_step_index(index) for index in range(8)] == (
         pytest.approx(expected + [0.02] * 4)
     )
     assert eta_schedule.kind == "closed_loop_half_cosine_warmup_hold"
@@ -826,7 +828,9 @@ def test_tangent_eta_cap_schedule_reuses_lr_warmup_and_holds_final_eta():
         base_learning_rate=1.0e-3,
         min_learning_rate=1.0e-5,
         warmup_epochs=4,
+        warmup_steps=None,
         total_epochs=8,
+        steps_per_epoch=1,
         field_prefix="coupling_training",
     )
     immediate = SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
@@ -836,7 +840,7 @@ def test_tangent_eta_cap_schedule_reuses_lr_warmup_and_holds_final_eta():
         },
         learning_rate_schedule=fixed_lr,
     )
-    assert [immediate.cap_for_epoch_index(index) for index in range(8)] == [0.02] * 8
+    assert [immediate.cap_for_step_index(index) for index in range(8)] == [0.02] * 8
     assert immediate.kind == "closed_loop_final_cap"
 
     with pytest.raises(ValueError, match="subspace_dimension=1"):

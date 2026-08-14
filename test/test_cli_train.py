@@ -70,6 +70,9 @@ class TestTrainCLIConfigCopy:
             "torch.optim.AdamW"
         )
         assert used["green_learning_rate_schedule"]["kind"] == "fixed"
+        assert used["green_learning_rate_schedule"]["resolution"] == (
+            "runtime_after_dataloader"
+        )
         assert used["training"]["seed"] == 0
         seed_provenance = used["green_training_seed_provenance"]
         assert seed_provenance["base_seed"] == 0
@@ -135,6 +138,12 @@ class TestTrainCLIConfigCopy:
             "a1e553530fde97d0e6b307d7c82ac6d38b072340"
         )
         assert used["green_learning_rate_schedule"]["enabled"] is True
+        assert used["green_learning_rate_schedule"]["warmup_source"] == (
+            "legacy_warmup_epochs"
+        )
+        assert used["green_learning_rate_schedule"]["resolution"] == (
+            "runtime_after_dataloader"
+        )
 
     def test_training_config_rejects_removed_adam_optimizer(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -202,6 +211,10 @@ class TestTrainCLIConfigCopy:
         )
         assert used["optimizer_provenance"]["upstream_commit"] == (
             "a1e553530fde97d0e6b307d7c82ac6d38b072340"
+        )
+        assert used["coupling_learning_rate_schedule"]["kind"] == "fixed"
+        assert used["coupling_learning_rate_schedule"]["resolution"] == (
+            "runtime_after_dataloader"
         )
         assert used["dataset"]["coupling_source"]["mode"] == "npz"
         assert used["dataset"]["reference_diagnostics"] == {

@@ -41,6 +41,7 @@
     "deterministic_algorithms": true,
     "use_lr_schedule": true,
     "warmup_epochs": 100,
+    "validation_every_steps": 24,
     "min_lr": 1e-5,
     "optimizer": {
       "name": "adamw",

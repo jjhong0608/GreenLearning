@@ -1,13 +1,13 @@
 {
   "dataset": {
     "geometry_mode": "complex",
-    "geometry_path": "data/geometry/annulus_02_05_1_128.npz",
-    "test_path": "data/complex_samples/annulus_02_05_1_128_poisson/test",
-    "coefficient_functions_path": "coefficients/Pure_Poisson.py",
+    "geometry_path": "data/geometry/pentagram_r05_h00078125.npz",
+    "test_path": "data/complex_samples/pentagram_r05_h00078125/test",
+    "coefficient_functions_path": "numerical_examples/pentagram/coefficients.py",
     "coupling_source": {
       "mode": "indexed_gp",
       "indexed_gp": {
-        "num_train": 4800,
+        "num_train": 1200,
         "num_valid": 300,
         "seed": 0,
         "lengthscale": 0.15,
@@ -22,7 +22,7 @@
     "dtype": "float64"
   },
   "terminal": {
-    "width": 350
+    "width": 150
   },
   "coupling_model": {
     "branch_input_dim": 129,
@@ -39,10 +39,18 @@
     },
     "balance_projection": {
       "enabled": true,
-      "mode": "physical_symmetric"
+      "mode": "symmetric_tangent_green_response",
+      "symmetric_tangent_green_response": {
+        "subspace_dimension": 4,
+        "eta": 0.015,
+        "eta_strategy": "closed_loop_exact_line_search",
+        "line_search_relative_eps": 1e-12,
+        "relative_lambda": 0.01,
+        "denominator_relative_eps": 1e-12
+      }
     },
     "pre_projection_fusion": {
-      "enabled": true,
+      "enabled": false,
       "mode": "absolute",
       "hidden_dim": 16,
       "depth": 1,
@@ -61,22 +69,45 @@
         "fusion": "product_fuser",
         "length_context": true
       }
+    },
+    "cross_axis_reconstruction": {
+      "enabled": true,
+      "mode": "local_weak_residual_reliability",
+      "gamma": 0.5,
+      "smoothing_steps": 2,
+      "smoothing_relaxation": 0.5,
+      "relative_floor": 0.1,
+      "eps": 1e-12
     }
   },
   "coupling_training": {
     "learning_rate": 0.002,
-    "epochs": 100,
-    "batch_size": 300,
+    "epochs": 400,
+    "batch_size": 200,
     "weight_decay": 0.05,
     "log_interval": 1,
-    "device": "cuda:1",
+    "device": "cpu",
     "seed": 0,
     "deterministic_algorithms": true,
     "gradient_clip_max_norm": 1.0,
     "use_lr_schedule": true,
-    "warmup_epochs": 10,
+    "warmup_steps": 240,
     "validation_every_steps": 24,
     "min_lr": 1e-5,
+    "canonical_energy": {
+      "boundary_weight": 0.0
+    },
+    "post_line_search_stationarity": {
+      "enabled": true,
+      "weight": 0.01,
+      "eps": 1e-12
+    },
+    "response_trust": {
+      "enabled": true,
+      "weight": 0.1,
+      "trust_weight": 0.0,
+      "eps": 1e-12
+    },
     "optimizer": {
       "name": "soap",
       "betas": [
@@ -97,18 +128,21 @@
     },
     "periodic_checkpoint": {
       "enabled": true,
-      "every_epochs": 50
+      "every_epochs": 200
     },
     "compile": {
       "enabled": true
     },
     "best_energy_checkpoint": {
       "enabled": true
+    },
+    "best_physics_checkpoint": {
+      "enabled": true
     }
   },
   "pipeline": {
     "run_green": false,
     "run_coupling": true,
-    "green_pretrained_path": "checkpoints/Annulus_poisson/green/model.safetensors"
+    "green_pretrained_path": "checkpoints/pentagram/green/model.safetensors"
   }
 }

@@ -79,6 +79,7 @@ from greenonet.config import (
 from greenonet.io import save_state_dict_safetensors
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
+from greenonet.training_step_schedule import StepValidationSchedule
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,14 @@ class ComplexForwardResult:
     reconstruction: ComplexReconstructionResult
     cross_axis_reconstruction: ComplexCrossAxisReconstructionResult | None
     objective: ComplexCouplingObjectiveResult
+
+
+@dataclass
+class _ComplexTrainingState:
+    global_step: int = 0
+    validation_index: int = 0
+    best_val_energy: float | None = None
+    best_val_physics: float | None = None
 
 
 class ComplexCouplingTrainer(LoggingMixin):
@@ -318,9 +327,21 @@ class ComplexCouplingTrainer(LoggingMixin):
                 collate_fn=complex_coupling_collate_fn,
             )
         )
+        steps_per_epoch = len(train_loader)
+        if steps_per_epoch < 1:
+            raise ValueError("Complex CouplingNet training loader must not be empty.")
         schedule_config = CouplingLearningRateSchedule.from_config(
             self.config,
-            total_epochs=self.config.epochs,
+            steps_per_epoch=steps_per_epoch,
+        )
+        validation_schedule = (
+            None
+            if validation_loader is None
+            else StepValidationSchedule.for_validation(
+                validation_every_steps=self.config.validation_every_steps,
+                total_optimizer_steps=schedule_config.total_optimizer_steps,
+                field_prefix="coupling_training",
+            )
         )
         optimizer = self.optimizer_factory.build(self.model.parameters())
         optimizer_profiler = OptimizerStepProfiler(
@@ -331,53 +352,43 @@ class ComplexCouplingTrainer(LoggingMixin):
         scheduler = schedule_config.build(optimizer)
         tangent_eta_schedule = self._build_tangent_eta_schedule(schedule_config)
         self._log_optimizer()
-        self._write_optimizer_provenance()
+        self._write_optimizer_provenance(
+            schedule=schedule_config,
+            validation_schedule=validation_schedule,
+        )
         self._log_learning_rate_schedule(schedule_config)
+        self._log_validation_schedule(validation_schedule)
         if tangent_eta_schedule is not None:
             self._log_tangent_eta_schedule(tangent_eta_schedule)
-        best_val_energy: float | None = None
-        best_val_physics: float | None = None
+        state = _ComplexTrainingState()
         for epoch in range(1, self.config.epochs + 1):
-            learning_rate = float(optimizer.param_groups[0]["lr"])
-            tangent_eta_cap = (
-                None
-                if tangent_eta_schedule is None
-                else tangent_eta_schedule.cap_for_epoch_index(epoch - 1)
-            )
             train_metrics = self._run_epoch(
                 train_loader,
+                epoch=epoch,
                 optimizer=optimizer,
                 optimizer_profiler=optimizer_profiler,
-                tangent_eta_cap=tangent_eta_cap,
+                scheduler=scheduler,
+                tangent_eta_schedule=tangent_eta_schedule,
+                validation_loader=validation_loader,
+                validation_schedule=validation_schedule,
+                state=state,
             )
-            train_metrics["learning_rate"] = learning_rate
             self.loss_history.append(float(train_metrics["loss"]))
-            self._record_metrics(epoch, "train", train_metrics)
+            self._record_metrics(
+                epoch,
+                "train",
+                train_metrics,
+                global_step=state.global_step,
+                step_in_epoch=steps_per_epoch,
+            )
             if epoch % self.config.log_interval == 0:
-                self._log_epoch(epoch, "train", train_metrics)
-            if validation_loader is not None:
-                val_metrics = self._evaluate_loader(validation_loader)
-                val_metrics["learning_rate"] = learning_rate
-                self._record_metrics(epoch, "val", val_metrics)
-                if epoch % self.config.log_interval == 0:
-                    self._log_epoch(epoch, "val", val_metrics)
-                if self.best_energy_checkpoint.enabled:
-                    validation_energy = float(val_metrics["loss_energy_optimized"])
-                    if best_val_energy is None or validation_energy < best_val_energy:
-                        best_val_energy = validation_energy
-                        self._save_checkpoint(
-                            "complex_coupling_model_best_energy.safetensors"
-                        )
-                if self.best_physics_checkpoint.enabled:
-                    validation_physics = float(val_metrics["loss"])
-                    if (
-                        best_val_physics is None
-                        or validation_physics < best_val_physics
-                    ):
-                        best_val_physics = validation_physics
-                        self._save_checkpoint(
-                            "complex_coupling_model_best_physics.safetensors"
-                        )
+                self._log_epoch(
+                    epoch,
+                    "train",
+                    train_metrics,
+                    global_step=state.global_step,
+                    step_in_epoch=steps_per_epoch,
+                )
             if (
                 self.config.periodic_checkpoint.enabled
                 and self.config.periodic_checkpoint.every_epochs > 0
@@ -386,8 +397,6 @@ class ComplexCouplingTrainer(LoggingMixin):
                 self._save_checkpoint(
                     f"complex_coupling_model_epoch_{epoch:04d}.safetensors"
                 )
-            if scheduler is not None:
-                scheduler.step()
 
         self._save_checkpoint("complex_coupling_model.safetensors")
         self._save_checkpoint("coupling_model.safetensors")
@@ -397,16 +406,32 @@ class ComplexCouplingTrainer(LoggingMixin):
         self,
         loader: DataLoader[Any],
         *,
+        epoch: int,
         optimizer: optim.Optimizer,
         optimizer_profiler: OptimizerStepProfiler,
-        tangent_eta_cap: float | None,
+        scheduler: optim.lr_scheduler.LambdaLR | None,
+        tangent_eta_schedule: SymmetricTangentEtaCapSchedule | None,
+        validation_loader: DataLoader[Any] | None,
+        validation_schedule: StepValidationSchedule | None,
+        state: _ComplexTrainingState,
     ) -> dict[str, float]:
         self.model.train()
         totals: dict[str, float] = {}
         samples = 0
+        first_learning_rate: float | None = None
+        last_learning_rate: float | None = None
         optimizer_profiler.begin_epoch()
-        for batch in loader:
+        for step_in_epoch, batch in enumerate(loader, start=1):
             batch = batch.to(self.device)
+            learning_rate = float(optimizer.param_groups[0]["lr"])
+            if first_learning_rate is None:
+                first_learning_rate = learning_rate
+            last_learning_rate = learning_rate
+            tangent_eta_cap = (
+                None
+                if tangent_eta_schedule is None
+                else tangent_eta_schedule.cap_for_step_index(state.global_step)
+            )
             optimizer.zero_grad(set_to_none=True)
             result = self._forward_batch(
                 batch,
@@ -419,12 +444,76 @@ class ComplexCouplingTrainer(LoggingMixin):
                     max_norm=self.config.gradient_clip_max_norm,
                 )
             optimizer_profiler.step()
+            state.global_step += 1
+            if scheduler is not None:
+                scheduler.step()
             batch_size = int(batch.rhs_valid.shape[0])
             self._accumulate(totals, result.metrics, batch_size=batch_size)
             samples += batch_size
+            if validation_schedule is not None and validation_schedule.is_due(
+                state.global_step
+            ):
+                if validation_loader is None:
+                    raise RuntimeError("Validation schedule has no validation loader.")
+                self._run_validation_event(
+                    loader=validation_loader,
+                    epoch=epoch,
+                    step_in_epoch=step_in_epoch,
+                    learning_rate=learning_rate,
+                    state=state,
+                )
         metrics = self._average(totals, samples)
         metrics.update(optimizer_profiler.finish_epoch())
+        if first_learning_rate is None or last_learning_rate is None:
+            raise ValueError("Complex CouplingNet training loader must not be empty.")
+        metrics["learning_rate"] = last_learning_rate
+        metrics["learning_rate_first"] = first_learning_rate
+        metrics["learning_rate_last"] = last_learning_rate
         return metrics
+
+    def _run_validation_event(
+        self,
+        *,
+        loader: DataLoader[Any],
+        epoch: int,
+        step_in_epoch: int,
+        learning_rate: float,
+        state: _ComplexTrainingState,
+    ) -> None:
+        state.validation_index += 1
+        val_metrics = self._evaluate_loader(loader)
+        val_metrics["learning_rate"] = learning_rate
+        self._record_metrics(
+            epoch,
+            "val",
+            val_metrics,
+            global_step=state.global_step,
+            step_in_epoch=step_in_epoch,
+            validation_index=state.validation_index,
+        )
+        self._log_epoch(
+            epoch,
+            "val",
+            val_metrics,
+            global_step=state.global_step,
+            step_in_epoch=step_in_epoch,
+        )
+        if self.best_energy_checkpoint.enabled:
+            validation_energy = float(val_metrics["loss_energy_optimized"])
+            if (
+                state.best_val_energy is None
+                or validation_energy < state.best_val_energy
+            ):
+                state.best_val_energy = validation_energy
+                self._save_checkpoint("complex_coupling_model_best_energy.safetensors")
+        if self.best_physics_checkpoint.enabled:
+            validation_physics = float(val_metrics["loss"])
+            if (
+                state.best_val_physics is None
+                or validation_physics < state.best_val_physics
+            ):
+                state.best_val_physics = validation_physics
+                self._save_checkpoint("complex_coupling_model_best_physics.safetensors")
 
     def _evaluate_loader(
         self,
@@ -697,9 +786,23 @@ class ComplexCouplingTrainer(LoggingMixin):
         epoch: int,
         split: str,
         metrics: dict[str, float],
+        *,
+        global_step: int,
+        step_in_epoch: int,
+        validation_index: int | None = None,
     ) -> None:
-        row: dict[str, float | int | str] = {"epoch": epoch, "split": split}
+        row: dict[str, float | int | str] = {
+            "epoch": epoch,
+            "global_step": global_step,
+            "step_in_epoch": step_in_epoch,
+            "split": split,
+        }
+        if validation_index is not None:
+            row["validation_index"] = validation_index
         for key in self._METRIC_KEYS:
+            if key in metrics:
+                row[key] = metrics[key]
+        for key in ("learning_rate_first", "learning_rate_last"):
             if key in metrics:
                 row[key] = metrics[key]
         self.metric_rows.append(row)
@@ -709,11 +812,25 @@ class ComplexCouplingTrainer(LoggingMixin):
         epoch: int,
         split: str,
         metrics: dict[str, float],
+        *,
+        global_step: int,
+        step_in_epoch: int,
     ) -> None:
         parts = [
             f"{key}={metrics[key]:.6e}" for key in self._METRIC_KEYS if key in metrics
         ]
-        self.logger.info("epoch %04d %s %s", epoch, split, " ".join(parts))
+        if split == "train":
+            for key in ("learning_rate_first", "learning_rate_last"):
+                if key in metrics:
+                    parts.append(f"{key}={metrics[key]:.6e}")
+        self.logger.info(
+            "epoch %04d %s global_step=%d step_in_epoch=%d %s",
+            epoch,
+            split,
+            global_step,
+            step_in_epoch,
+            " ".join(parts),
+        )
 
     def _log_learning_rate_schedule(
         self,
@@ -721,15 +838,36 @@ class ComplexCouplingTrainer(LoggingMixin):
     ) -> None:
         self.logger.info(
             "learning-rate schedule enabled=%s kind=%s base_lr=%.6e "
-            "min_lr=%.6e configured_warmup_epochs=%d "
-            "effective_warmup_epochs=%d total_epochs=%d",
+            "min_lr=%.6e warmup_source=%s configured_warmup_epochs=%d "
+            "configured_warmup_steps=%d effective_warmup_steps=%d "
+            "steps_per_epoch=%d total_epochs=%d total_optimizer_steps=%d",
             schedule.enabled,
             schedule.kind,
             schedule.base_learning_rate,
             schedule.min_learning_rate,
+            schedule.warmup_source,
             schedule.configured_warmup_epochs,
-            schedule.effective_warmup_epochs,
+            schedule.configured_warmup_steps,
+            schedule.effective_warmup_steps,
+            schedule.steps_per_epoch,
             schedule.total_epochs,
+            schedule.total_optimizer_steps,
+        )
+
+    def _log_validation_schedule(
+        self,
+        schedule: StepValidationSchedule | None,
+    ) -> None:
+        if schedule is None:
+            self.logger.info("validation schedule active=false")
+            return
+        self.logger.info(
+            "validation schedule active=true frequency_unit=optimizer_step "
+            "every_steps=%d total_optimizer_steps=%d expected_events=%d "
+            "final_step_mandatory=true",
+            schedule.every_steps,
+            schedule.total_optimizer_steps,
+            schedule.expected_event_count,
         )
 
     def _log_post_line_search_stationarity(self) -> None:
@@ -811,16 +949,16 @@ class ComplexCouplingTrainer(LoggingMixin):
     ) -> None:
         self.logger.info(
             "tangent-eta schedule strategy=%s kind=%s final_eta=%.6e "
-            "shared_with_lr_warmup=%s configured_warmup_epochs=%d "
-            "effective_warmup_epochs=%d total_epochs=%d "
+            "shared_with_lr_warmup=%s configured_warmup_steps=%d "
+            "effective_warmup_steps=%d total_optimizer_steps=%d "
             "training_cap=scheduled validation_cap=final",
             schedule.eta_strategy,
             schedule.kind,
             schedule.final_eta,
             schedule.enabled,
-            schedule.configured_warmup_epochs,
-            schedule.effective_warmup_epochs,
-            schedule.total_epochs,
+            schedule.configured_warmup_steps,
+            schedule.effective_warmup_steps,
+            schedule.total_optimizer_steps,
         )
 
     def _log_optimizer(self) -> None:
@@ -847,11 +985,19 @@ class ComplexCouplingTrainer(LoggingMixin):
                 provenance.soap,
             )
 
-    def _write_optimizer_provenance(self) -> None:
+    def _write_optimizer_provenance(
+        self,
+        *,
+        schedule: CouplingLearningRateSchedule,
+        validation_schedule: StepValidationSchedule | None,
+    ) -> None:
         path = self.work_dir / "optimizer_provenance.json"
-        path.write_text(
-            json.dumps(self.optimizer_provenance.as_dict(), indent=2) + "\n"
+        payload = self.optimizer_provenance.as_dict()
+        payload["learning_rate_schedule"] = schedule.as_dict()
+        payload["validation_schedule"] = (
+            None if validation_schedule is None else validation_schedule.as_dict()
         )
+        path.write_text(json.dumps(payload, indent=2) + "\n")
 
     def _log_pre_projection_fusion(self, model: ComplexCouplingNet) -> None:
         config = self.pre_projection_fusion_config

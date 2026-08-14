@@ -62,6 +62,18 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `[0.5,1.5]`이다. File 자체에서는 axial length scaling이나 directional
   reaction split을 수행하지 않으며, FEniCSx/GreenNet/CouplingNet은 같은
   coefficient path를 사용한다.
+- 논문용 Pentagram dataset/fusion screening은
+  `numerical_examples/pentagram/pentagram_train{1200,2400,4800}_{product,product_fuser}.json`
+  여섯 config의 complete `3 x 2` comparison으로 고정한다. Fusion family는
+  `branch_fusion.mode`와 `axis_1d_trunk.transverse_trunk.fusion`에 동시에 적용한다.
+  Primary comparison은 `2400` optimizer call의 equal-step budget을 사용한다.
+  Train count `1200/2400/4800`에 대해 epoch는 `400/200/100`, explicit
+  `warmup_steps=240`, `validation_every_steps=24`, periodic checkpoint interval은
+  `200/100/50`으로 둔다. 따라서 세 run은 같은 2400-step LR trajectory와
+  100회의 scheduled validation을 사용하고, periodic checkpoint는 각 run의
+  절반과 마지막 epoch에 생성된다.
+  Validation source 수는 `300`, indexed-GP seed와 CouplingNet training seed는
+  각각 `0`으로 고정하며 다른 model/training 설정은 base config와 동일하다.
 - `Divergence_Free_Convection_Diffusion.py`: variable diffusion,
   divergence-free convection with amplitude `2.0`, zero reaction.
 - 새 coefficient file을 추가할 때는 `a_fun`, `apx_fun`, `apy_fun`,
@@ -2288,6 +2300,15 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `checkpoints/pentagram/coupling9/tangent_subspace_k1_k4_audit/`에 둔다.
 
 ## Verification Defaults
+
+- GreenNet과 CouplingNet의 AdamW/SOAP first stage는 cumulative optimizer call을
+  기준으로 scheduler를 한 번씩 advance한다. SOAP의 첫 preconditioner 초기화
+  no-op도 한 step으로 센다. Explicit `warmup_steps`를 우선 사용하고, legacy
+  `warmup_epochs`는 runtime DataLoader의 `steps_per_epoch`를 곱해 변환한다.
+  Active validation에는 positive `validation_every_steps`가 필수이며 interval
+  배수와 non-duplicated final step에서 실행한다. Epoch train row와 step validation
+  row는 분리하고, Coupling periodic checkpoint와 Green LBFGS는 기존 epoch contract를
+  유지한다.
 
 - Official training runs require independent explicit base seeds:
   `training.seed` for GreenNet and `coupling_training.seed` for CouplingNet. Both

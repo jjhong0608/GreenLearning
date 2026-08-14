@@ -52,6 +52,7 @@ from greenonet.complex_sources import (
     IndexedGpParameters,
 )
 from greenonet.coupling_data import CouplingDataset
+from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
 from greenonet.coupling_model import CouplingNet
 from greenonet.coupling_optimizer import ComplexCouplingOptimizerFactory
 from greenonet.coupling_trainer import CouplingTrainer
@@ -227,15 +228,13 @@ class TrainCLI:
             if not isinstance(training, dict):
                 raise TypeError("training must be an object.")
             green_factory = GreenOptimizerFactory(training_cfg)
-            green_schedule = GreenLearningRateSchedule.from_config(
-                training_cfg,
-                total_epochs=training_cfg.epochs,
-            )
             training["optimizer"] = green_factory.resolved_config()
             training["seed"] = training_cfg.seed
             training["deterministic_algorithms"] = training_cfg.deterministic_algorithms
             payload["green_optimizer_provenance"] = green_factory.provenance().as_dict()
-            payload["green_learning_rate_schedule"] = green_schedule.as_dict()
+            payload["green_learning_rate_schedule"] = (
+                GreenLearningRateSchedule.configured_config(training_cfg)
+            )
             if training_cfg.seed is not None:
                 payload["green_training_seed_provenance"] = TrainingSeedContext(
                     stage="green",
@@ -251,6 +250,9 @@ class TrainCLI:
             coupling_training["seed"] = coupling_training_cfg.seed
             coupling_training["deterministic_algorithms"] = (
                 coupling_training_cfg.deterministic_algorithms
+            )
+            payload["coupling_learning_rate_schedule"] = (
+                CouplingLearningRateSchedule.configured_config(coupling_training_cfg)
             )
             if coupling_training_cfg.seed is not None:
                 payload["coupling_training_seed_provenance"] = TrainingSeedContext(
@@ -400,10 +402,7 @@ class TrainCLI:
         compile_cfg = cls._build_compile_config(compile_raw, "training")
         config = TrainingConfig(compile=compile_cfg, **training_kwargs)
         GreenOptimizerFactory(config)
-        GreenLearningRateSchedule.from_config(
-            config,
-            total_epochs=config.epochs,
-        )
+        GreenLearningRateSchedule.validate_config(config)
         return config
 
     @staticmethod
@@ -454,13 +453,15 @@ class TrainCLI:
             raise TypeError(
                 "coupling_training.best_rel_sol_checkpoint must be an object."
             )
-        return CouplingTrainingConfig(
+        config = CouplingTrainingConfig(
             losses=losses_cfg,
             compile=compile_cfg,
             periodic_checkpoint=periodic_cfg,
             best_rel_sol_checkpoint=best_rel_sol_cfg,
             **coupling_training_kwargs,
         )
+        CouplingLearningRateSchedule.validate_config(config)
+        return config
 
     @staticmethod
     def _build_coupling_losses_config(

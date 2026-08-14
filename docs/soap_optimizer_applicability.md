@@ -163,8 +163,12 @@ optimizer.zero_grad(set_to_none=True)
 loss.backward()
 clip_grad_norm_()
 optimizer.step()
-scheduler.step()  # epoch 종료 후
+scheduler.step()  # 성공한 cumulative optimizer call 직후
 ```
+
+SOAP의 첫 preconditioner-initialization no-op도 한 optimizer step으로 계산하며,
+LR scheduler와 `validation_every_steps` cadence는 같은 global-step counter를
+사용한다. Epoch은 first-stage 종료 조건과 aggregate logging 단위로만 남는다.
 
 현재 `configs/complex_coupling.json`의 주요 optimizer 관련 값은 다음과
 같다.

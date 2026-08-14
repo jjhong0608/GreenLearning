@@ -1,107 +1,183 @@
-# Explicit Global Training Seed 구현 계획
+# Cumulative Optimizer-Step Scheduler and Fixed-Step Validation Plan
 
 ## Summary
 
-GreenNet과 CouplingNet에 독립적인 base training seed를 추가하고, model initialization, synthetic Green data, DataLoader shuffle, dropout 및 CPU/CUDA RNG를 재현 가능하게 만든다. 공식 training CLI의 활성 학습 단계에는 seed를 필수로 요구하고, 논문용 config에서는 PyTorch deterministic algorithms도 활성화한다.
+GreenNet과 CouplingNet의 AdamW/SOAP 학습에서 learning-rate scheduler를 epoch가 아닌 **누적 `optimizer.step()` 호출 수**로 갱신한다. Validation도 epoch 경계와 분리하여 `validation_every_steps`마다 실행하고, 전체 first-stage 학습의 마지막 step에서는 interval 배수가 아니더라도 한 번 더 실행한다.
 
-현재 `dataset.coupling_source.indexed_gp.seed`는 CouplingNet source realization만 결정하며 새 training seed와 독립적으로 유지한다. Model architecture, optimizer 수식, checkpoint tensor key와 dataset schema는 변경하지 않는다.
+적용 범위는 다음으로 고정한다.
 
-구현 확신도는 **0.98**이다. 규칙이나 정보 부족은 없다. 다만 서로 다른 GPU, CUDA, cuBLAS, PyTorch 또는 compiler version 사이의 bitwise 동일성은 seed만으로 보장할 수 없으며, 동일 software/hardware 환경에서의 재현성을 보장 대상으로 둔다.
+- Complex 및 legacy unit-square CouplingNet 모두 적용한다.
+- Complex 및 unit-square GreenNet의 AdamW/SOAP first stage에 적용한다.
+- GreenNet LBFGS의 optimizer, scheduler 부재, epoch-level diagnostic 동작은 그대로 유지한다.
+- CouplingNet periodic checkpoint의 `every_epochs`와 파일명은 그대로 유지한다.
+- Model, loss, projection, reconstruction, optimizer 수식, checkpoint tensor key는 변경하지 않는다.
 
-## Public Configuration
+## Public Config
 
-GreenNet과 CouplingNet에 각각 독립적인 seed를 둔다.
+`TrainingConfig`와 `CouplingTrainingConfig`에 동일한 두 옵션을 추가한다.
 
 ```json
-"training": {
-  "seed": 0,
-  "deterministic_algorithms": true
-},
-"coupling_training": {
-  "seed": 0,
-  "deterministic_algorithms": true
+{
+  "use_lr_schedule": true,
+  "warmup_steps": 240,
+  "validation_every_steps": 24
 }
 ```
 
-- `training.seed`는 GreenNet data generation, model initialization, shuffle 및 runtime RNG의 base seed다.
-- `coupling_training.seed`는 CouplingNet model initialization, shuffle 및 runtime RNG의 base seed다.
-- Seed는 boolean이 아닌 정수이며 범위는 `[0, 2^32-1]`로 검증한다.
-- `deterministic_algorithms`는 strict boolean이며 기본값은 `false`로 둔다.
-- `pipeline.run_green=true`인데 `training.seed`가 누락되면 fail fast한다.
-- `pipeline.run_coupling=true`인데 `coupling_training.seed`가 누락되면 fail fast한다.
-- 실행하지 않는 stage의 seed는 생략할 수 있어 pretrained GreenNet 기반 CouplingNet config를 간결하게 유지한다.
-- 기존 checkpoint의 evaluation/export는 seed가 없는 과거 `config_used.json`도 계속 허용한다. 명시적 seed 요구는 새 training 시작에만 적용한다.
-- 논문 실험용 complex config에는 해당 활성 stage의 seed와 `deterministic_algorithms=true`를 명시한다.
+- `warmup_steps`: optional nonnegative integer다.
+- `validation_every_steps`: active validation dataset을 사용하는 run에서는 반드시 명시해야 하는 positive integer다.
+- Validation이 비활성인 GreenNet run에서는 `validation_every_steps`를 생략한다.
+- 기존 `warmup_epochs`는 parse compatibility를 위해 유지한다.
+- `warmup_steps`가 없으면 `warmup_epochs * steps_per_epoch`로 변환한다.
+- `warmup_steps`와 양수 `warmup_epochs`를 동시에 지정하면 ambiguous config로 fail fast한다.
+- 기존 config는 실행 가능하지만 scheduler가 epoch staircase가 아니라 stepwise curve로 바뀌므로 numerical trajectory까지 backward-compatible한 것은 아니다.
+- `epochs`는 계속 학습 종료 조건이며 별도의 `total_steps` config는 추가하지 않는다.
 
-## Seed Semantics
+## Step-Based Schedule
 
-Base seed 하나에서 SHA-256 기반의 stable namespace derivation으로 다음 uint32 sub-seed를 만든다.
+Epoch당 optimizer step 수와 전체 step 수는 runtime DataLoader에서 계산한다.
 
-```text
-green:data_train
-green:data_valid
-green:model
-green:runtime
-green:loader_train
-green:loader_lbfgs
+\[
+B=\operatorname{len}(\text{train loader}),
+\qquad
+T=E B,
+\]
 
-coupling:model
-coupling:runtime
-coupling:loader_train
-```
+여기서 \(E\)는 `epochs`, \(B\)는 `steps_per_epoch`, \(T\)는 `total_optimizer_steps`다. 현재 `drop_last=false`이므로 map-style dataset에서는 사실상 \(B=\lceil N/\text{batch size}\rceil\)이다.
 
-- Python의 process-randomized `hash()`는 사용하지 않는다.
-- Green train/validation data seed를 분리해 training sample 수가 달라져도 validation data가 변하지 않게 한다.
-- DataLoader는 전용 CPU `torch.Generator`를 사용해 global RNG 소비와 shuffle 순서를 분리한다.
-- Model 생성 직전에 model seed를 적용하고, 생성 직후 runtime seed를 다시 적용해 parameter 수 차이가 dropout/runtime RNG를 이동시키지 않게 한다.
-- Coupling indexed-GP source는 계속 `dataset.coupling_source.indexed_gp.seed`로 결정한다.
-- 같은 Coupling training seed에서 `num_train`이 달라도 model initialization은 동일해야 한다.
-- 현재 constructor 순서상 `product`와 `product_fuser`의 공통 parameter는 같은 seed에서 동일하게 초기화하고, `product_fuser`의 추가 layer만 별도 parameter로 존재하는 것을 테스트로 고정한다.
+1-based optimizer step \(s=1,\ldots,T\), effective warmup \(W\)에 대해:
 
-## Implementation Changes
+\[
+\eta_s
+=
+\eta_{\max}\frac{s}{W},
+\qquad 1\le s\le W,
+\]
 
-1. `src/greenonet/config.py`의 `TrainingConfig`와 `CouplingTrainingConfig`에 `seed: int | None`과 `deterministic_algorithms: bool`을 추가한다. 공통 validator로 type/range를 검증하고, pipeline-aware validator가 활성 stage의 missing seed를 거부한다.
+\[
+\eta_s
+=
+\eta_{\min}
++
+\frac12(\eta_{\max}-\eta_{\min})
+\left[
+1+\cos\left(
+\pi\frac{s-W-1}{T-W-1}
+\right)
+\right],
+\qquad W+1\le s\le T.
+\]
 
-2. 새 `src/greenonet/reproducibility.py`에 seed dataclass와 적용 helper를 둔다. Helper는 `random.seed`, `numpy.random.seed`, `torch.manual_seed`, `torch.cuda.manual_seed_all`을 적용하고 named sub-seed 및 DataLoader generator를 생성한다.
+- \(W=0\)이면 step 1에서 base LR로 시작해 step \(T\)에서 `min_lr`에 도달한다.
+- \(W\ge T\)이면 기존 규칙처럼 effective warmup을 \(T-1\)로 제한한다.
+- Warmup 마지막 step과 cosine 첫 step은 모두 base LR를 사용한다.
+- 여러 parameter group에는 동일 multiplier를 적용해 LR 비율을 보존한다.
+- `use_lr_schedule=false`이면 모든 step에서 고정 LR를 사용한다.
+- PyTorch 권고 순서대로 매 batch에서 `optimizer.step()` 후 `scheduler.step()`을 정확히 한 번 호출한다. [PyTorch optimizer scheduling documentation](https://docs.pytorch.org/docs/stable/optim)
+- SOAP의 첫 preconditioner-initialization no-op도 하나의 optimizer 호출로 계산한다. 이는 기존 equal-step budget 및 SOAP frequency 의미와 일치한다.
+- Optimizer 호출이 예외로 실패하면 global step과 scheduler를 진행하지 않는다.
 
-3. Strict mode에서는 `torch.use_deterministic_algorithms(True, warn_only=False)`, `torch.backends.cudnn.deterministic=True`, `torch.backends.cudnn.benchmark=False`를 적용한다. CUDA가 활성화되기 전에 `CUBLAS_WORKSPACE_CONFIG=:4096:8`을 설정하고 unsupported nondeterministic operation은 조용히 fallback하지 않고 오류로 노출한다.
+논문용 dataset-size 비교는 다음과 같이 동일한 schedule을 갖는다.
 
-4. `cli/train.py`는 config parsing 직후 활성 stage seed를 검증한다. GreenNet과 CouplingNet을 순차 실행하더라도 각 stage 시작 시 자기 seed context를 다시 적용해 GreenNet RNG 소비가 CouplingNet initialization에 영향을 주지 않게 한다.
+| Train samples | Batch | Epochs | Steps/epoch | Total steps |
+|---:|---:|---:|---:|---:|
+| 600 | 200 | 800 | 3 | 2400 |
+| 1200 | 200 | 400 | 6 | 2400 |
+| 2400 | 200 | 200 | 12 | 2400 |
+| 4800 | 200 | 100 | 24 | 2400 |
 
-5. GreenNet runner에서 현재 `seed=training_cfg.epochs` 전달을 제거하고 `training.seed`를 source of truth로 사용한다. Train data, validation data, model 및 runtime seed를 각각 적용하고, complex 및 legacy Green trainer의 shuffled DataLoader와 LBFGS loader에 명시적 generator를 전달한다.
+모든 run은 `warmup_steps=240`, `validation_every_steps=24`를 사용하므로 동일한 LR trajectory와 정확히 100회의 scheduled validation을 갖는다.
 
-6. CouplingNet은 model 생성 전에 coupling model seed를 적용하고 생성 후 runtime seed를 재설정한다. Complex 및 legacy Coupling trainer의 shuffled DataLoader에 coupling loader generator를 전달한다. Validation/evaluation loader는 계속 `shuffle=false`로 유지한다.
+## Validation Contract
 
-7. Direct trainer에 이미 생성된 model을 전달하는 API는 유지한다. 공식 reproducibility guarantee는 `cli/train.py`와 runner path에 적용하며, direct caller가 model initialization까지 재현하려면 공개 seed helper를 model 생성 전에 호출하도록 문서화한다.
+- `global_step`은 first-stage 시작 시 0이며 epoch 경계에서 초기화하지 않는다.
+- Validation은 `global_step % validation_every_steps == 0`일 때 실행한다.
+- 마지막 optimizer step이 interval 배수가 아니면 final validation을 한 번 추가한다.
+- 마지막 step이 이미 interval 배수이면 중복 validation하지 않는다.
+- Step 0 baseline validation은 추가하지 않는다.
+- Validation은 optimizer update와 scheduler advancement 이후 실행하되, 기록되는 `learning_rate`는 직전 optimizer update에 실제 사용한 LR다.
+- Validation 중 `model.eval()`과 `torch.no_grad()`를 사용하고 이후 기존 train mode를 복원한다.
+- Complex CouplingNet best-energy 및 best-physics checkpoint는 step validation event에서만 갱신한다.
+- Legacy CouplingNet best-`rel_sol` checkpoint도 같은 step validation event에서 갱신한다.
+- GreenNet은 기존처럼 validation metric만 계산하며 새로운 best-validation checkpoint 정책은 추가하지 않는다.
+- `log_interval`은 epoch-aggregate training log 주기로 유지되고 validation cadence에는 관여하지 않는다.
 
-8. `config_used.json`에는 입력한 base seed와 deterministic flag를 materialize하고, Green/Coupling별 resolved sub-seed, 적용 범위, device, strict mode 및 source-seed 분리 정책을 provenance block으로 기록한다.
+## Implementation Steps
 
-9. `training.log`에는 stage 시작 시 base/model/runtime/loader/data seed, deterministic mode, CUDA/cuDNN 상태를 한 번 기록한다. Artifact summary에도 base seed와 deterministic provenance를 전달한다.
+1. `src/greenonet/config.py`에 `warmup_steps`와 `validation_every_steps`를 추가하고 type, finite/range, conflicting warmup config를 strict하게 검증한다.
+2. `src/greenonet/learning_rate_scheduler.py`의 공통 schedule을 optimizer-step 단위로 일반화하고 Green/Coupling wrapper가 DataLoader 생성 후 `steps_per_epoch`로 resolve하도록 변경한다.
+3. Config parsing 시에는 unresolved fields만 검증하고, runtime에 `steps_per_epoch`, `total_optimizer_steps`, warmup source와 effective warmup을 확정한다.
+4. Complex/legacy Coupling trainer를 batch-level scheduler hook과 validation trigger를 갖도록 리팩터링한다. Epoch train aggregation과 periodic checkpoint는 유지한다.
+5. Complex/unit-square Green trainer의 AdamW/SOAP loop도 같은 step controller를 사용한다. `compute_validation_rel_sol=true`일 때만 fixed-step validation을 실행한다.
+6. GreenNet LBFGS는 별도 step counter에 포함하지 않고 기존 epoch validation과 scheduler-disabled 동작을 보존한다.
+7. \(K=1\) tangent eta cap schedule을 `cap_for_step_index(...)`로 전환해 LR warmup step과 공유한다. \(K\ge2\)의 schedule-not-applicable 경로는 유지한다.
+8. Train epoch row와 step validation row를 분리한다. 공통 필드는 `epoch`, `global_step`, `step_in_epoch`, `split`, `learning_rate`로 둔다.
+9. Epoch train row에는 `learning_rate_first`, `learning_rate_last`를 추가하고 기존 `learning_rate`는 마지막 optimizer update LR의 alias로 유지한다.
+10. Green recorder에는 기존 `phase`를 유지하면서 `split=train|val`을 추가한다. LBFGS row의 first-stage step 필드는 비워 두어 다른 step budget과 혼동하지 않게 한다.
+11. Startup log와 provenance에 `steps_per_epoch`, `total_optimizer_steps`, warmup source, configured/effective warmup steps, validation interval과 expected validation count를 기록한다.
+12. `config_used.json`에는 configured fields를 저장하고, DataLoader 이후 resolve된 값은 Green/Coupling training-schedule provenance와 `training.log`에 저장한다.
+13. Artifact loader는 runtime DataLoader 없이 scheduler를 resolve하지 않는다. 저장된 resolved provenance가 있으면 사용하고, 없으면 configured-only schedule로 명시한다.
+14. Existing log plotter는 `global_step`이 있으면 이를 x-axis로 사용하고, 과거 log에서는 epoch parser로 fallback하도록 유지한다.
+15. Active validation을 사용하는 shipped Green/Coupling config에 `validation_every_steps=24`를 명시하고, 논문용 equal-step configs는 `warmup_steps=240`으로 통일한다.
+16. README와 `docs/memory.md`에 step definition, legacy conversion, mandatory validation interval, final validation, SOAP first-step counting 및 LBFGS 제외 규칙을 기록한다.
 
-10. Canonical GreenNet 및 ComplexCouplingNet config에 명시적 seed를 추가한다. Archived checkpoint의 `config_used.json`은 수정하지 않으며 model-only safetensors 형식과 state-dict key는 유지한다.
+## Affected Files
 
-11. README와 `docs/memory.md`에 source seed와 training seed의 차이, paired-ablation 절차, strict determinism의 환경 한계, model-only checkpoint가 RNG/optimizer state resume를 지원하지 않는다는 점을 기록한다.
+- Config/schedule core: `src/greenonet/config.py`, `src/greenonet/learning_rate_scheduler.py`, Green/Coupling scheduler wrappers와 tangent eta schedule.
+- Runtime: `src/greenonet/complex_coupling_trainer.py`, `src/greenonet/coupling_trainer.py`, `src/greenonet/trainer.py`, `src/greenonet/complex_green_trainer.py`.
+- Provenance/export: `cli/train.py`, Green/Coupling artifact exporters, `src/greenonet/green_optimizer.py`.
+- Analysis/config/docs: Green/Coupling log plotters, `configs/`, `numerical_examples/`, `README.md`, `docs/memory.md`.
+- Tests: scheduler, config/CLI, 네 trainer, SOAP telemetry, tangent schedule, artifacts와 log parser tests.
 
 ## Test Plan
 
-- Config tests: valid boundary seed, negative/overflow/bool/float rejection, non-boolean deterministic flag, active-stage missing seed rejection, inactive-stage omission 허용, save/load round-trip.
-- Seed helper tests: 같은 base/namespace는 같은 sub-seed, 다른 stage/namespace는 다른 sub-seed, Python/NumPy/Torch RNG 반복 일치.
-- GreenNet tests: 같은 seed에서 generated train/validation data, initial state, shuffle order와 one-step result 일치; 다른 seed에서 차이 발생; training sample 수가 달라도 model 및 validation seed가 불변.
-- CouplingNet tests: 같은 seed에서 state dict, minibatch order와 one-step parameter update 일치; 다른 seed에서 차이 발생; indexed-GP source seed는 training seed 변경에 영향받지 않음.
-- Paired fusion tests: 같은 seed의 `product`와 `product_fuser`에서 공통 state-dict tensor가 정확히 같고 추가 fuser tensor만 다름.
-- Pipeline tests: Green과 Coupling을 같이 실행하거나 pretrained Green을 사용할 때 Coupling initialization이 동일함.
-- Determinism tests: CPU strict mode의 반복 결과가 exact match하고, CUDA strict test는 가용 환경에서 실행하며 unsupported op는 명시적 오류로 검증한다.
-- Provenance tests: `config_used.json`, logs, artifacts에 base/resolved seed와 deterministic mode가 기록됨.
-- Regression tests: 기존 checkpoint load/export, indexed-GP identity, optimizer, scheduler, GreenNet LBFGS, unit-square 및 complex paths의 기존 behavior 유지.
-- 검증 순서: focused config/reproducibility tests, Green/Coupling trainer tests, 전체 `pytest test`, `ruff check src cli test`, `ruff format src cli test`, `mypy src`, `git diff --check`.
+- Exact LR sequence: warmup, cosine start, final `min_lr`, zero warmup, single-step edge case와 disabled schedule을 검증한다.
+- Equal-budget regression: `3x800`, `6x400`, `12x200`, `24x100`이 동일한 2400-step LR sequence를 생성하는지 확인한다.
+- Legacy config: `warmup_epochs`가 runtime step으로 정확히 변환되고 `warmup_steps`와의 충돌이 거부되는지 확인한다.
+- Validation trigger: interval 배수, non-divisible final step, divisible final deduplication, interval이 total steps보다 큰 경우를 검증한다.
+- Trainer integration: 네 trainer에서 scheduler 호출 수가 optimizer 호출 수와 같고 validation이 epoch 수가 아닌 global step에서 발생하는지 확인한다.
+- Checkpoint behavior: best checkpoint는 validation event에서만 갱신되고 periodic checkpoint는 기존 epoch cadence와 filename을 유지하는지 확인한다.
+- SOAP: 첫 no-op 호출도 global step, LR schedule, validation cadence 및 telemetry count에 포함되는지 확인한다.
+- Tangent: \(K=1\) eta cap이 stepwise warmup을 따르고 \(K=2,3,4\)에는 계속 적용되지 않는지 검증한다.
+- Mode restoration: mid-epoch validation 후 dropout/train mode가 정확히 복원되는지 확인한다.
+- Logging/provenance: CSV/log의 global step, LR start/end, validation index와 resolved schedule metadata를 검증한다.
+- LBFGS regression: scheduler가 적용되지 않고 기존 epoch-level diagnostic 및 checkpoint behavior가 유지되는지 확인한다.
+- Plot/artifact regression: 새 step log와 과거 epoch log를 모두 읽고 checkpoint tensor key 및 artifact numerical field가 변하지 않는지 확인한다.
+
+검증 순서는 scheduler/config tests, 각 trainer focused tests, artifact/log parser tests, 전체 regression과 정적 검사로 고정한다.
+
+```bash
+PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
+  test/test_coupling_lr_scheduler.py \
+  test/test_green_lr_scheduler.py \
+  test/test_complex_coupling_trainer.py \
+  test/test_coupling.py \
+  test/test_green_optimizer.py \
+  test/test_complex_green_trainer.py \
+  test/test_cli_train.py
+
+PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
+ruff check src cli test
+ruff format src cli test
+~/.conda/envs/green_net/bin/python -m mypy src
+git diff --check
+```
 
 ## Rollback Strategy
 
-- Runtime rollback은 `deterministic_algorithms=false`로 strict kernel enforcement만 끄되 seed 기반 initialization/shuffle 재현성은 유지한다.
-- Code rollback은 reproducibility helper, 두 config field, CLI stage seeding, DataLoader generator 및 provenance만 제거한다.
-- Model architecture와 checkpoint key가 바뀌지 않으므로 checkpoint migration은 필요하지 않다.
-- Strict CUDA mode가 특정 SOAP 또는 compiled operation과 충돌하면 seed 기능은 유지하고, 정확한 unsupported operation과 환경을 보고한 뒤 해당 experiment config에서만 strict mode를 끈다.
-- Model-only checkpoint는 중간 epoch RNG/optimizer state를 저장하지 않으므로 exact resume는 이번 범위에 포함하지 않는다.
+- Scheduler, validation trigger, recorder schema를 공통 helper와 trainer wiring으로 분리하여 모델 및 objective 코드와 독립적으로 되돌릴 수 있게 한다.
+- Rollback 시 epoch-end `scheduler.step()`과 epoch validation을 복원하고 새 step fields를 config에서 제거한다.
+- `warmup_epochs`, periodic checkpoint와 과거 log parser를 유지하므로 이전 config와 artifact를 복구할 수 있다.
+- Checkpoint는 model-only safetensors이므로 optimizer/scheduler state migration이나 model key migration이 필요 없다.
+- 기존 checkpoint, log, artifact 파일은 수정하거나 덮어쓰지 않는다.
+- Step 전환 때문에 numerical regression이 발생해도 model, Green reconstruction, projection, loss 또는 optimizer implementation을 되돌리지 않는다.
+
+## Confidence
+
+- 구현 계획 확신도: **0.96**.
+- Equal-step 실험에서 LR 및 validation opportunity confound를 제거할 확신도: **0.99**.
+- 규칙 모호성은 사용자 선택으로 해소되었다.
+- 남은 불확실성은 정보 부족에 해당한다. 특히 GreenNet full-dataset validation을 24 step마다 수행할 때의 wall-clock overhead는 실제 dataset 크기와 hardware에 따라 측정해야 한다.
 
 ## Executable `/goal` Draft
 
@@ -109,41 +185,50 @@ coupling:loader_train
 /goal
 
 `/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/PLAN.md`의
-"Explicit Global Training Seed 구현 계획"을 기준 문서로 참고하여 GreenNet과
-CouplingNet의 명시적 training seed 및 deterministic reproducibility integration을
-끝까지 구현한다.
+"Cumulative Optimizer-Step Scheduler and Fixed-Step Validation Plan"을
+기준 문서로 참고하여 optimizer-step scheduler와 fixed-step validation
+integration을 끝까지 구현한다.
 
 완료는 다음 조건으로 검증한다.
 
-- `training.seed`와 `coupling_training.seed`가 독립적인 base seed로 동작할 것,
-- 활성 training stage에서 seed가 누락되면 fail fast할 것,
-- source-generation seed와 training seed의 의미가 분리되어 유지될 것,
-- 같은 seed에서 model initialization, DataLoader order 및 one-step update가
-  반복 실행 간 일치할 것,
-- 다른 seed에서는 initialization과 shuffle order가 달라질 것,
-- GreenNet 실행 여부가 CouplingNet initialization을 변경하지 않을 것,
-- training sample 수가 달라도 같은 seed의 model initialization이 유지될 것,
-- `product`와 `product_fuser`의 공통 parameter가 paired seed에서 동일할 것,
-- configurable strict deterministic mode와 CUDA fail-fast 동작이 구현될 것,
-- config_used, training log 및 artifact provenance에 base/resolved seed가 기록될 것,
-- 기존 model checkpoint tensor key와 safetensors 형식이 변경되지 않을 것,
-- indexed-GP source identity, optimizer, scheduler, LBFGS, projection,
-  reconstruction 및 loss semantics가 변경되지 않을 것,
+- GreenNet과 CouplingNet의 AdamW/SOAP first-stage scheduler가 cumulative
+  optimizer step마다 정확히 한 번 갱신될 것,
+- warmup_steps가 explicit step contract로 동작하고 기존 warmup_epochs는
+  steps_per_epoch를 이용한 compatibility fallback으로 동작할 것,
+- warmup_steps와 양수 warmup_epochs의 동시 지정은 fail fast할 것,
+- validation dataset을 사용하는 run은 positive validation_every_steps를
+  반드시 명시할 것,
+- 모든 논문용 실험 config가 validation_every_steps=24를 사용할 것,
+- validation이 global step의 24배수와 non-divisible final step에서 실행되고
+  final duplicate는 생성되지 않을 것,
+- train metric은 epoch aggregate, validation metric은 independent step event로
+  기록될 것,
+- best checkpoint는 step validation에서 갱신되고 periodic checkpoint는 기존
+  epoch cadence를 유지할 것,
+- SOAP의 first-step initialization call이 global optimizer step에 포함될 것,
+- K=1 tangent eta cap은 LR warmup step을 공유하고 K>=2 동작은 바뀌지 않을 것,
+- GreenNet LBFGS는 scheduler 없이 기존 epoch-level 동작을 유지할 것,
+- config_used, logs, CSV와 provenance에서 configured/resolved step contract를
+  구분해 추적할 수 있을 것,
+- model architecture, objective, checkpoint tensor key, projection,
+  reconstruction 및 dataset schema가 변경되지 않을 것,
 - focused tests와 전체 pytest, Ruff, mypy, git diff check가 통과할 것.
 
-수정 범위는 training config, reproducibility helper, Green/Coupling runner와
-DataLoader wiring, seed provenance, canonical configs, 관련 tests와 문서로 제한한다.
+수정 범위는 training config, shared step scheduler/validation policy,
+GreenNet/CouplingNet trainer wiring, tangent eta schedule, logging/provenance,
+artifact/log parsers, active experiment configs, tests와 문서로 제한한다.
 
-Model backbone, objective, projection, reconstruction, source-generation formula,
-geometry/sample NPZ schema, optimizer 수식 및 exact-resume 기능은 변경하지 않는다.
+Loss, optimizer 수식, model backbone, Green reconstruction, projection,
+geometry/sample NPZ schema, LBFGS algorithm과 periodic checkpoint cadence는
+변경하지 않는다. 실제 장기 numerical training은 실행하지 않는다.
 
-각 구현 단계 후 가장 작은 config/seed tests를 먼저 실행하고, Green/Coupling
-trainer integration tests를 거쳐 전체 regression suite를 실행한다.
+각 구현 단계 후 scheduler/config focused tests를 먼저 실행하고, 각 trainer와
+artifact/log parser tests를 거친 뒤 전체 regression suite를 실행한다.
 
-동일 software/hardware 환경에서도 deterministic execution을 유지할 수 없다면
-작업을 중단하고 다음을 보고한다.
+기존 model checkpoint compatibility 또는 first-stage/LBFGS 경계를 유지할 수
+없다면 작업을 중단하고 다음을 보고한다.
 
-1. nondeterministic한 정확한 operation과 실행 환경,
-2. 영향을 받는 GreenNet 또는 CouplingNet stage와 test,
-3. seed 기반 paired initialization/shuffle을 보존하는 가장 작은 fallback 전략.
+1. 정확히 충돌하는 schedule, validation, metric 또는 tensor contract,
+2. 영향을 받는 config, checkpoint, log, artifact와 trainer,
+3. model과 objective를 보존하는 가장 작은 rollback 또는 migration 전략.
 ```

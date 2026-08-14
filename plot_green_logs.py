@@ -17,7 +17,9 @@ LOG_Y_FLOOR = 1e-16
 
 
 def _parse_metric_tokens(text: str) -> Dict[str, float]:
-    return {m.group("key"): float(m.group("value")) for m in TOKEN_PATTERN.finditer(text)}
+    return {
+        m.group("key"): float(m.group("value")) for m in TOKEN_PATTERN.finditer(text)
+    }
 
 
 def parse_green_log(path: Path) -> Dict[str, List[float]]:
@@ -31,19 +33,75 @@ def parse_green_log(path: Path) -> Dict[str, List[float]]:
         rf"(?P<loss>{NUMBER_PATTERN})(?P<rest>.*)",
         re.IGNORECASE,
     )
+    pattern_step_train = re.compile(
+        rf"Epoch\s+(?P<epoch>\d+)\s+train\s+global_step=(?P<global_step>\d+):"
+        rf"(?P<rest>.*?\|\s*loss=(?P<loss>{NUMBER_PATTERN})(?P<metrics>.*))",
+        re.IGNORECASE,
+    )
+    pattern_step_validation = re.compile(
+        rf"(?:Complex\s+)?Green\s+validation\s+epoch=(?P<epoch>\d+)\s+"
+        rf"global_step=(?P<global_step>\d+).*?rel_sol=(?P<rel_sol>{NUMBER_PATTERN})",
+        re.IGNORECASE,
+    )
     entries: List[Dict[str, float]] = []
+    step_entries: Dict[int, Dict[str, float]] = {}
     last_adam = 0
 
     for line in path.read_text().splitlines():
+        step_validation = pattern_step_validation.search(line)
+        if step_validation:
+            global_step = int(step_validation.group("global_step"))
+            entry = step_entries.get(global_step)
+            if entry is None:
+                entry = {
+                    "epoch": global_step,
+                    "global_step": float(global_step),
+                    "loss": float("nan"),
+                    "train_rel_sol": float("nan"),
+                    "val_rel_sol": float("nan"),
+                    "rel_green": float("nan"),
+                }
+                entries.append(entry)
+                step_entries[global_step] = entry
+            entry["val_rel_sol"] = float(step_validation.group("rel_sol"))
+            last_adam = max(last_adam, global_step)
+            continue
+        step_train = pattern_step_train.search(line)
+        if step_train:
+            global_step = int(step_train.group("global_step"))
+            tokens = _parse_metric_tokens(step_train.group("metrics"))
+            entry = step_entries.get(global_step)
+            if entry is None:
+                entry = {
+                    "epoch": global_step,
+                    "global_step": float(global_step),
+                    "loss": float("nan"),
+                    "train_rel_sol": float("nan"),
+                    "val_rel_sol": float("nan"),
+                    "rel_green": float("nan"),
+                }
+                entries.append(entry)
+                step_entries[global_step] = entry
+            entry["loss"] = float(step_train.group("loss"))
+            entry["train_rel_sol"] = tokens.get(
+                "train_rel_sol",
+                tokens.get("rel_sol", float("nan")),
+            )
+            entry["rel_green"] = tokens.get("rel_green", float("nan"))
+            last_adam = max(last_adam, global_step)
+            continue
         m = pattern_epoch.search(line)
         if m:
             epoch = int(m.group("epoch"))
             last_adam = max(last_adam, epoch)
             tokens = _parse_metric_tokens(m.group("rest"))
-            train_rel_sol = tokens.get("train_rel_sol", tokens.get("rel_sol", float("nan")))
+            train_rel_sol = tokens.get(
+                "train_rel_sol", tokens.get("rel_sol", float("nan"))
+            )
             entries.append(
                 {
                     "epoch": epoch,
+                    "global_step": float("nan"),
                     "loss": float(m.group("loss")),
                     "train_rel_sol": train_rel_sol,
                     "val_rel_sol": tokens.get("val_rel_sol", float("nan")),
@@ -55,10 +113,13 @@ def parse_green_log(path: Path) -> Dict[str, List[float]]:
         if m2:
             epoch = last_adam + int(m2.group("epoch"))
             tokens = _parse_metric_tokens(m2.group("rest"))
-            train_rel_sol = tokens.get("train_rel_sol", tokens.get("rel_sol", float("nan")))
+            train_rel_sol = tokens.get(
+                "train_rel_sol", tokens.get("rel_sol", float("nan"))
+            )
             entries.append(
                 {
                     "epoch": epoch,
+                    "global_step": float("nan"),
                     "loss": float(m2.group("loss")),
                     "train_rel_sol": train_rel_sol,
                     "val_rel_sol": tokens.get("val_rel_sol", float("nan")),
@@ -69,6 +130,7 @@ def parse_green_log(path: Path) -> Dict[str, List[float]]:
     entries = sorted(entries, key=lambda e: e["epoch"])
     metrics: Dict[str, List[float]] = {
         "epoch": [],
+        "global_step": [],
         "loss": [],
         "train_rel_sol": [],
         "val_rel_sol": [],
@@ -76,6 +138,7 @@ def parse_green_log(path: Path) -> Dict[str, List[float]]:
     }
     for e in entries:
         metrics["epoch"].append(e["epoch"])
+        metrics["global_step"].append(e["global_step"])
         metrics["loss"].append(e["loss"])
         metrics["train_rel_sol"].append(e["train_rel_sol"])
         metrics["val_rel_sol"].append(e["val_rel_sol"])
@@ -181,7 +244,9 @@ def _add_last_annotation(
             mode="markers",
             marker=dict(color=color, size=7, symbol="circle-open", line=dict(width=2)),
             name=f"{marker_label} marker",
-            text=[f"{marker_label}<br>last {_format_annotation_value(last_value)}<br>epoch {last_epoch:g}"],
+            text=[
+                f"{marker_label}<br>last {_format_annotation_value(last_value)}<br>epoch {last_epoch:g}"
+            ],
             hovertemplate="%{text}<extra></extra>",
             showlegend=False,
         )
@@ -204,7 +269,14 @@ def _xaxis_config(
     series: List[tuple[str, Dict[str, List[float]]]],
     show_annotations: bool,
 ) -> dict[str, object]:
-    config: dict[str, object] = {"title": "Epoch"}
+    uses_global_step = any(
+        math.isfinite(step)
+        for _, metrics in series
+        for step in metrics.get("global_step", [])
+    )
+    config: dict[str, object] = {
+        "title": "Cumulative Optimizer Step" if uses_global_step else "Epoch"
+    }
     if not show_annotations:
         return config
 
@@ -274,7 +346,6 @@ def make_fig(
             )
     fig.update_layout(
         title=label,
-        xaxis_title="Epoch",
         yaxis_title=label,
         yaxis_type="log",
         xaxis=_xaxis_config(list(data_by_log.items()), show_annotations),
@@ -314,14 +385,25 @@ def save_fig(fig: go.Figure, base_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot GreenONet training metrics.")
-    parser.add_argument("--logs", type=Path, nargs="+", required=True, help="Paths to training.log files.")
+    parser.add_argument(
+        "--logs",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Paths to training.log files.",
+    )
     parser.add_argument(
         "--labels",
         type=str,
         nargs="*",
         help="Optional labels for each log (same order as --logs).",
     )
-    parser.add_argument("--outdir", type=Path, default=Path("plots_green"), help="Output directory for figures.")
+    parser.add_argument(
+        "--outdir",
+        type=Path,
+        default=Path("plots_green"),
+        help="Output directory for figures.",
+    )
     parser.add_argument(
         "--font-family",
         type=str,

@@ -10,6 +10,38 @@ import torch
 from greenonet.numerics import IntegrationRule
 
 
+def _validate_training_step_fields(
+    *,
+    field_prefix: str,
+    warmup_epochs: object,
+    warmup_steps: object,
+    validation_every_steps: object,
+) -> None:
+    if not isinstance(warmup_epochs, int) or isinstance(warmup_epochs, bool):
+        raise TypeError(f"{field_prefix}.warmup_epochs must be an integer.")
+    if warmup_epochs < 0:
+        raise ValueError(f"{field_prefix}.warmup_epochs must be non-negative.")
+    if warmup_steps is not None:
+        if not isinstance(warmup_steps, int) or isinstance(warmup_steps, bool):
+            raise TypeError(f"{field_prefix}.warmup_steps must be an integer or null.")
+        if warmup_steps < 0:
+            raise ValueError(f"{field_prefix}.warmup_steps must be non-negative.")
+        if warmup_epochs > 0:
+            raise ValueError(
+                f"{field_prefix}.warmup_steps and a positive warmup_epochs "
+                "cannot be configured together."
+            )
+    if validation_every_steps is not None:
+        if not isinstance(validation_every_steps, int) or isinstance(
+            validation_every_steps, bool
+        ):
+            raise TypeError(
+                f"{field_prefix}.validation_every_steps must be an integer or null."
+            )
+        if validation_every_steps <= 0:
+            raise ValueError(f"{field_prefix}.validation_every_steps must be positive.")
+
+
 @dataclass(frozen=True)
 class IndexedGpSourceConfig:
     """Fixed index-seeded GP source settings for complex CouplingNet."""
@@ -1621,6 +1653,8 @@ class CouplingTrainingConfig:
     losses: CouplingLossesConfig = field(default_factory=CouplingLossesConfig)
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
+    warmup_steps: int | None = None
+    validation_every_steps: int | None = None
     min_lr: float = 1e-6
     integration_rule: IntegrationRule = "simpson"
     compile: CompileConfig = field(default_factory=CompileConfig)
@@ -1659,6 +1693,12 @@ class CouplingTrainingConfig:
         from greenonet.reproducibility import validate_training_seed
 
         validate_training_seed(self.seed, field_name="coupling_training.seed")
+        _validate_training_step_fields(
+            field_prefix="coupling_training",
+            warmup_epochs=self.warmup_epochs,
+            warmup_steps=self.warmup_steps,
+            validation_every_steps=self.validation_every_steps,
+        )
         if not isinstance(self.deterministic_algorithms, bool):
             raise TypeError(
                 "coupling_training.deterministic_algorithms must be a boolean."
@@ -1964,6 +2004,8 @@ class TrainingConfig:
     compute_validation_rel_sol: bool = False
     use_lr_schedule: bool = False
     warmup_epochs: int = 0
+    warmup_steps: int | None = None
+    validation_every_steps: int | None = None
     min_lr: float = 1e-6
     optimizer: GreenOptimizerConfig | dict[str, Any] = field(
         default_factory=GreenOptimizerConfig
@@ -1983,6 +2025,12 @@ class TrainingConfig:
         from greenonet.reproducibility import validate_training_seed
 
         validate_training_seed(self.seed, field_name="training.seed")
+        _validate_training_step_fields(
+            field_prefix="training",
+            warmup_epochs=self.warmup_epochs,
+            warmup_steps=self.warmup_steps,
+            validation_every_steps=self.validation_every_steps,
+        )
         if not isinstance(self.deterministic_algorithms, bool):
             raise TypeError("training.deterministic_algorithms must be a boolean.")
         self.green_quadrature = GreenQuadratureConfig.from_raw(self.green_quadrature)

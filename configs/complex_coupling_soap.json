@@ -88,6 +88,7 @@
     "gradient_clip_max_norm": 1.0,
     "use_lr_schedule": true,
     "warmup_epochs": 10,
+    "validation_every_steps": 24,
     "min_lr": 1e-5,
     "optimizer": {
       "name": "soap",

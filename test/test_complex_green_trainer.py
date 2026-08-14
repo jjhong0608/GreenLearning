@@ -141,6 +141,8 @@ def test_complex_green_trainer_one_epoch_outputs_safe_metrics(tmp_path):
         (tmp_path / "work" / "green_optimizer_provenance.json").read_text()
     )
     assert provenance["optimizer"]["name"] == "adamw"
+    assert provenance["learning_rate_schedule"]["total_optimizer_steps"] == 1
+    assert provenance["validation_schedule"] == {"active": False}
     assert (tmp_path / "work" / "loss_curve.html").exists()
     assert (tmp_path / "work" / "rel_sol_curve.html").exists()
     assert (tmp_path / "work" / "rel_green_curve.html").exists()
@@ -326,6 +328,7 @@ def test_complex_green_trainer_lbfgs_logs_validation_and_rel_green(tmp_path):
             warmup_epochs=2,
             min_lr=1e-4,
             compute_validation_rel_sol=True,
+            validation_every_steps=1,
             integration_rule="trapezoid",
             compile=CompileConfig(enabled=False),
             lbfgs_epochs=1,
@@ -349,6 +352,8 @@ def test_complex_green_trainer_lbfgs_logs_validation_and_rel_green(tmp_path):
     rows = list(
         csv.DictReader((tmp_path / "work_lbfgs" / "green_training_metrics.csv").open())
     )
-    assert [row["phase"] for row in rows] == ["adamw", "lbfgs"]
+    assert [row["phase"] for row in rows] == ["adamw", "adamw", "lbfgs"]
+    assert [row["split"] for row in rows] == ["val", "train", "train"]
     assert float(rows[0]["learning_rate"]) == pytest.approx(1.0e-4)
+    assert float(rows[1]["learning_rate"]) == pytest.approx(1.0e-4)
     assert float(rows[-1]["learning_rate"]) == pytest.approx(1.0)

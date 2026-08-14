@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 from typing import Callable, List, cast
 
@@ -20,6 +22,7 @@ from greenonet.config import (
 from greenonet.logging_mixin import LoggingMixin
 from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
 from greenonet.numerics import integrate, line_operator_fd, uniform_spacing
+from greenonet.training_step_schedule import StepValidationSchedule
 from greenonet.visualizer import LossVisualizer
 from greenonet.io import (
     save_model_with_config,
@@ -105,6 +108,7 @@ class CouplingTrainer(LoggingMixin):
         self.green_kernel = green_kernel.to(self.device)  # (2, n, m, m)
         self.loss_history: List[float] = []
         self.stage_loss_history: dict[str, List[float]] = {}
+        self.metric_rows: list[dict[str, object]] = []
 
     def _integrate(
         self, green: torch.Tensor, values: torch.Tensor, x_axis: torch.Tensor
@@ -938,17 +942,129 @@ class CouplingTrainer(LoggingMixin):
             weight_decay=optimization_cfg.weight_decay,
         )
 
-    def _build_scheduler(
+    def _record_training_metrics(
         self,
-        optimization_cfg: CouplingTrainingConfig,
-        optimizer: optim.Optimizer,
-        total_epochs: int,
-    ) -> optim.lr_scheduler.LambdaLR | None:
-        schedule = CouplingLearningRateSchedule.from_config(
-            optimization_cfg,
-            total_epochs=total_epochs,
+        *,
+        epoch: int,
+        global_step: int,
+        step_in_epoch: int,
+        split: str,
+        metrics: dict[str, float],
+        validation_index: int | None = None,
+    ) -> None:
+        row: dict[str, object] = {
+            "epoch": epoch,
+            "global_step": global_step,
+            "step_in_epoch": step_in_epoch,
+            "split": split,
+            **metrics,
+        }
+        if validation_index is not None:
+            row["validation_index"] = validation_index
+        self.metric_rows.append(row)
+
+    def _write_training_metrics(self) -> None:
+        if not self.metric_rows:
+            return
+        fieldnames: list[str] = []
+        for row in self.metric_rows:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
+        path = self.work_dir / "coupling_training_metrics.csv"
+        with path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self.metric_rows)
+
+    def _log_learning_rate_schedule(
+        self,
+        schedule: CouplingLearningRateSchedule,
+    ) -> None:
+        self.logger.info(
+            "Coupling learning-rate schedule enabled=%s kind=%s base_lr=%.6e "
+            "min_lr=%.6e warmup_source=%s configured_warmup_epochs=%d "
+            "configured_warmup_steps=%d effective_warmup_steps=%d "
+            "steps_per_epoch=%d total_epochs=%d total_optimizer_steps=%d",
+            schedule.enabled,
+            schedule.kind,
+            schedule.base_learning_rate,
+            schedule.min_learning_rate,
+            schedule.warmup_source,
+            schedule.configured_warmup_epochs,
+            schedule.configured_warmup_steps,
+            schedule.effective_warmup_steps,
+            schedule.steps_per_epoch,
+            schedule.total_epochs,
+            schedule.total_optimizer_steps,
         )
-        return schedule.build(optimizer)
+
+    def _log_validation_schedule(
+        self,
+        schedule: StepValidationSchedule | None,
+    ) -> None:
+        if schedule is None:
+            self.logger.info("Coupling validation schedule active=false")
+            return
+        self.logger.info(
+            "Coupling validation schedule active=true frequency_unit=optimizer_step "
+            "every_steps=%d total_optimizer_steps=%d expected_events=%d "
+            "final_step_mandatory=true",
+            schedule.every_steps,
+            schedule.total_optimizer_steps,
+            schedule.expected_event_count,
+        )
+
+    def _write_schedule_provenance(
+        self,
+        *,
+        schedule: CouplingLearningRateSchedule,
+        validation_schedule: StepValidationSchedule | None,
+    ) -> None:
+        payload = {
+            "optimizer": {
+                "name": "adamw",
+                "implementation": "torch.optim.AdamW",
+                "checkpoint_policy": "model_only_no_optimizer_resume",
+            },
+            "learning_rate_schedule": schedule.as_dict(),
+            "validation_schedule": (
+                {"active": False}
+                if validation_schedule is None
+                else validation_schedule.as_dict()
+            ),
+        }
+        path = self.work_dir / "coupling_optimizer_provenance.json"
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+
+    def _log_step_metrics(
+        self,
+        *,
+        epoch: int,
+        global_step: int,
+        step_in_epoch: int,
+        split: str,
+        metrics: dict[str, float],
+    ) -> None:
+        self.logger.info(
+            "epoch %04d %s global_step=%d step_in_epoch=%d loss=%.6e "
+            "l2_cons=%.6e energy_cons=%.6e cross_cons=%.6e "
+            "balance_loss=%.6e symmetric_boundary_loss=%.6e "
+            "rel_flux=%.6e rel_sol=%.6e learning_rate=%.6e",
+            epoch,
+            split,
+            global_step,
+            step_in_epoch,
+            metrics["loss"],
+            metrics["loss_l2_consistency"],
+            metrics["loss_energy_consistency"],
+            metrics["loss_cross_consistency"],
+            metrics["loss_balance_loss"],
+            metrics["loss_symmetric_boundary_loss"],
+            metrics["rel_flux"],
+            metrics["rel_sol"],
+            metrics["learning_rate"],
+        )
 
     def _clip_gradients_if_enabled(
         self,
@@ -1028,15 +1144,41 @@ class CouplingTrainer(LoggingMixin):
         )
         optimization_cfg = self._optimization_config()
         optimizer = self._build_optimizer(optimization_cfg)
-        scheduler = self._build_scheduler(optimization_cfg, optimizer, epochs)
+        steps_per_epoch = len(train_loader)
+        if steps_per_epoch < 1:
+            raise ValueError("CouplingNet training loader must not be empty.")
+        schedule_config = CouplingLearningRateSchedule.from_config(
+            optimization_cfg,
+            steps_per_epoch=steps_per_epoch,
+        )
+        scheduler = schedule_config.build(optimizer)
+        validation_schedule = (
+            None
+            if val_loader is None
+            else StepValidationSchedule.for_validation(
+                validation_every_steps=optimization_cfg.validation_every_steps,
+                total_optimizer_steps=schedule_config.total_optimizer_steps,
+                field_prefix="coupling_training",
+            )
+        )
+        self._log_learning_rate_schedule(schedule_config)
+        self._log_validation_schedule(validation_schedule)
+        self._write_schedule_provenance(
+            schedule=schedule_config,
+            validation_schedule=validation_schedule,
+        )
         phase_history: List[float] = []
         best_rel_sol = float("inf")
+        global_step = 0
+        validation_index = 0
 
         for epoch in range(1, epochs + 1):
             epoch_losses: List[float] = []
             accum = self._metric_accumulator(0.0)
             batch_count = 0
-            for batch in train_loader:
+            first_learning_rate: float | None = None
+            last_learning_rate: float | None = None
+            for step_in_epoch, batch in enumerate(train_loader, start=1):
                 (
                     (
                         coords,
@@ -1053,6 +1195,10 @@ class CouplingTrainer(LoggingMixin):
                     boundary_batch,
                 ) = split_coupling_batch(tuple(batch))
                 del ap
+                learning_rate = float(optimizer.param_groups[0]["lr"])
+                if first_learning_rate is None:
+                    first_learning_rate = learning_rate
+                last_learning_rate = learning_rate
                 optimizer.zero_grad()
                 loss, metrics = self._step_loss(
                     coords,
@@ -1069,49 +1215,87 @@ class CouplingTrainer(LoggingMixin):
                 loss.backward()  # type: ignore[no-untyped-call]
                 self._clip_gradients_if_enabled(optimization_cfg)
                 optimizer.step()
+                global_step += 1
+                if scheduler is not None:
+                    scheduler.step()
                 epoch_losses.append(loss.detach().item())
                 for key in accum:
                     accum[key] += metrics.get(key, 0.0)
                 batch_count += 1
+                if validation_schedule is not None and validation_schedule.is_due(
+                    global_step
+                ):
+                    if val_loader is None:
+                        raise RuntimeError(
+                            "Validation schedule has no validation loader."
+                        )
+                    validation_index += 1
+                    val_metrics = self._evaluate_loader(val_loader)
+                    val_metrics["learning_rate"] = learning_rate
+                    self._record_training_metrics(
+                        epoch=epoch,
+                        global_step=global_step,
+                        step_in_epoch=step_in_epoch,
+                        split="val",
+                        metrics=val_metrics,
+                        validation_index=validation_index,
+                    )
+                    self._log_step_metrics(
+                        epoch=epoch,
+                        global_step=global_step,
+                        step_in_epoch=step_in_epoch,
+                        split="val",
+                        metrics=val_metrics,
+                    )
+                    best_rel_sol = self._maybe_save_best_rel_sol_checkpoint(
+                        val_metrics,
+                        best_rel_sol,
+                    )
 
             mean_loss = float(sum(epoch_losses) / max(len(epoch_losses), 1))
             train_metrics = {
                 key: value / max(batch_count, 1) for key, value in accum.items()
             }
+            if first_learning_rate is None or last_learning_rate is None:
+                raise ValueError("CouplingNet training loader must not be empty.")
             train_metrics["smooth_mask_diff_power"] = (
                 self._smooth_mask_diff_power_metric()
             )
+            train_metrics["learning_rate"] = last_learning_rate
+            train_metrics["learning_rate_first"] = first_learning_rate
+            train_metrics["learning_rate_last"] = last_learning_rate
             self.loss_history.append(mean_loss)
             phase_history.append(mean_loss)
-
-            val_metrics = self._metric_accumulator(float("nan"))
-            if val_loader is not None:
-                val_metrics = self._evaluate_loader(val_loader)
-                best_rel_sol = self._maybe_save_best_rel_sol_checkpoint(
-                    val_metrics, best_rel_sol
-                )
+            self._record_training_metrics(
+                epoch=epoch,
+                global_step=global_step,
+                step_in_epoch=steps_per_epoch,
+                split="train",
+                metrics=train_metrics,
+            )
 
             if epoch % self.config.log_interval == 0:
-                current_lr = optimizer.param_groups[0]["lr"]
                 l2_cfg = self.config.losses.l2_consistency
                 energy_cfg = self.config.losses.energy_consistency
                 cross_cfg = self.config.losses.cross_consistency
                 balance_cfg = self.config.losses.balance_loss
                 symmetric_boundary_cfg = self.config.losses.symmetric_boundary_loss
                 log_message = (
-                    "epoch %s | train loss=%.4e l2_cons=%.4e energy_cons=%.4e "
+                    "epoch %s train global_step=%d step_in_epoch=%d | "
+                    "loss=%.4e l2_cons=%.4e energy_cons=%.4e "
                     "cross_cons=%.4e balance_loss=%.4e symmetric_boundary_loss=%.4e "
                     "rel_flux=%.4e rel_sol=%.4e | "
                     "w_l2=%.4e on_l2=%s w_energy=%.4e on_energy=%s "
                     "w_cross=%.4e on_cross=%s w_balance_loss=%.4e "
                     "on_balance_loss=%s w_symmetric_boundary_loss=%.4e "
-                    "on_symmetric_boundary_loss=%s | lr=%.4e "
-                    "smooth_mask_diff_power=%.4e | val loss=%.4e l2_cons=%.4e "
-                    "energy_cons=%.4e cross_cons=%.4e balance_loss=%.4e "
-                    "symmetric_boundary_loss=%.4e rel_flux=%.4e rel_sol=%.4e"
+                    "on_symmetric_boundary_loss=%s | learning_rate=%.4e "
+                    "learning_rate_first=%.4e learning_rate_last=%.4e "
+                    "smooth_mask_diff_power=%.4e"
                 )
                 log_args: tuple[object, ...] = (
                     epoch,
+                    global_step,
+                    steps_per_epoch,
                     train_metrics["loss"],
                     train_metrics["loss_l2_consistency"],
                     train_metrics["loss_energy_consistency"],
@@ -1130,38 +1314,26 @@ class CouplingTrainer(LoggingMixin):
                     balance_cfg.enabled,
                     symmetric_boundary_cfg.weight,
                     symmetric_boundary_cfg.enabled,
-                    current_lr,
+                    last_learning_rate,
+                    first_learning_rate,
+                    last_learning_rate,
                     train_metrics["smooth_mask_diff_power"],
-                    val_metrics["loss"],
-                    val_metrics["loss_l2_consistency"],
-                    val_metrics["loss_energy_consistency"],
-                    val_metrics["loss_cross_consistency"],
-                    val_metrics["loss_balance_loss"],
-                    val_metrics["loss_symmetric_boundary_loss"],
-                    val_metrics["rel_flux"],
-                    val_metrics["rel_sol"],
                 )
                 if self._source_lift_enabled():
                     log_message = (
                         log_message + " | source_lift train_corr=%.4e "
-                        "train_rel_diff=%.4e train_g_rms=%.4e val_corr=%.4e "
-                        "val_rel_diff=%.4e val_g_rms=%.4e"
+                        "train_rel_diff=%.4e train_g_rms=%.4e"
                     )
                     log_args = log_args + (
                         train_metrics["source_lift_corr_g_f"],
                         train_metrics["source_lift_rel_diff_g_f"],
                         train_metrics["source_lift_g_rms"],
-                        val_metrics["source_lift_corr_g_f"],
-                        val_metrics["source_lift_rel_diff_g_f"],
-                        val_metrics["source_lift_g_rms"],
                     )
                 self.logger.info(
                     log_message,
                     *log_args,
                 )
             self._maybe_save_periodic_checkpoint(epoch)
-            if scheduler is not None:
-                scheduler.step()
 
         adam_model_path = self.work_dir / "coupling_model_adam.safetensors"
         self._save_checkpoint(adam_model_path)
@@ -1177,6 +1349,7 @@ class CouplingTrainer(LoggingMixin):
 
         final_path = self.work_dir / "coupling_model.safetensors"
         self._save_checkpoint(final_path)
+        self._write_training_metrics()
 
     def train(
         self,
@@ -1185,6 +1358,7 @@ class CouplingTrainer(LoggingMixin):
     ) -> None:
         self.loss_history = []
         self.stage_loss_history = {}
+        self.metric_rows = []
         epochs = self.config.epochs
         self._run_training_phase(
             train_dataset=train_dataset,

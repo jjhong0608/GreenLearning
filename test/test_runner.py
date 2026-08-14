@@ -352,7 +352,10 @@ class TestRunGreenONet:
             validation_scale_length=(0.10, 0.20),
             use_operator_learning=True,
             deterministic=True,
-            training_cfg=TrainingConfig(compute_validation_rel_sol=True),
+            training_cfg=TrainingConfig(
+                compute_validation_rel_sol=True,
+                validation_every_steps=1,
+            ),
         )
 
         assert sampler_calls == [
@@ -436,7 +439,10 @@ class TestRunGreenONet:
             deterministic=True,
             sampler_mode="forward",
             validation_sampler_mode="backward",
-            training_cfg=TrainingConfig(compute_validation_rel_sol=True),
+            training_cfg=TrainingConfig(
+                compute_validation_rel_sol=True,
+                validation_every_steps=1,
+            ),
         )
 
         assert calls["forward"] == 1

@@ -42,6 +42,7 @@ from greenonet.numerics import IntegrationRule, integrate
 from greenonet.optimizer_support import OptimizerStepProfiler
 from greenonet.plotly_io import save_plotly_figure
 from greenonet.reproducibility import TrainingSeedContext, seed_dataloader_worker
+from greenonet.training_step_schedule import StepValidationSchedule
 from greenonet.visualizer import LossVisualizer
 
 
@@ -687,9 +688,21 @@ class ComplexGreenTrainer(LoggingMixin):
             shuffle=True,
             generator=self._train_loader_generator,
         )
+        steps_per_epoch = len(loader)
+        if steps_per_epoch < 1:
+            raise ValueError("Complex GreenNet training loader must not be empty.")
         schedule_config = GreenLearningRateSchedule.from_config(
             self.config,
-            total_epochs=self.config.epochs,
+            steps_per_epoch=steps_per_epoch,
+        )
+        validation_schedule = (
+            StepValidationSchedule.for_validation(
+                validation_every_steps=self.config.validation_every_steps,
+                total_optimizer_steps=schedule_config.total_optimizer_steps,
+                field_prefix="training",
+            )
+            if self.config.compute_validation_rel_sol
+            else None
         )
         optimizer = self.optimizer_factory.build(self.model.parameters())
         optimizer_profiler = OptimizerStepProfiler(
@@ -698,15 +711,25 @@ class ComplexGreenTrainer(LoggingMixin):
             device=self.device,
         )
         scheduler = schedule_config.build(optimizer)
-        self.training_recorder.log_startup(schedule_config)
-        self.training_recorder.write_provenance(schedule_config)
+        self.training_recorder.log_startup(schedule_config, validation_schedule)
+        self.training_recorder.write_provenance(
+            schedule_config,
+            validation_schedule,
+        )
+        global_step = 0
+        validation_index = 0
 
         for epoch in range(1, self.config.epochs + 1):
-            learning_rate = float(optimizer.param_groups[0]["lr"])
             epoch_losses: List[float] = []
             last_batch: ComplexGreenBatch | None = None
+            first_learning_rate: float | None = None
+            last_learning_rate: float | None = None
             optimizer_profiler.begin_epoch()
-            for batch in loader:
+            for step_in_epoch, batch in enumerate(loader, start=1):
+                learning_rate = float(optimizer.param_groups[0]["lr"])
+                if first_learning_rate is None:
+                    first_learning_rate = learning_rate
+                last_learning_rate = learning_rate
                 batch = batch.to(self.device)
                 optimizer.zero_grad()
                 prediction = None
@@ -725,26 +748,55 @@ class ComplexGreenTrainer(LoggingMixin):
                 )
                 cast(Any, loss).backward()
                 optimizer_profiler.step()
+                global_step += 1
+                if scheduler is not None:
+                    scheduler.step()
                 epoch_losses.append(float(loss.detach().item()))
                 last_batch = batch
+                if validation_schedule is not None and validation_schedule.is_due(
+                    global_step
+                ):
+                    assert validation_dataset is not None
+                    validation_index += 1
+                    val_rel_sol = self._dataset_rel_sol(validation_dataset)
+                    self.val_rel_sol_history.append(val_rel_sol)
+                    self.training_recorder.record(
+                        phase=self.optimizer_provenance.name,
+                        epoch=epoch,
+                        split="val",
+                        global_step=global_step,
+                        step_in_epoch=step_in_epoch,
+                        validation_index=validation_index,
+                        learning_rate=learning_rate,
+                        loss=float("nan"),
+                        rel_sol=val_rel_sol,
+                    )
+                    self.logger.info(
+                        "Complex Green validation epoch=%d global_step=%d "
+                        "step_in_epoch=%d validation_index=%d "
+                        "learning_rate=%.6e rel_sol=%.6e",
+                        epoch,
+                        global_step,
+                        step_in_epoch,
+                        validation_index,
+                        learning_rate,
+                        val_rel_sol,
+                    )
 
             mean_loss = float(sum(epoch_losses) / max(len(epoch_losses), 1))
             self.loss_history.append(mean_loss)
             optimizer_metrics = optimizer_profiler.finish_epoch()
             epoch_rel_sol: float | None = None
-            epoch_val_rel_sol: float | None = None
             epoch_rel_green: float | None = None
+            if first_learning_rate is None or last_learning_rate is None:
+                raise ValueError("Complex GreenNet training loader must not be empty.")
 
             if epoch % self.config.log_interval == 0 and last_batch is not None:
                 with torch.no_grad():
                     if self.config.compute_validation_rel_sol:
                         train_rel_sol = self._dataset_rel_sol(dataset)
-                        assert validation_dataset is not None
-                        val_rel_sol = self._dataset_rel_sol(validation_dataset)
                         self.rel_sol_history.append(train_rel_sol)
-                        self.val_rel_sol_history.append(val_rel_sol)
                         epoch_rel_sol = train_rel_sol
-                        epoch_val_rel_sol = val_rel_sol
                     else:
                         pred_eval = None
                         if not self._green_quadrature_enabled():
@@ -774,13 +826,16 @@ class ComplexGreenTrainer(LoggingMixin):
                         "nan" if rel_green_mean is None else f"{rel_green_mean:.4e}"
                     )
                     self.logger.info(
-                        "Epoch %s: lr=%.6e | loss=%.4e | train_rel_sol=%.4e | "
-                        "val_rel_sol=%.4e | rel_green=%s%s",
+                        "Epoch %s train global_step=%d: learning_rate=%.6e "
+                        "learning_rate_first=%.6e learning_rate_last=%.6e | "
+                        "loss=%.4e | train_rel_sol=%.4e | rel_green=%s%s",
                         epoch,
-                        learning_rate,
+                        global_step,
+                        last_learning_rate,
+                        first_learning_rate,
+                        last_learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
-                        self.val_rel_sol_history[-1],
                         rel_green_text,
                         self._optimizer_metrics_log_suffix(optimizer_metrics),
                     )
@@ -789,9 +844,14 @@ class ComplexGreenTrainer(LoggingMixin):
                         "nan" if rel_green_mean is None else f"{rel_green_mean:.4e}"
                     )
                     self.logger.info(
-                        "Epoch %s: lr=%.6e | loss=%.4e | rel_sol=%.4e | rel_green=%s%s",
+                        "Epoch %s train global_step=%d: learning_rate=%.6e "
+                        "learning_rate_first=%.6e learning_rate_last=%.6e | "
+                        "loss=%.4e | rel_sol=%.4e | rel_green=%s%s",
                         epoch,
-                        learning_rate,
+                        global_step,
+                        last_learning_rate,
+                        first_learning_rate,
+                        last_learning_rate,
                         mean_loss,
                         self.rel_sol_history[-1],
                         rel_green_text,
@@ -799,24 +859,31 @@ class ComplexGreenTrainer(LoggingMixin):
                     )
             elif epoch % self.config.log_interval == 0:
                 self.logger.info(
-                    "Epoch %s: lr=%.6e | loss=%.4e%s",
+                    "Epoch %s train global_step=%d: learning_rate=%.6e "
+                    "learning_rate_first=%.6e learning_rate_last=%.6e | "
+                    "loss=%.4e%s",
                     epoch,
-                    learning_rate,
+                    global_step,
+                    last_learning_rate,
+                    first_learning_rate,
+                    last_learning_rate,
                     mean_loss,
                     self._optimizer_metrics_log_suffix(optimizer_metrics),
                 )
             self.training_recorder.record(
                 phase=self.optimizer_provenance.name,
                 epoch=epoch,
-                learning_rate=learning_rate,
+                split="train",
+                global_step=global_step,
+                step_in_epoch=steps_per_epoch,
+                learning_rate=last_learning_rate,
+                learning_rate_first=first_learning_rate,
+                learning_rate_last=last_learning_rate,
                 loss=mean_loss,
                 rel_sol=epoch_rel_sol,
-                val_rel_sol=epoch_val_rel_sol,
                 rel_green=epoch_rel_green,
                 telemetry=optimizer_metrics,
             )
-            if scheduler is not None:
-                scheduler.step()
 
         self._save_model_checkpoint("model_pre_lbfgs.safetensors")
         if self.config.lbfgs_max_iter > 0 and self.config.lbfgs_epochs > 0:

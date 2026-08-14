@@ -24,10 +24,7 @@ from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geo
 from greenonet.complex_green_response_projection import (
     ColumnDiagonalGreenResponseContext,
 )
-from greenonet.complex_tangent_projection import (
-    SymmetricTangentEtaCapSchedule,
-    SymmetricTangentGreenResponseContext,
-)
+from greenonet.complex_tangent_projection import SymmetricTangentGreenResponseContext
 from greenonet.complex_visualization_mesh import (
     ComplexVisualizationMesh,
     load_complex_visualization_mesh,
@@ -2963,16 +2960,9 @@ class ComplexCouplingArtifactExporter(
             projection.symmetric_tangent_green_response
         )
         subspace = config.subspace_dimension >= 2
-        eta_schedule: SymmetricTangentEtaCapSchedule | None = None
-        if not subspace:
-            learning_rate_schedule = CouplingLearningRateSchedule.from_config(
-                training_config,
-                total_epochs=training_config.epochs,
-            )
-            eta_schedule = SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
-                config=config,
-                learning_rate_schedule=learning_rate_schedule,
-            )
+        configured_lr_schedule = CouplingLearningRateSchedule.configured_config(
+            training_config
+        )
         adaptive = config.eta_strategy == "closed_loop_exact_line_search"
         if subspace:
             update = (
@@ -3012,15 +3002,33 @@ class ComplexCouplingArtifactExporter(
                 "artifact_policy": "not_applied",
             }
         else:
-            if eta_schedule is None:
-                raise RuntimeError("K=1 tangent eta schedule was not initialized.")
+            eta_schedule_enabled = bool(adaptive and configured_lr_schedule["enabled"])
+            configured_warmup_steps = configured_lr_schedule["configured_warmup_steps"]
+            raw_warmup_epochs = configured_lr_schedule["configured_warmup_epochs"]
+            if not isinstance(raw_warmup_epochs, int) or isinstance(
+                raw_warmup_epochs, bool
+            ):
+                raise RuntimeError(
+                    "Configured CouplingNet warmup epochs must be an integer."
+                )
+            configured_warmup_epochs = raw_warmup_epochs
+            has_configured_warmup = (
+                isinstance(configured_warmup_steps, int) and configured_warmup_steps > 0
+            ) or configured_warmup_epochs > 0
             eta_schedule_summary = {
                 "applicable": True,
-                "kind": eta_schedule.kind,
-                "final_eta": eta_schedule.final_eta,
-                "shared_with_lr_warmup": eta_schedule.enabled,
-                "configured_warmup_epochs": eta_schedule.configured_warmup_epochs,
-                "effective_warmup_epochs": eta_schedule.effective_warmup_epochs,
+                "kind": (
+                    "closed_loop_configured_half_cosine_warmup_hold"
+                    if eta_schedule_enabled and has_configured_warmup
+                    else ("closed_loop_final_cap" if adaptive else "fixed_eta")
+                ),
+                "final_eta": config.eta,
+                "shared_with_lr_warmup": eta_schedule_enabled,
+                "warmup_source": configured_lr_schedule["warmup_source"],
+                "configured_warmup_epochs": configured_warmup_epochs,
+                "configured_warmup_steps": configured_warmup_steps,
+                "effective_warmup_steps": None,
+                "resolution": "runtime_after_dataloader",
                 "post_warmup_behavior": "hold_final_eta",
                 "training_policy": "scheduled_cap",
                 "validation_policy": "final_cap",

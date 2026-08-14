@@ -18,6 +18,7 @@ from greenonet.optimizer_support import (
     build_adamw_or_soap,
     build_optimizer_provenance,
 )
+from greenonet.training_step_schedule import StepValidationSchedule
 
 
 class GreenOptimizerFactory:
@@ -93,7 +94,11 @@ class GreenTrainingRecorder:
         self.provenance = provenance
         self.rows: list[dict[str, float | int | str]] = []
 
-    def log_startup(self, schedule: GreenLearningRateSchedule) -> None:
+    def log_startup(
+        self,
+        schedule: GreenLearningRateSchedule,
+        validation_schedule: StepValidationSchedule | None,
+    ) -> None:
         provenance = self.provenance
         self.logger.info(
             "Green optimizer name=%s implementation=%s base_lr=%.6e "
@@ -118,22 +123,48 @@ class GreenTrainingRecorder:
             )
         self.logger.info(
             "Green learning-rate schedule enabled=%s kind=%s base_lr=%.6e "
-            "min_lr=%.6e configured_warmup_epochs=%d "
-            "effective_warmup_epochs=%d total_epochs=%d "
+            "min_lr=%.6e warmup_source=%s configured_warmup_epochs=%d "
+            "configured_warmup_steps=%d effective_warmup_steps=%d "
+            "steps_per_epoch=%d total_epochs=%d total_optimizer_steps=%d "
             "applies_to=first_stage_only",
             schedule.enabled,
             schedule.kind,
             schedule.base_learning_rate,
             schedule.min_learning_rate,
+            schedule.warmup_source,
             schedule.configured_warmup_epochs,
-            schedule.effective_warmup_epochs,
+            schedule.configured_warmup_steps,
+            schedule.effective_warmup_steps,
+            schedule.steps_per_epoch,
             schedule.total_epochs,
+            schedule.total_optimizer_steps,
         )
+        if validation_schedule is None:
+            self.logger.info("Green validation schedule active=false")
+        else:
+            self.logger.info(
+                "Green validation schedule active=true "
+                "frequency_unit=optimizer_step every_steps=%d "
+                "total_optimizer_steps=%d expected_events=%d "
+                "final_step_mandatory=true",
+                validation_schedule.every_steps,
+                validation_schedule.total_optimizer_steps,
+                validation_schedule.expected_event_count,
+            )
 
-    def write_provenance(self, schedule: GreenLearningRateSchedule) -> None:
+    def write_provenance(
+        self,
+        schedule: GreenLearningRateSchedule,
+        validation_schedule: StepValidationSchedule | None,
+    ) -> None:
         payload = {
             "optimizer": self.provenance.as_dict(),
             "learning_rate_schedule": schedule.as_dict(),
+            "validation_schedule": (
+                {"active": False}
+                if validation_schedule is None
+                else validation_schedule.as_dict()
+            ),
             "lbfgs_scheduler": "disabled",
         }
         path = self.work_dir / "green_optimizer_provenance.json"
@@ -146,6 +177,12 @@ class GreenTrainingRecorder:
         epoch: int,
         learning_rate: float,
         loss: float,
+        split: str = "train",
+        global_step: int | None = None,
+        step_in_epoch: int | None = None,
+        validation_index: int | None = None,
+        learning_rate_first: float | None = None,
+        learning_rate_last: float | None = None,
         rel_sol: float | None = None,
         val_rel_sol: float | None = None,
         rel_green: float | None = None,
@@ -154,9 +191,20 @@ class GreenTrainingRecorder:
         row: dict[str, float | int | str] = {
             "phase": phase,
             "epoch": epoch,
+            "split": split,
             "learning_rate": learning_rate,
             "loss": loss,
         }
+        if global_step is not None:
+            row["global_step"] = global_step
+        if step_in_epoch is not None:
+            row["step_in_epoch"] = step_in_epoch
+        if validation_index is not None:
+            row["validation_index"] = validation_index
+        if learning_rate_first is not None:
+            row["learning_rate_first"] = learning_rate_first
+        if learning_rate_last is not None:
+            row["learning_rate_last"] = learning_rate_last
         if rel_sol is not None:
             row["rel_sol"] = rel_sol
         if val_rel_sol is not None:

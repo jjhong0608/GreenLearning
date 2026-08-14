@@ -170,10 +170,7 @@ def load_green_artifact_configs(
         raise TypeError("training.compile must be an object.")
     training_cfg = TrainingConfig(compile=compile_cfg, **training_kwargs)
     GreenOptimizerFactory(training_cfg)
-    GreenLearningRateSchedule.from_config(
-        training_cfg,
-        total_epochs=training_cfg.epochs,
-    )
+    GreenLearningRateSchedule.validate_config(training_cfg)
 
     return dataset_cfg, model_cfg, training_cfg, raw_payload
 
@@ -740,13 +737,11 @@ class GreenArtifactExporter:
         training_cfg: TrainingConfig,
     ) -> dict[str, object]:
         factory = GreenOptimizerFactory(training_cfg)
-        schedule = GreenLearningRateSchedule.from_config(
-            training_cfg,
-            total_epochs=training_cfg.epochs,
-        )
         return {
             "green_optimizer_provenance": factory.provenance().as_dict(),
-            "green_learning_rate_schedule": schedule.as_dict(),
+            "green_learning_rate_schedule": (
+                GreenLearningRateSchedule.configured_config(training_cfg)
+            ),
             "optimizer_state_resume": "not_supported_model_only_checkpoint",
             "lbfgs_scheduler": "disabled",
         }

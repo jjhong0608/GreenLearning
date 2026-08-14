@@ -202,6 +202,9 @@ def test_unit_square_green_trainer_soap_schedule_and_metrics(tmp_path):
     provenance = json.loads((tmp_path / "green_optimizer_provenance.json").read_text())
     assert provenance["optimizer"]["name"] == "soap"
     assert provenance["learning_rate_schedule"]["enabled"] is True
+    assert provenance["learning_rate_schedule"]["steps_per_epoch"] == 1
+    assert provenance["learning_rate_schedule"]["total_optimizer_steps"] == 3
+    assert provenance["validation_schedule"] == {"active": False}
     assert provenance["lbfgs_scheduler"] == "disabled"
     expected_model_keys = set(model_state_dict_for_save(model))
     for checkpoint_name in ("model_pre_lbfgs.safetensors", "model.safetensors"):
@@ -212,4 +215,4 @@ def test_unit_square_green_trainer_soap_schedule_and_metrics(tmp_path):
     training_log = (tmp_path / "training.log").read_text()
     assert "Green optimizer name=soap" in training_log
     assert "Green learning-rate schedule enabled=True" in training_log
-    assert "lr=5.000000e-04" in training_log
+    assert "learning_rate=5.000000e-04" in training_log
