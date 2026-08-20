@@ -1,0 +1,148 @@
+{
+  "dataset": {
+    "geometry_mode": "complex",
+    "geometry_path": "data/geometry/disk_radius_05_1_128.npz",
+    "test_path": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/test",
+    "coefficient_functions_path": "numerical_examples/disk/coefficient.py",
+    "coupling_source": {
+      "mode": "indexed_gp",
+      "indexed_gp": {
+        "num_train": 4800,
+        "num_valid": 300,
+        "seed": 0,
+        "lengthscale": 0.15,
+        "amplitude": 1.0,
+        "mean": 0.0
+      }
+    },
+    "reference_diagnostics": {
+      "training": false,
+      "validation": false
+    },
+    "dtype": "float64"
+  },
+  "terminal": {
+    "width": 150
+  },
+  "coupling_model": {
+    "branch_input_dim": 129,
+    "hidden_dim": 256,
+    "depth": 4,
+    "activation": "rational",
+    "use_bias": true,
+    "dropout": 0.0,
+    "dtype": "float64",
+    "coefficient_terms": {
+      "diffusion": true,
+      "convection": false,
+      "reaction": false
+    },
+    "balance_projection": {
+      "enabled": true,
+      "mode": "symmetric_tangent_green_response",
+      "symmetric_tangent_green_response": {
+        "subspace_dimension": 4,
+        "eta": 0.015,
+        "eta_strategy": "closed_loop_exact_line_search",
+        "line_search_relative_eps": 1e-12,
+        "relative_lambda": 0.01,
+        "denominator_relative_eps": 1e-12
+      }
+    },
+    "pre_projection_fusion": {
+      "enabled": false,
+      "mode": "absolute",
+      "hidden_dim": 16,
+      "depth": 1,
+      "eps": 1e-12,
+      "final_layer_init_scale": 0.0
+    },
+    "branch_fusion": {
+      "mode": "product_fuser"
+    },
+    "axis_1d_trunk": {
+      "enabled": true,
+      "num_frequencies": 4,
+      "max_frequency": 8.0,
+      "transverse_trunk": {
+        "enabled": true,
+        "fusion": "product_fuser",
+        "length_context": true
+      }
+    },
+    "cross_axis_reconstruction": {
+      "enabled": true,
+      "mode": "local_weak_residual_reliability",
+      "gamma": 0.5,
+      "smoothing_steps": 2,
+      "smoothing_relaxation": 0.5,
+      "relative_floor": 0.1,
+      "eps": 1e-12
+    }
+  },
+  "coupling_training": {
+    "learning_rate": 0.002,
+    "epochs": 100,
+    "batch_size": 200,
+    "weight_decay": 0.05,
+    "log_interval": 1,
+    "device": "cpu",
+    "seed": 0,
+    "deterministic_algorithms": true,
+    "gradient_clip_max_norm": 1.0,
+    "use_lr_schedule": true,
+    "warmup_steps": 240,
+    "validation_every_steps": 24,
+    "min_lr": 1e-5,
+    "canonical_energy": {
+      "boundary_weight": 0.0
+    },
+    "post_line_search_stationarity": {
+      "enabled": true,
+      "weight": 0.01,
+      "eps": 1e-12
+    },
+    "response_trust": {
+      "enabled": true,
+      "weight": 0.1,
+      "trust_weight": 0.0,
+      "eps": 1e-12
+    },
+    "optimizer": {
+      "name": "soap",
+      "betas": [
+        0.95,
+        0.99
+      ],
+      "eps": 1e-8,
+      "profile_step_time": true,
+      "soap": {
+        "shampoo_beta": 0.95,
+        "precondition_frequency": 3,
+        "max_precondition_dim": 1024,
+        "merge_dims": false,
+        "precondition_1d": true,
+        "normalize_grads": false,
+        "correct_bias": true
+      }
+    },
+    "periodic_checkpoint": {
+      "enabled": true,
+      "every_epochs": 50
+    },
+    "compile": {
+      "enabled": true
+    },
+    "best_energy_checkpoint": {
+      "enabled": true
+    },
+    "best_physics_checkpoint": {
+      "enabled": true
+    }
+  },
+  "pipeline": {
+    "run_green": false,
+    "run_coupling": true,
+    "green_pretrained_path": "checkpoints/numerical_examples/disk/green/model.safetensors"
+  }
+}

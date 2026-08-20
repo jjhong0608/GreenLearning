@@ -90,6 +90,59 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   Queue는 각 child가 끝날 때까지 기다리고 run별 log file descriptor를 새로 열며,
   `_SUCCESS`가 있는 run만 재시작 시 skip한다. 실패 또는 non-empty incomplete work
   directory에서는 중단하여 서로 다른 run의 checkpoint/log가 섞이지 않게 한다.
+- Unit-square Poisson source-count study의 16개 run은 모두 완료되었고,
+  `artifacts_best_energy/metrics/per_sample_metrics.csv`의 공통 100-sample test set을
+  primary evidence로 사용한다. Seed 0-3 평균 `rel_sol`은 train source
+  `600/1200/2400/4800`에서 각각 `0.425477%/0.393118%/0.369595%/0.350500%`이고,
+  각 doubling에서 paired seed 4개 모두 개선되었다. `rel_flux`는 각각
+  `3.619216%/3.312076%/3.073374%/3.031958%`이다. 2400에서 4800으로 늘리면
+  `rel_sol`은 추가로 `5.166%`, optimized energy는 `6.684%` 감소하며,
+  seed-averaged test sample 100개 중 99개에서 `rel_sol`이 개선된다. 2400의
+  mean `rel_sol`은 4800 best보다 `5.448%` 높아서 분석의 5% saturation 기준을
+  통과하지 못한다. 따라서 후속 논문 수치 예제의 공통 source budget은
+  `num_train=4800`, `num_valid=300`, batch `200`, total optimizer step `2400`,
+  `warmup_steps=240`, `validation_every_steps=24`로 고정한다. Batch 200이면
+  4800 source의 epoch 수는 100이다. 재현 분석 CLI는
+  `cli/analyze_unit_square_training_size.py`이고 결과는
+  `checkpoints/numerical_examples/unit_square_poisson/training_size_analysis/`에
+  report/CSV/JSON/Plotly로 저장한다. Root `metrics/test_per_sample_metrics.csv`는
+  final-model diagnostic이며, primary 비교는 reference-free best-energy checkpoint
+  artifact를 사용한다.
+- 논문용 두 번째 수치 예제는 radius `0.5` Disk의 variable-diffusion equation으로
+  고정한다. Physical-coordinate coefficient는
+  `a(x,y)=1+0.5 sin(2 pi x) sin(4 pi y)`이고 `0.5 <= a <= 1.5`이며,
+  `b_x=b_y=c=0`이다. `x <-> y` 비대칭성과 서로 다른 x/y frequency를 의도적으로
+  사용한다. Experiment-local 정의는 `numerical_examples/disk/coefficient.py`이며,
+  기존 `coefficients/Sinusoidal_Diffusion_Only.py`와 수치적으로 동일하다. Disk
+  CouplingNet config는 experiment-local GreenNet checkpoint인
+  `checkpoints/numerical_examples/disk/green/model.safetensors`를 사용한다. Disk
+  geometry의 canonical path는 `data/geometry/disk_radius_05_1_128.npz`이며
+  GreenNet과 모든 Disk CouplingNet config가 이 경로를 공유한다.
+- Disk의 scientific ablation은 canonical energy를 항상 활성화한 상태에서
+  response trust와 source-normalized stationarity를 각각 on/off하는 `2 x 2`
+  objective matrix로 고정한다. 각 cell은 seed `0/1/2/3` 네 번을 실행하며 config는
+  `numerical_examples/disk/disk_{energy_only,energy_response_trust,energy_stationarity,energy_response_trust_stationarity}_seed{0,1,2,3}.json`이다.
+  Unit-square study에서 선택한 common protocol인 train/valid `4800/300`, batch
+  `200`, total optimizer step `2400`, `warmup_steps=240`,
+  `validation_every_steps=24`, `product_fuser`, K=4 tangent correction,
+  local weak-residual reconstruction, boundary weight `0`을 유지한다. Diffusion
+  coefficient branch만 활성화하고 indexed-GP seed와 CouplingNet seed를 같은 값으로
+  paired한다. Primary comparison은 best-energy checkpoint를 사용한다.
+  `cli/run_disk_experiment_queue.py`는 objective 순서
+  `energy_only -> energy_response_trust -> energy_stationarity ->
+  energy_response_trust_stationarity`와 각 objective 내부 seed `0 -> 3` 순서로
+  16개 run을 하나씩 실행한다. Default output root는
+  `checkpoints/numerical_examples/disk`이며 run directory는
+  `coupling_<objective>_seed<seed>`이다. Unit-square queue와 동일하게 `_SUCCESS`만
+  completed run으로 인정하고, non-empty incomplete directory나 첫 child failure에서
+  queue를 중단한다.
+  병렬 supervisor 실행에는 `cli/run_disk_experiment_queue_seed01.py`와
+  `cli/run_disk_experiment_queue_seed23.py`를 사용한다. 첫 queue는 모든 objective의
+  seed `0/1`, 둘째 queue는 seed `2/3`을 실행하므로 각각 8개이며 두 집합의
+  intersection은 비어 있고 union은 full 16-run matrix다. Run directory는 공통
+  output root의 기존 `coupling_<objective>_seed<seed>`를 유지하되 supervisor
+  metadata는 각각 `queue_seed01.{log,pid}`, `queue_seed01_status.json`과
+  `queue_seed23.{log,pid}`, `queue_seed23_status.json`으로 분리한다.
 - `Divergence_Free_Convection_Diffusion.py`: variable diffusion,
   divergence-free convection with amplitude `2.0`, zero reaction.
 - 새 coefficient file을 추가할 때는 `a_fun`, `apx_fun`, `apy_fun`,
