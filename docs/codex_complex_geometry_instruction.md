@@ -476,7 +476,7 @@ For vertical segments:
 s=y,\qquad r=x.
 \]
 
-The geometry branch feature must be
+When `coupling_model.geometry_branch.enabled=true`, use the geometry branch feature
 
 \[
 g_\ell
@@ -499,8 +499,9 @@ s_{\ell,\mathrm{mid}}
 \frac{s_\ell^-+s_\ell^+}{2}.
 \]
 
-The separate fixed-line transverse branch Fourier-encodes the globally normalized
-coordinate \(\widehat r_\ell\):
+When `axis_1d_trunk.fixed_line_transverse_branch.enabled=true`, the separate
+fixed-line transverse branch Fourier-encodes the globally normalized coordinate
+\(\widehat r_\ell\):
 
 \[
 \operatorname{PE}(\widehat r_\ell)
@@ -522,7 +523,8 @@ Do not include:
 - axis one-hot;
 - raw \(r_\ell\) scalar.
 
-Output contract v6 also requires one shared pointwise transverse trunk with input
+When `axis_1d_trunk.transverse_trunk.enabled=true`, require
+`length_context=true` and use one shared pointwise transverse trunk with input
 
 \[
 \left[
@@ -537,25 +539,36 @@ t_\perp,
 For x/\(\Phi\), use \((L_\parallel,L_\perp,t_\perp)=(L_x,L_y,t_y)\).
 For y/\(\Psi\), swap the axes. Require all lengths and the global reference
 extent to be positive. Fuse the primary and transverse trunk embeddings using the
-configured `product` or `product_fuser` mode.
+configured `product`, `product_fuser`, or `concat_fuser` mode. `product_fuser`
+receives `[T_parallel,T_perp,T_parallel*T_perp]` with width `3H`; `concat_fuser`
+receives `[T_parallel,T_perp]` with width `2H` and must not construct an
+element-wise product. If the pointwise transverse trunk is disabled, use the
+primary trunk directly.
 
-Use `product_fuser` as the default branch fusion mode:
+For every set of at least two active branch embeddings, `product_fuser` receives
+the embeddings and their component-wise product. In the minimal source/coefficient
+architecture this is
 
 \[
 [
-h_{\mathrm{func}},
-h_{\mathrm{geom}},
-h_{\mathrm{func}}\odot h_{\mathrm{geom}}
+h_f,
+h_a,
+h_f\odot h_a
 ]
 \]
 
-followed by a learned fuser.
+followed by a learned `3H -> H` fuser. If only one branch remains, bypass the
+fuser. Disabling learned geometry networks does not disable geometry metadata,
+deterministic \(A L^2\) output scaling, projection, tangent correction, or Green
+reconstruction.
 
 ### 5.11 Physical symmetric balance projection
 
-Complex output contract v6 requires `balance_projection.enabled=true` and
-`mode="physical_symmetric"`. Do not use balance loss, smooth masked projection,
-response-space orthogonal projection, or response-preconditioned projection.
+Physical symmetric projection is the base balance operation. The optional
+`mode="symmetric_tangent_green_response"` must apply that same projection first
+and then use only balance-preserving tangent corrections. Do not use balance loss,
+smooth masked projection, response-space orthogonal projection, or retired
+response-preconditioned projection.
 
 At valid point \(p_q\), define
 
@@ -656,6 +669,31 @@ variables consumed by Green reconstruction:
 
 Green reconstruction consumes \(\Phi,\Psi\) directly. Do not multiply the
 projected responses by another axis-specific \(L^2\) factor.
+
+For `symmetric_tangent_green_response`, support both explicit and geometry-only
+automatic tangent dimension selection. Explicit K remains the default. Automatic
+selection uses only the connected axial incidence encoded by `coords_valid`,
+`x_segment_id`, and `y_segment_id`, with
+
+\[
+d_A(i,j)=\left\lceil d_L(i,j)/2\right\rceil,
+\]
+
+\[
+K_{\Omega,h}=\min\left\{K:
+C_{\mathrm{global}}(K)\ge\tau_{\mathrm{global}},\quad
+Q_{0.05}(C_i(K))\ge\tau_{\mathrm{tail}}
+\right\}.
+\]
+
+Both thresholds default to `0.99` and are independently configurable; the 5%
+quantile is fixed. `max_subspace_dimension` defaults to `8`, applies to explicit
+and automatic modes, and must fail rather than clamp if the selected K exceeds
+it. Resolve K before tangent-context construction and materialize it in
+`config_used.json`, with the original auto policy and geometry/reach identity in
+provenance. Coefficients, source, predictions, and reference targets must not
+affect this selection. Dynamic K must preserve exact source balance, nested
+non-increasing response cost, K1-K4 compatibility, and model/sidecar schemas.
 
 ### 5.12 Segment-wise Green reconstruction
 

@@ -1,183 +1,109 @@
-# Cumulative Optimizer-Step Scheduler and Fixed-Step Validation Plan
+# Geometry-Only Automatic Tangent Dimension \(K\) Selection Plan
 
 ## Summary
 
-GreenNet과 CouplingNet의 AdamW/SOAP 학습에서 learning-rate scheduler를 epoch가 아닌 **누적 `optimizer.step()` 호출 수**로 갱신한다. Validation도 epoch 경계와 분리하여 `validation_every_steps`마다 실행하고, 전체 first-stage 학습의 마지막 step에서는 interval 배수가 아니더라도 한 번 더 실행한다.
+- Complex CouplingNet의 `symmetric_tangent_green_response`에서 geometry의 connected axial-line incidence만으로 tangent subspace dimension \(K\)를 자동 선택한다.
+- Active point 사이의 point-graph 거리 \(d_L(i,j)\)와 tangent structural distance를
+  \[
+  d_A(i,j)=\left\lceil\frac{d_L(i,j)}{2}\right\rceil
+  \]
+  로 정의하고,
+  \[
+  C_i(K)=\frac1P\sum_{j=1}^P\mathbf 1[d_A(i,j)\le K-1],
+  \qquad
+  C_{\mathrm{global}}(K)=\frac1P\sum_{i=1}^P C_i(K)
+  \]
+  를 계산한다.
+- 자동 선택값은
+  \[
+  K_{\Omega,h}
+  =
+  \min\left\{
+  K:
+  C_{\mathrm{global}}(K)\ge\tau_{\mathrm{global}},
+  \quad
+  Q_{0.05}(C_i(K))\ge\tau_{\mathrm{tail}}
+  \right\}
+  \]
+  로 고정한다. 기본값은 \(\tau_{\mathrm{global}}=\tau_{\mathrm{tail}}=0.99\)이고, quantile \(0.05\)는 고정한다.
+- 이 계산에는 geometry의 `coords_valid`, `x_segment_id`, `y_segment_id`만 사용한다. PDE coefficients, source, GreenNet/CouplingNet prediction, reference `sol/phi/psi`는 사용하지 않는다.
+- 현재 확인된 기본 geometry 결과 `Square=2`, `Disk=2`, `Annulus=4`, `Pentagram=4`를 regression 기준으로 사용한다.
 
-적용 범위는 다음으로 고정한다.
+## Public Configuration
 
-- Complex 및 legacy unit-square CouplingNet 모두 적용한다.
-- Complex 및 unit-square GreenNet의 AdamW/SOAP first stage에 적용한다.
-- GreenNet LBFGS의 optimizer, scheduler 부재, epoch-level diagnostic 동작은 그대로 유지한다.
-- CouplingNet periodic checkpoint의 `every_epochs`와 파일명은 그대로 유지한다.
-- Model, loss, projection, reconstruction, optimizer 수식, checkpoint tensor key는 변경하지 않는다.
-
-## Public Config
-
-`TrainingConfig`와 `CouplingTrainingConfig`에 동일한 두 옵션을 추가한다.
+기존 explicit 설정은 그대로 유지한다.
 
 ```json
-{
-  "use_lr_schedule": true,
-  "warmup_steps": 240,
-  "validation_every_steps": 24
+"symmetric_tangent_green_response": {
+  "subspace_dimension": 4,
+  "max_subspace_dimension": 8,
+  "geometry_k_selection": {
+    "enabled": false,
+    "global_reach_threshold": 0.99,
+    "pointwise_tail_reach_threshold": 0.99
+  }
 }
 ```
 
-- `warmup_steps`: optional nonnegative integer다.
-- `validation_every_steps`: active validation dataset을 사용하는 run에서는 반드시 명시해야 하는 positive integer다.
-- Validation이 비활성인 GreenNet run에서는 `validation_every_steps`를 생략한다.
-- 기존 `warmup_epochs`는 parse compatibility를 위해 유지한다.
-- `warmup_steps`가 없으면 `warmup_epochs * steps_per_epoch`로 변환한다.
-- `warmup_steps`와 양수 `warmup_epochs`를 동시에 지정하면 ambiguous config로 fail fast한다.
-- 기존 config는 실행 가능하지만 scheduler가 epoch staircase가 아니라 stepwise curve로 바뀌므로 numerical trajectory까지 backward-compatible한 것은 아니다.
-- `epochs`는 계속 학습 종료 조건이며 별도의 `total_steps` config는 추가하지 않는다.
+자동 선택은 다음처럼 활성화한다.
 
-## Step-Based Schedule
+```json
+"symmetric_tangent_green_response": {
+  "subspace_dimension": 4,
+  "max_subspace_dimension": 8,
+  "geometry_k_selection": {
+    "enabled": true,
+    "global_reach_threshold": 0.99,
+    "pointwise_tail_reach_threshold": 0.99
+  }
+}
+```
 
-Epoch당 optimizer step 수와 전체 step 수는 runtime DataLoader에서 계산한다.
+- `enabled=false`가 backward-compatible default이며 `subspace_dimension`을 그대로 사용한다.
+- `enabled=true`이면 geometry가 계산한 \(K_{\Omega,h}\)가 `subspace_dimension`을 override한다. 이때 명시적 값은 fallback으로 사용하지 않는다.
+- `max_subspace_dimension`은 explicit/automatic mode에 공통으로 적용되는 configurable safety limit이며 기본값은 `8`이다.
+- 자동으로 필요한 \(K\)가 safety limit보다 크면 clamp하지 않고, 필요한 최소 \(K\), limit에서의 두 reach metric과 geometry diameter를 포함해 fail fast한다.
+- Threshold는 boolean이 아닌 finite numeric `(0,1]`, dimension과 maximum은 boolean이 아닌 양의 정수로 strict validation한다. Unknown key도 거부한다.
+- \(K\ge2\)로 해석되면 기존처럼 `eta_strategy="closed_loop_exact_line_search"`가 필수다.
 
-\[
-B=\operatorname{len}(\text{train loader}),
-\qquad
-T=E B,
-\]
+## Implementation Changes
 
-여기서 \(E\)는 `epochs`, \(B\)는 `steps_per_epoch`, \(T\)는 `total_optimizer_steps`다. 현재 `drop_last=false`이므로 map-style dataset에서는 사실상 \(B=\lceil N/\text{batch size}\rceil\)이다.
-
-1-based optimizer step \(s=1,\ldots,T\), effective warmup \(W\)에 대해:
-
-\[
-\eta_s
-=
-\eta_{\max}\frac{s}{W},
-\qquad 1\le s\le W,
-\]
-
-\[
-\eta_s
-=
-\eta_{\min}
-+
-\frac12(\eta_{\max}-\eta_{\min})
-\left[
-1+\cos\left(
-\pi\frac{s-W-1}{T-W-1}
-\right)
-\right],
-\qquad W+1\le s\le T.
-\]
-
-- \(W=0\)이면 step 1에서 base LR로 시작해 step \(T\)에서 `min_lr`에 도달한다.
-- \(W\ge T\)이면 기존 규칙처럼 effective warmup을 \(T-1\)로 제한한다.
-- Warmup 마지막 step과 cosine 첫 step은 모두 base LR를 사용한다.
-- 여러 parameter group에는 동일 multiplier를 적용해 LR 비율을 보존한다.
-- `use_lr_schedule=false`이면 모든 step에서 고정 LR를 사용한다.
-- PyTorch 권고 순서대로 매 batch에서 `optimizer.step()` 후 `scheduler.step()`을 정확히 한 번 호출한다. [PyTorch optimizer scheduling documentation](https://docs.pytorch.org/docs/stable/optim)
-- SOAP의 첫 preconditioner-initialization no-op도 하나의 optimizer 호출로 계산한다. 이는 기존 equal-step budget 및 SOAP frequency 의미와 일치한다.
-- Optimizer 호출이 예외로 실패하면 global step과 scheduler를 진행하지 않는다.
-
-논문용 dataset-size 비교는 다음과 같이 동일한 schedule을 갖는다.
-
-| Train samples | Batch | Epochs | Steps/epoch | Total steps |
-|---:|---:|---:|---:|---:|
-| 600 | 200 | 800 | 3 | 2400 |
-| 1200 | 200 | 400 | 6 | 2400 |
-| 2400 | 200 | 200 | 12 | 2400 |
-| 4800 | 200 | 100 | 24 | 2400 |
-
-모든 run은 `warmup_steps=240`, `validation_every_steps=24`를 사용하므로 동일한 LR trajectory와 정확히 100회의 scheduled validation을 갖는다.
-
-## Validation Contract
-
-- `global_step`은 first-stage 시작 시 0이며 epoch 경계에서 초기화하지 않는다.
-- Validation은 `global_step % validation_every_steps == 0`일 때 실행한다.
-- 마지막 optimizer step이 interval 배수가 아니면 final validation을 한 번 추가한다.
-- 마지막 step이 이미 interval 배수이면 중복 validation하지 않는다.
-- Step 0 baseline validation은 추가하지 않는다.
-- Validation은 optimizer update와 scheduler advancement 이후 실행하되, 기록되는 `learning_rate`는 직전 optimizer update에 실제 사용한 LR다.
-- Validation 중 `model.eval()`과 `torch.no_grad()`를 사용하고 이후 기존 train mode를 복원한다.
-- Complex CouplingNet best-energy 및 best-physics checkpoint는 step validation event에서만 갱신한다.
-- Legacy CouplingNet best-`rel_sol` checkpoint도 같은 step validation event에서 갱신한다.
-- GreenNet은 기존처럼 validation metric만 계산하며 새로운 best-validation checkpoint 정책은 추가하지 않는다.
-- `log_interval`은 epoch-aggregate training log 주기로 유지되고 validation cadence에는 관여하지 않는다.
-
-## Implementation Steps
-
-1. `src/greenonet/config.py`에 `warmup_steps`와 `validation_every_steps`를 추가하고 type, finite/range, conflicting warmup config를 strict하게 검증한다.
-2. `src/greenonet/learning_rate_scheduler.py`의 공통 schedule을 optimizer-step 단위로 일반화하고 Green/Coupling wrapper가 DataLoader 생성 후 `steps_per_epoch`로 resolve하도록 변경한다.
-3. Config parsing 시에는 unresolved fields만 검증하고, runtime에 `steps_per_epoch`, `total_optimizer_steps`, warmup source와 effective warmup을 확정한다.
-4. Complex/legacy Coupling trainer를 batch-level scheduler hook과 validation trigger를 갖도록 리팩터링한다. Epoch train aggregation과 periodic checkpoint는 유지한다.
-5. Complex/unit-square Green trainer의 AdamW/SOAP loop도 같은 step controller를 사용한다. `compute_validation_rel_sol=true`일 때만 fixed-step validation을 실행한다.
-6. GreenNet LBFGS는 별도 step counter에 포함하지 않고 기존 epoch validation과 scheduler-disabled 동작을 보존한다.
-7. \(K=1\) tangent eta cap schedule을 `cap_for_step_index(...)`로 전환해 LR warmup step과 공유한다. \(K\ge2\)의 schedule-not-applicable 경로는 유지한다.
-8. Train epoch row와 step validation row를 분리한다. 공통 필드는 `epoch`, `global_step`, `step_in_epoch`, `split`, `learning_rate`로 둔다.
-9. Epoch train row에는 `learning_rate_first`, `learning_rate_last`를 추가하고 기존 `learning_rate`는 마지막 optimizer update LR의 alias로 유지한다.
-10. Green recorder에는 기존 `phase`를 유지하면서 `split=train|val`을 추가한다. LBFGS row의 first-stage step 필드는 비워 두어 다른 step budget과 혼동하지 않게 한다.
-11. Startup log와 provenance에 `steps_per_epoch`, `total_optimizer_steps`, warmup source, configured/effective warmup steps, validation interval과 expected validation count를 기록한다.
-12. `config_used.json`에는 configured fields를 저장하고, DataLoader 이후 resolve된 값은 Green/Coupling training-schedule provenance와 `training.log`에 저장한다.
-13. Artifact loader는 runtime DataLoader 없이 scheduler를 resolve하지 않는다. 저장된 resolved provenance가 있으면 사용하고, 없으면 configured-only schedule로 명시한다.
-14. Existing log plotter는 `global_step`이 있으면 이를 x-axis로 사용하고, 과거 log에서는 epoch parser로 fallback하도록 유지한다.
-15. Active validation을 사용하는 shipped Green/Coupling config에 `validation_every_steps=24`를 명시하고, 논문용 equal-step configs는 `warmup_steps=240`으로 통일한다.
-16. README와 `docs/memory.md`에 step definition, legacy conversion, mandatory validation interval, final validation, SOAP first-step counting 및 LBFGS 제외 규칙을 기록한다.
-
-## Affected Files
-
-- Config/schedule core: `src/greenonet/config.py`, `src/greenonet/learning_rate_scheduler.py`, Green/Coupling scheduler wrappers와 tangent eta schedule.
-- Runtime: `src/greenonet/complex_coupling_trainer.py`, `src/greenonet/coupling_trainer.py`, `src/greenonet/trainer.py`, `src/greenonet/complex_green_trainer.py`.
-- Provenance/export: `cli/train.py`, Green/Coupling artifact exporters, `src/greenonet/green_optimizer.py`.
-- Analysis/config/docs: Green/Coupling log plotters, `configs/`, `numerical_examples/`, `README.md`, `docs/memory.md`.
-- Tests: scheduler, config/CLI, 네 trainer, SOAP telemetry, tangent schedule, artifacts와 log parser tests.
+1. Plotly/Scipy에 의존하지 않는 production geometry-selection core를 분리한다. 기존 topology analyzer와 visualization CLI는 이 core를 재사용해 graph 정의가 달라지지 않게 한다.
+2. Selector는 `ComplexGeometryMetadata`를 받아 topology counts, selected \(K\), global/tail reach, graph diameter, geometry identity와 setup time을 반환한다.
+3. Train/eval/artifact config-loading boundary에서 geometry를 한 번 읽고 model/trainer/evaluator 생성 전에 auto 설정을 explicit resolved config로 변환한다. Unresolved auto config가 runtime까지 들어오면 fail fast한다.
+4. `config_used.json`에는 실제 실행한 정수 `subspace_dimension`, `geometry_k_selection.enabled=false`를 저장한다. 별도 `tangent_subspace_dimension_provenance`에는 원래 auto 설정, thresholds, fixed quantile, configured/selected/max \(K\), geometry SHA-256, reach metric과 setup time을 기록한다.
+5. 원본 auto config를 직접 evaluation/export에 주는 경우에도 동일 resolver를 실행한다. Resolved `config_used.json`을 주면 topology를 재계산하지 않는다.
+6. Tangent core의 `Literal[1,2,3,4]`와 `{2,3,4}` validation을 동적 positive \(K\)로 일반화한다. Existing K1 special path와 K2 construction은 유지하고, K3 이상은 기존 MGS loop를 그대로 확장한다.
+7. `KrylovSubspaceStepResult`의 stacked directions/responses/coefficients/costs를 authoritative dynamic contract로 사용한다. 기존 direction-0/1 alias는 호환성을 위해 유지하되 K>2 자료는 dynamic result에서 읽는다.
+8. Trainer metrics, CSV field ordering, evaluator rows, raw NPZ, Plotly figures와 artifact summary를 resolved \(K\)만큼 동적으로 생성한다. 기존 K1–K4 key와 수치는 유지한다.
+9. K가 증가하다 numerical direction이 퇴화하면 기존처럼 해당 방향을 zero/inactive로 표시하고 이후 cost가 증가하지 않도록 한다. Balance \(\phi+\psi=f\)는 모든 \(K\)에서 그대로 보존한다.
+10. Tangent response-context sidecar는 \(K\)와 독립적인 frozen operator/preconditioner이므로 schema와 identity를 변경하지 않는다. Model architecture와 safetensors tensor key도 변경하지 않는다.
+11. 기존 audit CLI의 기본 비교 범위는 K1–K4로 유지하되, explicit 요청 시 `max_subspace_dimension`까지 사용할 수 있도록 공통 dynamic core를 적용한다.
+12. `README.md`, `docs/memory.md`, tangent design 문서에 auto/explicit precedence, geometry-only 의미, fixed 5% quantile, safety limit, provenance와 \(O(K)\) operator action 및 \(O(K^2)\) MGS 비용을 기록한다. `PLAN.md`는 사용자가 이 계획을 바탕으로 작성한다.
 
 ## Test Plan
 
-- Exact LR sequence: warmup, cosine start, final `min_lr`, zero warmup, single-step edge case와 disabled schedule을 검증한다.
-- Equal-budget regression: `3x800`, `6x400`, `12x200`, `24x100`이 동일한 2400-step LR sequence를 생성하는지 확인한다.
-- Legacy config: `warmup_epochs`가 runtime step으로 정확히 변환되고 `warmup_steps`와의 충돌이 거부되는지 확인한다.
-- Validation trigger: interval 배수, non-divisible final step, divisible final deduplication, interval이 total steps보다 큰 경우를 검증한다.
-- Trainer integration: 네 trainer에서 scheduler 호출 수가 optimizer 호출 수와 같고 validation이 epoch 수가 아닌 global step에서 발생하는지 확인한다.
-- Checkpoint behavior: best checkpoint는 validation event에서만 갱신되고 periodic checkpoint는 기존 epoch cadence와 filename을 유지하는지 확인한다.
-- SOAP: 첫 no-op 호출도 global step, LR schedule, validation cadence 및 telemetry count에 포함되는지 확인한다.
-- Tangent: \(K=1\) eta cap이 stepwise warmup을 따르고 \(K=2,3,4\)에는 계속 적용되지 않는지 검증한다.
-- Mode restoration: mid-epoch validation 후 dropout/train mode가 정확히 복원되는지 확인한다.
-- Logging/provenance: CSV/log의 global step, LR start/end, validation index와 resolved schedule metadata를 검증한다.
-- LBFGS regression: scheduler가 적용되지 않고 기존 epoch-level diagnostic 및 checkpoint behavior가 유지되는지 확인한다.
-- Plot/artifact regression: 새 step log와 과거 epoch log를 모두 읽고 checkpoint tensor key 및 artifact numerical field가 변하지 않는지 확인한다.
+- Config: legacy explicit K round-trip, auto nested config, independent thresholds, unknown/invalid keys, explicit \(K>\) maximum, auto-selected \(K>\) maximum, K2+ eta-strategy validation을 검사한다.
+- Geometry math: synthetic chain에서 known \(C_i(K)\), \(C_{\mathrm{global}}(K)\), 최소 K와 threshold 변화 효과를 검증하고 disconnected incidence graph를 거부한다.
+- Real geometry regression: 현재 NPZ에서 Square/Disk/Annulus/Pentagram이 각각 `2/2/4/4`로 선택되는지 확인한다.
+- Dynamic projection: K5와 K8에서 finite result, exact physical balance, nested response-cost non-increase, inactive-direction fallback과 autograd를 검증한다.
+- Backward compatibility: K1–K4 projection 결과와 existing metric key가 변경 전 tolerance를 유지하고 explicit mode에서는 topology selector가 호출되지 않는지 확인한다.
+- Integration: train/eval/export가 같은 resolved K를 사용하고, auto resolution이 runtime당 한 번만 실행되며, `config_used.json`, logs, CSV, artifact summary에 동일 provenance가 기록되는지 확인한다.
+- 전체 검증은 focused config/topology/projection tests 이후 전체 `pytest test`, `ruff check src cli test`, touched-file `ruff format`, `mypy src`, `git diff --check` 순서로 수행한다.
 
-검증 순서는 scheduler/config tests, 각 trainer focused tests, artifact/log parser tests, 전체 regression과 정적 검사로 고정한다.
+## Rollback And Acceptance
 
-```bash
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_coupling_lr_scheduler.py \
-  test/test_green_lr_scheduler.py \
-  test/test_complex_coupling_trainer.py \
-  test/test_coupling.py \
-  test/test_green_optimizer.py \
-  test/test_complex_green_trainer.py \
-  test/test_cli_train.py
-
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
-ruff check src cli test
-ruff format src cli test
-~/.conda/envs/green_net/bin/python -m mypy src
-git diff --check
-```
-
-## Rollback Strategy
-
-- Scheduler, validation trigger, recorder schema를 공통 helper와 trainer wiring으로 분리하여 모델 및 objective 코드와 독립적으로 되돌릴 수 있게 한다.
-- Rollback 시 epoch-end `scheduler.step()`과 epoch validation을 복원하고 새 step fields를 config에서 제거한다.
-- `warmup_epochs`, periodic checkpoint와 과거 log parser를 유지하므로 이전 config와 artifact를 복구할 수 있다.
-- Checkpoint는 model-only safetensors이므로 optimizer/scheduler state migration이나 model key migration이 필요 없다.
-- 기존 checkpoint, log, artifact 파일은 수정하거나 덮어쓰지 않는다.
-- Step 전환 때문에 numerical regression이 발생해도 model, Green reconstruction, projection, loss 또는 optimizer implementation을 되돌리지 않는다.
+- Runtime rollback은 `geometry_k_selection.enabled=false`와 explicit `subspace_dimension` 설정만으로 가능하다.
+- Auto run의 `config_used.json`은 resolved explicit K를 저장하므로 selector 코드를 제거해도 해당 checkpoint의 evaluation/export가 가능하다.
+- Code rollback은 geometry resolver, dynamic-K extension과 provenance만 제거하며 K1–K4 projection, tangent context sidecar, model checkpoint와 dataset/geometry NPZ는 유지한다.
+- 완료 기준은 auto/default thresholds, independent threshold override, explicit K, K>4 dynamic execution, fail-fast safety limit, exact balance, current four-geometry regression과 reference-free 원칙이 모두 검증되는 것이다.
 
 ## Confidence
 
-- 구현 계획 확신도: **0.96**.
-- Equal-step 실험에서 LR 및 validation opportunity confound를 제거할 확신도: **0.99**.
-- 규칙 모호성은 사용자 선택으로 해소되었다.
-- 남은 불확실성은 정보 부족에 해당한다. 특히 GreenNet full-dataset validation을 24 step마다 수행할 때의 wall-clock overhead는 실제 dataset 크기와 hardware에 따라 측정해야 한다.
+- 구현 계획 확신도: **0.97**.
+- Geometry-only selector가 정의한 수식을 정확히 구현할 확신도: **0.99**.
+- 선택된 \(K\)가 모든 PDE에서 accuracy-optimal일 경험적 확신도: **0.78**.
+- 규칙은 명확하다. 남은 불확실성은 규칙 모호성이 아니라, 사용자가 safety limit를 크게 높였을 때 K별 메모리·시간 증가와 PDE별 최적 \(K\)가 geometry-only 값과 얼마나 일치하는지에 대한 경험적 정보 부족이다.
 
 ## Executable `/goal` Draft
 
@@ -185,50 +111,45 @@ git diff --check
 /goal
 
 `/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/PLAN.md`의
-"Cumulative Optimizer-Step Scheduler and Fixed-Step Validation Plan"을
-기준 문서로 참고하여 optimizer-step scheduler와 fixed-step validation
-integration을 끝까지 구현한다.
+"Geometry-Only Automatic Tangent Dimension K Selection Plan"을 기준 문서로
+참고하여 geometry 기반 automatic K selection과 dynamic K>4 integration을
+끝까지 구현한다.
 
 완료는 다음 조건으로 검증한다.
 
-- GreenNet과 CouplingNet의 AdamW/SOAP first-stage scheduler가 cumulative
-  optimizer step마다 정확히 한 번 갱신될 것,
-- warmup_steps가 explicit step contract로 동작하고 기존 warmup_epochs는
-  steps_per_epoch를 이용한 compatibility fallback으로 동작할 것,
-- warmup_steps와 양수 warmup_epochs의 동시 지정은 fail fast할 것,
-- validation dataset을 사용하는 run은 positive validation_every_steps를
-  반드시 명시할 것,
-- 모든 논문용 실험 config가 validation_every_steps=24를 사용할 것,
-- validation이 global step의 24배수와 non-divisible final step에서 실행되고
-  final duplicate는 생성되지 않을 것,
-- train metric은 epoch aggregate, validation metric은 independent step event로
-  기록될 것,
-- best checkpoint는 step validation에서 갱신되고 periodic checkpoint는 기존
-  epoch cadence를 유지할 것,
-- SOAP의 first-step initialization call이 global optimizer step에 포함될 것,
-- K=1 tangent eta cap은 LR warmup step을 공유하고 K>=2 동작은 바뀌지 않을 것,
-- GreenNet LBFGS는 scheduler 없이 기존 epoch-level 동작을 유지할 것,
-- config_used, logs, CSV와 provenance에서 configured/resolved step contract를
-  구분해 추적할 수 있을 것,
-- model architecture, objective, checkpoint tensor key, projection,
-  reconstruction 및 dataset schema가 변경되지 않을 것,
+- geometry_k_selection.enabled=false인 기존 config가 explicit K 동작과
+  K1-K4 수치를 그대로 유지할 것,
+- enabled=true이면 PDE, source, model prediction과 reference target을 사용하지
+  않고 C_global 및 lower-5% pointwise reach 기준으로 최소 K를 선택할 것,
+- 두 reach threshold가 각각 config에서 독립적으로 설정될 것,
+- Square, Disk, Annulus, Pentagram의 canonical geometry가 각각 K=2,2,4,4로
+  선택될 것,
+- explicit K와 automatic K가 configurable max_subspace_dimension 기본값 8을
+  공유하고 limit 초과는 clamp 없이 fail fast할 것,
+- tangent projection, trainer, evaluator, artifact와 audit가 K>4 dynamic
+  directions, coefficients, costs와 activity를 처리할 것,
+- 모든 K에서 phi+psi=rhs와 nested response-cost non-increase가 유지될 것,
+- config_used.json에는 resolved explicit K가 고정되고 원래 auto policy,
+  geometry identity와 reach metrics가 provenance로 기록될 것,
+- tangent response-context sidecar, model checkpoint tensor key, GreenNet,
+  geometry/sample NPZ schema와 reference-free training 원칙이 변경되지 않을 것,
 - focused tests와 전체 pytest, Ruff, mypy, git diff check가 통과할 것.
 
-수정 범위는 training config, shared step scheduler/validation policy,
-GreenNet/CouplingNet trainer wiring, tangent eta schedule, logging/provenance,
-artifact/log parsers, active experiment configs, tests와 문서로 제한한다.
+수정 범위는 tangent geometry-selection core, config parsing/resolution,
+dynamic tangent subspace core, train/eval/export/audit provenance, 관련 tests와
+문서로 제한한다.
 
-Loss, optimizer 수식, model backbone, Green reconstruction, projection,
-geometry/sample NPZ schema, LBFGS algorithm과 periodic checkpoint cadence는
-변경하지 않는다. 실제 장기 numerical training은 실행하지 않는다.
+Full response matrix, global linear solve, PDE-dependent K selector, learnable K,
+sample-dependent K, silent K clamping과 장기 retraining은 추가하지 않는다.
 
-각 구현 단계 후 scheduler/config focused tests를 먼저 실행하고, 각 trainer와
-artifact/log parser tests를 거친 뒤 전체 regression suite를 실행한다.
+각 구현 단계 후 가장 작은 config/topology/projection tests를 먼저 실행하고,
+통과한 뒤 trainer/evaluator/artifact integration과 전체 regression suite를
+실행한다.
 
-기존 model checkpoint compatibility 또는 first-stage/LBFGS 경계를 유지할 수
-없다면 작업을 중단하고 다음을 보고한다.
+기존 K1-K4 수치 또는 checkpoint compatibility를 유지할 수 없다면 작업을
+중단하고 다음을 보고한다.
 
-1. 정확히 충돌하는 schedule, validation, metric 또는 tensor contract,
-2. 영향을 받는 config, checkpoint, log, artifact와 trainer,
-3. model과 objective를 보존하는 가장 작은 rollback 또는 migration 전략.
+1. 정확히 달라지는 projection, tensor, config 또는 metric contract,
+2. 영향을 받는 config, checkpoint, context sidecar와 artifact,
+3. explicit K1-K4 경로를 보존하는 가장 작은 rollback 전략.
 ```

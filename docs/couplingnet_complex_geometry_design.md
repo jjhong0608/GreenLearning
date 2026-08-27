@@ -299,9 +299,9 @@ Thus,
 }
 \\]
 
-The primary trunk does not receive the physical axial coordinate directly. Output
-contract v6 additionally requires a shared pointwise transverse trunk. At each
-valid point it receives
+The primary trunk does not receive the physical axial coordinate directly. An
+optional shared pointwise transverse trunk can additionally receive, at each
+valid point,
 
 \\[
 \left[
@@ -316,7 +316,9 @@ t_\perp,
 For the x/\\(\Phi\\) path,
 \\((L_\parallel,L_\perp,t_\perp)=(L_x,L_y,t_y)\\). For the y/\\(\Psi\\)
 path, the axes are swapped. \\(L_{\mathrm{ref}}\\) is the larger global x/y
-geometry extent. One shared four-input MLP handles both paths.
+geometry extent. One shared four-input MLP handles both paths. When
+`axis_1d_trunk.transverse_trunk.enabled=false`, the primary trunk embedding is
+used directly and no transverse-trunk or trunk-fuser parameters are created.
 
 ---
 
@@ -507,9 +509,9 @@ s=y,
 r=x.
 \\]
 
-### 7.2 Geometry and fixed-line transverse features
+### 7.2 Optional geometry and fixed-line transverse features
 
-The geometry branch feature is
+When `coupling_model.geometry_branch.enabled=true`, the geometry branch feature is
 
 \\[
 \boxed{
@@ -526,7 +528,8 @@ L_\ell^2,
 }
 \\]
 
-The separate fixed-line transverse branch receives
+When `axis_1d_trunk.fixed_line_transverse_branch.enabled=true`, the separate
+fixed-line transverse branch receives
 
 \\[
 \operatorname{PE}(\widehat r_\ell),
@@ -590,52 +593,81 @@ Raw \\(r_\ell\\) may be added later as an ablation, but it is not part of the de
 ### 7.5 Pointwise cross-axis length context
 
 The fixed-line transverse branch cannot describe how the orthogonal connected
-interval changes from point to point. The shared pointwise transverse trunk
-therefore receives the four features defined in Section 5.2. This exposes both
-the parallel and cross-axis response scales while preserving axis sharing. The
-primary and transverse trunk embeddings are fused with `product` or
-`product_fuser` according to `axis_1d_trunk.transverse_trunk.fusion`.
+interval changes from point to point. When enabled, the shared pointwise
+transverse trunk receives the four features defined in Section 5.2. This exposes
+both the parallel and cross-axis response scales while preserving axis sharing.
+The primary and transverse trunk embeddings are fused with `product`,
+`product_fuser`, or `concat_fuser` according to
+`axis_1d_trunk.transverse_trunk.fusion`. `product_fuser` applies the shared
+`Linear -> activation -> dropout` block to
+`[T_parallel,T_perp,T_parallel odot T_perp]` with input width `3H`.
+`concat_fuser` applies the same block family to `[T_parallel,T_perp]` with input
+width `2H` and does not construct an element-wise product. When the transverse
+trunk is disabled, the primary trunk is the complete trunk representation.
 
-### 7.6 Geometry/function branch fusion
+### 7.6 Active branch fusion and the minimal architecture
 
-The function branch embedding and geometry branch embedding are fused using `product_fuser` by default.
-
-Let
+Let the active branch embeddings be (h_1,\ldots,h_N), each with width (H).
+Complex CouplingNet supports three branch-level fusion rules:
 
 \\[
-h_\ell^{\mathrm{func}}
-=
-B_{\mathrm{func}}(F_\ell),
+\begin{aligned}
+\texttt{product}:\quad
+&h_\ell=h_1\odot\cdots\odot h_N,\\
+\texttt{product\_fuser}:\quad
+&h_\ell=F_{\mathrm{fuser}}
+\left([h_1,\ldots,h_N,h_1\odot\cdots\odot h_N]\right),\\
+\texttt{concat\_fuser}:\quad
+&h_\ell=F_{\mathrm{fuser}}\left([h_1,\ldots,h_N]\right).
+\end{aligned}
 \\]
 
-\\[
-h_\ell^{\mathrm{geom}}
-=
-B_{\mathrm{geom}}(g_\ell).
-\\]
+The trainable fuser is the same `Linear -> activation -> dropout` block in the
+last two modes. Its input width is ((N+1)H) for `product_fuser` and (NH) for
+`concat_fuser`. The latter never constructs an element-wise branch product in
+its forward or autograd graph. If (N=1), every mode bypasses the fuser and uses
+the sole embedding directly. Branch-side `concat_fuser` is complex-only; the
+unit-square model rejects it. The independent pointwise transverse-trunk setting
+supports its own `concat_fuser` contract described in Section 7.5.
 
-The fused branch feature is
+In `product_fuser` mode, the fused representation can also be written as
 
 \\[
 h_\ell
 =
 F_{\mathrm{fuser}}
 \left(
-[
-h_\ell^{\mathrm{func}},
-h_\ell^{\mathrm{geom}},
-h_\ell^{\mathrm{func}}\odot h_\ell^{\mathrm{geom}}
-]
+[h_1,\ldots,h_N,h_1\odot\cdots\odot h_N]
 \right).
 \\]
 
-Thus,
+The minimal variable-coefficient experiment disables the geometry branch, the
+fixed-line transverse branch, and the pointwise transverse trunk. Its learned
+branch inputs are
 
 \\[
-\boxed{
-\texttt{product\_fuser is the default branch fusion mode.}
-}
+h_f=B_f(\widehat f_\ell),\qquad
+h_a=B_a(\widehat a_\ell),
 \\]
+
+\\[
+\begin{aligned}
+h_B^{\mathrm{product\_fuser}}
+&=F_{\mathrm{fuser}}([h_f,h_a,h_f\odot h_a]),\\
+h_B^{\mathrm{concat\_fuser}}
+&=F_{\mathrm{fuser}}([h_f,h_a]),\\
+R_\ell
+&=A_\ell L_\ell^2\langle h_B,T_\parallel(t)\rangle.
+\end{aligned}
+\\]
+
+Thus the minimal fuser has input width (3H) in `product_fuser` mode and (2H) in
+`concat_fuser` mode. If the coefficient branch is also absent, only (h_f)
+remains and the code bypasses the fuser entirely. The new
+geometry and fixed-line flags default to the existing all-on architecture;
+changing an auxiliary flag creates an architecture-specific checkpoint. Segment
+metadata, deterministic (A_\ell L_\ell^2) scaling, balance projection, tangent
+correction, and Green reconstruction are not disabled with these learned modules.
 
 ---
 
@@ -643,7 +675,7 @@ Thus,
 
 ### 8.1 Projection policy
 
-Output contract v6 uses a single complex-geometry projection mode:
+Physical symmetric projection defines the base balance plane:
 
 \\[
 \boxed{
@@ -652,8 +684,11 @@ Output contract v6 uses a single complex-geometry projection mode:
 \\]
 
 No balance loss, reference solution, or reference split target is used. The
-unit-square projection path remains separate; retired complex response-space,
-RPS, smooth-mask, and geometry-weighted modes require a new training run.
+optional `symmetric_tangent_green_response` mode first applies this exact
+physical-symmetric projection and then moves only within its balance-preserving
+tangent space. The unit-square projection path remains separate; retired complex
+response-space, RPS, smooth-mask, and geometry-weighted modes require a new
+training run.
 
 ### 8.2 Pre-projection physical scaling
 
@@ -782,6 +817,56 @@ so reconstruction consumes them directly:
 \text{No additional }L_x^2\text{ or }L_y^2\text{ multiplication inside reconstruction.}
 }
 \\]
+
+### 8.7 Geometry-only tangent dimension selection
+
+For the optional `symmetric_tangent_green_response` mode, each active point is
+the intersection of one connected x segment and one connected y segment. Two
+points are adjacent in the point graph when they share either segment. Let
+\\(d_L(i,j)\\) denote the shortest point-graph distance and define the structural
+tangent distance
+
+\\[
+d_A(i,j)=\left\lceil\frac{d_L(i,j)}{2}\right\rceil.
+\\]
+
+For P active points, define
+
+\\[
+C_i(K)=\frac{1}{P}\sum_{j=1}^{P}
+\mathbf 1[d_A(i,j)\le K-1],
+\qquad
+C_{\mathrm{global}}(K)=\frac{1}{P}\sum_{i=1}^{P}C_i(K).
+\\]
+
+When `geometry_k_selection.enabled=true`, the production dimension is
+
+\\[
+K_{\Omega,h}=\min\left\{K:
+C_{\mathrm{global}}(K)\ge\tau_{\mathrm{global}},\quad
+Q_{0.05}(C_i(K))\ge\tau_{\mathrm{tail}}
+\right\}.
+\\]
+
+The two thresholds default independently to `0.99`; the lower-tail quantile is
+fixed at `0.05`. Only `coords_valid`, `x_segment_id`, and `y_segment_id` are used.
+PDE coefficients, source samples, GreenNet/CouplingNet outputs, and reference
+targets must not enter the selector. `geometry_k_selection.enabled=false` keeps
+the explicit `subspace_dimension` path.
+
+`max_subspace_dimension` defaults to `8` and is shared by explicit and automatic
+modes. If the rule requires a larger K, fail with the required dimension, reach
+metrics at the configured maximum, and graph diameters; never silently clamp.
+Resolve automatic K before constructing the tangent response context. Persist the
+resolved explicit K and disabled auto block in `config_used.json`, while retaining
+the original policy, geometry identity, thresholds, reach metrics, and setup time
+in `tangent_subspace_dimension_provenance`.
+
+The matrix-free tangent implementation accepts dynamic K. Increasing K requires
+approximately O(K) forward/adjoint response actions and O(K^2) response-space MGS
+work. It does not change the model tensor contract or the K-independent frozen
+response-context sidecar. Geometry-only K is a structural reach criterion and is
+not asserted to be the PDE-specific accuracy-optimal dimension.
 
 ---
 

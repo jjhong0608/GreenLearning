@@ -31,6 +31,15 @@ class AxialResponseBlock:
 
 
 @dataclass(frozen=True)
+class TangentColumnGramTerms:
+    """Column-wise self and cross terms for the tangent response operator."""
+
+    a: torch.Tensor
+    b: torch.Tensor
+    c: torch.Tensor
+
+
+@dataclass(frozen=True)
 class FrozenAxialResponseOperator:
     """Blockwise frozen Green response and transpose without a global matrix."""
 
@@ -112,6 +121,18 @@ class FrozenAxialResponseOperator:
         if not torch.all(torch.isfinite(gain)) or torch.any(gain < 0.0):
             raise ValueError("Column response gains must be finite and non-negative.")
         return gain.detach()
+
+    def diagonal_response(self) -> torch.Tensor:
+        """Scatter each segment block diagonal to global source order."""
+
+        diagonal = torch.zeros(
+            self.point_count,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        for block in self.blocks:
+            diagonal.index_copy_(0, block.valid_indices, torch.diagonal(block.matrix))
+        return diagonal.detach()
 
     def _validate_input(self, values: torch.Tensor, name: str) -> None:
         if values.dim() != 2 or values.shape[1] != self.point_count:
@@ -196,6 +217,77 @@ class FrozenBidirectionalResponseOperator:
             self.x.column_gain_squared(point_mass=point_mass),
             self.y.column_gain_squared(point_mass=point_mass),
         )
+
+    def tangent_column_gram_terms(
+        self,
+        *,
+        point_mass: torch.Tensor | float,
+    ) -> TangentColumnGramTerms:
+        """Return a, b, c without assembling a global response matrix."""
+
+        mass = torch.as_tensor(
+            point_mass,
+            dtype=self.x.dtype,
+            device=self.x.device,
+        )
+        if mass.numel() != 1 or not torch.isfinite(mass):
+            raise ValueError("point_mass must be a finite scalar.")
+        if bool((mass <= 0.0).item()):
+            raise ValueError("point_mass must be positive.")
+        a, b = self.column_gain_squared(point_mass=mass)
+
+        x_block_id, x_local = self._block_membership(self.x)
+        y_block_id, y_local = self._block_membership(self.y)
+        groups: dict[tuple[int, int], list[int]] = {}
+        for point_index in range(self.point_count):
+            key = (
+                int(x_block_id[point_index].item()),
+                int(y_block_id[point_index].item()),
+            )
+            groups.setdefault(key, []).append(point_index)
+
+        c = torch.zeros(self.point_count, dtype=self.x.dtype, device=self.x.device)
+        for (x_id, y_id), global_points in groups.items():
+            points = torch.tensor(
+                global_points,
+                dtype=torch.long,
+                device=self.x.device,
+            )
+            x_positions = x_local.index_select(0, points)
+            y_positions = y_local.index_select(0, points)
+            x_block = self.x.blocks[x_id]
+            y_block = self.y.blocks[y_id]
+            x_overlap = x_block.matrix.index_select(0, x_positions).index_select(
+                1, x_positions
+            )
+            y_overlap = y_block.matrix.index_select(0, y_positions).index_select(
+                1, y_positions
+            )
+            local_cross = mass * (x_overlap * y_overlap).sum(dim=0)
+            c.index_copy_(0, points, local_cross)
+        if not torch.all(torch.isfinite(c)):
+            raise ValueError("Cross-axis tangent column Gram terms must be finite.")
+        return TangentColumnGramTerms(a=a, b=b, c=c.detach())
+
+    @staticmethod
+    def _block_membership(
+        operator: FrozenAxialResponseOperator,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        block_id = torch.empty(
+            operator.point_count,
+            dtype=torch.long,
+            device=operator.device,
+        )
+        local_position = torch.empty_like(block_id)
+        for index, block in enumerate(operator.blocks):
+            count = int(block.valid_indices.numel())
+            block_id.index_fill_(0, block.valid_indices, index)
+            local_position.index_copy_(
+                0,
+                block.valid_indices,
+                torch.arange(count, dtype=torch.long, device=operator.device),
+            )
+        return block_id, local_position
 
 
 class FrozenAxialResponseOperatorBuilder:

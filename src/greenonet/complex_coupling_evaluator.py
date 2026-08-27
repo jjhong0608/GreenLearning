@@ -50,6 +50,7 @@ from greenonet.complex_tangent_projection import (
     SymmetricTangentGreenResponseContext,
     SymmetricTangentGreenResponseContextCache,
 )
+from greenonet.complex_tangent_context_io import resolve_tangent_context_path
 from greenonet.config import (
     BalanceProjectionConfig,
     ComplexCanonicalEnergyConfig,
@@ -60,6 +61,7 @@ from greenonet.config import (
     SymmetricTangentGreenResponseProjectionConfig,
     validate_complex_post_line_search_stationarity_config,
     validate_complex_response_trust_config,
+    validate_complex_tangent_context_checkpoint_config,
 )
 from greenonet.logging_mixin import LoggingMixin
 
@@ -89,6 +91,8 @@ class ComplexCouplingEvaluator(LoggingMixin):
         device: torch.device,
         work_dir: Path | str,
         terminal_width: int | None = None,
+        tangent_context_path: Path | None = None,
+        tangent_context_default_path: Path | None = None,
     ) -> None:
         self.model = model.to(device)
         self.model.eval()
@@ -129,17 +133,40 @@ class ComplexCouplingEvaluator(LoggingMixin):
         self.device = device
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        tangent_checkpoint = validate_complex_tangent_context_checkpoint_config(
+            training=config,
+            balance_projection=self.balance_projection,
+        )
+        resolved_tangent_context_path = resolve_tangent_context_path(
+            checkpoint=tangent_checkpoint,
+            cli_override=tangent_context_path,
+            default_path=(
+                tangent_context_default_path
+                or self.work_dir / "tangent_response_context.safetensors"
+            ),
+        )
         super().__init__(
             logger_name="ComplexCouplingEvaluator",
             work_dir=self.work_dir,
             terminal_width=terminal_width,
         )
+        self._log_complex_architecture()
         self._boundary_context: ComplexBoundaryEnergyContext | None = None
         self._green_response_context_cache = ColumnDiagonalGreenResponseContextCache(
             self.balance_projection.column_diagonal_green_response
         )
         self._tangent_context_cache = SymmetricTangentGreenResponseContextCache(
-            self.balance_projection.symmetric_tangent_green_response
+            self.balance_projection.symmetric_tangent_green_response,
+            checkpoint=tangent_checkpoint,
+            checkpoint_path=resolved_tangent_context_path,
+        )
+        self.logger.info(
+            "tangent context persistence enabled=%s load_policy=%s "
+            "save_after_build=%s path=%s",
+            tangent_checkpoint.enabled,
+            tangent_checkpoint.load_policy,
+            tangent_checkpoint.save_after_build,
+            resolved_tangent_context_path,
         )
         tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
@@ -224,6 +251,29 @@ class ComplexCouplingEvaluator(LoggingMixin):
             and self.post_line_search_stationarity_config.enabled,
             self.response_trust_config.enabled
             and self.post_line_search_stationarity_config.enabled,
+        )
+
+    def _log_complex_architecture(self) -> None:
+        architecture = self.model.architecture_provenance()
+        self.logger.info(
+            "complex CouplingNet architecture active_branch_components=%s "
+            "branch_component_count=%d branch_fusion_configured=%s "
+            "branch_fusion_effective=%s "
+            "branch_fusion_includes_elementwise_product=%s "
+            "branch_fuser_features=%s branch_fuser_input_dim=%s "
+            "geometry_branch_enabled=%s fixed_line_transverse_branch_enabled=%s "
+            "pointwise_transverse_trunk_enabled=%s trainable_parameter_count=%d",
+            architecture["active_branch_components"],
+            architecture["branch_component_count"],
+            architecture["branch_fusion_configured"],
+            architecture["branch_fusion_effective"],
+            architecture["branch_fusion_includes_elementwise_product"],
+            architecture["branch_fuser_features"],
+            architecture["branch_fuser_input_dim"],
+            architecture["geometry_branch_enabled"],
+            architecture["fixed_line_transverse_branch_enabled"],
+            architecture["pointwise_transverse_trunk_enabled"],
+            architecture["trainable_parameter_count"],
         )
 
     def evaluate(
@@ -401,24 +451,40 @@ class ComplexCouplingEvaluator(LoggingMixin):
     ) -> SymmetricTangentGreenResponseContext | None:
         if self.balance_projection.mode != "symmetric_tangent_green_response":
             return None
-        build_count_before = self._tangent_context_cache.build_count
+        activity_before = (
+            self._tangent_context_cache.build_count,
+            self._tangent_context_cache.load_count,
+        )
         context = self._tangent_context_cache.get_or_build(
             green_model=self.green_model,
             geometry=batch.geometry,
             x_green_branch=batch.x_green_branch,
             y_green_branch=batch.y_green_branch,
         )
-        if self._tangent_context_cache.build_count != build_count_before:
+        activity_after = (
+            self._tangent_context_cache.build_count,
+            self._tangent_context_cache.load_count,
+        )
+        if activity_after != activity_before:
             stats = context.statistics()
+            telemetry = self._tangent_context_cache.telemetry()
             self.logger.info(
-                "symmetric-tangent Green-response context build_seconds=%.6f "
+                "symmetric-tangent Green-response context source=%s "
+                "build_seconds=%.6f load_seconds=%.6f save_seconds=%.6f "
+                "context_id=%s file_bytes=%d preconditioner_variant=%s "
                 "subspace_dimension=%d eta=%.6e eta_strategy=%s "
                 "eta_applicability=%s line_search_relative_eps=%.6e "
                 "relative_lambda=%.6e denominator_relative_eps=%.6e "
                 "gain_scale=%.6e denominator=[%.6e, %.6e] "
                 "x_blocks=%d y_blocks=%d row_norm_used=false "
                 "global_matrix_materialized=false full_gram_solve=false",
+                telemetry["source"],
                 self._tangent_context_cache.build_seconds,
+                self._tangent_context_cache.load_seconds,
+                self._tangent_context_cache.save_seconds,
+                telemetry["context_id"],
+                telemetry["file_bytes"],
+                context.preconditioner_variant,
                 context.subspace_dimension,
                 context.eta,
                 context.eta_strategy,
@@ -461,6 +527,10 @@ class ComplexCouplingEvaluator(LoggingMixin):
     @property
     def symmetric_tangent_green_response_context_build_seconds(self) -> float:
         return self._tangent_context_cache.build_seconds
+
+    @property
+    def symmetric_tangent_green_response_context_telemetry(self) -> dict[str, object]:
+        return self._tangent_context_cache.telemetry()
 
     def _sample_metric_row(
         self,

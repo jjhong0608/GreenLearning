@@ -15,8 +15,10 @@ from greenonet.config import (
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
+    CouplingGeometryBranchConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
+    FixedLineTransverseBranchConfig,
     TransverseTrunkConfig,
 )
 from greenonet.io import load_state_dict_auto, save_state_dict_safetensors
@@ -39,6 +41,8 @@ def _build_item(tmp_path):
 def _model(
     *,
     fusion_mode: str = "product",
+    geometry_branch_enabled: bool = True,
+    fixed_line_transverse_branch_enabled: bool = True,
     transverse_trunk_enabled: bool = True,
     transverse_trunk_fusion: str = "product",
     coefficient_terms: CouplingCoefficientTermsConfig | None = None,
@@ -65,14 +69,20 @@ def _model(
             ),
             coefficient_terms=coefficient_terms or CouplingCoefficientTermsConfig(),
             branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
+            geometry_branch=CouplingGeometryBranchConfig(
+                enabled=geometry_branch_enabled
+            ),
             axis_1d_trunk=Axis1DTrunkConfig(
                 enabled=True,
                 num_frequencies=2,
                 max_frequency=2.0,
+                fixed_line_transverse_branch=FixedLineTransverseBranchConfig(
+                    enabled=fixed_line_transverse_branch_enabled
+                ),
                 transverse_trunk=TransverseTrunkConfig(
                     enabled=transverse_trunk_enabled,
                     fusion=transverse_trunk_fusion,
-                    length_context=True,
+                    length_context=transverse_trunk_enabled,
                 ),
             ),
         )
@@ -109,6 +119,244 @@ def test_complex_coupling_model_outputs_batch_axis_point_shape(tmp_path):
     assert model.transverse_feature_dim == 4
     assert not hasattr(model, "axis_one_hot")
     assert int(model._output_contract_version.item()) == 6
+
+
+def test_complex_all_on_defaults_preserve_branch_fuser_surface() -> None:
+    model = _model(fusion_mode="product_fuser")
+
+    assert model.active_branch_components == (
+        "source",
+        "coefficient",
+        "fixed_line_transverse",
+        "geometry",
+    )
+    assert model.branch_fuser is not None
+    assert model.branch_fuser.in_features == 5 * model.hidden_dim
+    architecture = model.architecture_provenance()
+    assert architecture["branch_component_count"] == 4
+    assert architecture["branch_fusion_includes_elementwise_product"] is True
+    assert architecture["branch_fuser_features"] == [
+        "source",
+        "coefficient",
+        "fixed_line_transverse",
+        "geometry",
+        "elementwise_product",
+    ]
+
+
+def test_complex_all_on_concat_fuser_uses_active_embeddings_only() -> None:
+    model = _model(fusion_mode="concat_fuser")
+
+    assert model.branch_fuser is not None
+    assert model.branch_fuser.in_features == 4 * model.hidden_dim
+    architecture = model.architecture_provenance()
+    assert architecture["branch_fusion_configured"] == "concat_fuser"
+    assert architecture["branch_fusion_effective"] == "concat_fuser"
+    assert architecture["branch_fusion_includes_elementwise_product"] is False
+    assert architecture["branch_fuser_features"] == [
+        "source",
+        "coefficient",
+        "fixed_line_transverse",
+        "geometry",
+    ]
+
+
+def test_complex_new_auxiliary_defaults_preserve_all_on_parameters() -> None:
+    explicit = _model()
+    torch.manual_seed(0)
+    omitted = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=8,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                num_frequencies=2,
+                max_frequency=2.0,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    fusion="product",
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+
+    assert omitted.state_dict().keys() == explicit.state_dict().keys()
+    for key, value in explicit.state_dict().items():
+        torch.testing.assert_close(omitted.state_dict()[key], value, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("geometry_enabled", "fixed_enabled", "pointwise_enabled"),
+    [
+        (False, True, True),
+        (True, False, True),
+        (True, True, False),
+        (False, False, False),
+    ],
+)
+def test_complex_auxiliary_toggles_are_independent_and_differentiable(
+    tmp_path,
+    geometry_enabled,
+    fixed_enabled,
+    pointwise_enabled,
+) -> None:
+    geometry, item = _build_item(tmp_path)
+    model = _model(
+        fusion_mode="product_fuser",
+        geometry_branch_enabled=geometry_enabled,
+        fixed_line_transverse_branch_enabled=fixed_enabled,
+        transverse_trunk_enabled=pointwise_enabled,
+    )
+
+    output = _forward(model, geometry, item)
+    output.square().mean().backward()
+
+    assert torch.isfinite(output).all()
+    assert (model.branch_geometry is not None) is geometry_enabled
+    assert (model.branch_transverse is not None) is fixed_enabled
+    assert (model.trunk_transverse is not None) is pointwise_enabled
+    assert all(
+        parameter.grad is None or torch.isfinite(parameter.grad).all()
+        for parameter in model.parameters()
+    )
+
+
+def test_complex_minimal_network_uses_three_h_product_fuser(tmp_path) -> None:
+    geometry, item = _build_item(tmp_path)
+    model = _model(
+        fusion_mode="product_fuser",
+        geometry_branch_enabled=False,
+        fixed_line_transverse_branch_enabled=False,
+        transverse_trunk_enabled=False,
+    )
+
+    output = _forward(model, geometry, item)
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.active_branch_components == ("source", "coefficient")
+    assert model.branch_geometry is None
+    assert model.branch_transverse is None
+    assert model.trunk_transverse is None
+    assert model.trunk_fuser is None
+    assert model.branch_fuser is not None
+    assert model.branch_fuser.in_features == 3 * model.hidden_dim
+    architecture = model.architecture_provenance()
+    assert architecture["branch_fusion_includes_elementwise_product"] is True
+    assert architecture["branch_fuser_features"] == [
+        "source",
+        "coefficient",
+        "elementwise_product",
+    ]
+    captured: list[torch.Tensor] = []
+
+    def capture_input(_module, args):
+        captured.append(args[0])
+
+    first = torch.randn(2, 3, model.hidden_dim, dtype=torch.float64, requires_grad=True)
+    second = torch.randn(
+        2, 3, model.hidden_dim, dtype=torch.float64, requires_grad=True
+    )
+    handle = model.branch_fuser.register_forward_pre_hook(capture_input)
+    fused = model._fuse_branch_components([first, second])
+    handle.remove()
+    torch.testing.assert_close(
+        captured[0],
+        torch.cat((first, second, first * second), dim=-1),
+    )
+    fused.square().mean().backward()
+    assert first.grad is not None and torch.isfinite(first.grad).all()
+    assert second.grad is not None and torch.isfinite(second.grad).all()
+    assert not any(
+        key.startswith(
+            (
+                "branch_geometry.",
+                "branch_transverse.",
+                "trunk_transverse.",
+                "trunk_fuser.",
+            )
+        )
+        for key in model.state_dict()
+    )
+
+
+def test_complex_minimal_concat_fuser_uses_two_h_without_product(tmp_path) -> None:
+    geometry, item = _build_item(tmp_path)
+    model = _model(
+        fusion_mode="concat_fuser",
+        geometry_branch_enabled=False,
+        fixed_line_transverse_branch_enabled=False,
+        transverse_trunk_enabled=False,
+    )
+    assert model.branch_fuser is not None
+    captured: list[torch.Tensor] = []
+
+    def capture_input(_module, args):
+        captured.append(args[0])
+
+    handle = model.branch_fuser.register_forward_pre_hook(capture_input)
+    output = _forward(model, geometry, item)
+    handle.remove()
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert torch.isfinite(output).all()
+    assert model.branch_fuser.in_features == 2 * model.hidden_dim
+    assert captured
+    assert all(value.shape[-1] == 2 * model.hidden_dim for value in captured)
+    architecture = model.architecture_provenance()
+    assert architecture["branch_fusion_includes_elementwise_product"] is False
+    assert architecture["branch_fuser_features"] == ["source", "coefficient"]
+
+    first = torch.randn(2, 3, model.hidden_dim, dtype=torch.float64, requires_grad=True)
+    second = torch.randn(
+        2, 3, model.hidden_dim, dtype=torch.float64, requires_grad=True
+    )
+    captured.clear()
+    handle = model.branch_fuser.register_forward_pre_hook(capture_input)
+    fused = model._fuse_branch_components([first, second])
+    handle.remove()
+    torch.testing.assert_close(captured[0], torch.cat((first, second), dim=-1))
+
+    pending = [fused.grad_fn]
+    visited_nodes: set[int] = set()
+    autograd_nodes: list[str] = []
+    while pending:
+        node = pending.pop()
+        if node is None or id(node) in visited_nodes:
+            continue
+        visited_nodes.add(id(node))
+        autograd_nodes.append(type(node).__name__)
+        pending.extend(next_node for next_node, _index in node.next_functions)
+    assert not any(name.startswith("MulBackward") for name in autograd_nodes)
+    fused.square().mean().backward()
+    assert first.grad is not None and torch.isfinite(first.grad).all()
+    assert second.grad is not None and torch.isfinite(second.grad).all()
+
+
+@pytest.mark.parametrize("fusion_mode", ["product_fuser", "concat_fuser"])
+def test_complex_single_active_branch_bypasses_configured_fuser(fusion_mode) -> None:
+    model = _model(
+        fusion_mode=fusion_mode,
+        geometry_branch_enabled=False,
+        fixed_line_transverse_branch_enabled=False,
+        transverse_trunk_enabled=False,
+        coefficient_terms=CouplingCoefficientTermsConfig(
+            diffusion=False,
+            convection=False,
+            reaction=False,
+        ),
+    )
+    feature = torch.randn(2, 3, model.hidden_dim, dtype=torch.float64)
+
+    fused = model._fuse_branch_components([feature])
+
+    assert model.active_branch_components == ("source",)
+    assert model.branch_fuser is None
+    assert fused is feature
+    assert model.architecture_provenance()["branch_fusion_effective"] == "identity"
 
 
 def test_cross_axis_reconstruction_does_not_change_model_state_or_contract() -> None:
@@ -354,6 +602,54 @@ def test_complex_pointwise_transverse_trunk_product_fuser_outputs_shape(tmp_path
     assert model.trunk_fuser is not None
 
 
+def test_complex_pointwise_transverse_trunk_concat_fuser_outputs_shape(tmp_path):
+    geometry, item = _build_item(tmp_path)
+    model = _model(
+        transverse_trunk_enabled=True,
+        transverse_trunk_fusion="concat_fuser",
+    )
+
+    output = _forward(model, geometry, item)
+    provenance = model.architecture_provenance()
+
+    assert output.shape == (1, 2, geometry.num_points)
+    assert model.trunk_transverse is not None
+    assert model.trunk_fuser is not None
+    assert model.trunk_fuser.in_features == 2 * model.hidden_dim
+    assert provenance["pointwise_transverse_trunk_fuser_features"] == [
+        "primary",
+        "transverse",
+    ]
+    assert provenance["pointwise_transverse_trunk_fuser_input_dim"] == (
+        2 * model.hidden_dim
+    )
+    assert not provenance[
+        "pointwise_transverse_trunk_fusion_includes_elementwise_product"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_mode", "target_mode"),
+    [("product_fuser", "concat_fuser"), ("concat_fuser", "product_fuser")],
+)
+def test_complex_model_rejects_transverse_fuser_checkpoint_mismatch(
+    tmp_path,
+    checkpoint_mode,
+    target_mode,
+):
+    checkpoint = tmp_path / f"complex_coupling_trunk_{checkpoint_mode}.safetensors"
+    save_state_dict_safetensors(
+        _model(transverse_trunk_fusion=checkpoint_mode).state_dict(),
+        checkpoint,
+    )
+
+    with pytest.raises(ValueError, match="trunk_fuser.weight shape"):
+        load_state_dict_auto(
+            _model(transverse_trunk_fusion=target_mode),
+            checkpoint,
+        )
+
+
 def test_complex_pointwise_transverse_trunk_uses_cross_axis_local_coordinates(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     model = _model(transverse_trunk_enabled=True)
@@ -404,9 +700,20 @@ def test_complex_coupling_model_is_source_conditioned(tmp_path):
     assert not torch.allclose(original, changed)
 
 
-def test_complex_model_scales_response_output_by_source_amplitude(tmp_path):
+@pytest.mark.parametrize("fusion_mode", ["product", "concat_fuser"])
+@pytest.mark.parametrize("minimal", [False, True])
+def test_complex_model_scales_response_output_by_source_amplitude(
+    tmp_path,
+    minimal,
+    fusion_mode,
+):
     geometry, item = _build_item(tmp_path)
-    model = _model()
+    model = _model(
+        fusion_mode=fusion_mode,
+        geometry_branch_enabled=not minimal,
+        fixed_line_transverse_branch_enabled=not minimal,
+        transverse_trunk_enabled=not minimal,
+    )
 
     original = _forward(model, geometry, item)
     doubled = model(
@@ -422,12 +729,21 @@ def test_complex_model_scales_response_output_by_source_amplitude(tmp_path):
     torch.testing.assert_close(doubled, 2.0 * original)
 
 
+@pytest.mark.parametrize("fusion_mode", ["product", "concat_fuser"])
+@pytest.mark.parametrize("minimal", [False, True])
 def test_complex_model_scales_raw_response_by_primary_length_squared(
     tmp_path,
     monkeypatch,
+    minimal,
+    fusion_mode,
 ):
     geometry, item = _build_item(tmp_path)
-    model = _model()
+    model = _model(
+        fusion_mode=fusion_mode,
+        geometry_branch_enabled=not minimal,
+        fixed_line_transverse_branch_enabled=not minimal,
+        transverse_trunk_enabled=not minimal,
+    )
 
     response = _forward(model, geometry, item)
     monkeypatch.setattr(
@@ -596,6 +912,44 @@ def test_complex_model_rejects_smooth_mask_balance_projection():
         )
 
 
+def test_complex_model_requires_length_context_only_for_enabled_transverse_trunk():
+    with pytest.raises(ValueError, match="length_context=true"):
+        ComplexCouplingNet(
+            CouplingModelConfig(
+                branch_input_dim=4,
+                hidden_dim=4,
+                depth=1,
+                dtype=torch.float64,
+                balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+                axis_1d_trunk=Axis1DTrunkConfig(
+                    enabled=True,
+                    transverse_trunk=TransverseTrunkConfig(
+                        enabled=True,
+                        length_context=False,
+                    ),
+                ),
+            )
+        )
+
+    disabled = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=False,
+                    length_context=False,
+                ),
+            ),
+        )
+    )
+    assert disabled.trunk_transverse is None
+
+
 def test_complex_model_accepts_physical_symmetric_projection():
     model = ComplexCouplingNet(
         CouplingModelConfig(
@@ -735,6 +1089,75 @@ def test_complex_model_loads_matching_output_contract_checkpoint(tmp_path):
     load_state_dict_auto(loaded, checkpoint)
 
     assert int(loaded._output_contract_version.item()) == 6
+
+
+def test_complex_model_loads_matching_concat_fuser_checkpoint(tmp_path):
+    model = _model(
+        fusion_mode="concat_fuser",
+        geometry_branch_enabled=False,
+        fixed_line_transverse_branch_enabled=False,
+        transverse_trunk_enabled=False,
+    )
+    checkpoint = tmp_path / "complex_coupling_concat_fuser.safetensors"
+    save_state_dict_safetensors(model.state_dict(), checkpoint)
+
+    loaded = _model(
+        fusion_mode="concat_fuser",
+        geometry_branch_enabled=False,
+        fixed_line_transverse_branch_enabled=False,
+        transverse_trunk_enabled=False,
+    )
+    load_state_dict_auto(loaded, checkpoint)
+
+    assert loaded.branch_fuser is not None
+    assert loaded.branch_fuser.in_features == 2 * loaded.hidden_dim
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(loaded.state_dict()[key], value)
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_mode", "target_mode"),
+    [("product_fuser", "concat_fuser"), ("concat_fuser", "product_fuser")],
+)
+def test_complex_model_rejects_concat_product_fuser_checkpoint_mismatch(
+    tmp_path,
+    checkpoint_mode,
+    target_mode,
+):
+    kwargs = {
+        "geometry_branch_enabled": False,
+        "fixed_line_transverse_branch_enabled": False,
+        "transverse_trunk_enabled": False,
+    }
+    checkpoint = tmp_path / f"complex_coupling_{checkpoint_mode}.safetensors"
+    save_state_dict_safetensors(
+        _model(fusion_mode=checkpoint_mode, **kwargs).state_dict(),
+        checkpoint,
+    )
+
+    with pytest.raises(ValueError, match="branch_fuser.weight shape"):
+        load_state_dict_auto(_model(fusion_mode=target_mode, **kwargs), checkpoint)
+
+
+@pytest.mark.parametrize("checkpoint_is_minimal", [False, True])
+def test_complex_model_rejects_full_minimal_checkpoint_mismatch(
+    tmp_path,
+    checkpoint_is_minimal,
+):
+    minimal_kwargs = {
+        "fusion_mode": "product_fuser",
+        "geometry_branch_enabled": False,
+        "fixed_line_transverse_branch_enabled": False,
+        "transverse_trunk_enabled": False,
+    }
+    full_kwargs = {"fusion_mode": "product_fuser"}
+    checkpoint_kwargs = minimal_kwargs if checkpoint_is_minimal else full_kwargs
+    target_kwargs = full_kwargs if checkpoint_is_minimal else minimal_kwargs
+    checkpoint = tmp_path / "complex_coupling_architecture_mismatch.safetensors"
+    save_state_dict_safetensors(_model(**checkpoint_kwargs).state_dict(), checkpoint)
+
+    with pytest.raises(ValueError, match="checkpoint architecture mismatch"):
+        load_state_dict_auto(_model(**target_kwargs), checkpoint)
 
 
 def test_complex_model_loads_single_residual_fuser_checkpoint_surface(tmp_path):

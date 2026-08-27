@@ -56,6 +56,7 @@ from greenonet.config import (
     CouplingBestPhysicsCheckpointConfig,
     CouplingCoefficientTermsConfig,
     CouplingTrainingConfig,
+    GeometryKSelectionConfig,
     SymmetricTangentGreenResponseProjectionConfig,
 )
 from greenonet.io import load_model_with_config, load_state_dict_auto
@@ -1261,6 +1262,11 @@ class ComplexCouplingArtifactExporter(
         "correction_weight_phi": "Physical balance correction weight for phi",
         "tangent_preconditioner_base": "Tangent Jacobi preconditioner base",
         "tangent_denominator": "Tangent regularized denominator",
+        "tangent_cross_axis_inner_product": "Cross-axis column Gram diagonal c",
+        "tangent_normalized_correlation": "Normalized cross-axis correlation rho",
+        "tangent_normalized_quadratic_cross_axis": (
+            "Normalized quadratic cross-axis term q"
+        ),
     }
 
     def __init__(
@@ -1328,6 +1334,11 @@ class ComplexCouplingArtifactExporter(
             config=configs.coupling_training,
             device=device,
             work_dir=self.request.outdir,
+            tangent_context_path=self.request.tangent_context,
+            tangent_context_default_path=(
+                self.request.coupling_checkpoint.parent
+                / "tangent_response_context.safetensors"
+            ),
         )
         boundary_context = evaluator.boundary_energy_context(geometry)
         boundary_overlay = ComplexDomainBoundaryOverlay.from_endpoint_coords(
@@ -1480,6 +1491,7 @@ class ComplexCouplingArtifactExporter(
             configs.coupling_training,
             metric_rows,
         )
+        architecture = coupling_model.architecture_provenance()
         summary = {
             "geometry_mode": "complex",
             "device": str(device),
@@ -1489,6 +1501,9 @@ class ComplexCouplingArtifactExporter(
             "training_source": asdict(configs.dataset.coupling_source),
             "reference_diagnostics": asdict(configs.dataset.reference_diagnostics),
             "training_reproducibility": training_reproducibility,
+            "tangent_subspace_dimension_provenance": configs.raw.get(
+                "tangent_subspace_dimension_provenance"
+            ),
             "artifact_dataset_contract": "full_reference_test_npz",
             "selected_samples": list(selected),
             "selected_sample_roles": roles,
@@ -1802,6 +1817,7 @@ class ComplexCouplingArtifactExporter(
                 "amplitude": "A=sqrt(integral_0^1 f_phys(s(t))^2 dt)",
                 "model_output_scaling": "primary_length_squared_times_physical_amplitude",
             },
+            "complex_coupling_architecture": architecture,
             "coefficient_terms": {
                 "diffusion": configs.coupling_model.coefficient_terms.diffusion,
                 "convection": configs.coupling_model.coefficient_terms.convection,
@@ -1835,6 +1851,15 @@ class ComplexCouplingArtifactExporter(
                 ],
             },
         }
+        if coupling_model.branch_geometry is not None:
+            summary["geometry_branch"] = {
+                "enabled": True,
+                "feature_count": coupling_model.geometry_feature_dim,
+            }
+        if coupling_model.branch_transverse is None:
+            summary.pop("transverse_encoding")
+        if not coupling_model.transverse_trunk_enabled:
+            summary.pop("transverse_trunk")
         if visualization_mesh is not None:
             mesh_summary = visualization_mesh.summary(self.request.visualization_mesh)
             mesh_summary["raw_archive"] = mesh_raw_archive
@@ -2630,24 +2655,25 @@ class ComplexCouplingArtifactExporter(
                 arrays["boundary_split_residual"] = (u_phi - u_psi)[
                     boundary_indices.numpy()
                 ]
-                arrays["x_transverse_length_context"] = (
-                    evaluator.model.transverse_length_context_features(
-                        prediction.batch.geometry,
-                        "x",
+                if evaluator.model.transverse_trunk_enabled:
+                    arrays["x_transverse_length_context"] = (
+                        evaluator.model.transverse_length_context_features(
+                            prediction.batch.geometry,
+                            "x",
+                        )
+                        .detach()
+                        .cpu()
+                        .numpy()
                     )
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
-                arrays["y_transverse_length_context"] = (
-                    evaluator.model.transverse_length_context_features(
-                        prediction.batch.geometry,
-                        "y",
+                    arrays["y_transverse_length_context"] = (
+                        evaluator.model.transverse_length_context_features(
+                            prediction.batch.geometry,
+                            "y",
+                        )
+                        .detach()
+                        .cpu()
+                        .numpy()
                     )
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
                 if bool(prediction.batch.has_flux[0].item()):
                     target_phi = (
                         prediction.batch.flux_valid[0, 0].detach().cpu().numpy()
@@ -2741,8 +2767,57 @@ class ComplexCouplingArtifactExporter(
         payload = {
             "gamma_x_squared": context.gamma_x_squared.detach().cpu().numpy(),
             "gamma_y_squared": context.gamma_y_squared.detach().cpu().numpy(),
+            "cross_axis_inner_product": (
+                context.cross_axis_inner_product.detach().cpu().numpy()
+            ),
+            "normalized_correlation": (
+                context.normalized_correlation.detach().cpu().numpy()
+            ),
+            "normalized_quadratic_cross_axis": (
+                context.normalized_quadratic_cross_axis.detach().cpu().numpy()
+            ),
+            "separable_preconditioner_base": (
+                context.separable_preconditioner_base.detach().cpu().numpy()
+            ),
+            "exact_preconditioner_base": (
+                context.exact_preconditioner_base.detach().cpu().numpy()
+            ),
+            "absolute_preconditioner_base": (
+                context.absolute_preconditioner_base.detach().cpu().numpy()
+            ),
+            "quadratic_preconditioner_base": (
+                context.quadratic_preconditioner_base.detach().cpu().numpy()
+            ),
+            "separable_denominator": (
+                context.separable_denominator.detach().cpu().numpy()
+            ),
+            "exact_denominator": context.exact_denominator.detach().cpu().numpy(),
+            "absolute_denominator": (
+                context.absolute_denominator.detach().cpu().numpy()
+            ),
+            "quadratic_denominator": (
+                context.quadratic_denominator.detach().cpu().numpy()
+            ),
             "preconditioner_base": (context.preconditioner_base.detach().cpu().numpy()),
             "denominator": context.denominator.detach().cpu().numpy(),
+            "preconditioner_variant": np.asarray(context.preconditioner_variant),
+            "cross_axis_relative_eps": np.asarray(
+                context.cross_axis_relative_eps,
+                dtype=np.float64,
+            ),
+            "q_epsilon": context.q_epsilon.detach().cpu().numpy(),
+            "damping": context.damping.detach().cpu().numpy(),
+            "cauchy_violation": context.cauchy_violation.detach().cpu().numpy(),
+            "cauchy_violation_max": (
+                context.cauchy_violation_max.detach().cpu().numpy()
+            ),
+            "exact_roundoff_clamp_mask": (
+                context.exact_roundoff_clamp_mask.detach().cpu().numpy()
+            ),
+            "exact_roundoff_clamp_count": np.asarray(
+                context.exact_roundoff_clamp_count,
+                dtype=np.int64,
+            ),
             "point_mass": context.point_mass.detach().cpu().numpy(),
             "eta": np.asarray(context.eta, dtype=np.float64),
             "eta_strategy": np.asarray(context.eta_strategy),
@@ -2815,6 +2890,15 @@ class ComplexCouplingArtifactExporter(
             return [], ()
         coords = geometry.coords_valid.detach().cpu().numpy()
         fields = {
+            "tangent_cross_axis_inner_product": (
+                context.cross_axis_inner_product.detach().cpu().numpy()
+            ),
+            "tangent_normalized_correlation": (
+                context.normalized_correlation.detach().cpu().numpy()
+            ),
+            "tangent_normalized_quadratic_cross_axis": (
+                context.normalized_quadratic_cross_axis.detach().cpu().numpy()
+            ),
             "tangent_preconditioner_base": (
                 context.preconditioner_base.detach().cpu().numpy()
             ),
@@ -2823,9 +2907,10 @@ class ComplexCouplingArtifactExporter(
         paths: list[str] = []
         for field, values in fields.items():
             parameter_label = (
-                f"K={context.subspace_dimension}, lambda={context.relative_lambda:g}"
+                f"K={context.subspace_dimension}, "
+                f"variant={context.preconditioner_variant}"
                 if context.subspace_dimension >= 2
-                else f"eta={context.eta:g}, lambda={context.relative_lambda:g}"
+                else f"eta={context.eta:g}, variant={context.preconditioner_variant}"
             )
             figure = self._scatter_figure(
                 title=(
@@ -2889,14 +2974,34 @@ class ComplexCouplingArtifactExporter(
                 + "p_tilde=(rhs+d)/2; q_tilde=(rhs-d)/2; "
                 + "m0=H_x*p_tilde-H_y*q_tilde; "
                 + "g=(H_x+H_y)^T*M_Omega*m0; "
-                + "D=gamma_x^2+gamma_y^2+"
-                + f"({tangent_config.relative_lambda:g}+"
-                + f"{tangent_config.denominator_relative_eps:g})*mean(gamma_sum); "
+                + ComplexCouplingArtifactExporter._tangent_preconditioner_formula(
+                    tangent_config
+                )
+                + "; "
                 + update
                 + "phi=p_tilde+delta; psi=q_tilde-delta; "
                 + suffix
             )
         return prefix + "phi=(rhs+d)/2; psi=(rhs-d)/2; " + suffix
+
+    @staticmethod
+    def _tangent_preconditioner_formula(
+        config: SymmetricTangentGreenResponseProjectionConfig,
+    ) -> str:
+        base = {
+            "separable": "B=a+b",
+            "exact_diagonal": "B=a+b+2*c",
+            "absolute_cross_axis": "B=a+b+2*abs(c)",
+            "normalized_quadratic_cross_axis": (
+                "B=a+b+4*c^2/(a+b+cross_axis_relative_eps*mean(a+b))"
+            ),
+        }[config.preconditioner_variant]
+        return (
+            "a=diag(H_x^T*M*H_x); b=diag(H_y^T*M*H_y); "
+            "c=diag(H_x^T*M*H_y); "
+            + base
+            + "; D=B+(relative_lambda+denominator_relative_eps)*mean(a+b)"
+        )
 
     def _green_response_context_summary(
         self,
@@ -2958,6 +3063,9 @@ class ComplexCouplingArtifactExporter(
         active = projection.mode == "symmetric_tangent_green_response"
         config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             projection.symmetric_tangent_green_response
+        )
+        geometry_k_selection = GeometryKSelectionConfig.from_raw(
+            config.geometry_k_selection
         )
         subspace = config.subspace_dimension >= 2
         configured_lr_schedule = CouplingLearningRateSchedule.configured_config(
@@ -3038,6 +3146,8 @@ class ComplexCouplingArtifactExporter(
         summary: dict[str, Any] = {
             "active": active,
             "subspace_dimension": config.subspace_dimension,
+            "max_subspace_dimension": config.max_subspace_dimension,
+            "geometry_k_selection_enabled_at_runtime": (geometry_k_selection.enabled),
             "eta": config.eta,
             "eta_role": (
                 "k1_only_not_applied"
@@ -3049,6 +3159,8 @@ class ComplexCouplingArtifactExporter(
             "line_search_relative_eps": config.line_search_relative_eps,
             "relative_lambda": config.relative_lambda,
             "denominator_relative_eps": config.denominator_relative_eps,
+            "preconditioner_variant": config.preconditioner_variant,
+            "cross_axis_relative_eps": config.cross_axis_relative_eps,
             "fixed_parameters": not adaptive and not subspace,
             "sample_adaptive": adaptive or subspace,
             "batch_independent": True,
@@ -3061,10 +3173,13 @@ class ComplexCouplingArtifactExporter(
             "gradient": "g=(H_x+H_y)^T*M_Omega*m0",
             "update": update,
             "eta_cap_schedule": eta_schedule_summary,
-            "preconditioner": (
-                "D=gamma_x_squared+gamma_y_squared+"
-                "(relative_lambda+denominator_relative_eps)*mean(gamma_sum)"
-            ),
+            "preconditioner": self._tangent_preconditioner_formula(config),
+            "preconditioner_suite": [
+                "separable",
+                "exact_diagonal",
+                "absolute_cross_axis",
+                "normalized_quadratic_cross_axis",
+            ],
             "gain_definition": "diag(H_s^T M_Omega H_s)",
             "operator_definition": "H_s=K_s W_s L_s^2",
             "row_norm_used": False,
@@ -3091,6 +3206,9 @@ class ComplexCouplingArtifactExporter(
             ),
             "context_build_seconds": (
                 evaluator.symmetric_tangent_green_response_context_build_seconds
+            ),
+            "context_checkpoint": (
+                evaluator.symmetric_tangent_green_response_context_telemetry
             ),
             "raw_archive": (
                 "data/symmetric_tangent_green_response_fields.npz"
@@ -3227,11 +3345,11 @@ class ComplexCouplingArtifactExporter(
             color_ranges = color_ranges_by_sample[sample.sample_id]
             for field in self._figure_fields_for_sample(sample.arrays):
                 fig = self._scatter_figure(
-                    title=f"{stem} {self.FIGURE_TITLES[field]}",
+                    title=f"{stem} {self._figure_title(field)}",
                     coords=sample.arrays["coords_valid"],
                     values=sample.arrays[field],
                     theme=theme,
-                    signed=field in self.SIGNED_FIGURE_FIELDS,
+                    signed=self._figure_is_signed(field),
                     color_range=color_ranges.get(field),
                     boundary_overlay=boundary_overlay,
                 )
@@ -3382,7 +3500,38 @@ class ComplexCouplingArtifactExporter(
     def _figure_fields_for_sample(
         cls, arrays: dict[str, np.ndarray]
     ) -> tuple[str, ...]:
-        return tuple(field for field in cls.FIGURE_FIELDS if field in arrays)
+        configured = tuple(field for field in cls.FIGURE_FIELDS if field in arrays)
+        dynamic = tuple(
+            sorted(
+                field
+                for field in arrays
+                if field not in configured
+                and (
+                    field.startswith("tangent_direction_")
+                    or field.startswith("tangent_response_direction_")
+                )
+                and field.rsplit("_", maxsplit=1)[-1].isdigit()
+            )
+        )
+        return configured + dynamic
+
+    @classmethod
+    def _figure_title(cls, field: str) -> str:
+        if field in cls.FIGURE_TITLES:
+            return cls.FIGURE_TITLES[field]
+        if field.startswith("tangent_direction_"):
+            index = int(field.rsplit("_", maxsplit=1)[-1])
+            return f"Jacobi-preconditioned tangent direction {index}"
+        if field.startswith("tangent_response_direction_"):
+            index = int(field.rsplit("_", maxsplit=1)[-1])
+            return f"Response of tangent direction {index}"
+        raise KeyError(f"No figure title is defined for field '{field}'.")
+
+    @classmethod
+    def _figure_is_signed(cls, field: str) -> bool:
+        return field in cls.SIGNED_FIGURE_FIELDS or field.startswith(
+            ("tangent_direction_", "tangent_response_direction_")
+        )
 
     @classmethod
     def _figure_fields(

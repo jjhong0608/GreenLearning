@@ -14,13 +14,13 @@ from greenonet.complex_tangent_subspace_audit import (
 
 
 class AuditTangentSubspaceCLI:
-    """Run a frozen-checkpoint matrix-free K=1 through K=4 comparison."""
+    """Run a frozen-checkpoint matrix-free tangent-dimension comparison."""
 
     def __init__(self) -> None:
         parser = argparse.ArgumentParser(
             description=(
                 "Compare the configured-cap K=1 tangent correction with nested "
-                "unconstrained matrix-free tangent subspaces through K=4."
+                "unconstrained matrix-free tangent subspaces through requested K."
             )
         )
         parser.add_argument("--config", type=Path, required=True)
@@ -30,13 +30,13 @@ class AuditTangentSubspaceCLI:
         parser.add_argument("--geometry", type=Path, default=None)
         parser.add_argument("--test-path", type=Path, default=None)
         parser.add_argument("--coefficients", type=Path, default=None)
+        parser.add_argument("--tangent-context", type=Path, default=None)
         parser.add_argument("--device", type=str, default=None)
         parser.add_argument("--theme", type=str, default="plotly_white")
         parser.add_argument("--batch-size", type=self._positive_int, default=10)
         parser.add_argument(
             "--max-subspace-dimension",
             type=self._subspace_dimension,
-            choices=(2, 3, 4),
             default=2,
             help="Largest unconstrained diagnostic tangent subspace (default: 2).",
         )
@@ -85,8 +85,8 @@ class AuditTangentSubspaceCLI:
     @staticmethod
     def _subspace_dimension(value: str) -> int:
         parsed = int(value)
-        if parsed not in {2, 3, 4}:
-            raise argparse.ArgumentTypeError("value must be 2, 3, or 4")
+        if parsed < 2:
+            raise argparse.ArgumentTypeError("value must be at least 2")
         return parsed
 
     @staticmethod
@@ -140,6 +140,7 @@ class AuditTangentSubspaceCLI:
                 geometry=args.geometry,
                 test_path=args.test_path,
                 coefficients=args.coefficients,
+                tangent_context=args.tangent_context,
                 device=args.device,
                 theme=args.theme,
                 batch_size=args.batch_size,

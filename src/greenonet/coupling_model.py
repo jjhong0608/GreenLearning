@@ -418,6 +418,12 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
         self.active_coefficient_terms = tuple(active_coefficient_terms)
         branch_fusion = CouplingBranchFusionConfig.from_raw(config.branch_fusion)
         self.branch_fusion_mode = branch_fusion.mode
+        if self.branch_fusion_mode == "concat_fuser":
+            raise ValueError(
+                "branch_fusion.mode='concat_fuser' is only supported by "
+                "ComplexCouplingNet; unit-square CouplingNet supports 'product' "
+                "and 'product_fuser'."
+            )
         axis_1d_trunk = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
         self.axis_1d_trunk_enabled = bool(axis_1d_trunk.enabled)
         self.axis_1d_boundary_aware_modes = int(axis_1d_trunk.boundary_aware_modes)

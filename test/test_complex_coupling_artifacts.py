@@ -24,8 +24,11 @@ from greenonet.config import (
     BalanceProjectionConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
+    CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
+    CouplingGeometryBranchConfig,
     CouplingModelConfig,
+    FixedLineTransverseBranchConfig,
     ModelConfig,
     TransverseTrunkConfig,
 )
@@ -681,6 +684,13 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     )
 
     assert summary["geometry_mode"] == "complex"
+    assert summary["complex_coupling_architecture"]["active_branch_components"] == [
+        "source",
+        "coefficient",
+        "fixed_line_transverse",
+        "geometry",
+    ]
+    assert summary["geometry_branch"] == {"enabled": True, "feature_count": 6}
     assert summary["selected_samples"] == [0]
     assert summary["training_source"] == {"mode": "npz", "indexed_gp": None}
     assert summary["reference_diagnostics"] == {
@@ -1262,6 +1272,119 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         np.testing.assert_equal(boundary_off_raw[key], raw[key])
 
 
+@pytest.mark.parametrize(
+    ("fusion_mode", "expected_input_dim", "includes_product", "fuser_features"),
+    [
+        (
+            "product_fuser",
+            12,
+            True,
+            ["source", "coefficient", "elementwise_product"],
+        ),
+        ("concat_fuser", 8, False, ["source", "coefficient"]),
+    ],
+)
+def test_minimal_complex_artifact_records_only_active_auxiliary_modules(
+    tmp_path,
+    monkeypatch,
+    fusion_mode,
+    expected_input_dim,
+    includes_product,
+    fuser_features,
+):
+    _patch_static_export(monkeypatch)
+    geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
+    coeff_path = write_coefficients(tmp_path / "coeffs.py")
+    data_dir = tmp_path / "test_data"
+    write_sample_npz(data_dir)
+    coupling_cfg = CouplingModelConfig(
+        branch_input_dim=4,
+        hidden_dim=4,
+        depth=1,
+        dtype=torch.float64,
+        balance_projection=BalanceProjectionConfig(mode="physical_symmetric"),
+        branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
+        geometry_branch=CouplingGeometryBranchConfig(enabled=False),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            num_frequencies=2,
+            max_frequency=2.0,
+            fixed_line_transverse_branch=FixedLineTransverseBranchConfig(enabled=False),
+            transverse_trunk=TransverseTrunkConfig(enabled=False),
+        ),
+    )
+    green_cfg = ModelConfig(
+        hidden_dim=4,
+        depth=1,
+        branch_input_dim=4,
+        use_green=False,
+        dtype=torch.float64,
+    )
+    coupling_path = tmp_path / "minimal_coupling.safetensors"
+    green_path = tmp_path / "green.safetensors"
+    save_state_dict_safetensors(
+        ComplexCouplingNet(coupling_cfg).state_dict(), coupling_path
+    )
+    save_model_with_config(GreenONetModel(green_cfg), green_cfg, green_path)
+    config_path = write_complex_config(
+        tmp_path / "config.json",
+        geometry_path=geometry_path,
+        train_path=None,
+        test_path=data_dir,
+        coefficient_path=coeff_path,
+    )
+    payload = json.loads(config_path.read_text())
+    payload["coupling_model"]["branch_fusion"] = {"mode": fusion_mode}
+    payload["coupling_model"]["geometry_branch"] = {"enabled": False}
+    payload["coupling_model"]["axis_1d_trunk"]["fixed_line_transverse_branch"] = {
+        "enabled": False
+    }
+    payload["coupling_model"]["axis_1d_trunk"]["transverse_trunk"] = {
+        "enabled": False,
+        "fusion": "product",
+        "length_context": False,
+    }
+    config_path.write_text(json.dumps(payload))
+    outdir = tmp_path / "artifacts"
+
+    summary = export_complex_coupling_artifacts(
+        CouplingArtifactRequest(
+            config=config_path,
+            coupling_checkpoint=coupling_path,
+            green_checkpoint=green_path,
+            outdir=outdir,
+            device="cpu",
+        )
+    )
+
+    architecture = summary["complex_coupling_architecture"]
+    assert architecture["active_branch_components"] == ["source", "coefficient"]
+    assert architecture["branch_fusion_configured"] == fusion_mode
+    assert architecture["branch_fusion_effective"] == fusion_mode
+    assert (
+        architecture["branch_fusion_includes_elementwise_product"] is includes_product
+    )
+    assert architecture["branch_fuser_features"] == fuser_features
+    assert architecture["branch_fuser_input_dim"] == expected_input_dim
+    assert architecture["geometry_branch_enabled"] is False
+    assert architecture["fixed_line_transverse_branch_enabled"] is False
+    assert architecture["pointwise_transverse_trunk_enabled"] is False
+    assert "geometry_branch" not in summary
+    assert "transverse_encoding" not in summary
+    assert "transverse_trunk" not in summary
+    evaluator_log = (outdir / "training.log").read_text()
+    assert "active_branch_components=['source', 'coefficient']" in evaluator_log
+    assert f"branch_fusion_configured={fusion_mode}" in evaluator_log
+    assert (
+        f"branch_fusion_includes_elementwise_product={includes_product}"
+        in evaluator_log
+    )
+    assert f"branch_fuser_input_dim={expected_input_dim}" in evaluator_log
+    raw = np.load(outdir / "data" / "selected_raw_arrays.npz")
+    assert not any(key.endswith("_x_transverse_length_context") for key in raw.files)
+    assert not any(key.endswith("_y_transverse_length_context") for key in raw.files)
+
+
 def test_column_diagonal_green_response_artifact_provenance_and_fields(
     tmp_path,
     monkeypatch,
@@ -1416,6 +1539,7 @@ def test_column_diagonal_green_response_artifact_provenance_and_fields(
         ("closed_loop_exact_line_search", 2),
         ("closed_loop_exact_line_search", 3),
         ("closed_loop_exact_line_search", 4),
+        ("closed_loop_exact_line_search", 5),
     ],
 )
 def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
@@ -1557,6 +1681,9 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert stationarity_summary["uses_reference_targets"] is False
     assert "m0=H_x*p_tilde-H_y*q_tilde" in projection["formula"]
     assert summary["projection_figure_fields"] == [
+        "tangent_cross_axis_inner_product",
+        "tangent_normalized_correlation",
+        "tangent_normalized_quadratic_cross_axis",
         "tangent_preconditioner_base",
         "tangent_denominator",
     ]
@@ -1567,8 +1694,27 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     expected_context_fields = {
         "gamma_x_squared",
         "gamma_y_squared",
+        "cross_axis_inner_product",
+        "normalized_correlation",
+        "normalized_quadratic_cross_axis",
+        "separable_preconditioner_base",
+        "exact_preconditioner_base",
+        "absolute_preconditioner_base",
+        "quadratic_preconditioner_base",
+        "separable_denominator",
+        "exact_denominator",
+        "absolute_denominator",
+        "quadratic_denominator",
         "preconditioner_base",
         "denominator",
+        "preconditioner_variant",
+        "cross_axis_relative_eps",
+        "q_epsilon",
+        "damping",
+        "cauchy_violation",
+        "cauchy_violation_max",
+        "exact_roundoff_clamp_mask",
+        "exact_roundoff_clamp_count",
         "point_mass",
         "eta",
         "eta_strategy",
@@ -1581,7 +1727,16 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert set(context_fields.files) == expected_context_fields
     assert context_fields["eta"].item() == pytest.approx(0.01)
     assert context_fields["eta_strategy"].item() == eta_strategy
+    assert context_fields["preconditioner_variant"].item() == "separable"
     assert context_fields["line_search_relative_eps"].item() == pytest.approx(3.0e-12)
+    np.testing.assert_allclose(
+        context_fields["preconditioner_base"],
+        context_fields["separable_preconditioner_base"],
+    )
+    np.testing.assert_allclose(
+        context_fields["denominator"],
+        context_fields["separable_denominator"],
+    )
     assert np.all(context_fields["denominator"] > 0.0)
     for field in summary["projection_figure_fields"]:
         figure_path = outdir / "figures" / "balance_projection" / f"{field}.json"
@@ -1638,6 +1793,11 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
             assert f"coefficient_{direction_index}_statistics" in tangent
             assert f"response_cost_k{direction_index + 1}_statistics" in tangent
             assert f"direction_{direction_index}_active_fraction" in tangent
+            assert f"tangent_direction_{direction_index}" in summary["figure_fields"]
+            assert (
+                f"tangent_response_direction_{direction_index}"
+                in summary["figure_fields"]
+            )
         for suffix in (
             "_tangent_direction_0",
             "_tangent_direction_1",

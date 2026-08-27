@@ -14,6 +14,9 @@ from greenonet.complex_coupling_data import ComplexCouplingDataset
 from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_geometry import load_complex_geometry
+from greenonet.complex_tangent_geometry_selection import (
+    GeometryTangentDimensionResolver,
+)
 from greenonet.config import (
     Axis1DTrunkConfig,
     BalanceProjectionConfig,
@@ -21,6 +24,7 @@ from greenonet.config import (
     CouplingBranchFusionConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
+    CouplingGeometryBranchConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
     CouplingModelConfig,
@@ -74,6 +78,15 @@ class EvalCouplingCLI:
             type=str,
             required=True,
             help="Path to GreenONet checkpoint for computing kernels.",
+        )
+        parser.add_argument(
+            "--tangent-context",
+            type=Path,
+            default=None,
+            help=(
+                "Optional tangent response context sidecar override. Requires "
+                "tangent_context_checkpoint.enabled=true."
+            ),
         )
         self.parser = parser
 
@@ -138,6 +151,16 @@ class EvalCouplingCLI:
     ) -> CouplingBranchFusionConfig:
         try:
             return CouplingBranchFusionConfig.from_raw(raw_branch_fusion)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"{section_name}.{exc}") from exc
+
+    @staticmethod
+    def _build_geometry_branch_config(
+        raw_geometry_branch: object | None,
+        section_name: str,
+    ) -> CouplingGeometryBranchConfig:
+        try:
+            return CouplingGeometryBranchConfig.from_raw(raw_geometry_branch)  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:
             raise type(exc)(f"{section_name}.{exc}") from exc
 
@@ -362,6 +385,22 @@ class EvalCouplingCLI:
         geometry = load_complex_geometry(
             dataset_cfg.geometry_path, dtype=dataset_cfg.dtype
         )
+        resolution = GeometryTangentDimensionResolver.resolve(
+            model_config=coupling_model_cfg,
+            geometry=geometry,
+            geometry_path=dataset_cfg.geometry_path,
+        )
+        coupling_model_cfg = resolution.model_config
+        provenance = raw.get("tangent_subspace_dimension_provenance")
+        if not isinstance(provenance, dict):
+            provenance = resolution.provenance
+        if provenance is not None:
+            work_dir = Path(args.work_dir)
+            work_dir.mkdir(parents=True, exist_ok=True)
+            (work_dir / "tangent_subspace_dimension_provenance.json").write_text(
+                json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         test_dataset = ComplexCouplingDataset(
             dataset_cfg.test_path,
             geometry,
@@ -398,6 +437,11 @@ class EvalCouplingCLI:
             device=device,
             work_dir=Path(args.work_dir),
             terminal_width=terminal_cfg.width,
+            tangent_context_path=args.tangent_context,
+            tangent_context_default_path=(
+                Path(args.coupling_checkpoint).parent
+                / "tangent_response_context.safetensors"
+            ),
         )
         evaluator.evaluate(
             test_dataset,
@@ -430,6 +474,11 @@ class EvalCouplingCLI:
             branch_fusion_raw,
             "coupling_model",
         )
+        geometry_branch_raw = coupling_model_kwargs.pop("geometry_branch", None)
+        geometry_branch_cfg = self._build_geometry_branch_config(
+            geometry_branch_raw,
+            "coupling_model",
+        )
         green_response_raw = coupling_model_kwargs.pop("green_response_feature", None)
         green_response_cfg = self._build_green_response_feature_config(
             green_response_raw,
@@ -457,6 +506,7 @@ class EvalCouplingCLI:
             source_stencil_lift=source_lift_cfg,
             coefficient_terms=coefficient_terms_cfg,
             branch_fusion=branch_fusion_cfg,
+            geometry_branch=geometry_branch_cfg,
             green_response_feature=green_response_cfg,
             trunk_positional_encoding=positional_cfg,
             axis_1d_trunk=axis_1d_trunk_cfg,

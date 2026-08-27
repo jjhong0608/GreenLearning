@@ -39,10 +39,13 @@ from greenonet.config import (
     CouplingBestEnergyCheckpointConfig,
     CouplingBestPhysicsCheckpointConfig,
     CouplingBestRelSolCheckpointConfig,
+    CouplingBranchFusionConfig,
+    CouplingGeometryBranchConfig,
     CouplingLossTermConfig,
     CouplingLossesConfig,
     CouplingModelConfig,
     CouplingTrainingConfig,
+    FixedLineTransverseBranchConfig,
     TransverseTrunkConfig,
 )
 from test.complex_fixtures import (
@@ -164,6 +167,90 @@ def test_complex_trainer_one_step_has_no_cross_metrics_or_logs(
     assert "final_layer_init_scale=0" in training_log
     assert "explicit_geometry_features=false" in training_log
     assert "pre_projection_fusion_gate" not in training_log
+
+
+@pytest.mark.parametrize(
+    ("fusion_mode", "expected_input_dim", "includes_product"),
+    [("product_fuser", 12, True), ("concat_fuser", 8, False)],
+)
+def test_minimal_complex_network_trains_with_k4_tangent_projection(
+    tmp_path,
+    fusion_mode,
+    expected_input_dim,
+    includes_product,
+):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={
+                    "subspace_dimension": 4,
+                    "eta_strategy": "closed_loop_exact_line_search",
+                },
+            ),
+            branch_fusion=CouplingBranchFusionConfig(mode=fusion_mode),
+            geometry_branch=CouplingGeometryBranchConfig(enabled=False),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                fixed_line_transverse_branch=FixedLineTransverseBranchConfig(
+                    enabled=False
+                ),
+                transverse_trunk=TransverseTrunkConfig(enabled=False),
+            ),
+        )
+    )
+    work_dir = tmp_path / f"minimal_k4_{fusion_mode}"
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        config=CouplingTrainingConfig(
+            epochs=1,
+            validation_every_steps=1,
+            batch_size=1,
+            log_interval=1,
+            device="cpu",
+            compile=CompileConfig(enabled=False),
+        ),
+        work_dir=work_dir,
+        green_model=ConstantGreen(1.0),
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+
+    before_training = trainer._forward_batch(batch)
+    trainer.train(dataset, dataset)
+
+    assert before_training.projection.raw_response.shape == (
+        1,
+        2,
+        geometry.num_points,
+    )
+    torch.testing.assert_close(
+        before_training.projection.physical_balance_residual,
+        torch.zeros_like(before_training.projection.physical_balance_residual),
+        rtol=0.0,
+        atol=1.0e-12,
+    )
+    assert before_training.projection.symmetric_tangent_diagnostics is not None
+    assert (
+        before_training.projection.symmetric_tangent_diagnostics.subspace_dimension == 4
+    )
+    assert (work_dir / "complex_coupling_model.safetensors").is_file()
+    log_text = (work_dir / "training.log").read_text()
+    assert "active_branch_components=['source', 'coefficient']" in log_text
+    assert f"branch_fusion_configured={fusion_mode}" in log_text
+    assert f"branch_fusion_includes_elementwise_product={includes_product}" in log_text
+    assert f"branch_fuser_input_dim={expected_input_dim}" in log_text
+    assert "geometry_branch_enabled=False" in log_text
+    assert "fixed_line_transverse_branch_enabled=False" in log_text
+    assert "pointwise_transverse_trunk_enabled=False" in log_text
 
 
 def test_column_diagonal_green_response_context_is_cached_in_train_and_eval(
@@ -1406,7 +1493,7 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
     assert "loss_tangent_post_line_search_stationarity" in rows[0]
 
 
-@pytest.mark.parametrize("subspace_dimension", [1, 2, 3, 4])
+@pytest.mark.parametrize("subspace_dimension", [1, 2, 3, 4, 5])
 def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(
     tmp_path,
     subspace_dimension,
@@ -1473,7 +1560,99 @@ def test_complex_tangent_evaluator_reuses_context_and_reports_sample_metrics(
         assert f"subspace_dimension={subspace_dimension}" in log_text
 
 
-@pytest.mark.parametrize("subspace_dimension", [2, 3, 4])
+def test_tangent_context_sidecar_build_save_and_required_evaluator_load(
+    tmp_path,
+) -> None:
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
+    data_dir = tmp_path / "data"
+    write_sample_npz(data_dir)
+    dataset = ComplexCouplingDataset(data_dir, geometry, coeffs, branch_input_dim=4)
+    model = ComplexCouplingNet(
+        CouplingModelConfig(
+            branch_input_dim=4,
+            hidden_dim=4,
+            depth=1,
+            dtype=torch.float64,
+            balance_projection=BalanceProjectionConfig(
+                mode="symmetric_tangent_green_response",
+                symmetric_tangent_green_response={
+                    "subspace_dimension": 4,
+                    "eta_strategy": "closed_loop_exact_line_search",
+                    "preconditioner_variant": "absolute_cross_axis",
+                },
+            ),
+            axis_1d_trunk=Axis1DTrunkConfig(
+                enabled=True,
+                transverse_trunk=TransverseTrunkConfig(
+                    enabled=True,
+                    length_context=True,
+                ),
+            ),
+        )
+    )
+    context_path = tmp_path / "shared" / "tangent_response_context.safetensors"
+    build_config = CouplingTrainingConfig(
+        batch_size=1,
+        device="cpu",
+        tangent_context_checkpoint={
+            "enabled": True,
+            "path": context_path,
+            "load_policy": "if_available",
+            "save_after_build": True,
+        },
+    )
+    batch = complex_coupling_collate_fn([dataset[0]])
+    trainer = ComplexCouplingTrainer(
+        model=model,
+        green_model=ConstantGreen(1.0),
+        config=build_config,
+        work_dir=tmp_path / "trainer",
+    )
+
+    built = trainer._forward_batch(batch)
+    trainer._forward_batch(batch)
+    build_telemetry = trainer.symmetric_tangent_green_response_context_telemetry
+
+    assert context_path.is_file()
+    assert build_telemetry["source"] == "built"
+    assert build_telemetry["build_count"] == 1
+    assert build_telemetry["save_count"] == 1
+    assert build_telemetry["load_count"] == 0
+
+    load_config = replace(
+        build_config,
+        tangent_context_checkpoint={
+            "enabled": True,
+            "path": context_path,
+            "load_policy": "required",
+            "save_after_build": False,
+        },
+    )
+    evaluator = ComplexCouplingEvaluator(
+        model=model,
+        green_model=ConstantGreen(1.0),
+        config=load_config,
+        device=torch.device("cpu"),
+        work_dir=tmp_path / "evaluator",
+    )
+    loaded = evaluator.predict_batch(batch)
+    evaluator.predict_batch(batch)
+    load_telemetry = evaluator.symmetric_tangent_green_response_context_telemetry
+
+    assert load_telemetry["source"] == "loaded"
+    assert load_telemetry["build_count"] == 0
+    assert load_telemetry["save_count"] == 0
+    assert load_telemetry["load_count"] == 1
+    assert load_telemetry["context_id"] == build_telemetry["context_id"]
+    torch.testing.assert_close(
+        loaded.projection.projected_physical,
+        built.projection.projected_physical,
+    )
+    torch.testing.assert_close(loaded.objective.loss, built.loss)
+
+
+@pytest.mark.parametrize("subspace_dimension", [2, 3, 4, 5])
 def test_complex_k2_plus_trainer_disables_eta_schedule_and_logs_subspace_metrics(
     tmp_path,
     subspace_dimension,

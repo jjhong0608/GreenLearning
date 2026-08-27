@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -11,12 +13,15 @@ from greenonet.config import (
     ComplexResponseTrustConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
+    CouplingGeometryBranchConfig,
     CouplingModelConfig,
     CouplingTrainingConfig,
     CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
+    FixedLineTransverseBranchConfig,
     ModelConfig,
     SourceStencilLiftConfig,
+    TangentContextCheckpointConfig,
     TransverseTrunkConfig,
     validate_complex_post_line_search_stationarity_config,
     validate_complex_response_trust_config,
@@ -86,6 +91,80 @@ def test_complex_cross_axis_reconstruction_config_round_trip():
     )
     assert loaded.cross_axis_reconstruction.enabled is True
     assert loaded.cross_axis_reconstruction.gamma == pytest.approx(0.75)
+
+
+def test_complex_auxiliary_network_config_round_trip():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingModelConfig(
+        branch_fusion=CouplingBranchFusionConfig(mode="concat_fuser"),
+        geometry_branch=CouplingGeometryBranchConfig(enabled=False),
+        axis_1d_trunk=Axis1DTrunkConfig(
+            enabled=True,
+            fixed_line_transverse_branch=FixedLineTransverseBranchConfig(enabled=False),
+            transverse_trunk=TransverseTrunkConfig(enabled=False),
+        ),
+    )
+
+    payload = _serialize_config(config)
+    loaded = _deserialize_config(payload, CouplingModelConfig)
+
+    assert isinstance(loaded, CouplingModelConfig)
+    assert loaded == config
+    assert loaded.branch_fusion.mode == "concat_fuser"
+    assert loaded.geometry_branch.enabled is False
+    assert loaded.axis_1d_trunk.fixed_line_transverse_branch.enabled is False
+    assert loaded.axis_1d_trunk.transverse_trunk.enabled is False
+
+
+def test_tangent_context_checkpoint_config_round_trip() -> None:
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingTrainingConfig(
+        tangent_context_checkpoint={
+            "enabled": True,
+            "path": "checkpoints/context.safetensors",
+            "load_policy": "if_available",
+            "save_after_build": True,
+        }
+    )
+
+    payload = _serialize_config(config)
+    loaded = _deserialize_config(payload, CouplingTrainingConfig)
+
+    assert isinstance(
+        loaded.tangent_context_checkpoint,
+        TangentContextCheckpointConfig,
+    )
+    assert loaded.tangent_context_checkpoint == config.tangent_context_checkpoint
+    assert loaded.tangent_context_checkpoint.path == Path(
+        "checkpoints/context.safetensors"
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "error_type"),
+    [
+        ({"enabled": True, "unknown": 1}, TypeError),
+        ({"enabled": "yes"}, TypeError),
+        ({"enabled": True, "load_policy": "fallback"}, ValueError),
+        (
+            {
+                "enabled": True,
+                "load_policy": "required",
+                "save_after_build": True,
+            },
+            ValueError,
+        ),
+        ({"enabled": False, "path": "context.safetensors"}, ValueError),
+    ],
+)
+def test_tangent_context_checkpoint_config_rejects_invalid_values(
+    raw: dict[str, object],
+    error_type: type[Exception],
+) -> None:
+    with pytest.raises(error_type):
+        TangentContextCheckpointConfig.from_raw(raw)
 
 
 def test_complex_cross_axis_reconstruction_rejects_unknown_key() -> None:
@@ -384,7 +463,7 @@ def test_column_diagonal_green_response_config_round_trip():
     )
 
 
-@pytest.mark.parametrize("subspace_dimension", [2, 3, 4])
+@pytest.mark.parametrize("subspace_dimension", [2, 3, 4, 5, 8])
 def test_symmetric_tangent_green_response_config_round_trip(subspace_dimension):
     from greenonet.io import _deserialize_config, _serialize_config
 
@@ -399,6 +478,8 @@ def test_symmetric_tangent_green_response_config_round_trip(subspace_dimension):
                 "line_search_relative_eps": 4.0e-12,
                 "relative_lambda": 0.2,
                 "denominator_relative_eps": 2.5e-11,
+                "preconditioner_variant": "normalized_quadratic_cross_axis",
+                "cross_axis_relative_eps": 7.5e-13,
             },
         }
     )
@@ -411,11 +492,15 @@ def test_symmetric_tangent_green_response_config_round_trip(subspace_dimension):
     assert loaded.balance_projection.mode == "symmetric_tangent_green_response"
     tangent = loaded.balance_projection.symmetric_tangent_green_response
     assert tangent.subspace_dimension == subspace_dimension
+    assert tangent.max_subspace_dimension == 8
+    assert not tangent.geometry_k_selection.enabled
     assert tangent.eta == pytest.approx(0.025)
     assert tangent.eta_strategy == "closed_loop_exact_line_search"
     assert tangent.line_search_relative_eps == pytest.approx(4.0e-12)
     assert tangent.relative_lambda == pytest.approx(0.2)
     assert tangent.denominator_relative_eps == pytest.approx(2.5e-11)
+    assert tangent.preconditioner_variant == "normalized_quadratic_cross_axis"
+    assert tangent.cross_axis_relative_eps == pytest.approx(7.5e-13)
 
 
 @pytest.mark.parametrize(
@@ -424,7 +509,7 @@ def test_symmetric_tangent_green_response_config_round_trip(subspace_dimension):
         ("eta", -0.1, ValueError),
         ("eta", True, TypeError),
         ("subspace_dimension", 0, ValueError),
-        ("subspace_dimension", 5, ValueError),
+        ("subspace_dimension", 9, ValueError),
         ("subspace_dimension", 1.0, TypeError),
         ("subspace_dimension", True, TypeError),
         ("eta_strategy", "adaptive", ValueError),
@@ -434,6 +519,10 @@ def test_symmetric_tangent_green_response_config_round_trip(subspace_dimension):
         ("relative_lambda", float("inf"), ValueError),
         ("denominator_relative_eps", 0.0, ValueError),
         ("denominator_relative_eps", "1e-12", TypeError),
+        ("preconditioner_variant", "unknown", ValueError),
+        ("preconditioner_variant", True, TypeError),
+        ("cross_axis_relative_eps", 0.0, ValueError),
+        ("cross_axis_relative_eps", True, TypeError),
     ],
 )
 def test_symmetric_tangent_green_response_rejects_invalid_config(

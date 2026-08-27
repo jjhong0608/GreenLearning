@@ -12,13 +12,12 @@ from greenonet.coefficients import load_coefficient_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 DISK_DIR = ROOT / "numerical_examples" / "disk"
-BASE_CONFIG_PATH = DISK_DIR / "base_config.json"
+DISK_OLD_DIR = ROOT / "numerical_examples" / "disk_old"
 SEEDS = range(4)
-OBJECTIVE_FLAGS = {
-    "energy_only": (False, False),
-    "energy_response_trust": (False, True),
-    "energy_stationarity": (True, False),
-    "energy_response_trust_stationarity": (True, True),
+FREQUENCY_VARIANTS = {
+    "f1": (1, 1.0),
+    "f2": (2, 2.0),
+    "f3": (3, 4.0),
 }
 
 
@@ -27,30 +26,28 @@ def _load_json(path: Path) -> dict[str, object]:
         return json.load(handle)
 
 
-def _normalized_experiment(payload: dict[str, object]) -> dict[str, object]:
-    normalized = copy.deepcopy(payload)
-    dataset = normalized["dataset"]
+def _expected_config(*, variant: str, seed: int) -> dict[str, object]:
+    expected = copy.deepcopy(
+        _load_json(DISK_OLD_DIR / f"disk_energy_only_seed{seed}.json")
+    )
+    dataset = expected["dataset"]
     assert isinstance(dataset, dict)
-    coupling_source = dataset["coupling_source"]
-    assert isinstance(coupling_source, dict)
-    indexed_gp = coupling_source["indexed_gp"]
-    assert isinstance(indexed_gp, dict)
-    indexed_gp["seed"] = 0
-
-    training = normalized["coupling_training"]
-    assert isinstance(training, dict)
-    training["seed"] = 0
-    stationarity = training["post_line_search_stationarity"]
-    response_trust = training["response_trust"]
-    assert isinstance(stationarity, dict)
-    assert isinstance(response_trust, dict)
-    stationarity["enabled"] = True
-    response_trust["enabled"] = True
-    return normalized
+    dataset["coefficient_functions_path"] = "numerical_examples/disk_old/coefficient.py"
+    model = expected["coupling_model"]
+    assert isinstance(model, dict)
+    axis = model["axis_1d_trunk"]
+    assert isinstance(axis, dict)
+    axis["num_frequencies"], axis["max_frequency"] = FREQUENCY_VARIANTS[variant]
+    pipeline = expected["pipeline"]
+    assert isinstance(pipeline, dict)
+    pipeline["green_pretrained_path"] = (
+        "checkpoints/numerical_examples/disk_diffusion/green/model.safetensors"
+    )
+    return expected
 
 
 def test_disk_coefficient_is_asymmetric_uniformly_elliptic_diffusion() -> None:
-    coefficient = load_coefficient_functions(DISK_DIR / "coefficient.py")
+    coefficient = load_coefficient_functions(DISK_OLD_DIR / "coefficient.py")
     x = torch.tensor([0.25, 0.25, 0.0], dtype=torch.float64)
     y = torch.tensor([0.125, -0.125, 0.0], dtype=torch.float64)
 
@@ -70,7 +67,7 @@ def test_disk_coefficient_is_asymmetric_uniformly_elliptic_diffusion() -> None:
 
 
 def test_disk_coefficient_derivatives_match_autograd_and_green_checkpoint() -> None:
-    coefficient = load_coefficient_functions(DISK_DIR / "coefficient.py")
+    coefficient = load_coefficient_functions(DISK_OLD_DIR / "coefficient.py")
     green_coefficient = load_coefficient_functions(
         ROOT / "coefficients" / "Sinusoidal_Diffusion_Only.py"
     )
@@ -92,45 +89,24 @@ def test_disk_coefficient_derivatives_match_autograd_and_green_checkpoint() -> N
         assert torch.allclose(actual, expected)
 
 
-def test_disk_objective_matrix_has_four_paired_seeds_and_no_other_differences() -> None:
-    base = _load_json(BASE_CONFIG_PATH)
+def test_disk_frequency_matrix_has_four_paired_seeds_and_no_other_differences() -> None:
     expected_paths = {
-        DISK_DIR / f"disk_{objective}_seed{seed}.json"
-        for objective in OBJECTIVE_FLAGS
+        DISK_DIR / f"disk_transverse_{variant}_seed{seed}.json"
+        for variant in FREQUENCY_VARIANTS
         for seed in SEEDS
     }
-    actual_paths = set(DISK_DIR.glob("disk_*.json"))
+    actual_paths = set(DISK_DIR.glob("*.json"))
 
     assert actual_paths == expected_paths
-    for objective, (
-        stationarity_enabled,
-        response_trust_enabled,
-    ) in OBJECTIVE_FLAGS.items():
+    for variant in FREQUENCY_VARIANTS:
         for seed in SEEDS:
-            path = DISK_DIR / f"disk_{objective}_seed{seed}.json"
+            path = DISK_DIR / f"disk_transverse_{variant}_seed{seed}.json"
             payload = _load_json(path)
-            dataset = payload["dataset"]
-            training = payload["coupling_training"]
-            assert isinstance(dataset, dict)
-            assert isinstance(training, dict)
-            coupling_source = dataset["coupling_source"]
-            assert isinstance(coupling_source, dict)
-            indexed_gp = coupling_source["indexed_gp"]
-            assert isinstance(indexed_gp, dict)
-            stationarity = training["post_line_search_stationarity"]
-            response_trust = training["response_trust"]
-            assert isinstance(stationarity, dict)
-            assert isinstance(response_trust, dict)
-
-            assert indexed_gp["seed"] == seed
-            assert training["seed"] == seed
-            assert stationarity["enabled"] is stationarity_enabled
-            assert response_trust["enabled"] is response_trust_enabled
-            assert _normalized_experiment(payload) == base
+            assert payload == _expected_config(variant=variant, seed=seed)
 
 
 def test_disk_configs_use_fixed_paper_protocol_and_strictly_parse() -> None:
-    config_paths = [BASE_CONFIG_PATH, *sorted(DISK_DIR.glob("disk_*.json"))]
+    config_paths = sorted(DISK_DIR.glob("*.json"))
 
     for path in config_paths:
         payload = _load_json(path)
@@ -160,6 +136,11 @@ def test_disk_configs_use_fixed_paper_protocol_and_strictly_parse() -> None:
             "reaction": False,
         }
         assert model["branch_fusion"] == {"mode": "product_fuser"}
+        axis = model["axis_1d_trunk"]
+        assert isinstance(axis, dict)
+        assert (axis["num_frequencies"], axis["max_frequency"]) in set(
+            FREQUENCY_VARIANTS.values()
+        )
         projection = model["balance_projection"]
         assert isinstance(projection, dict)
         tangent = projection["symmetric_tangent_green_response"]
@@ -170,8 +151,10 @@ def test_disk_configs_use_fixed_paper_protocol_and_strictly_parse() -> None:
         assert training["warmup_steps"] == 240
         assert training["validation_every_steps"] == 24
         assert training["canonical_energy"] == {"boundary_weight": 0.0}
+        assert training["post_line_search_stationarity"]["enabled"] is False
+        assert training["response_trust"]["enabled"] is False
         assert pipeline["green_pretrained_path"] == (
-            "checkpoints/numerical_examples/disk/green/model.safetensors"
+            "checkpoints/numerical_examples/disk_diffusion/green/model.safetensors"
         )
 
         TrainCLI()._build_configs(path)
@@ -189,7 +172,7 @@ def test_disk_configs_use_fixed_paper_protocol_and_strictly_parse() -> None:
         ROOT
         / "checkpoints"
         / "numerical_examples"
-        / "disk"
+        / "disk_diffusion"
         / "green"
         / "model.safetensors"
     ).is_file()

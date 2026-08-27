@@ -356,13 +356,16 @@ class CouplingCoefficientTermsConfig:
 class CouplingBranchFusionConfig:
     """Branch feature fusion mode for CouplingNet."""
 
-    mode: Literal["product", "product_fuser"] = "product"
+    mode: Literal["product", "product_fuser", "concat_fuser"] = "product"
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, str):
             raise TypeError("branch_fusion.mode must be a string.")
-        if self.mode not in {"product", "product_fuser"}:
-            raise ValueError("branch_fusion.mode must be 'product' or 'product_fuser'.")
+        if self.mode not in {"product", "product_fuser", "concat_fuser"}:
+            raise ValueError(
+                "branch_fusion.mode must be 'product', 'product_fuser', or "
+                "'concat_fuser'."
+            )
 
     @classmethod
     def from_raw(
@@ -400,16 +403,16 @@ class TransverseTrunkConfig:
     """Optional pointwise cross-axis trunk settings for complex geometry."""
 
     enabled: bool = False
-    fusion: Literal["product", "product_fuser"] = "product"
+    fusion: Literal["product", "product_fuser", "concat_fuser"] = "product"
     length_context: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
             raise TypeError("axis_1d_trunk.transverse_trunk.enabled must be a boolean.")
-        if self.fusion not in {"product", "product_fuser"}:
+        if self.fusion not in {"product", "product_fuser", "concat_fuser"}:
             raise ValueError(
                 "axis_1d_trunk.transverse_trunk.fusion must be "
-                "'product' or 'product_fuser'."
+                "'product', 'product_fuser', or 'concat_fuser'."
             )
         if not isinstance(self.length_context, bool):
             raise TypeError(
@@ -438,6 +441,39 @@ class TransverseTrunkConfig:
 
 
 @dataclass
+class FixedLineTransverseBranchConfig:
+    """Optional fixed-line transverse branch settings for complex geometry."""
+
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError(
+                "axis_1d_trunk.fixed_line_transverse_branch.enabled must be a boolean."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: FixedLineTransverseBranchConfig | dict[str, Any] | None,
+    ) -> FixedLineTransverseBranchConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled"})
+            if unknown:
+                raise TypeError(
+                    "axis_1d_trunk.fixed_line_transverse_branch has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("axis_1d_trunk.fixed_line_transverse_branch must be an object.")
+
+
+@dataclass
 class Axis1DTrunkConfig:
     """Shared 1D trunk with boundary-aware transverse branch settings."""
 
@@ -445,11 +481,17 @@ class Axis1DTrunkConfig:
     boundary_aware_modes: int = 4
     num_frequencies: int = 4
     max_frequency: float = 8.0
+    fixed_line_transverse_branch: FixedLineTransverseBranchConfig = field(
+        default_factory=FixedLineTransverseBranchConfig
+    )
     transverse_trunk: TransverseTrunkConfig = field(
         default_factory=TransverseTrunkConfig
     )
 
     def __post_init__(self) -> None:
+        self.fixed_line_transverse_branch = FixedLineTransverseBranchConfig.from_raw(
+            self.fixed_line_transverse_branch
+        )
         self.transverse_trunk = TransverseTrunkConfig.from_raw(self.transverse_trunk)
         if not isinstance(self.enabled, bool):
             raise TypeError("axis_1d_trunk.enabled must be a boolean.")
@@ -493,6 +535,7 @@ class Axis1DTrunkConfig:
                     "boundary_aware_modes",
                     "num_frequencies",
                     "max_frequency",
+                    "fixed_line_transverse_branch",
                     "transverse_trunk",
                 }
             )
@@ -503,6 +546,12 @@ class Axis1DTrunkConfig:
             if "transverse_trunk" in data:
                 data["transverse_trunk"] = TransverseTrunkConfig.from_raw(
                     data["transverse_trunk"]
+                )
+            if "fixed_line_transverse_branch" in data:
+                data["fixed_line_transverse_branch"] = (
+                    FixedLineTransverseBranchConfig.from_raw(
+                        data["fixed_line_transverse_branch"]
+                    )
                 )
             return cls(**data)
         raise TypeError("axis_1d_trunk must be an object.")
@@ -574,15 +623,90 @@ class ColumnDiagonalGreenResponseProjectionConfig:
 
 
 @dataclass
+class GeometryKSelectionConfig:
+    """Geometry-only tangent-subspace dimension selection settings."""
+
+    enabled: bool = False
+    global_reach_threshold: float = 0.99
+    pointwise_tail_reach_threshold: float = 0.99
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                "geometry_k_selection.enabled must be a boolean."
+            )
+        for name, value in (
+            ("global_reach_threshold", self.global_reach_threshold),
+            (
+                "pointwise_tail_reach_threshold",
+                self.pointwise_tail_reach_threshold,
+            ),
+        ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(
+                    "balance_projection.symmetric_tangent_green_response."
+                    f"geometry_k_selection.{name} must be numeric."
+                )
+            if not math.isfinite(float(value)) or not 0.0 < float(value) <= 1.0:
+                raise ValueError(
+                    "balance_projection.symmetric_tangent_green_response."
+                    f"geometry_k_selection.{name} must be finite and in (0, 1]."
+                )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: GeometryKSelectionConfig | dict[str, Any] | None,
+    ) -> GeometryKSelectionConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(
+                set(data)
+                - {
+                    "enabled",
+                    "global_reach_threshold",
+                    "pointwise_tail_reach_threshold",
+                }
+            )
+            if unknown:
+                raise TypeError(
+                    "balance_projection.symmetric_tangent_green_response."
+                    "geometry_k_selection has unknown keys: "
+                    f"{', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError(
+            "balance_projection.symmetric_tangent_green_response."
+            "geometry_k_selection must be an object."
+        )
+
+
+@dataclass
 class SymmetricTangentGreenResponseProjectionConfig:
     """Matrix-free tangent Green-response correction settings."""
 
-    subspace_dimension: Literal[1, 2, 3, 4] = 1
+    subspace_dimension: int = 1
+    max_subspace_dimension: int = 8
+    geometry_k_selection: GeometryKSelectionConfig | dict[str, Any] = field(
+        default_factory=GeometryKSelectionConfig
+    )
     eta: float = 0.01
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"] = "fixed"
     line_search_relative_eps: float = 1.0e-12
     relative_lambda: float = 0.01
     denominator_relative_eps: float = 1.0e-12
+    preconditioner_variant: Literal[
+        "separable",
+        "exact_diagonal",
+        "absolute_cross_axis",
+        "normalized_quadratic_cross_axis",
+    ] = "separable"
+    cross_axis_relative_eps: float = 1.0e-12
 
     def __post_init__(self) -> None:
         if isinstance(self.subspace_dimension, bool) or not isinstance(
@@ -592,11 +716,31 @@ class SymmetricTangentGreenResponseProjectionConfig:
                 "balance_projection.symmetric_tangent_green_response."
                 "subspace_dimension must be an integer."
             )
-        if self.subspace_dimension not in {1, 2, 3, 4}:
+        if self.subspace_dimension < 1:
             raise ValueError(
                 "balance_projection.symmetric_tangent_green_response."
-                "subspace_dimension must be 1, 2, 3, or 4."
+                "subspace_dimension must be positive."
             )
+        if isinstance(self.max_subspace_dimension, bool) or not isinstance(
+            self.max_subspace_dimension, int
+        ):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                "max_subspace_dimension must be an integer."
+            )
+        if self.max_subspace_dimension < 1:
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                "max_subspace_dimension must be positive."
+            )
+        if self.subspace_dimension > self.max_subspace_dimension:
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                "subspace_dimension must not exceed max_subspace_dimension."
+            )
+        self.geometry_k_selection = GeometryKSelectionConfig.from_raw(
+            self.geometry_k_selection
+        )
         self._validate_nonnegative("eta", self.eta)
         if not isinstance(self.eta_strategy, str):
             raise TypeError(
@@ -626,6 +770,27 @@ class SymmetricTangentGreenResponseProjectionConfig:
         self._validate_positive(
             "denominator_relative_eps",
             self.denominator_relative_eps,
+        )
+        if not isinstance(self.preconditioner_variant, str):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                "preconditioner_variant must be a string."
+            )
+        allowed = {
+            "separable",
+            "exact_diagonal",
+            "absolute_cross_axis",
+            "normalized_quadratic_cross_axis",
+        }
+        if self.preconditioner_variant not in allowed:
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                "preconditioner_variant must be 'separable', 'exact_diagonal', "
+                "'absolute_cross_axis', or 'normalized_quadratic_cross_axis'."
+            )
+        self._validate_positive(
+            "cross_axis_relative_eps",
+            self.cross_axis_relative_eps,
         )
 
     @staticmethod
@@ -669,11 +834,15 @@ class SymmetricTangentGreenResponseProjectionConfig:
                 set(data)
                 - {
                     "subspace_dimension",
+                    "max_subspace_dimension",
+                    "geometry_k_selection",
                     "eta",
                     "eta_strategy",
                     "line_search_relative_eps",
                     "relative_lambda",
                     "denominator_relative_eps",
+                    "preconditioner_variant",
+                    "cross_axis_relative_eps",
                 }
             )
             if unknown:
@@ -681,7 +850,10 @@ class SymmetricTangentGreenResponseProjectionConfig:
                     "balance_projection.symmetric_tangent_green_response has "
                     f"unknown keys: {', '.join(unknown)}."
                 )
-            return cls(**data)
+            geometry_k_selection = GeometryKSelectionConfig.from_raw(
+                data.pop("geometry_k_selection", None)
+            )
+            return cls(geometry_k_selection=geometry_k_selection, **data)
         raise TypeError(
             "balance_projection.symmetric_tangent_green_response must be an object."
         )
@@ -747,6 +919,17 @@ class BalanceProjectionConfig:
                 "'response_space', 'physical_symmetric', or "
                 "'column_diagonal_green_response', or "
                 "'symmetric_tangent_green_response'."
+            )
+        tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+            self.symmetric_tangent_green_response
+        )
+        geometry_k_selection = GeometryKSelectionConfig.from_raw(
+            tangent.geometry_k_selection
+        )
+        if geometry_k_selection.enabled and mode != "symmetric_tangent_green_response":
+            raise ValueError(
+                "geometry_k_selection.enabled=true requires "
+                "balance_projection.mode='symmetric_tangent_green_response'."
             )
         if self.mask not in {"quadratic", "sin"}:
             raise ValueError("balance_projection.mask must be 'quadratic' or 'sin'.")
@@ -1021,6 +1204,36 @@ class ComplexCrossAxisReconstructionConfig:
 
 
 @dataclass
+class CouplingGeometryBranchConfig:
+    """Optional segment-geometry branch settings for complex CouplingNet."""
+
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("geometry_branch.enabled must be a boolean.")
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: CouplingGeometryBranchConfig | dict[str, Any] | None,
+    ) -> CouplingGeometryBranchConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            data = dict(raw)
+            unknown = sorted(set(data) - {"enabled"})
+            if unknown:
+                raise TypeError(
+                    f"geometry_branch has unknown keys: {', '.join(unknown)}."
+                )
+            return cls(**data)
+        raise TypeError("geometry_branch must be an object.")
+
+
+@dataclass
 class CouplingModelConfig:
     """Architecture settings for CouplingNet."""
 
@@ -1060,6 +1273,9 @@ class CouplingModelConfig:
     branch_fusion: CouplingBranchFusionConfig | dict[str, Any] = field(
         default_factory=CouplingBranchFusionConfig
     )
+    geometry_branch: CouplingGeometryBranchConfig | dict[str, Any] = field(
+        default_factory=CouplingGeometryBranchConfig
+    )
     green_response_feature: GreenResponseFeatureConfig = field(
         default_factory=GreenResponseFeatureConfig
     )
@@ -1081,6 +1297,9 @@ class CouplingModelConfig:
             self.balance_projection
         )
         self.branch_fusion = CouplingBranchFusionConfig.from_raw(self.branch_fusion)
+        self.geometry_branch = CouplingGeometryBranchConfig.from_raw(
+            self.geometry_branch
+        )
         self.axis_1d_trunk = Axis1DTrunkConfig.from_raw(self.axis_1d_trunk)
         self.pre_projection_fusion = ComplexPreProjectionFusionConfig.from_raw(
             self.pre_projection_fusion
@@ -1574,6 +1793,78 @@ class CouplingOptimizerConfig:
 
 
 @dataclass
+class TangentContextCheckpointConfig:
+    """Persistence policy for the frozen complex tangent response context."""
+
+    enabled: bool = False
+    path: Path | None = None
+    load_policy: Literal["never", "if_available", "required"] = "if_available"
+    save_after_build: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("tangent_context_checkpoint.enabled must be a boolean.")
+        if isinstance(self.path, str):
+            self.path = Path(self.path)
+        if self.path is not None and not isinstance(self.path, Path):
+            raise TypeError("tangent_context_checkpoint.path must be a path or null.")
+        if not isinstance(self.load_policy, str):
+            raise TypeError("tangent_context_checkpoint.load_policy must be a string.")
+        if self.load_policy not in {"never", "if_available", "required"}:
+            raise ValueError(
+                "tangent_context_checkpoint.load_policy must be 'never', "
+                "'if_available', or 'required'."
+            )
+        if not isinstance(self.save_after_build, bool):
+            raise TypeError(
+                "tangent_context_checkpoint.save_after_build must be a boolean."
+            )
+        if not self.enabled:
+            if self.path is not None:
+                raise ValueError(
+                    "tangent_context_checkpoint.path requires enabled=true."
+                )
+            if self.load_policy != "if_available":
+                raise ValueError(
+                    "A non-default tangent_context_checkpoint.load_policy requires "
+                    "enabled=true."
+                )
+            if not self.save_after_build:
+                raise ValueError(
+                    "tangent_context_checkpoint.save_after_build=false requires "
+                    "enabled=true."
+                )
+        if self.enabled and self.load_policy == "required" and self.save_after_build:
+            raise ValueError(
+                "tangent_context_checkpoint.load_policy='required' is load-only "
+                "and requires save_after_build=false."
+            )
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: TangentContextCheckpointConfig | dict[str, Any] | None,
+    ) -> TangentContextCheckpointConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("tangent_context_checkpoint must be an object.")
+        data = dict(raw)
+        unknown = sorted(
+            set(data) - {"enabled", "path", "load_policy", "save_after_build"}
+        )
+        if unknown:
+            raise TypeError(
+                "tangent_context_checkpoint has unknown keys: "
+                + ", ".join(unknown)
+                + "."
+            )
+        return cls(**data)
+
+
+@dataclass
 class GreenOptimizerConfig:
     """Optimizer selection shared by unit-square and complex GreenNet."""
 
@@ -1688,6 +1979,9 @@ class CouplingTrainingConfig:
     optimizer: CouplingOptimizerConfig | dict[str, Any] = field(
         default_factory=CouplingOptimizerConfig
     )
+    tangent_context_checkpoint: TangentContextCheckpointConfig | dict[str, Any] = field(
+        default_factory=TangentContextCheckpointConfig
+    )
 
     def __post_init__(self) -> None:
         from greenonet.reproducibility import validate_training_seed
@@ -1727,6 +2021,9 @@ class CouplingTrainingConfig:
         )
         self.response_trust = ComplexResponseTrustConfig.from_raw(self.response_trust)
         self.optimizer = CouplingOptimizerConfig.from_raw(self.optimizer)
+        self.tangent_context_checkpoint = TangentContextCheckpointConfig.from_raw(
+            self.tangent_context_checkpoint
+        )
 
 
 def validate_unit_square_coupling_training_config(
@@ -1786,6 +2083,35 @@ def validate_unit_square_coupling_training_config(
             "ComplexCouplingTrainer; omit the optimizer block for unit-square "
             "AdamW training."
         )
+    if TangentContextCheckpointConfig.from_raw(
+        config.tangent_context_checkpoint
+    ).enabled:
+        raise ValueError(
+            "coupling_training.tangent_context_checkpoint is available only for "
+            "ComplexCouplingTrainer."
+        )
+
+
+def validate_complex_tangent_context_checkpoint_config(
+    *,
+    training: CouplingTrainingConfig,
+    balance_projection: BalanceProjectionConfig | dict[str, Any] | str,
+) -> TangentContextCheckpointConfig:
+    """Validate tangent context persistence against the projection mode."""
+
+    checkpoint = TangentContextCheckpointConfig.from_raw(
+        training.tangent_context_checkpoint
+    )
+    if not checkpoint.enabled:
+        return checkpoint
+    projection = BalanceProjectionConfig.from_raw(balance_projection)
+    if not projection.enabled or projection.mode != "symmetric_tangent_green_response":
+        raise ValueError(
+            "coupling_training.tangent_context_checkpoint.enabled=true requires "
+            "coupling_model.balance_projection.mode="
+            "'symmetric_tangent_green_response'."
+        )
+    return checkpoint
 
 
 def validate_complex_post_line_search_stationarity_config(

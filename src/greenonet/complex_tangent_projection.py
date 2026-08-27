@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 import time
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Literal, TYPE_CHECKING
 
 import torch
 
@@ -12,12 +14,23 @@ from greenonet.complex_axial_response_operator import (
     FrozenBidirectionalResponseOperator,
 )
 from greenonet.complex_geometry import ComplexGeometryMetadata
+from greenonet.complex_tangent_preconditioner import (
+    TANGENT_PRECONDITIONER_VARIANTS,
+    TangentPreconditionerTerms,
+    TangentPreconditionerVariant,
+    build_tangent_preconditioner_terms,
+)
 from greenonet.config import (
     ComplexPostLineSearchStationarityConfig,
     ComplexResponseTrustConfig,
+    GeometryKSelectionConfig,
     SymmetricTangentGreenResponseProjectionConfig,
+    TangentContextCheckpointConfig,
 )
 from greenonet.coupling_lr_scheduler import CouplingLearningRateSchedule
+
+if TYPE_CHECKING:
+    from greenonet.complex_tangent_context_io import TangentContextIdentity
 
 
 @dataclass(frozen=True)
@@ -228,12 +241,31 @@ class SymmetricTangentGreenResponseContext:
     gain_scale: torch.Tensor
     denominator: torch.Tensor
     point_mass: torch.Tensor
-    subspace_dimension: Literal[1, 2, 3, 4]
+    subspace_dimension: int
     eta: float
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"]
     line_search_relative_eps: float
     relative_lambda: float
     denominator_relative_eps: float
+    preconditioner_variant: TangentPreconditionerVariant
+    cross_axis_relative_eps: float
+    cross_axis_inner_product: torch.Tensor
+    normalized_correlation: torch.Tensor
+    normalized_quadratic_cross_axis: torch.Tensor
+    separable_preconditioner_base: torch.Tensor
+    exact_preconditioner_base: torch.Tensor
+    absolute_preconditioner_base: torch.Tensor
+    quadratic_preconditioner_base: torch.Tensor
+    separable_denominator: torch.Tensor
+    exact_denominator: torch.Tensor
+    absolute_denominator: torch.Tensor
+    quadratic_denominator: torch.Tensor
+    q_epsilon: torch.Tensor
+    damping: torch.Tensor
+    cauchy_violation: torch.Tensor
+    cauchy_violation_max: torch.Tensor
+    exact_roundoff_clamp_mask: torch.Tensor
+    exact_roundoff_clamp_count: int
 
     @classmethod
     def from_response_operator(
@@ -253,47 +285,97 @@ class SymmetricTangentGreenResponseContext:
             raise ValueError("point_mass must be a finite scalar.")
         if bool((mass <= 0.0).item()):
             raise ValueError("point_mass must be positive.")
-        gamma_x_squared, gamma_y_squared = response_operator.column_gain_squared(
-            point_mass=mass
+        gram = response_operator.tangent_column_gram_terms(point_mass=mass)
+        terms = build_tangent_preconditioner_terms(
+            gram=gram,
+            variant=resolved.preconditioner_variant,
+            relative_lambda=resolved.relative_lambda,
+            denominator_relative_eps=resolved.denominator_relative_eps,
+            cross_axis_relative_eps=resolved.cross_axis_relative_eps,
         )
-        preconditioner_base = gamma_x_squared + gamma_y_squared
-        gain_scale = preconditioner_base.mean()
-        if not torch.isfinite(gain_scale) or bool((gain_scale <= 0.0).item()):
-            raise ValueError(
-                "The tangent Green-response preconditioner gain scale must be "
-                "finite and positive."
-            )
-        denominator = (
-            preconditioner_base
-            + (
-                float(resolved.relative_lambda)
-                + float(resolved.denominator_relative_eps)
-            )
-            * gain_scale
+        return cls.from_preconditioner_terms(
+            response_operator=response_operator,
+            point_mass=mass,
+            terms=terms,
+            config=resolved,
         )
-        if not torch.all(torch.isfinite(denominator)) or torch.any(denominator <= 0.0):
-            raise ValueError(
-                "The tangent Green-response denominator must be finite and positive."
-            )
+
+    @classmethod
+    def from_preconditioner_terms(
+        cls,
+        *,
+        response_operator: FrozenBidirectionalResponseOperator,
+        point_mass: torch.Tensor,
+        terms: TangentPreconditionerTerms,
+        config: SymmetricTangentGreenResponseProjectionConfig,
+    ) -> SymmetricTangentGreenResponseContext:
+        """Construct a runtime context from built or strictly loaded static terms."""
+
         return cls(
             response_operator=response_operator,
-            gamma_x_squared=gamma_x_squared.detach(),
-            gamma_y_squared=gamma_y_squared.detach(),
-            preconditioner_base=preconditioner_base.detach(),
-            gain_scale=gain_scale.detach(),
-            denominator=denominator.detach(),
-            point_mass=mass.detach(),
-            subspace_dimension=resolved.subspace_dimension,
-            eta=float(resolved.eta),
-            eta_strategy=resolved.eta_strategy,
-            line_search_relative_eps=float(resolved.line_search_relative_eps),
-            relative_lambda=float(resolved.relative_lambda),
-            denominator_relative_eps=float(resolved.denominator_relative_eps),
+            gamma_x_squared=terms.a,
+            gamma_y_squared=terms.b,
+            preconditioner_base=terms.selected_base,
+            gain_scale=terms.gain_scale,
+            denominator=terms.denominator,
+            point_mass=point_mass.detach(),
+            subspace_dimension=config.subspace_dimension,
+            eta=float(config.eta),
+            eta_strategy=config.eta_strategy,
+            line_search_relative_eps=float(config.line_search_relative_eps),
+            relative_lambda=float(config.relative_lambda),
+            denominator_relative_eps=float(config.denominator_relative_eps),
+            preconditioner_variant=config.preconditioner_variant,
+            cross_axis_relative_eps=float(config.cross_axis_relative_eps),
+            cross_axis_inner_product=terms.c,
+            normalized_correlation=terms.rho,
+            normalized_quadratic_cross_axis=terms.q,
+            separable_preconditioner_base=terms.separable_base,
+            exact_preconditioner_base=terms.exact_base,
+            absolute_preconditioner_base=terms.absolute_base,
+            quadratic_preconditioner_base=terms.quadratic_base,
+            separable_denominator=terms.separable_denominator,
+            exact_denominator=terms.exact_denominator,
+            absolute_denominator=terms.absolute_denominator,
+            quadratic_denominator=terms.quadratic_denominator,
+            q_epsilon=terms.q_epsilon,
+            damping=terms.damping,
+            cauchy_violation=terms.cauchy_violation,
+            cauchy_violation_max=terms.cauchy_violation_max,
+            exact_roundoff_clamp_mask=terms.exact_roundoff_clamp_mask,
+            exact_roundoff_clamp_count=terms.exact_roundoff_clamp_count,
         )
 
     @property
     def num_points(self) -> int:
         return self.response_operator.point_count
+
+    def with_preconditioner_variant(
+        self,
+        variant: TangentPreconditionerVariant,
+    ) -> SymmetricTangentGreenResponseContext:
+        """Select one stored schema-v2 denominator without rebuilding the operator."""
+
+        if variant not in TANGENT_PRECONDITIONER_VARIANTS:
+            raise ValueError(f"Unsupported tangent preconditioner variant: {variant}.")
+        bases = {
+            "separable": self.separable_preconditioner_base,
+            "exact_diagonal": self.exact_preconditioner_base,
+            "absolute_cross_axis": self.absolute_preconditioner_base,
+            "normalized_quadratic_cross_axis": self.quadratic_preconditioner_base,
+        }
+        denominators = {
+            "separable": self.separable_denominator,
+            "exact_diagonal": self.exact_denominator,
+            "absolute_cross_axis": self.absolute_denominator,
+            "normalized_quadratic_cross_axis": self.quadratic_denominator,
+        }
+        return replace(
+            self,
+            preconditioner_variant=variant,
+            preconditioner_base=bases[variant],
+            denominator=denominators[variant],
+        )
 
     def validate_for(self, reference: torch.Tensor) -> None:
         if reference.shape[-1] != self.num_points:
@@ -430,7 +512,31 @@ class SymmetricTangentGreenResponseContext:
             "line_search_relative_eps": self.line_search_relative_eps,
             "relative_lambda": self.relative_lambda,
             "denominator_relative_eps": self.denominator_relative_eps,
+            "preconditioner_variant": self.preconditioner_variant,
+            "cross_axis_relative_eps": self.cross_axis_relative_eps,
             "gain_scale": float(self.gain_scale.item()),
+            "cross_axis_inner_product_min": float(
+                self.cross_axis_inner_product.min().item()
+            ),
+            "cross_axis_inner_product_max": float(
+                self.cross_axis_inner_product.max().item()
+            ),
+            "normalized_correlation_min": float(
+                self.normalized_correlation.min().item()
+            ),
+            "normalized_correlation_max": float(
+                self.normalized_correlation.max().item()
+            ),
+            "normalized_quadratic_cross_axis_min": float(
+                self.normalized_quadratic_cross_axis.min().item()
+            ),
+            "normalized_quadratic_cross_axis_max": float(
+                self.normalized_quadratic_cross_axis.max().item()
+            ),
+            "damping": float(self.damping.item()),
+            "q_epsilon": float(self.q_epsilon.item()),
+            "cauchy_violation_max": float(self.cauchy_violation_max.item()),
+            "exact_roundoff_clamp_count": self.exact_roundoff_clamp_count,
             "gamma_x_squared_min": float(self.gamma_x_squared.min().item()),
             "gamma_x_squared_max": float(self.gamma_x_squared.max().item()),
             "gamma_y_squared_min": float(self.gamma_y_squared.min().item()),
@@ -449,6 +555,27 @@ class SymmetricTangentGreenResponseContext:
         }
 
 
+def _apply_inverse_preconditioner(
+    *,
+    values: torch.Tensor,
+    inverse_denominator: torch.Tensor,
+    inverse_preconditioner: Callable[[torch.Tensor], torch.Tensor] | None,
+) -> torch.Tensor:
+    if inverse_preconditioner is None:
+        return inverse_denominator * values
+    output = inverse_preconditioner(values)
+    if output.shape != values.shape:
+        raise ValueError(
+            "inverse_preconditioner must preserve the input shape; "
+            f"received {tuple(values.shape)} and returned {tuple(output.shape)}."
+        )
+    if output.dtype != values.dtype or output.device != values.device:
+        raise ValueError("inverse_preconditioner must preserve input dtype and device.")
+    if not torch.all(torch.isfinite(output)):
+        raise ValueError("inverse_preconditioner returned non-finite values.")
+    return output
+
+
 def matrix_free_krylov_k2_step(
     *,
     context: SymmetricTangentGreenResponseContext,
@@ -456,6 +583,7 @@ def matrix_free_krylov_k2_step(
     gradient: torch.Tensor,
     relative_eps: float,
     monotonicity_relative_tol: float | None = None,
+    inverse_preconditioner: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> KrylovK2StepResult:
     """Minimize response mismatch in a two-direction preconditioned subspace."""
 
@@ -473,7 +601,11 @@ def matrix_free_krylov_k2_step(
         )
 
     inverse_denominator = context.denominator.reciprocal().unsqueeze(0)
-    direction_0 = inverse_denominator * gradient
+    direction_0 = _apply_inverse_preconditioner(
+        values=gradient,
+        inverse_denominator=inverse_denominator,
+        inverse_preconditioner=inverse_preconditioner,
+    )
     directional_response_0 = context.response_operator.forward_pair(
         torch.stack((direction_0, direction_0), dim=1)
     )
@@ -489,7 +621,11 @@ def matrix_free_krylov_k2_step(
 
     hessian_direction_0 = context.tangent_gradient(response_0)
     residual_gradient_1 = gradient - coefficient_0.unsqueeze(1) * hessian_direction_0
-    direction_1_raw = inverse_denominator * residual_gradient_1
+    direction_1_raw = _apply_inverse_preconditioner(
+        values=residual_gradient_1,
+        inverse_denominator=inverse_denominator,
+        inverse_preconditioner=inverse_preconditioner,
+    )
     directional_response_1_raw = context.response_operator.forward_pair(
         torch.stack((direction_1_raw, direction_1_raw), dim=1)
     )
@@ -584,11 +720,16 @@ def matrix_free_krylov_subspace_step(
     max_dimension: int,
     relative_eps: float,
     monotonicity_relative_tol: float | None = None,
+    inverse_preconditioner: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> KrylovSubspaceStepResult:
     """Extend the unchanged K=2 seed with nested response-orthogonal directions."""
 
-    if isinstance(max_dimension, bool) or max_dimension not in {2, 3, 4}:
-        raise ValueError("max_dimension must be 2, 3, or 4.")
+    if (
+        isinstance(max_dimension, bool)
+        or not isinstance(max_dimension, int)
+        or max_dimension < 2
+    ):
+        raise ValueError("max_dimension must be an integer greater than or equal to 2.")
     if monotonicity_relative_tol is not None and (
         not math.isfinite(monotonicity_relative_tol) or monotonicity_relative_tol <= 0.0
     ):
@@ -601,6 +742,7 @@ def matrix_free_krylov_subspace_step(
         gradient=gradient,
         relative_eps=relative_eps,
         monotonicity_relative_tol=monotonicity_relative_tol,
+        inverse_preconditioner=inverse_preconditioner,
     )
     mass = context.point_mass
     inverse_denominator = context.denominator.reciprocal().unsqueeze(0)
@@ -626,7 +768,11 @@ def matrix_free_krylov_subspace_step(
     residual_gradient = k2.residual_gradient_post
 
     for _direction_index in range(2, max_dimension):
-        direction = inverse_denominator * residual_gradient
+        direction = _apply_inverse_preconditioner(
+            values=residual_gradient,
+            inverse_denominator=inverse_denominator,
+            inverse_preconditioner=inverse_preconditioner,
+        )
         directional_response = context.response_operator.forward_pair(
             torch.stack((direction, direction), dim=1)
         )
@@ -974,6 +1120,15 @@ class SymmetricTangentGreenResponseContextBuilder:
         config: SymmetricTangentGreenResponseProjectionConfig | dict[str, object],
     ) -> None:
         self.config = SymmetricTangentGreenResponseProjectionConfig.from_raw(config)
+        geometry_k_selection = GeometryKSelectionConfig.from_raw(
+            self.config.geometry_k_selection
+        )
+        if geometry_k_selection.enabled:
+            raise ValueError(
+                "Unresolved geometry_k_selection reached tangent runtime. Resolve "
+                "the geometry-only subspace dimension before constructing the "
+                "tangent response context."
+            )
 
     @torch.no_grad()
     def build(
@@ -1007,11 +1162,29 @@ class SymmetricTangentGreenResponseContextCache:
     def __init__(
         self,
         config: SymmetricTangentGreenResponseProjectionConfig | dict[str, object],
+        *,
+        checkpoint: TangentContextCheckpointConfig | dict[str, object] | None = None,
+        checkpoint_path: Path | None = None,
     ) -> None:
-        self.builder = SymmetricTangentGreenResponseContextBuilder(config)
+        self.config = SymmetricTangentGreenResponseProjectionConfig.from_raw(config)
+        self.builder = SymmetricTangentGreenResponseContextBuilder(self.config)
+        self.checkpoint = TangentContextCheckpointConfig.from_raw(checkpoint)
+        self.checkpoint_path = checkpoint_path
+        if self.checkpoint.enabled and self.checkpoint_path is None:
+            raise ValueError(
+                "Enabled tangent context persistence requires a resolved checkpoint path."
+            )
         self.context: SymmetricTangentGreenResponseContext | None = None
         self.build_count = 0
         self.build_seconds = 0.0
+        self.load_count = 0
+        self.load_seconds = 0.0
+        self.save_count = 0
+        self.save_seconds = 0.0
+        self.context_source: Literal["none", "built", "loaded"] = "none"
+        self.context_id: str | None = None
+        self.identity: TangentContextIdentity | None = None
+        self.identity_verified = False
 
     def get_or_build(
         self,
@@ -1021,15 +1194,103 @@ class SymmetricTangentGreenResponseContextCache:
         x_green_branch: torch.Tensor,
         y_green_branch: torch.Tensor,
     ) -> SymmetricTangentGreenResponseContext:
+        from greenonet.complex_tangent_context_io import TangentResponseContextStore
+
         if self.context is None:
-            start = time.perf_counter()
-            self.context = self.builder.build(
-                green_model=green_model,
-                geometry=geometry,
+            point_mass = (geometry.hx * geometry.hy).to(
+                device=x_green_branch.device,
+                dtype=x_green_branch.dtype,
+            )
+            if self.checkpoint.enabled:
+                identity = TangentResponseContextStore.identity(
+                    green_model=green_model,
+                    geometry=geometry,
+                    x_green_branch=x_green_branch,
+                    y_green_branch=y_green_branch,
+                    point_mass=point_mass,
+                )
+                self.identity = identity
+                assert self.checkpoint_path is not None
+                should_load = (
+                    self.checkpoint.load_policy != "never"
+                    and self.checkpoint_path.exists()
+                )
+                if should_load:
+                    start = time.perf_counter()
+                    loaded = TangentResponseContextStore.load(
+                        path=self.checkpoint_path,
+                        identity=identity,
+                        config=self.config,
+                        device=x_green_branch.device,
+                    )
+                    self.load_seconds = time.perf_counter() - start
+                    self.load_count += 1
+                    self.context = (
+                        SymmetricTangentGreenResponseContext.from_preconditioner_terms(
+                            response_operator=loaded.response_operator,
+                            point_mass=loaded.point_mass,
+                            terms=loaded.terms,
+                            config=self.config,
+                        )
+                    )
+                    self.context_source = "loaded"
+                    self.context_id = str(loaded.manifest["context_id"])
+                    self.identity_verified = True
+                elif self.checkpoint.load_policy == "required":
+                    raise FileNotFoundError(
+                        "Required tangent response context sidecar does not exist: "
+                        f"{self.checkpoint_path}"
+                    )
+            if self.context is None:
+                start = time.perf_counter()
+                self.context = self.builder.build(
+                    green_model=green_model,
+                    geometry=geometry,
+                    x_green_branch=x_green_branch,
+                    y_green_branch=y_green_branch,
+                )
+                self.build_seconds = time.perf_counter() - start
+                self.build_count += 1
+                self.context_source = "built"
+                self.identity_verified = self.checkpoint.enabled
+                if self.checkpoint.enabled and self.checkpoint.save_after_build:
+                    assert self.checkpoint_path is not None
+                    assert self.identity is not None
+                    start = time.perf_counter()
+                    manifest = TangentResponseContextStore.save(
+                        path=self.checkpoint_path,
+                        context=self.context,
+                        identity=self.identity,
+                    )
+                    self.save_seconds = time.perf_counter() - start
+                    self.save_count += 1
+                    self.context_id = str(manifest["context_id"])
+        elif self.checkpoint.enabled:
+            assert self.identity is not None
+            TangentResponseContextStore.validate_runtime_branches(
+                identity=self.identity,
                 x_green_branch=x_green_branch,
                 y_green_branch=y_green_branch,
             )
-            self.build_seconds = time.perf_counter() - start
-            self.build_count += 1
         self.context.validate_for(x_green_branch.new_empty(geometry.num_points))
         return self.context
+
+    def telemetry(self) -> dict[str, object]:
+        path = self.checkpoint_path
+        return {
+            "persistence_enabled": self.checkpoint.enabled,
+            "source": self.context_source,
+            "path": None if path is None else str(path),
+            "context_id": self.context_id,
+            "schema_version": 2 if self.checkpoint.enabled else None,
+            "build_count": self.build_count,
+            "load_count": self.load_count,
+            "save_count": self.save_count,
+            "build_seconds": self.build_seconds,
+            "load_seconds": self.load_seconds,
+            "save_seconds": self.save_seconds,
+            "file_bytes": (
+                path.stat().st_size if path is not None and path.is_file() else 0
+            ),
+            "identity_verified": self.identity_verified,
+        }

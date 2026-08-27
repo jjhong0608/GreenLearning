@@ -139,6 +139,15 @@ class ExportCouplingArtifactsCLI:
                 "errors. Defaults to 0.99 in complex mode; use 1.0 for full range."
             ),
         )
+        parser.add_argument(
+            "--tangent-context",
+            type=Path,
+            default=None,
+            help=(
+                "Optional tangent response context sidecar override for complex "
+                "artifacts."
+            ),
+        )
         self.parser = parser
 
     @staticmethod
@@ -190,6 +199,7 @@ class ExportCouplingArtifactsCLI:
             show_domain_boundary=bool(args.show_domain_boundary),
             visualization_mesh=args.visualization_mesh,
             directional_color_quantile=args.directional_color_quantile,
+            tangent_context=args.tangent_context,
         )
         logger = self._build_logger(request.outdir)
         with request.config.open() as fp:

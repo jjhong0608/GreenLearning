@@ -410,8 +410,8 @@ def test_generic_k2_subspace_preserves_existing_k2_tensors_bitwise():
     )
 
 
-@pytest.mark.parametrize("subspace_dimension", [3, 4])
-def test_k3_k4_projection_is_nested_balanced_and_matrix_free(
+@pytest.mark.parametrize("subspace_dimension", [3, 4, 5, 8])
+def test_dynamic_k_projection_is_nested_balanced_and_matrix_free(
     tmp_path,
     monkeypatch,
     subspace_dimension,
@@ -432,7 +432,7 @@ def test_k3_k4_projection_is_nested_balanced_and_matrix_free(
     rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
 
     def fail_solve(*args, **kwargs):
-        raise AssertionError("K=3/K=4 tangent projection must not solve a matrix.")
+        raise AssertionError("Dynamic tangent projection must not solve a matrix.")
 
     monkeypatch.setattr(torch.linalg, "solve", fail_solve)
     projection = apply_complex_balance_projection(
@@ -479,7 +479,7 @@ def test_k3_k4_projection_is_nested_balanced_and_matrix_free(
     assert torch.all(torch.isfinite(raw_physical.grad))
 
 
-@pytest.mark.parametrize("subspace_dimension", [2, 3, 4])
+@pytest.mark.parametrize("subspace_dimension", [2, 3, 4, 5, 8])
 def test_k2_plus_rejects_eta_cap_and_degenerate_directions_fall_back(
     subspace_dimension,
 ):

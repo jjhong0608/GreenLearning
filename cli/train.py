@@ -16,6 +16,7 @@ from greenonet.config import (
     CouplingBranchFusionConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
+    CouplingGeometryBranchConfig,
     CouplingLossesConfig,
     CouplingLossTermConfig,
     CouplingModelConfig,
@@ -46,6 +47,10 @@ from greenonet.complex_coupling_evaluator import ComplexCouplingEvaluator
 from greenonet.complex_coupling_model import ComplexCouplingNet
 from greenonet.complex_coupling_trainer import ComplexCouplingTrainer
 from greenonet.complex_geometry import ComplexGeometryMetadata, load_complex_geometry
+from greenonet.complex_tangent_geometry_selection import (
+    GeometryTangentDimensionResolver,
+    materialized_tangent_config,
+)
 from greenonet.complex_sources import (
     GeometryGridLoader,
     IndexedGpComplexSourceProvider,
@@ -82,6 +87,15 @@ class TrainCLI:
             type=str,
             default="checkpoints/run",
             help="Directory to store logs and artifacts.",
+        )
+        parser.add_argument(
+            "--tangent-context",
+            type=Path,
+            default=None,
+            help=(
+                "Optional tangent response context sidecar override. Requires "
+                "tangent_context_checkpoint.enabled=true."
+            ),
         )
         self.parser = parser
 
@@ -130,6 +144,11 @@ class TrainCLI:
             branch_fusion_raw,
             "coupling_model",
         )
+        geometry_branch_raw = coupling_model_kwargs.pop("geometry_branch", None)
+        geometry_branch_cfg = self._build_geometry_branch_config(
+            geometry_branch_raw,
+            "coupling_model",
+        )
         green_response_raw = coupling_model_kwargs.pop("green_response_feature", None)
         green_response_cfg = self._build_green_response_feature_config(
             green_response_raw,
@@ -157,6 +176,7 @@ class TrainCLI:
             source_stencil_lift=source_lift_cfg,
             coefficient_terms=coefficient_terms_cfg,
             branch_fusion=branch_fusion_cfg,
+            geometry_branch=geometry_branch_cfg,
             green_response_feature=green_response_cfg,
             trunk_positional_encoding=positional_cfg,
             axis_1d_trunk=axis_1d_trunk_cfg,
@@ -206,7 +226,9 @@ class TrainCLI:
         dataset_cfg: DatasetConfig,
         training_cfg: TrainingConfig | None = None,
         coupling_training_cfg: CouplingTrainingConfig,
+        coupling_model_cfg: CouplingModelConfig,
         pipeline_cfg: PipelineConfig,
+        tangent_dimension_provenance: dict[str, object] | None = None,
     ) -> None:
         destination = work_dir / "config_used.json"
         materialize_green = pipeline_cfg.run_green
@@ -291,6 +313,21 @@ class TrainCLI:
                     else None
                 ),
             }
+            if tangent_dimension_provenance is not None:
+                coupling_model = payload.setdefault("coupling_model", {})
+                if not isinstance(coupling_model, dict):
+                    raise TypeError("coupling_model must be an object.")
+                projection = coupling_model.setdefault("balance_projection", {})
+                if not isinstance(projection, dict):
+                    raise TypeError(
+                        "coupling_model.balance_projection must be an object."
+                    )
+                projection["symmetric_tangent_green_response"] = (
+                    materialized_tangent_config(coupling_model_cfg)
+                )
+                payload["tangent_subspace_dimension_provenance"] = (
+                    tangent_dimension_provenance
+                )
         destination.write_text(json.dumps(payload, indent=2) + "\n")
 
     @classmethod
@@ -356,6 +393,16 @@ class TrainCLI:
     ) -> CouplingBranchFusionConfig:
         try:
             return CouplingBranchFusionConfig.from_raw(raw_branch_fusion)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"{section_name}.{exc}") from exc
+
+    @staticmethod
+    def _build_geometry_branch_config(
+        raw_geometry_branch: object | None,
+        section_name: str,
+    ) -> CouplingGeometryBranchConfig:
+        try:
+            return CouplingGeometryBranchConfig.from_raw(raw_geometry_branch)  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:
             raise type(exc)(f"{section_name}.{exc}") from exc
 
@@ -572,7 +619,9 @@ class TrainCLI:
         terminal_cfg: TerminalConfig,
         coeffs: CoefficientFunctions,
         green_model: torch.nn.Module,
+        geometry: ComplexGeometryMetadata,
         work_dir: Path,
+        tangent_context_path: Path | None,
     ) -> None:
         if coupling_training_cfg.seed is None:
             raise ValueError(
@@ -590,10 +639,6 @@ class TrainCLI:
         validate_complex_coupling_source_config(
             dataset_cfg,
             coupling_training_cfg,
-        )
-        geometry = load_complex_geometry(
-            dataset_cfg.geometry_path,
-            dtype=dataset_cfg.dtype,
         )
         train_dataset = self._build_complex_source_dataset(
             split="train",
@@ -638,6 +683,7 @@ class TrainCLI:
             green_model=green_model,
             terminal_width=terminal_cfg.width,
             seed_context=seed_context,
+            tangent_context_path=tangent_context_path,
         )
         trainer.train(train_dataset, validation_dataset)
         if test_dataset is not None:
@@ -648,6 +694,10 @@ class TrainCLI:
                 device=torch.device(coupling_training_cfg.device),
                 work_dir=work_dir,
                 terminal_width=terminal_cfg.width,
+                tangent_context_path=tangent_context_path,
+                tangent_context_default_path=(
+                    work_dir / "tangent_response_context.safetensors"
+                ),
             )
             evaluator.evaluate(
                 test_dataset,
@@ -748,13 +798,31 @@ class TrainCLI:
             )
         work_dir = Path(args.work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
+        complex_geometry: ComplexGeometryMetadata | None = None
+        tangent_dimension_provenance: dict[str, object] | None = None
+        if pipeline_cfg.run_coupling and dataset_cfg.geometry_mode == "complex":
+            if dataset_cfg.geometry_path is None:
+                raise ValueError("dataset.geometry_path is required for complex mode.")
+            complex_geometry = load_complex_geometry(
+                dataset_cfg.geometry_path,
+                dtype=dataset_cfg.dtype,
+            )
+            resolution = GeometryTangentDimensionResolver.resolve(
+                model_config=coupling_model_cfg,
+                geometry=complex_geometry,
+                geometry_path=dataset_cfg.geometry_path,
+            )
+            coupling_model_cfg = resolution.model_config
+            tangent_dimension_provenance = resolution.provenance
         self._write_config_used(
             config_path=config_path,
             work_dir=work_dir,
             dataset_cfg=dataset_cfg,
             training_cfg=training_cfg,
             coupling_training_cfg=coupling_training_cfg,
+            coupling_model_cfg=coupling_model_cfg,
             pipeline_cfg=pipeline_cfg,
+            tangent_dimension_provenance=tangent_dimension_provenance,
         )
         if self._should_apply_cpu_runtime(
             training_cfg,
@@ -832,6 +900,10 @@ class TrainCLI:
 
         if pipeline_cfg.run_coupling:
             if dataset_cfg.geometry_mode == "complex":
+                if complex_geometry is None:
+                    raise RuntimeError(
+                        "Complex geometry was not resolved before training."
+                    )
                 self._run_complex_coupling(
                     dataset_cfg=dataset_cfg,
                     coupling_model_cfg=coupling_model_cfg,
@@ -840,7 +912,9 @@ class TrainCLI:
                     terminal_cfg=terminal_cfg,
                     coeffs=coeffs,
                     green_model=green_model,
+                    geometry=complex_geometry,
                     work_dir=work_dir,
+                    tangent_context_path=args.tangent_context,
                 )
                 return
             if coupling_training_cfg.seed is None:

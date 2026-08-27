@@ -945,10 +945,22 @@ def test_coupling_branch_fusion_config_defaults_and_validation():
     assert CouplingBranchFusionConfig.from_raw({"mode": "product_fuser"}).mode == (
         "product_fuser"
     )
+    assert CouplingBranchFusionConfig.from_raw({"mode": "concat_fuser"}).mode == (
+        "concat_fuser"
+    )
     with pytest.raises(ValueError, match="branch_fusion.mode"):
         CouplingBranchFusionConfig(mode="bad")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="branch_fusion"):
         CouplingBranchFusionConfig.from_raw("product")  # type: ignore[arg-type]
+
+
+def test_unit_square_coupling_rejects_concat_fuser() -> None:
+    with pytest.raises(ValueError, match="only supported by ComplexCouplingNet"):
+        CouplingNet(
+            CouplingModelConfig(
+                branch_fusion=CouplingBranchFusionConfig(mode="concat_fuser")
+            )
+        )
 
 
 def test_coupling_model_product_fusion_preserves_forward_shape():
@@ -2067,6 +2079,7 @@ def test_axis_1d_trunk_rejects_invalid_config():
         Axis1DTrunkConfig(max_frequency=0.0)
     with pytest.raises(ValueError, match="transverse_trunk.fusion"):
         TransverseTrunkConfig(fusion="sum")
+    assert TransverseTrunkConfig(fusion="concat_fuser").fusion == "concat_fuser"
     with pytest.raises(TypeError, match="transverse_trunk.enabled"):
         TransverseTrunkConfig(enabled="yes")
     with pytest.raises(TypeError, match="transverse_trunk has unknown keys"):

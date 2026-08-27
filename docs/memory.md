@@ -112,37 +112,28 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   고정한다. Physical-coordinate coefficient는
   `a(x,y)=1+0.5 sin(2 pi x) sin(4 pi y)`이고 `0.5 <= a <= 1.5`이며,
   `b_x=b_y=c=0`이다. `x <-> y` 비대칭성과 서로 다른 x/y frequency를 의도적으로
-  사용한다. Experiment-local 정의는 `numerical_examples/disk/coefficient.py`이며,
+  사용한다. Experiment-local 정의는 `numerical_examples/disk_old/coefficient.py`이며,
   기존 `coefficients/Sinusoidal_Diffusion_Only.py`와 수치적으로 동일하다. Disk
   CouplingNet config는 experiment-local GreenNet checkpoint인
-  `checkpoints/numerical_examples/disk/green/model.safetensors`를 사용한다. Disk
+  `checkpoints/numerical_examples/disk_diffusion/green/model.safetensors`를 사용한다. Disk
   geometry의 canonical path는 `data/geometry/disk_radius_05_1_128.npz`이며
   GreenNet과 모든 Disk CouplingNet config가 이 경로를 공유한다.
-- Disk의 scientific ablation은 canonical energy를 항상 활성화한 상태에서
-  response trust와 source-normalized stationarity를 각각 on/off하는 `2 x 2`
-  objective matrix로 고정한다. 각 cell은 seed `0/1/2/3` 네 번을 실행하며 config는
-  `numerical_examples/disk/disk_{energy_only,energy_response_trust,energy_stationarity,energy_response_trust_stationarity}_seed{0,1,2,3}.json`이다.
-  Unit-square study에서 선택한 common protocol인 train/valid `4800/300`, batch
-  `200`, total optimizer step `2400`, `warmup_steps=240`,
-  `validation_every_steps=24`, `product_fuser`, K=4 tangent correction,
-  local weak-residual reconstruction, boundary weight `0`을 유지한다. Diffusion
-  coefficient branch만 활성화하고 indexed-GP seed와 CouplingNet seed를 같은 값으로
-  paired한다. Primary comparison은 best-energy checkpoint를 사용한다.
-  `cli/run_disk_experiment_queue.py`는 objective 순서
-  `energy_only -> energy_response_trust -> energy_stationarity ->
-  energy_response_trust_stationarity`와 각 objective 내부 seed `0 -> 3` 순서로
-  16개 run을 하나씩 실행한다. Default output root는
-  `checkpoints/numerical_examples/disk`이며 run directory는
-  `coupling_<objective>_seed<seed>`이다. Unit-square queue와 동일하게 `_SUCCESS`만
-  completed run으로 인정하고, non-empty incomplete directory나 첫 child failure에서
-  queue를 중단한다.
-  병렬 supervisor 실행에는 `cli/run_disk_experiment_queue_seed01.py`와
-  `cli/run_disk_experiment_queue_seed23.py`를 사용한다. 첫 queue는 모든 objective의
-  seed `0/1`, 둘째 queue는 seed `2/3`을 실행하므로 각각 8개이며 두 집합의
-  intersection은 비어 있고 union은 full 16-run matrix다. Run directory는 공통
-  output root의 기존 `coupling_<objective>_seed<seed>`를 유지하되 supervisor
-  metadata는 각각 `queue_seed01.{log,pid}`, `queue_seed01_status.json`과
-  `queue_seed23.{log,pid}`, `queue_seed23_status.json`으로 분리한다.
+- Disk의 current scientific ablation은 fixed-line transverse Fourier encoding의
+  spectral capacity를 검증하는 `4 x 4` matrix다. F1/F2/F3은 각각 frequency set
+  `[1]`, `[1,2]`, `[1,2,4]`를 사용하며 config는
+  `numerical_examples/disk/disk_transverse_f{1,2,3}_seed{0,1,2,3}.json`이다.
+  F4 `[1,2,4,8]`은 새 config를 만들지 않고 completed
+  `checkpoints/numerical_examples/disk_diffusion/coupling/coupling_energy_only_seed{0,1,2,3}`
+  결과를 재사용한다. 따라서 새로 학습할 config는 정확히 12개다.
+  모든 cell은 canonical energy-only, train/valid `4800/300`, batch `200`, total
+  optimizer step `2400`, `warmup_steps=240`, `validation_every_steps=24`,
+  `product_fuser`, K=4 tangent correction, local weak-residual reconstruction,
+  boundary weight `0`, diffusion coefficient branch on을 공유한다. Indexed-GP seed와
+  CouplingNet seed는 `0/1/2/3`으로 paired하며 primary comparison은 best-energy
+  checkpoint를 사용한다. 이전 response-trust/stationarity `2 x 2 x 4` objective
+  study의 config, coefficient, base template는 `numerical_examples/disk_old/`에
+  보존하며 current spectral ablation에는 포함하지 않는다. Legacy Disk queue CLI는
+  이전 objective 이름을 enumerate하므로 current 12-config launcher로 사용하지 않는다.
 - `Divergence_Free_Convection_Diffusion.py`: variable diffusion,
   divergence-free convection with amplitude `2.0`, zero reaction.
 - 새 coefficient file을 추가할 때는 `a_fun`, `apx_fun`, `apy_fun`,
@@ -1469,6 +1460,13 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   16,301 vertices, 32,428 triangles, 16,129 exact valid mappings, 172 boundary
   vertices와 zero auxiliary vertices를 가지며 loader가 geometry SHA-256과 point
   mapping을 검증한다.
+- Radius-0.5 Disk visualization cache는
+  `data/visualization_mesh/disk_radius_05_1_128_mesh.npz`이다. 이 cache는
+  `data/geometry/disk_radius_05_1_128.npz`와 `examples/unit_circle_gmsh.py`에서
+  `boundary_size_factor=3.0`, `max_auxiliary_fraction=0.001`로 생성한다. 저장된 mesh는
+  12,984 vertices, 25,831 triangles, 12,849 exact valid mappings, 135 boundary
+  vertices와 zero auxiliary vertices를 가지며, boundary radius는 numerical
+  tolerance 안에서 정확히 `0.5`다.
 - Mesh scalar figure는 selected sample의 `sol`, `u_pred`, `u_pred_error`, `rhs`,
   `phi`, `psi`와, target flux가 있을 때 `target_phi`, `target_psi`, `phi_error`,
   `psi_error`에 additive로 생성하며 기존 scatter를 대체하지 않는다. Solution
@@ -2367,6 +2365,269 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   paired training 품질 및 계산 비용을 확인한 뒤 결정한다.
   Frozen evidence는
   `checkpoints/pentagram/coupling9/tangent_subspace_k1_k4_audit/`에 둔다.
+
+## Minimal Complex CouplingNet Architecture
+
+- Complex CouplingNet의 learned auxiliary network는 독립적으로 끌 수 있다.
+  `coupling_model.geometry_branch.enabled`는 segment geometry MLP를,
+  `axis_1d_trunk.fixed_line_transverse_branch.enabled`는 fixed-line Fourier
+  branch를, `axis_1d_trunk.transverse_trunk.enabled`는 pointwise cross-axis
+  trunk와 trunk fuser를 제어한다. 앞의 두 새 flag 기본값은 `true`이므로 기존
+  all-on config/checkpoint surface를 유지한다. Pointwise trunk가 켜질 때만
+  `length_context=true`가 필수다.
+- Variable-coefficient minimal architecture는 source branch, coefficient branch,
+  mandatory primary trunk만 유지한다. `branch_fusion.mode=product_fuser`이면
+  `[h_f,h_a,h_f*h_a]`를 입력으로 하는 `3H -> H` fuser를 사용한다. Active
+  branch가 하나뿐이면 fuser를 생성하지 않고 해당 embedding을 직접 사용한다.
+- Complex-only `branch_fusion.mode=concat_fuser`는 active embedding만 concat하고
+  product feature를 만들지 않는다. 따라서 minimal source+coefficient 구성은
+  `[h_f,h_a]`의 `2H -> H` fuser를 사용하며 forward/autograd graph에 branch
+  element-wise product가 없다. `product_fuser`의 기존 `3H -> H` tensor 순서와
+  수치는 유지한다. Unit-square CouplingNet은 이 mode를 명시적으로 거부하며,
+  pointwise transverse-trunk fusion과는 독립이다. Pointwise trunk도 이제
+  `product`, `product_fuser`, `concat_fuser`를 지원한다. Trunk `concat_fuser`는
+  `[T_parallel,T_perp]`를 `2H -> H`로 합치며 element-wise product를 만들지 않는다.
+  기존 trunk `product_fuser`는 `[T_parallel,T_perp,T_parallel*T_perp]`의
+  `3H -> H` 계약과 checkpoint shape를 유지한다.
+- Auxiliary network를 끄더라도 connected-segment metadata, source amplitude,
+  deterministic `A*L^2` output scaling, physical balance projection, K-dimensional
+  tangent correction, Green reconstruction, canonical energy, optimizer와 scheduler는
+  바뀌지 않는다. Full/Minimal model checkpoint는 architecture-specific이며 서로
+  다른 설정으로 load하면 명시적인 architecture mismatch로 거부한다.
+- Artifact summary는 resolved active branch order, effective fusion, fuser input
+  dimension과 parameter count를 기록한다. Disabled fixed-line/pointwise module의
+  encoding 또는 length-context array는 summary/raw NPZ에 사용된 것처럼 기록하지
+  않는다. Minimal/full 장기 실험 config는 별도 후속 작업에서 생성한다.
+- `configs/unit_square_minimal_concat_fuser.json`은
+  `numerical_examples/unit_square/base_config.json`의 Pure Poisson dataset, K=4
+  tangent, objective와 training protocol을 유지하면서 geometry branch,
+  fixed-line transverse branch와 pointwise transverse trunk를 끈 minimal example이다.
+  모든 coefficient term도 base처럼 꺼져 있으므로 active branch는 source 하나이고,
+  configured `concat_fuser`는 effective identity이며 fuser parameter를 만들지 않는다.
+  실제 `[h_f,h_a]`의 `2H -> H` concat을 비교하려면 variable-coefficient problem에서
+  적어도 하나의 coefficient term을 활성화해야 한다.
+
+## Tangent Preconditioner Variant Design
+
+- `docs/tangent_preconditioner_variants_design.md` is the single implementation and
+  experiment contract for the symmetric-tangent preconditioner comparison. 네 후보는
+  production config, projection, trainer/evaluator/artifact와 frozen audit에 구현되었다.
+- The four allowed formulas are `D_sep=a+b+damping`,
+  `D_exact=a+b+2c+damping`, `D_abs=a+b+2*abs(c)+damping`, and
+  `D_q=a+b+4*c^2/(a+b+epsilon_q)+damping`, where
+  `a=diag(H_x^T M_Omega H_x)`, `b=diag(H_y^T M_Omega H_y)`, and
+  `c=diag(H_x^T M_Omega H_y)`.
+- The config names are `separable`, `exact_diagonal`,
+  `absolute_cross_axis`, and `normalized_quadratic_cross_axis`.
+  `preconditioner_variant="separable"` remains the backward-compatible production
+  default. `cross_axis_relative_eps=1e-12` supplies the scale-aware `q/rho` guard;
+  damping retains the existing `relative_lambda` and
+  `denominator_relative_eps` policy for every variant.
+- Cross-axis terms must be computed from segment-local axial response blocks without
+  a global response/Gram matrix or linear solve. Contexts cache raw `a,b,c` and record
+  config, geometry, GreenNet/checkpoint, dtype/device, timing, and numerical-check
+  provenance. Model checkpoint tensor keys and shapes do not change.
+- Stored `q`의 의미는 `q=c^2/(a+b+epsilon_q)`이며 `D_q`에 들어갈 때만 `4q`를
+  사용한다. Schema-v2 context는 `a,b,c,rho,q`, 네 undamped base와 denominator,
+  common damping 및 Cauchy/roundoff audit field를 모두 저장한다.
+- Intermediate strength parameters, ReLU/positive-part variants, and silent
+  sign-dependent fallbacks are excluded. The controlled comparison is the four
+  variants crossed with `K=1..4`, first as a shared frozen-checkpoint audit and then
+  as paired retraining. Frozen post-hoc results do not establish a training benefit.
+- This decision authorizes implementation and comparison, not replacement of the
+  production default. Any default promotion requires the document's preregistered
+  accuracy, physics, robustness, runtime, and artifact-completeness gates.
+- The 2026-08-26 frozen Pentagram `coupling11` 4 x K audit is complete at
+  `checkpoints/pentagram/coupling11/tangent_preconditioner_4x4_audit/`. It evaluated
+  100 test samples with one raw-output stream, one response-context build, and no
+  global matrix or solve. Operator equivalence had maximum absolute error
+  `2.775558e-17`, and physical balance residual was exactly zero.
+- In that audit, `separable K=4` had the lowest mean optimized energy
+  (`1.741050e-5`) and `rel_sol` (`1.112221e-2`). Relative to separable uncapped K=1,
+  it reduced response mismatch by `96.182%`, optimized energy by `96.336%`, and
+  mean `rel_sol` by `81.248%`. Cross term `c` was nonnegative everywhere, making
+  `exact_diagonal` and `absolute_cross_axis` identical. K=4 variant differences
+  were small, so retain `separable` as the production default; frozen evidence is
+  screening only and does not replace paired retraining.
+- The Annulus CDR training-bias control is stored at
+  `checkpoints/annulus_CDR/tangent_preconditioner_training_bias_comparison/`. It
+  compares `coupling5` trained with `physical_symmetric`, `coupling8` trained with
+  separable fixed eta, and `coupling9` trained with separable closed-loop line
+  search on the same 50 test samples and response context
+  `sha256:d968c2e6d1af75ca23d88e30595d3d15d2648f5b5f1899c2bfb40ffe1b314a16`.
+  Cross-checkpoint solution comparisons use `rel_sol_equal_mean` because the old
+  configs do not share the same weak-reliability reconstruction setting.
+- The non-tangent `coupling5` control still changes mean K=4
+  `rel_sol_equal_mean` by only `-0.269%` when replacing separable with exact;
+  tangent-trained `coupling8/9` change it by `-0.369%/-0.393%`. The common
+  operator has mean `rho=0.047764`, max `rho=0.102040`, and the exact cross term
+  increases the damped separable denominator by only `2.726%` on average. Since
+  `c` is positive everywhere, exact and absolute variants are bitwise identical.
+  Therefore separable-specific training adaptation is not the primary cause of
+  the small variant spread.
+- Tangent training adaptation does exist at the correction-subspace level:
+  `coupling8/9` are substantially worse than `coupling5` under the uncorrected
+  symmetric baseline but outperform it after K=4. Increasing K lowers
+  equal-mean solution error by about `42.5%` for `coupling5` and about `50%` for
+  `coupling8/9`, whereas a fixed-K preconditioner change stays below `0.4%` in
+  aggregate. Retain separable as the default and prioritize K/subspace and model
+  questions over paired retraining of the cross-axis diagonal variants.
+- Pentagram에서 K가 axial connectivity를 어떻게 확장하는지에 대한 canonical
+  분석 bundle은
+  `checkpoints/pentagram/tangent_topology_k_analysis/analysis_report.md`에 둔다.
+  `cli/analyze_tangent_topology.py`는 geometry의 x/y connected-segment incidence
+  graph, trained `coupling8/9/10/11` K 비교, frozen `coupling9` K audit를 결합해
+  Markdown, JSON, CSV, NPZ와 Plotly HTML/JSON/PNG/PDF를 생성한다.
+- Canonical Pentagram은 valid point 4,572개, x/y segment 142/147개이고 point
+  graph diameter는 15, 한 번의 matrix-free A action을 한 graph layer로 센
+  A-distance diameter는 8이다. K=4에서 처음 도달 가능한 ordered pair는 전체의
+  `0.960083%`이며, 18개 point는 이 K4-new layer가 domain의 절반 이상을 차지한다.
+  따라서 K=4가 필요한 실제 axial path는 존재하지만 K=4가 전체 graph를
+  포괄한다는 뜻은 아니다.
+- Frozen coupling9의 K3-to-K4는 mean response mismatch를 `21.252%`, mean
+  `rel_sol`을 `9.371%` 줄였고, separately trained K3-to-K4는 mean `rel_sol`을
+  `9.887%` 줄였다. 그러나 selected sample에서 K4-new topology exposure와
+  solution-error reduction의 correlation은 일관되지 않는다. 따라서 K4의
+  개선은 graph reach와 spectral/Krylov approximation enrichment가 함께 만든
+  결과로 해석한다. Absolute accuracy 기준은 K4, isolated tangent-core
+  cost-quality knee는 K3이라는 결론을 유지한다.
+- Geometry-only K selection은
+  `C_global(K)>=0.99`와 `Q_0.05(C_i(K))>=0.99`를 동시에 만족하는 최소 K로
+  정의한다. 현재 paper geometry의 `h=1/128` active points에서
+  `K_square=2`, `K_disk=2`, `K_annulus=4`, `K_pentagram=4`이다. Pentagram을
+  같은 polygon 규칙으로 `2h=1/64`에서 다시 생성해도 K=4이므로
+  `max(K_pentagram,h,K_pentagram,2h)=4`이다. 네 geometry에 공통 K를 쓸 때는
+  geometry-family maximum인 K=4를 사용한다. 이 규칙에는 PDE, source,
+  GreenNet/CouplingNet prediction, reference target을 사용하지 않는다.
+- 네 paper geometry의 K=1..4 구조적 연결성은
+  `cli/visualize_geometry_k_connectivity.py`로 재현하고 결과는
+  `checkpoints/geometry_k_connectivity_visualization/`에 둔다. Per-domain 그림은
+  geometry-only selected K의 직전 단계에서 하위 5% reach에 가까운 대표 seed에서
+  출발한 first-reach shell을, 4x4 overview는 모든 point의 `C_i(K)`를 표시한다. 이는
+  localized source-coordinate seed에 대한 `K_first=d_A+1` 구조를 시각화한 것이며,
+  일반적으로 dense한 production `g0`의 literal zero/nonzero propagation map으로
+  해석하지 않는다. Canonical 결과는 Square/Disk가 K=2에서 full reach, Annulus가
+  K=4에서 full reach, Pentagram이 K=4에서 global/tail 99% rule을 만족함을 보인다.
+- `cli/audit_tangent_preconditioners.py --posthoc-tangent-override` is the explicit
+  audit-only path for applying closed-loop tangent screening to a
+  `physical_symmetric` checkpoint. It records both training and audit projection
+  provenance and may build/save a shared tangent context supplied by
+  `--tangent-context`. Without the flag, non-tangent training configs fail fast.
+- `cli/audit_tangent_cross_axis_coupling.py`은 implicit
+  `C=H_x^T M_Omega H_y`의 full/off-diagonal Frobenius energy를 deterministic
+  Rademacher probe로 추정하고, frozen network가 실제로 만드는
+  `z_b=D^-1 g_b`에서 `||(C+C^T)z_b||/||Az_b||`를 측정한다. Segment-local
+  `H/H^T` action만 사용하며 global Gram matrix, global solve, reference
+  `sol/phi/psi`는 사용하지 않는다. Probe별 CSV, sample별 CSV, operator field
+  NPZ, JSON summary, Plotly figure와 report를 생성한다.
+- Annulus CDR의 common response context를 사용한 2026-08-26 audit 결과는
+  `checkpoints/annulus_CDR/tangent_cross_axis_coupling_comparison/`에 둔다.
+  Canonical 256-probe 결과는 `R_off,C=0.998180`,
+  `R_off,C+C^T=0.997819`, `R_off,A=0.979635`,
+  `||C+C^T||_F/||A||_F=0.078826`이다. 따라서 cross-axis operator는 full
+  tangent Hessian의 지배 성분은 아니지만, `C` 자체의 energy는 거의 모두
+  diagonal 밖에 있다.
+- Frozen `coupling5/8/9`의 50-sample mean
+  `||(C+C^T)z_b||/||Az_b||`는 각각
+  `0.273876/0.259521/0.256723`이다. 반면 full cross action에 대한
+  `2*diag(C)z_b` norm 비율은 `0.001264/0.001119/0.001154`이고, diagonal을
+  뺀 cross action 비율은 `0.998943/0.999032/0.999002`이다. 즉 작은 `rho_i`와
+  exact-diagonal 대 separable 차이는 full cross-axis coupling이 작다는 증거가
+  아니라 `diag(C)`만 작다는 증거다. Jacobi가 `c_i`를 작게 만드는 것은 아니며,
+  작은 diagonal만 보존해 nonlocal cross-axis structure를 숨기는 것이 한계다.
+  K>=2는 full matrix-free `A` action을 사용하므로 이 off-diagonal structure를
+  별도 dense preconditioner 없이도 활용할 수 있다. 이 audit만으로 nonlocal
+  preconditioner의 end-to-end 우월성을 주장하지 않는다.
+- `cli/audit_tangent_low_rank.py`는 cached response context에서
+  `T=D^-1/2 A D^-1/2`, `A=(H_x+H_y)^T M_Omega(H_x+H_y)`의 dominant Ritz
+  basis를 matrix-free로 만들고, diagonal 및 rank `4/8/16/32`를 모두
+  `K=1/2/3/4`와 비교한다. Global `P x P` matrix와 solve는 만들지 않으며,
+  unresolved complement는 다음 Ritz value로 scale한다. Unit complement는
+  이 operator에서 high mode를 과도하게 감쇠하므로 production 후보가 아니다.
+- Frozen Annulus CDR `coupling9`의 canonical 결과는
+  `checkpoints/annulus_CDR/coupling9/tangent_low_rank_k1_k4_audit/`에 있다.
+  Diagonal K4의 mean `rel_sol=1.2942%`, response mismatch `5.33099e-8`에 비해
+  rank-8 K4는 `1.1655%`와 `3.98569e-8`로 각각 `9.945%`, `25.235%` 개선하지만,
+  optimized energy는 `2.529%` 증가하고 tangent-core forward+backward 시간은
+  `218.68 ms`에서 `495.62 ms` (`2.266x`)로 증가한다. Rank-4 K4는 mean `rel_sol=1.1659%`로
+  rank-8과 사실상 같고 energy 증가는 `0.0217%`라서 smallest accuracy ablation이다.
+  그러나 low-rank `K<4` 중 diagonal K4보다 mean `rel_sol`과 core runtime을 모두
+  개선하는 경우는 없다. 따라서 diagonal K4를 기본으로 유지하며, low-rank는 K
+  증가의 효율적 대체재가 아니라 optional accuracy extension으로만 취급한다.
+  Runtime은 model/data/validation을 제외한 tangent core 기준이다.
+- `separable` tangent preconditioner는 `D`만 pointwise diagonal이라는 뜻이다.
+  실제 gradient와 K-subspace는 처음부터
+  `A=(H_x+H_y)^T M_Omega(H_x+H_y)`를 matrix-free로 적용하므로
+  `H_x^T M H_y+H_y^T M H_x`의 off-diagonal cross-axis coupling을 포함한다.
+  K1에서도 한 horizontal/vertical segment를 통한 정보가 모이고, K>=2는
+  `D^-1 A`를 반복 적용해 intersecting axial-segment graph의 더 긴 path로
+  influence를 전파한다. Hole로 분리된 같은-coordinate segment는 직접 연결되지
+  않지만 다른 x/y segment의 교차 chain을 통해 간접 연결될 수 있다. MGS
+  orthogonalization은 이 connectivity를 만들지 않고 기존 response direction을
+  직교화할 뿐이다.
+
+## Tangent Runtime Context Persistence Design
+
+- `docs/tangent_response_context_checkpointing.md` is the single implementation
+  contract for persisting and reusing the frozen symmetric-tangent Green-response
+  runtime context. `src/greenonet/complex_tangent_context_io.py`의 schema v2
+  safetensors sidecar와 shared cache lifecycle로 구현되었다.
+- CouplingNet safetensors remain model-only. The frozen segment-local `H_x/H_y`
+  blocks, valid-point indices, Jacobi gains/denominator and point mass belong in a
+  separate `tangent_response_context.safetensors` sidecar shared by all CouplingNet
+  checkpoints for the same fixed operator.
+- The sidecar may be reused when source, CouplingNet checkpoint, batch size, K, eta,
+  or selected preconditioner variant changes because schema v2 stores all four
+  variants. Geometry, GreenNet state, actual x/y Green branch, reconstruction
+  contract, floating dtype, `relative_lambda`, `denominator_relative_eps`, or
+  `cross_axis_relative_eps` changes require a different context.
+- Compatibility is established from semantic geometry, Green state dict, actual
+  Green-branch tensor and reconstruction-contract SHA-256 identities. Existing but
+  corrupt or incompatible sidecars fail fast and never silently rebuild. Missing
+  sidecars may build only when the explicit load policy permits it.
+- Dynamic proposal, mismatch, gradient, K directions, subspace coefficients, eta
+  and delta are never serialized; they remain sample-dependent and are recomputed
+  every forward. Loaded `H_x/H_y` actions must preserve gradients with respect to
+  CouplingNet source outputs.
+- Existing `data/symmetric_tangent_green_response_fields.npz` remains a diagnostic
+  archive and cannot restore the runtime context because it does not contain the
+  response blocks. Persistence is opt-in and the current runtime-only lazy build is
+  the backward-compatible default.
+- `coupling_training.tangent_context_checkpoint` controls persistence. Path priority is
+  CLI `--tangent-context`, config path, then the caller-specific deterministic default.
+  `if_available` builds only when missing; corrupt or incompatible existing files fail
+  instead of rebuilding. The sidecar and JSON manifest are written atomically, and
+  logs/summaries record source, context ID, schema, byte size, path and timings.
+
+## Geometry-Only Automatic Tangent Dimension Selection
+
+- `symmetric_tangent_green_response.geometry_k_selection.enabled=false` preserves
+  the explicit `subspace_dimension` path. When enabled, production resolves K once
+  from `coords_valid`, `x_segment_id`, and `y_segment_id` before building the model,
+  evaluator, artifact exporter, or tangent response context.
+- Let `d_L(i,j)` be distance in the active-point axial incidence graph and
+  `d_A(i,j)=ceil(d_L(i,j)/2)`. Define `C_i(K)` as the fraction of points with
+  `d_A(i,j)<=K-1` and `C_global(K)` as its pointwise mean. The selected dimension
+  is the smallest K satisfying both configured global reach and the fixed lower-5%
+  pointwise reach thresholds. Their defaults are independently `0.99` and `0.99`.
+- `max_subspace_dimension` defaults to `8` and applies to explicit and automatic
+  modes. A required automatic K above the limit is never clamped: resolution fails
+  with the required K, both limit metrics, and graph diameters. Unresolved auto
+  config is also rejected by the tangent runtime.
+- The current canonical regression is Square/Disk/Annulus/Pentagram = `2/2/4/4`.
+  The selector is geometry-only: coefficients, source samples, predictions, and
+  reference `sol/phi/psi` do not enter it. Consequently the selected K is a
+  structural default, not a guarantee of PDE-specific accuracy optimality.
+- Auto training writes the resolved explicit K with auto disabled into
+  `config_used.json`. `tangent_subspace_dimension_provenance` retains the original
+  thresholds, fixed quantile, geometry path and SHA-256, counts, diameters, reach
+  metrics, setup time, and reference-free flags. Resolved configs can be evaluated
+  or exported without rerunning topology analysis.
+- Tangent projection, trainer/evaluator diagnostics, raw NPZ fields, Plotly fields,
+  and tangent audit loops accept dynamic K above four. K1-K4 legacy aliases and
+  metric order remain stable. The response context sidecar and model checkpoint
+  tensor keys remain unchanged because K changes only the matrix-free online
+  Krylov/MGS work, approximately O(K) operator actions and O(K^2) orthogonalization.
 
 ## Verification Defaults
 

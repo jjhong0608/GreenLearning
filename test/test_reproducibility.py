@@ -284,7 +284,10 @@ def test_indexed_gp_identity_seed_is_independent_of_training_seed() -> None:
         assert derive_indexed_seed(13, "train", 27) == expected
 
 
-def test_product_and_product_fuser_share_identical_common_parameters() -> None:
+@pytest.mark.parametrize("trainable_fuser_mode", ["product_fuser", "concat_fuser"])
+def test_product_and_trainable_fusers_share_identical_common_parameters(
+    trainable_fuser_mode,
+) -> None:
     context = TrainingSeedContext(
         stage="coupling",
         base_seed=53,
@@ -294,10 +297,10 @@ def test_product_and_product_fuser_share_identical_common_parameters() -> None:
     context.apply("model")
     product = ComplexCouplingNet(_small_coupling_config("product"))
     context.apply("model")
-    product_fuser = ComplexCouplingNet(_small_coupling_config("product_fuser"))
+    trainable_fuser = ComplexCouplingNet(_small_coupling_config(trainable_fuser_mode))
 
     product_state = product.state_dict()
-    fuser_state = product_fuser.state_dict()
+    fuser_state = trainable_fuser.state_dict()
     common_keys = sorted(set(product_state) & set(fuser_state))
     assert common_keys
     assert set(fuser_state) - set(product_state)

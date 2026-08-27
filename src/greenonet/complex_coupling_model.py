@@ -18,6 +18,7 @@ from greenonet.config import (
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
+    CouplingGeometryBranchConfig,
     CouplingModelConfig,
 )
 from greenonet.coupling_model import ActivationFactoryMixin, MLP
@@ -62,6 +63,11 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         )
 
         axis_cfg = Axis1DTrunkConfig.from_raw(config.axis_1d_trunk)
+        geometry_branch = CouplingGeometryBranchConfig.from_raw(config.geometry_branch)
+        self.fixed_line_transverse_branch_enabled = bool(
+            axis_cfg.fixed_line_transverse_branch.enabled
+        )
+        self.geometry_branch_enabled = bool(geometry_branch.enabled)
         self.transverse_num_frequencies = int(axis_cfg.num_frequencies)
         self.transverse_max_frequency = float(axis_cfg.max_frequency)
         self.transverse_feature_dim = 2 * self.transverse_num_frequencies
@@ -102,24 +108,32 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             )
         else:
             self.branch_coefficient = None
-        self.branch_transverse = MLP(
-            input_dim=self.transverse_feature_dim,
-            hidden_dim=config.hidden_dim,
-            depth=config.depth,
-            activation=config.activation,
-            use_bias=config.use_bias,
-            dropout=config.dropout,
-            last_activation=False,
-        )
-        self.branch_geometry = MLP(
-            input_dim=self.geometry_feature_dim,
-            hidden_dim=config.hidden_dim,
-            depth=config.depth,
-            activation=config.activation,
-            use_bias=config.use_bias,
-            dropout=config.dropout,
-            last_activation=False,
-        )
+        self.branch_transverse: MLP | None
+        if self.fixed_line_transverse_branch_enabled:
+            self.branch_transverse = MLP(
+                input_dim=self.transverse_feature_dim,
+                hidden_dim=config.hidden_dim,
+                depth=config.depth,
+                activation=config.activation,
+                use_bias=config.use_bias,
+                dropout=config.dropout,
+                last_activation=False,
+            )
+        else:
+            self.branch_transverse = None
+        self.branch_geometry: MLP | None
+        if self.geometry_branch_enabled:
+            self.branch_geometry = MLP(
+                input_dim=self.geometry_feature_dim,
+                hidden_dim=config.hidden_dim,
+                depth=config.depth,
+                activation=config.activation,
+                use_bias=config.use_bias,
+                dropout=config.dropout,
+                last_activation=False,
+            )
+        else:
+            self.branch_geometry = None
         self.trunk = MLP(
             input_dim=1,
             hidden_dim=config.hidden_dim,
@@ -147,9 +161,15 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
                 dropout=config.dropout,
                 last_activation=True,
             )
-            if self.transverse_trunk_fusion_mode == "product_fuser":
+            if self.transverse_trunk_fusion_mode in {
+                "product_fuser",
+                "concat_fuser",
+            }:
+                fuser_component_count = (
+                    3 if (self.transverse_trunk_fusion_mode == "product_fuser") else 2
+                )
                 self.trunk_fuser = nn.Linear(
-                    3 * config.hidden_dim,
+                    fuser_component_count * config.hidden_dim,
                     config.hidden_dim,
                     bias=config.use_bias,
                 )
@@ -169,13 +189,27 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
 
         branch_fusion = CouplingBranchFusionConfig.from_raw(config.branch_fusion)
         self.branch_fusion_mode = branch_fusion.mode
-        branch_component_count = 3 + (1 if self.branch_coefficient is not None else 0)
+        active_branch_components = ["source"]
+        if self.branch_coefficient is not None:
+            active_branch_components.append("coefficient")
+        if self.branch_transverse is not None:
+            active_branch_components.append("fixed_line_transverse")
+        if self.branch_geometry is not None:
+            active_branch_components.append("geometry")
+        self.active_branch_components = tuple(active_branch_components)
+        branch_component_count = len(self.active_branch_components)
         self.branch_fuser: nn.Linear | None
         self.branch_fuser_activation: nn.Module
         self.branch_fuser_dropout: nn.Module
-        if self.branch_fusion_mode == "product_fuser":
+        if (
+            self.branch_fusion_mode in {"product_fuser", "concat_fuser"}
+            and branch_component_count > 1
+        ):
+            fuser_component_count = branch_component_count + int(
+                self.branch_fusion_mode == "product_fuser"
+            )
             self.branch_fuser = nn.Linear(
-                (branch_component_count + 1) * config.hidden_dim,
+                fuser_component_count * config.hidden_dim,
                 config.hidden_dim,
                 bias=config.use_bias,
             )
@@ -237,15 +271,14 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
                 "ComplexCouplingNet output-contract version 6 requires "
                 "axis_1d_trunk.enabled=true."
             )
-        if not axis_cfg.transverse_trunk.enabled:
+        if (
+            axis_cfg.transverse_trunk.enabled
+            and not axis_cfg.transverse_trunk.length_context
+        ):
             raise ValueError(
-                "ComplexCouplingNet output-contract version 6 requires "
-                "axis_1d_trunk.transverse_trunk.enabled=true."
-            )
-        if not axis_cfg.transverse_trunk.length_context:
-            raise ValueError(
-                "ComplexCouplingNet output-contract version 6 requires "
-                "axis_1d_trunk.transverse_trunk.length_context=true."
+                "ComplexCouplingNet requires "
+                "axis_1d_trunk.transverse_trunk.length_context=true when the "
+                "pointwise transverse trunk is enabled."
             )
         if config.source_stencil_lift.enabled:
             raise ValueError("ComplexCouplingNet does not support source_stencil_lift.")
@@ -279,6 +312,7 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         version = int(version_tensor.detach().cpu().item())
         if version == self.OUTPUT_CONTRACT_VERSION:
             self._prepare_pre_projection_fusion_checkpoint(prepared)
+            self._validate_auxiliary_architecture_checkpoint(prepared)
             return prepared
         raise ValueError(
             "Incompatible complex CouplingNet output contract version "
@@ -312,6 +346,55 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
                 f"{version}; expected {self.OUTPUT_CONTRACT_VERSION}."
             )
         self._validate_pre_projection_fusion_checkpoint(state_dict)
+        self._validate_auxiliary_architecture_checkpoint(state_dict)
+
+    def _validate_auxiliary_architecture_checkpoint(
+        self,
+        state_dict: Mapping[str, torch.Tensor],
+    ) -> None:
+        """Reject checkpoints built with different optional network modules."""
+
+        module_expectations = {
+            "branch_transverse": self.branch_transverse is not None,
+            "branch_geometry": self.branch_geometry is not None,
+            "branch_fuser": self.branch_fuser is not None,
+            "trunk_transverse": self.trunk_transverse is not None,
+            "trunk_fuser": self.trunk_fuser is not None,
+        }
+        mismatches: list[str] = []
+        for prefix, expected in module_expectations.items():
+            present = any(key.startswith(f"{prefix}.") for key in state_dict)
+            if present != expected:
+                mismatches.append(
+                    f"{prefix} expected={'present' if expected else 'absent'} "
+                    f"checkpoint={'present' if present else 'absent'}"
+                )
+        if self.branch_fuser is not None and "branch_fuser.weight" in state_dict:
+            checkpoint_shape = tuple(state_dict["branch_fuser.weight"].shape)
+            expected_shape = tuple(self.branch_fuser.weight.shape)
+            if checkpoint_shape != expected_shape:
+                mismatches.append(
+                    "branch_fuser.weight shape "
+                    f"checkpoint={checkpoint_shape} expected={expected_shape}"
+                )
+        if self.trunk_fuser is not None and "trunk_fuser.weight" in state_dict:
+            checkpoint_shape = tuple(state_dict["trunk_fuser.weight"].shape)
+            expected_shape = tuple(self.trunk_fuser.weight.shape)
+            if checkpoint_shape != expected_shape:
+                mismatches.append(
+                    "trunk_fuser.weight shape "
+                    f"checkpoint={checkpoint_shape} expected={expected_shape}"
+                )
+        if mismatches:
+            raise ValueError(
+                "Complex CouplingNet checkpoint architecture mismatch for optional "
+                "auxiliary networks: "
+                + "; ".join(mismatches)
+                + ". Match coupling_model.geometry_branch, "
+                "axis_1d_trunk.fixed_line_transverse_branch, "
+                "axis_1d_trunk.transverse_trunk, coefficient_terms, and "
+                "branch_fusion to the training config."
+            )
 
     def _prepare_pre_projection_fusion_checkpoint(
         self,
@@ -525,14 +608,18 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
         branch_components = [source_features]
         if self.branch_coefficient is not None:
             branch_components.append(self._coefficient_features(coefficient_branch))
-        transverse_features = self.branch_transverse(
-            self._transverse_features(geometry, axis).to(source_branch.device)
-        )
-        geometry_features = self.branch_geometry(
-            self._geometry_features(geometry, axis).to(source_branch.device)
-        )
-        branch_components.append(transverse_features.unsqueeze(0).expand(bsz, -1, -1))
-        branch_components.append(geometry_features.unsqueeze(0).expand(bsz, -1, -1))
+        if self.branch_transverse is not None:
+            transverse_features = self.branch_transverse(
+                self._transverse_features(geometry, axis).to(source_branch.device)
+            )
+            branch_components.append(
+                transverse_features.unsqueeze(0).expand(bsz, -1, -1)
+            )
+        if self.branch_geometry is not None:
+            geometry_features = self.branch_geometry(
+                self._geometry_features(geometry, axis).to(source_branch.device)
+            )
+            branch_components.append(geometry_features.unsqueeze(0).expand(bsz, -1, -1))
         segment_features = self._fuse_branch_components(branch_components)
 
         gathered_segment = segment_features[:, segment_id]
@@ -587,21 +674,21 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
                 self.transverse_length_context_features(geometry, axis).to(device)
             ),
         )
-        product_features = primary_features * transverse_features
         if self.transverse_trunk_fusion_mode == "product":
-            return product_features
-        if self.transverse_trunk_fusion_mode == "product_fuser":
+            return primary_features * transverse_features
+        if self.transverse_trunk_fusion_mode in {
+            "product_fuser",
+            "concat_fuser",
+        }:
             if self.trunk_fuser is None:
                 raise RuntimeError(
                     "trunk_fuser must be initialized when "
-                    "axis_1d_trunk.transverse_trunk.fusion='product_fuser'."
+                    "axis_1d_trunk.transverse_trunk.fusion uses a trainable fuser."
                 )
-            fused = self.trunk_fuser(
-                torch.cat(
-                    (primary_features, transverse_features, product_features),
-                    dim=-1,
-                )
-            )
+            components = [primary_features, transverse_features]
+            if self.transverse_trunk_fusion_mode == "product_fuser":
+                components.append(primary_features * transverse_features)
+            fused = self.trunk_fuser(torch.cat(components, dim=-1))
             fused = cast(torch.Tensor, self.trunk_fuser_activation(fused))
             return cast(torch.Tensor, self.trunk_fuser_dropout(fused))
         raise ValueError(
@@ -734,18 +821,85 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
     def _fuse_branch_components(self, components: list[torch.Tensor]) -> torch.Tensor:
         if not components:
             raise ValueError("At least one branch component is required.")
-        product_feature = components[0]
-        for component in components[1:]:
-            product_feature = product_feature * component
-        if self.branch_fusion_mode == "product":
-            return product_feature
-        if self.branch_fusion_mode == "product_fuser":
+        if len(components) == 1:
+            return components[0]
+        if self.branch_fusion_mode in {"product_fuser", "concat_fuser"}:
             if self.branch_fuser is None:
                 raise RuntimeError(
                     "branch_fuser must be initialized when "
-                    "branch_fusion.mode='product_fuser'."
+                    "branch_fusion.mode uses a trainable fuser."
                 )
-            fused = self.branch_fuser(torch.cat(components + [product_feature], dim=-1))
+            fuser_components = components
+            if self.branch_fusion_mode == "product_fuser":
+                product_feature = components[0]
+                for component in components[1:]:
+                    product_feature = product_feature * component
+                fuser_components = components + [product_feature]
+            fused = self.branch_fuser(torch.cat(fuser_components, dim=-1))
             fused = cast(torch.Tensor, self.branch_fuser_activation(fused))
             return cast(torch.Tensor, self.branch_fuser_dropout(fused))
+        if self.branch_fusion_mode == "product":
+            product_feature = components[0]
+            for component in components[1:]:
+                product_feature = product_feature * component
+            return product_feature
         raise ValueError(f"Unsupported branch_fusion mode: {self.branch_fusion_mode}")
+
+    def architecture_provenance(self) -> dict[str, object]:
+        """Return the resolved optional-network architecture without tensor data."""
+
+        branch_component_count = len(self.active_branch_components)
+        effective_branch_fusion = (
+            "identity" if branch_component_count == 1 else self.branch_fusion_mode
+        )
+        includes_elementwise_product = branch_component_count > 1 and (
+            self.branch_fusion_mode in {"product", "product_fuser"}
+        )
+        branch_fuser_features: list[str] | None = None
+        if self.branch_fuser is not None:
+            branch_fuser_features = list(self.active_branch_components)
+            if self.branch_fusion_mode == "product_fuser":
+                branch_fuser_features.append("elementwise_product")
+        trunk_fuser_features: list[str] | None = None
+        if self.trunk_fuser is not None:
+            trunk_fuser_features = ["primary", "transverse"]
+            if self.transverse_trunk_fusion_mode == "product_fuser":
+                trunk_fuser_features.append("elementwise_product")
+        return {
+            "active_branch_components": list(self.active_branch_components),
+            "branch_component_count": branch_component_count,
+            "branch_fusion_configured": self.branch_fusion_mode,
+            "branch_fusion_effective": effective_branch_fusion,
+            "branch_fusion_includes_elementwise_product": (
+                includes_elementwise_product
+            ),
+            "branch_fuser_features": branch_fuser_features,
+            "branch_fuser_input_dim": (
+                None
+                if self.branch_fuser is None
+                else int(self.branch_fuser.in_features)
+            ),
+            "geometry_branch_enabled": self.branch_geometry is not None,
+            "fixed_line_transverse_branch_enabled": (
+                self.branch_transverse is not None
+            ),
+            "pointwise_transverse_trunk_enabled": self.transverse_trunk_enabled,
+            "pointwise_transverse_trunk_fusion": (
+                self.transverse_trunk_fusion_mode
+                if self.transverse_trunk_enabled
+                else "identity"
+            ),
+            "pointwise_transverse_trunk_fuser_features": trunk_fuser_features,
+            "pointwise_transverse_trunk_fuser_input_dim": (
+                None if self.trunk_fuser is None else int(self.trunk_fuser.in_features)
+            ),
+            "pointwise_transverse_trunk_fusion_includes_elementwise_product": (
+                self.transverse_trunk_enabled
+                and self.transverse_trunk_fusion_mode in {"product", "product_fuser"}
+            ),
+            "trainable_parameter_count": sum(
+                parameter.numel()
+                for parameter in self.parameters()
+                if parameter.requires_grad
+            ),
+        }

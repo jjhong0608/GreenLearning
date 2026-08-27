@@ -128,6 +128,7 @@ class TestTrainCLIConfigCopy:
             dataset_cfg=DatasetConfig(),
             training_cfg=training,
             coupling_training_cfg=CouplingTrainingConfig(),
+            coupling_model_cfg=CouplingModelConfig(),
             pipeline_cfg=PipelineConfig(run_green=True, run_coupling=False),
         )
 
@@ -198,6 +199,7 @@ class TestTrainCLIConfigCopy:
             work_dir=work_dir,
             dataset_cfg=DatasetConfig(geometry_mode="complex"),
             coupling_training_cfg=training,
+            coupling_model_cfg=CouplingModelConfig(),
             pipeline_cfg=PipelineConfig(run_green=False, run_coupling=True),
         )
 
@@ -231,6 +233,65 @@ class TestTrainCLIConfigCopy:
             "runtime",
             "loader_train",
         }
+
+    def test_complex_config_copy_materializes_resolved_geometry_k(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "dataset": {"geometry_mode": "complex"},
+                    "coupling_model": {
+                        "balance_projection": {
+                            "mode": "symmetric_tangent_green_response",
+                            "symmetric_tangent_green_response": {
+                                "subspace_dimension": 4,
+                                "geometry_k_selection": {"enabled": True},
+                                "eta_strategy": "closed_loop_exact_line_search",
+                            },
+                        }
+                    },
+                    "coupling_training": {"seed": 11},
+                    "pipeline": {"run_green": False, "run_coupling": True},
+                }
+            )
+        )
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        resolved_model = CouplingModelConfig(
+            balance_projection={
+                "mode": "symmetric_tangent_green_response",
+                "symmetric_tangent_green_response": {
+                    "subspace_dimension": 2,
+                    "geometry_k_selection": {"enabled": False},
+                    "eta_strategy": "closed_loop_exact_line_search",
+                },
+            }
+        )
+        provenance = {
+            "selection_mode": "geometry_auto",
+            "configured_subspace_dimension": 4,
+            "resolved_subspace_dimension": 2,
+            "geometry_sha256": "0" * 64,
+        }
+
+        TrainCLI._write_config_used(
+            config_path=config_path,
+            work_dir=work_dir,
+            dataset_cfg=DatasetConfig(geometry_mode="complex"),
+            coupling_training_cfg=CouplingTrainingConfig(seed=11),
+            coupling_model_cfg=resolved_model,
+            pipeline_cfg=PipelineConfig(run_green=False, run_coupling=True),
+            tangent_dimension_provenance=provenance,
+        )
+
+        used = json.loads((work_dir / "config_used.json").read_text())
+        tangent = used["coupling_model"]["balance_projection"][
+            "symmetric_tangent_green_response"
+        ]
+        assert tangent["subspace_dimension"] == 2
+        assert tangent["max_subspace_dimension"] == 8
+        assert tangent["geometry_k_selection"]["enabled"] is False
+        assert used["tangent_subspace_dimension_provenance"] == provenance
 
     def test_boundary_off_paired_config_differs_only_by_canonical_weight(self):
         root = Path(__file__).resolve().parents[1]
@@ -1244,6 +1305,7 @@ class TestTrainCLIDatasetConfig:
                     "boundary_aware_modes": 5,
                     "num_frequencies": 6,
                     "max_frequency": 12.0,
+                    "fixed_line_transverse_branch": {"enabled": False},
                     "transverse_trunk": {
                         "enabled": True,
                         "fusion": "product_fuser",
@@ -1271,6 +1333,7 @@ class TestTrainCLIDatasetConfig:
         assert axis_1d_trunk.boundary_aware_modes == 5
         assert axis_1d_trunk.num_frequencies == 6
         assert axis_1d_trunk.max_frequency == 12.0
+        assert axis_1d_trunk.fixed_line_transverse_branch.enabled is False
         assert axis_1d_trunk.transverse_trunk.enabled is True
         assert axis_1d_trunk.transverse_trunk.fusion == "product_fuser"
         assert axis_1d_trunk.transverse_trunk.length_context is True
@@ -1410,13 +1473,21 @@ class TestTrainCLIDatasetConfig:
 
         assert cfg.mode == "product"
 
-    def test_eval_cli_parses_branch_fusion_config(self):
-        cfg = EvalCouplingCLI._build_branch_fusion_config(
-            {"mode": "product_fuser"},
+    def test_train_cli_parses_concat_branch_fusion_config(self):
+        cfg = TrainCLI._build_branch_fusion_config(
+            {"mode": "concat_fuser"},
             "coupling_model",
         )
 
-        assert cfg == CouplingBranchFusionConfig(mode="product_fuser")
+        assert cfg == CouplingBranchFusionConfig(mode="concat_fuser")
+
+    def test_eval_cli_parses_branch_fusion_config(self):
+        cfg = EvalCouplingCLI._build_branch_fusion_config(
+            {"mode": "concat_fuser"},
+            "coupling_model",
+        )
+
+        assert cfg == CouplingBranchFusionConfig(mode="concat_fuser")
 
     def test_eval_cli_rejects_non_object_branch_fusion_config(self):
         with pytest.raises(TypeError, match="coupling_model.branch_fusion"):
@@ -1428,7 +1499,7 @@ class TestTrainCLIDatasetConfig:
     def test_eval_cli_rejects_invalid_branch_fusion_mode(self):
         with pytest.raises(ValueError, match="coupling_model.branch_fusion.mode"):
             EvalCouplingCLI._build_branch_fusion_config(
-                {"mode": "concat_fuser"},
+                {"mode": "unsupported_fuser"},
                 "coupling_model",
             )
 
@@ -1484,6 +1555,7 @@ class TestTrainCLIDatasetConfig:
         assert cfg.boundary_aware_modes == 4
         assert cfg.num_frequencies == 4
         assert cfg.max_frequency == 8.0
+        assert cfg.fixed_line_transverse_branch.enabled is True
 
     def test_eval_cli_parses_axis_1d_trunk_config(self):
         cfg = EvalCouplingCLI._build_axis_1d_trunk_config(
@@ -1492,6 +1564,7 @@ class TestTrainCLIDatasetConfig:
                 "boundary_aware_modes": 6,
                 "num_frequencies": 7,
                 "max_frequency": 14.0,
+                "fixed_line_transverse_branch": {"enabled": False},
                 "transverse_trunk": {
                     "enabled": True,
                     "fusion": "product",
@@ -1505,6 +1578,7 @@ class TestTrainCLIDatasetConfig:
         assert cfg.boundary_aware_modes == 6
         assert cfg.num_frequencies == 7
         assert cfg.max_frequency == 14.0
+        assert cfg.fixed_line_transverse_branch.enabled is False
         assert cfg.transverse_trunk.enabled is True
         assert cfg.transverse_trunk.fusion == "product"
         assert cfg.transverse_trunk.length_context is True
@@ -1513,6 +1587,38 @@ class TestTrainCLIDatasetConfig:
         with pytest.raises(TypeError, match="coupling_model.axis_1d_trunk"):
             EvalCouplingCLI._build_axis_1d_trunk_config(
                 "enabled",
+                "coupling_model",
+            )
+
+    def test_geometry_branch_config_defaults_and_parsing(self):
+        default = TrainCLI._build_geometry_branch_config(None, "coupling_model")
+        disabled = EvalCouplingCLI._build_geometry_branch_config(
+            {"enabled": False},
+            "coupling_model",
+        )
+
+        assert default.enabled is True
+        assert disabled.enabled is False
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["disabled", {"enabled": 0}, {"unknown": True}],
+    )
+    def test_rejects_invalid_geometry_branch_config(self, raw):
+        with pytest.raises((TypeError, ValueError), match="geometry_branch"):
+            TrainCLI._build_geometry_branch_config(raw, "coupling_model")
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["disabled", {"enabled": 0}, {"unknown": True}],
+    )
+    def test_rejects_invalid_fixed_line_transverse_branch_config(self, raw):
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="fixed_line_transverse_branch",
+        ):
+            TrainCLI._build_axis_1d_trunk_config(
+                {"fixed_line_transverse_branch": raw},
                 "coupling_model",
             )
 

@@ -30,8 +30,10 @@ from greenonet.config import (
     CouplingTrunkPositionalEncodingConfig,
     DatasetConfig,
     GreenResponseFeatureConfig,
+    GeometryKSelectionConfig,
     ModelConfig,
     SourceStencilLiftConfig,
+    SymmetricTangentGreenResponseProjectionConfig,
     TrainingConfig,
     reject_retired_coupling_training_options,
     validate_unit_square_coupling_training_config,
@@ -60,6 +62,7 @@ class CouplingArtifactRequest:
     show_domain_boundary: bool = True
     visualization_mesh: Path | None = None
     directional_color_quantile: float | None = None
+    tangent_context: Path | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -77,6 +80,11 @@ class CouplingArtifactRequest:
             Path,
         ):
             raise TypeError("visualization_mesh must be a pathlib.Path or None.")
+        if self.tangent_context is not None and not isinstance(
+            self.tangent_context,
+            Path,
+        ):
+            raise TypeError("tangent_context must be a pathlib.Path or None.")
         quantile = self.directional_color_quantile
         if quantile is not None and (
             isinstance(quantile, bool)
@@ -242,6 +250,47 @@ def load_coupling_artifact_configs(config_path: Path) -> CouplingArtifactConfigs
         **coupling_model_kwargs,
     )
 
+    projection = BalanceProjectionConfig.from_raw(coupling_model_cfg.balance_projection)
+    tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+        projection.symmetric_tangent_green_response
+    )
+    geometry_k_selection = GeometryKSelectionConfig.from_raw(
+        tangent.geometry_k_selection
+    )
+    if (
+        dataset_cfg.geometry_mode == "complex"
+        and projection.mode == "symmetric_tangent_green_response"
+        and geometry_k_selection.enabled
+    ):
+        if dataset_cfg.geometry_path is None:
+            raise ValueError(
+                "dataset.geometry_path is required for geometry-only K selection."
+            )
+        from greenonet.complex_geometry import load_complex_geometry
+        from greenonet.complex_tangent_geometry_selection import (
+            GeometryTangentDimensionResolver,
+            materialized_tangent_config,
+        )
+
+        geometry = load_complex_geometry(
+            dataset_cfg.geometry_path,
+            dtype=dataset_cfg.dtype,
+        )
+        resolution = GeometryTangentDimensionResolver.resolve(
+            model_config=coupling_model_cfg,
+            geometry=geometry,
+            geometry_path=dataset_cfg.geometry_path,
+        )
+        coupling_model_cfg = resolution.model_config
+        raw_projection = raw_coupling_model.setdefault("balance_projection", {})
+        if not isinstance(raw_projection, dict):
+            raise TypeError("coupling_model.balance_projection must be an object.")
+        raw_projection["symmetric_tangent_green_response"] = (
+            materialized_tangent_config(coupling_model_cfg)
+        )
+        if resolution.provenance is not None:
+            raw_payload["tangent_subspace_dimension_provenance"] = resolution.provenance
+
     raw_coupling_training = raw_payload.get("coupling_training", {})
     if not isinstance(raw_coupling_training, dict):
         raise TypeError("coupling_training config section must be an object.")
@@ -311,6 +360,10 @@ class CouplingArtifactExporter:
             raise ValueError(
                 "--visualization-mesh is supported only for complex CouplingNet "
                 "artifacts."
+            )
+        if self.request.tangent_context is not None:
+            raise ValueError(
+                "--tangent-context is supported only for complex CouplingNet artifacts."
             )
         self.request.outdir.mkdir(parents=True, exist_ok=True)
         self._ensure_output_tree()

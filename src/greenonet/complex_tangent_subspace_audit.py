@@ -16,7 +16,6 @@ from torch.utils.data import DataLoader
 
 from greenonet.coefficients import load_coefficient_functions
 from greenonet.complex_axial_response_operator import (
-    FrozenAxialResponseOperatorBuilder,
     FrozenBidirectionalResponseOperator,
 )
 from greenonet.complex_coupling_artifacts import ComplexCouplingArtifactExporter
@@ -48,13 +47,16 @@ from greenonet.complex_symmetric_tangent_audit import (
 from greenonet.complex_tangent_projection import (
     KrylovSubspaceStepResult,
     SymmetricTangentGreenResponseContext,
+    SymmetricTangentGreenResponseContextCache,
     matrix_free_krylov_k2_step as matrix_free_krylov_k2_step,
     matrix_free_krylov_subspace_step,
 )
+from greenonet.complex_tangent_context_io import resolve_tangent_context_path
 from greenonet.config import (
     BalanceProjectionConfig,
     ComplexCanonicalEnergyConfig,
     SymmetricTangentGreenResponseProjectionConfig,
+    validate_complex_tangent_context_checkpoint_config,
 )
 from greenonet.coupling_artifacts import (
     CouplingArtifactConfigs,
@@ -86,6 +88,7 @@ class TangentSubspaceAuditRequest:
     monotonicity_relative_tol: float = 1.0e-10
     max_subspace_dimension: int = 2
     save_generated_data: bool = True
+    tangent_context: Path | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -97,9 +100,11 @@ class TangentSubspaceAuditRequest:
         if (
             isinstance(self.max_subspace_dimension, bool)
             or not isinstance(self.max_subspace_dimension, int)
-            or self.max_subspace_dimension not in {2, 3, 4}
+            or self.max_subspace_dimension < 2
         ):
-            raise ValueError("max_subspace_dimension must be 2, 3, or 4.")
+            raise ValueError(
+                "max_subspace_dimension must be an integer greater than or equal to 2."
+            )
         for name, value, allow_zero in (
             ("transition_log_threshold", self.transition_log_threshold, True),
             ("subspace_relative_eps", self.subspace_relative_eps, False),
@@ -121,6 +126,21 @@ class TangentSubspaceAuditRequest:
                 raise ValueError("selected_samples must not contain duplicates.")
             if any(sample_id < 0 for sample_id in self.selected_samples):
                 raise ValueError("selected_samples must be non-negative.")
+        if self.tangent_context is not None and not isinstance(
+            self.tangent_context,
+            Path,
+        ):
+            raise TypeError("tangent_context must be a pathlib.Path or None.")
+
+
+@dataclass(frozen=True)
+class PreparedTangentBatch:
+    """Variant-independent network output and symmetric response for one batch."""
+
+    raw_physical: torch.Tensor
+    symmetric_physical: torch.Tensor
+    mismatch: torch.Tensor
+    gradient: torch.Tensor
 
 
 KrylovSubspaceAuditResult = KrylovSubspaceStepResult
@@ -185,6 +205,9 @@ class ComplexTangentSubspaceAudit(
         self._device: torch.device
         self._context_build_count = 0
         self._operator_equivalence_max_abs = math.nan
+        self._tangent_context_cache: (
+            SymmetricTangentGreenResponseContextCache | None
+        ) = None
 
     def run(self) -> dict[str, Any]:
         self.request.outdir.mkdir(parents=True, exist_ok=True)
@@ -351,12 +374,6 @@ class ComplexTangentSubspaceAudit(
     def _initialize_context(self, batch: ComplexCouplingBatch) -> None:
         if hasattr(self, "response_operator"):
             return
-        self.response_operator = FrozenAxialResponseOperatorBuilder.build(
-            green_model=self._green_model,
-            geometry=batch.geometry,
-            x_green_branch=batch.x_green_branch,
-            y_green_branch=batch.y_green_branch,
-        )
         projection = BalanceProjectionConfig.from_raw(
             self._configs.coupling_model.balance_projection
         )
@@ -364,21 +381,31 @@ class ComplexTangentSubspaceAudit(
             projection.symmetric_tangent_green_response
         )
         diagnostic_tangent = replace(tangent, subspace_dimension=1)
-        self.tangent_context = (
-            SymmetricTangentGreenResponseContext.from_response_operator(
-                response_operator=self.response_operator,
-                point_mass=batch.geometry.hx.to(
-                    device=self._device,
-                    dtype=batch.rhs_valid.dtype,
-                )
-                * batch.geometry.hy.to(
-                    device=self._device,
-                    dtype=batch.rhs_valid.dtype,
-                ),
-                config=diagnostic_tangent,
-            )
+        checkpoint = validate_complex_tangent_context_checkpoint_config(
+            training=self._configs.coupling_training,
+            balance_projection=projection,
         )
-        self._context_build_count += 1
+        checkpoint_path = resolve_tangent_context_path(
+            checkpoint=checkpoint,
+            cli_override=self.request.tangent_context,
+            default_path=(
+                self.request.coupling_checkpoint.parent
+                / "tangent_response_context.safetensors"
+            ),
+        )
+        self._tangent_context_cache = SymmetricTangentGreenResponseContextCache(
+            diagnostic_tangent,
+            checkpoint=checkpoint,
+            checkpoint_path=checkpoint_path,
+        )
+        self.tangent_context = self._tangent_context_cache.get_or_build(
+            green_model=self._green_model,
+            geometry=batch.geometry,
+            x_green_branch=batch.x_green_branch,
+            y_green_branch=batch.y_green_branch,
+        )
+        self.response_operator = self.tangent_context.response_operator
+        self._context_build_count = self._tangent_context_cache.build_count
         self._verify_operator_equivalence(batch)
 
     def _verify_operator_equivalence(self, batch: ComplexCouplingBatch) -> None:
@@ -421,10 +448,10 @@ class ComplexTangentSubspaceAudit(
             )
 
     @torch.no_grad()
-    def _evaluate_batch(
+    def _prepare_batch(
         self,
         batch: ComplexCouplingBatch,
-    ) -> tuple[TangentBatchEvaluation, KrylovSubspaceAuditResult]:
+    ) -> PreparedTangentBatch:
         raw_response, _fusion = self._coupling_model.forward_with_fusion_diagnostics(
             geometry=batch.geometry,
             x_source_branch=batch.x_source_branch,
@@ -460,15 +487,30 @@ class ComplexTangentSubspaceAudit(
         symmetric_solution = self.response_operator.forward_pair(symmetric)
         mismatch = symmetric_solution[:, 0] - symmetric_solution[:, 1]
         gradient = self.tangent_context.tangent_gradient(mismatch)
-        production_step = self.tangent_context.tangent_step(
+        return PreparedTangentBatch(
+            raw_physical=raw_physical,
+            symmetric_physical=symmetric,
             mismatch=mismatch,
             gradient=gradient,
-            eta_cap=self.tangent_context.eta,
+        )
+
+    @torch.no_grad()
+    def _evaluate_prepared_batch(
+        self,
+        batch: ComplexCouplingBatch,
+        prepared: PreparedTangentBatch,
+        *,
+        context: SymmetricTangentGreenResponseContext,
+    ) -> tuple[TangentBatchEvaluation, KrylovSubspaceAuditResult]:
+        production_step = context.tangent_step(
+            mismatch=prepared.mismatch,
+            gradient=prepared.gradient,
+            eta_cap=context.eta,
         )
         krylov = matrix_free_krylov_subspace_audit(
-            context=self.tangent_context,
-            mismatch=mismatch,
-            gradient=gradient,
+            context=context,
+            mismatch=prepared.mismatch,
+            gradient=prepared.gradient,
             max_dimension=self.request.max_subspace_dimension,
             relative_eps=self.request.subspace_relative_eps,
             monotonicity_relative_tol=self.request.monotonicity_relative_tol,
@@ -486,7 +528,7 @@ class ComplexTangentSubspaceAudit(
             )
         tangent_delta = torch.stack(
             (
-                torch.zeros_like(gradient),
+                torch.zeros_like(prepared.gradient),
                 production_step.delta,
                 *tuple(
                     krylov.deltas[dimension]
@@ -495,6 +537,7 @@ class ComplexTangentSubspaceAudit(
             ),
             dim=0,
         )
+        symmetric = prepared.symmetric_physical
         candidate_physical = torch.stack(
             (
                 symmetric.unsqueeze(0)[:, :, 0] + tangent_delta,
@@ -540,11 +583,11 @@ class ComplexTangentSubspaceAudit(
         return (
             TangentBatchEvaluation(
                 methods=self.methods,
-                raw_physical=raw_physical,
+                raw_physical=prepared.raw_physical,
                 symmetric_physical=symmetric,
                 configured_physical=configured,
-                tangent_gradient=gradient,
-                tangent_preconditioner_base=self.tangent_context.preconditioner_base,
+                tangent_gradient=prepared.gradient,
+                tangent_preconditioner_base=context.preconditioner_base,
                 tangent_delta=tangent_delta,
                 candidate_physical=candidate_physical,
                 candidate_solution=candidate_solution,
@@ -573,7 +616,7 @@ class ComplexTangentSubspaceAudit(
                 closed_loop=(
                     ClosedLoopTangentBatchDiagnostics(
                         method_id="k1_production",
-                        eta_cap=self.tangent_context.eta,
+                        eta_cap=context.eta,
                         eta_star=production_step.eta_star,
                         eta_applied=production_step.eta_applied,
                         eta_capped=production_step.eta_capped,
@@ -599,18 +642,33 @@ class ComplexTangentSubspaceAudit(
             krylov,
         )
 
+    @torch.no_grad()
+    def _evaluate_batch(
+        self,
+        batch: ComplexCouplingBatch,
+    ) -> tuple[TangentBatchEvaluation, KrylovSubspaceAuditResult]:
+        prepared = self._prepare_batch(batch)
+        return self._evaluate_prepared_batch(
+            batch,
+            prepared,
+            context=self.tangent_context,
+        )
+
     def _metric_rows(
         self,
         batch: ComplexCouplingBatch,
         evaluation: TangentBatchEvaluation,
         krylov: KrylovSubspaceAuditResult,
         edges: ProjectionTransitionEdges,
+        *,
+        context: SymmetricTangentGreenResponseContext | None = None,
     ) -> list[dict[str, float | int | str]]:
+        active_context = self.tangent_context if context is None else context
         rows = self.build_metric_rows(
             batch=batch,
             evaluation=evaluation,
             edges=edges,
-            point_mass=self.tangent_context.point_mass,
+            point_mass=active_context.point_mass,
             eps=self.request.metric_eps,
         )
         batch_count = batch.rhs_valid.shape[0]
@@ -1196,6 +1254,9 @@ class ComplexTangentSubspaceAudit(
             "production_code_changed": False,
             "training_or_checkpoint_updated": False,
             "config": str(self.request.config),
+            "tangent_subspace_dimension_provenance": self._configs.raw.get(
+                "tangent_subspace_dimension_provenance"
+            ),
             "coupling_checkpoint": str(self.request.coupling_checkpoint),
             "green_checkpoint": str(self.request.green_checkpoint),
             "geometry_path": str(geometry_path),
@@ -1204,6 +1265,7 @@ class ComplexTangentSubspaceAudit(
             "sample_count": len(dataset),
             "configured_eta_cap": tangent.eta,
             "configured_relative_lambda": tangent.relative_lambda,
+            "configured_preconditioner_variant": tangent.preconditioner_variant,
             "frozen_training_subspace_dimension": tangent.subspace_dimension,
             "maximum_audited_subspace_dimension": (self.request.max_subspace_dimension),
             "subspace_relative_eps": self.request.subspace_relative_eps,
@@ -1242,6 +1304,11 @@ class ComplexTangentSubspaceAudit(
                     self._operator_equivalence_max_abs
                 ),
             },
+            "tangent_context": (
+                {}
+                if self._tangent_context_cache is None
+                else self._tangent_context_cache.telemetry()
+            ),
             "reference_policy": {
                 "sol_and_flux_used_for_correction": False,
                 "sol_and_flux_used_for_evaluation_only": True,

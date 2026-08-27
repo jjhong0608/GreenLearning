@@ -16,6 +16,7 @@ from greenonet.config import (
     ComplexPreProjectionFusionConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
+    CouplingGeometryBranchConfig,
     CouplingModelConfig,
     CouplingTrunkPositionalEncodingConfig,
     GreenResponseFeatureConfig,
@@ -99,6 +100,11 @@ def _deserialize_config(
         if isinstance(branch_fusion_raw, dict):
             data["branch_fusion"] = CouplingBranchFusionConfig.from_raw(
                 branch_fusion_raw
+            )
+        geometry_branch_raw = data.get("geometry_branch")
+        if isinstance(geometry_branch_raw, dict):
+            data["geometry_branch"] = CouplingGeometryBranchConfig.from_raw(
+                geometry_branch_raw
             )
         green_response_raw = data.get("green_response_feature")
         if isinstance(green_response_raw, dict):
