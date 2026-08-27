@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import shutil
 from dataclasses import asdict
@@ -14,6 +15,7 @@ from greenonet.config import (
     BalanceProjectionConfig,
     CompileConfig,
     CouplingBranchFusionConfig,
+    CouplingArtifactsConfig,
     CouplingBestRelSolCheckpointConfig,
     CouplingCoefficientTermsConfig,
     CouplingGeometryBranchConfig,
@@ -34,6 +36,7 @@ from greenonet.config import (
     TrainingConfig,
     reject_retired_coupling_training_options,
     validate_active_training_seeds,
+    validate_coupling_artifacts_config,
     validate_complex_coupling_source_config,
 )
 from greenonet.compile_utils import maybe_compile_model, model_state_dict_for_save
@@ -66,6 +69,10 @@ from greenonet.io import load_model_with_config, load_state_dict_auto
 from greenonet.green_lr_scheduler import GreenLearningRateSchedule
 from greenonet.green_optimizer import GreenOptimizerFactory
 from greenonet.model import GreenONetModel
+from greenonet.post_training_coupling_artifacts import (
+    FullReferenceTestDatasetValidator,
+    PostTrainingCouplingArtifactRunner,
+)
 from greenonet.runner import run_complex_green_o_net, run_green_o_net
 from greenonet.runtime import apply_runtime_cpu_settings, write_runtime_cpu_summary
 from greenonet.reproducibility import TrainingSeedContext
@@ -112,6 +119,7 @@ class TrainCLI:
     ]:
         with config_path.open() as fp:
             raw = json.load(fp)
+        CouplingArtifactsConfig.from_raw(raw.get("coupling_artifacts"))
         terminal_cfg = self._build_terminal_config(raw.get("terminal"))
         dataset_cfg = DatasetConfig.from_raw(raw["dataset"])
 
@@ -229,6 +237,7 @@ class TrainCLI:
         coupling_model_cfg: CouplingModelConfig,
         pipeline_cfg: PipelineConfig,
         tangent_dimension_provenance: dict[str, object] | None = None,
+        coupling_artifacts_cfg: CouplingArtifactsConfig | None = None,
     ) -> None:
         destination = work_dir / "config_used.json"
         materialize_green = pipeline_cfg.run_green
@@ -328,6 +337,10 @@ class TrainCLI:
                 payload["tangent_subspace_dimension_provenance"] = (
                     tangent_dimension_provenance
                 )
+            if coupling_artifacts_cfg is not None and (
+                "coupling_artifacts" in payload or coupling_artifacts_cfg.enabled
+            ):
+                payload["coupling_artifacts"] = coupling_artifacts_cfg.to_raw()
         destination.write_text(json.dumps(payload, indent=2) + "\n")
 
     @classmethod
@@ -784,12 +797,29 @@ class TrainCLI:
             pipeline_cfg,
             terminal_cfg,
         ) = self._build_configs(config_path)
+        with config_path.open() as fp:
+            raw_config = json.load(fp)
+        coupling_artifacts_cfg = CouplingArtifactsConfig.from_raw(
+            raw_config.get("coupling_artifacts")
+        )
 
         validate_active_training_seeds(
             training=training_cfg,
             coupling_training=coupling_training_cfg,
             pipeline=pipeline_cfg,
         )
+        validate_coupling_artifacts_config(
+            artifacts=coupling_artifacts_cfg,
+            dataset=dataset_cfg,
+            coupling_training=coupling_training_cfg,
+            pipeline=pipeline_cfg,
+        )
+        if coupling_artifacts_cfg.enabled:
+            if dataset_cfg.test_path is None:
+                raise RuntimeError(
+                    "Artifact validation unexpectedly resolved no test path."
+                )
+            FullReferenceTestDatasetValidator.validate(dataset_cfg.test_path)
 
         if pipeline_cfg.run_coupling:
             validate_complex_coupling_source_config(
@@ -823,6 +853,7 @@ class TrainCLI:
             coupling_model_cfg=coupling_model_cfg,
             pipeline_cfg=pipeline_cfg,
             tangent_dimension_provenance=tangent_dimension_provenance,
+            coupling_artifacts_cfg=coupling_artifacts_cfg,
         )
         if self._should_apply_cpu_runtime(
             training_cfg,
@@ -916,6 +947,21 @@ class TrainCLI:
                     work_dir=work_dir,
                     tangent_context_path=args.tangent_context,
                 )
+                if coupling_artifacts_cfg.enabled:
+                    if pipeline_cfg.run_green:
+                        del green_trainer
+                    del green_model
+                    gc.collect()
+                    if torch.device(coupling_training_cfg.device).type == "cuda":
+                        torch.cuda.empty_cache()
+                    PostTrainingCouplingArtifactRunner(
+                        config=coupling_artifacts_cfg,
+                        dataset=dataset_cfg,
+                        coupling_training=coupling_training_cfg,
+                        pipeline=pipeline_cfg,
+                        work_dir=work_dir,
+                        tangent_context_override=args.tangent_context,
+                    ).run()
                 return
             if coupling_training_cfg.seed is None:
                 raise ValueError(

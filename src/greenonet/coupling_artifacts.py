@@ -7,7 +7,7 @@ import math
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar, Sequence, cast
+from typing import Any, ClassVar, Literal, Sequence, cast
 
 import numpy as np
 import plotly.graph_objects as go
@@ -63,6 +63,8 @@ class CouplingArtifactRequest:
     visualization_mesh: Path | None = None
     directional_color_quantile: float | None = None
     tangent_context: Path | None = None
+    generation_trigger: Literal["standalone_cli", "post_training"] = "standalone_cli"
+    checkpoint_selector: Literal["best_energy"] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -85,6 +87,20 @@ class CouplingArtifactRequest:
             Path,
         ):
             raise TypeError("tangent_context must be a pathlib.Path or None.")
+        if self.generation_trigger not in {"standalone_cli", "post_training"}:
+            raise ValueError(
+                "generation_trigger must be 'standalone_cli' or 'post_training'."
+            )
+        if self.checkpoint_selector not in {None, "best_energy"}:
+            raise ValueError("checkpoint_selector must be 'best_energy' or None.")
+        if (
+            self.generation_trigger == "post_training"
+            and self.checkpoint_selector != "best_energy"
+        ):
+            raise ValueError(
+                "post_training artifact generation requires "
+                "checkpoint_selector='best_energy'."
+            )
         quantile = self.directional_color_quantile
         if quantile is not None and (
             isinstance(quantile, bool)

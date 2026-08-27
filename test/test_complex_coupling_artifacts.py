@@ -24,17 +24,24 @@ from greenonet.config import (
     BalanceProjectionConfig,
     ComplexCrossAxisReconstructionConfig,
     ComplexPreProjectionFusionConfig,
+    CouplingArtifactsConfig,
     CouplingBranchFusionConfig,
     CouplingCoefficientTermsConfig,
     CouplingGeometryBranchConfig,
     CouplingModelConfig,
+    CouplingTrainingConfig,
+    DatasetConfig,
     FixedLineTransverseBranchConfig,
     ModelConfig,
+    PipelineConfig,
     TransverseTrunkConfig,
 )
 from greenonet.coupling_artifacts import CouplingArtifactRequest
 from greenonet.io import save_model_with_config, save_state_dict_safetensors
 from greenonet.model import GreenONetModel
+from greenonet.post_training_coupling_artifacts import (
+    PostTrainingCouplingArtifactRunner,
+)
 from test.complex_fixtures import (
     write_coefficients,
     write_complex_config,
@@ -614,14 +621,14 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
         use_green=False,
         dtype=torch.float64,
     )
-    coupling_path = tmp_path / "complex_coupling.safetensors"
+    coupling_path = tmp_path / "complex_coupling_model_best_energy.safetensors"
     green_path = tmp_path / "green.safetensors"
     save_state_dict_safetensors(
         ComplexCouplingNet(coupling_cfg).state_dict(), coupling_path
     )
     save_model_with_config(GreenONetModel(green_cfg), green_cfg, green_path)
     config_path = write_complex_config(
-        tmp_path / "config.json",
+        tmp_path / "config_used.json",
         geometry_path=geometry_path,
         train_path=None,
         test_path=data_dir,
@@ -668,22 +675,42 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     }
     config_payload["coupling_training"]["best_physics_checkpoint"] = {"enabled": True}
     config_path.write_text(json.dumps(config_payload))
-    outdir = tmp_path / "artifacts"
+    outdir = tmp_path / "artifacts_best_energy"
 
-    summary = export_complex_coupling_artifacts(
-        CouplingArtifactRequest(
-            config=config_path,
-            coupling_checkpoint=coupling_path,
-            green_checkpoint=green_path,
-            outdir=outdir,
+    summary = PostTrainingCouplingArtifactRunner(
+        config=CouplingArtifactsConfig(
+            enabled=True,
             device="cpu",
             theme="plotly_white",
             coefficient_vector_max_points=2,
             visualization_mesh=visualization_mesh_path,
-        )
-    )
+        ),
+        dataset=DatasetConfig(
+            geometry_mode="complex",
+            geometry_path=geometry_path,
+            test_path=data_dir,
+            coefficient_functions_path=coeff_path,
+        ),
+        coupling_training=CouplingTrainingConfig(
+            best_energy_checkpoint={"enabled": True},
+        ),
+        pipeline=PipelineConfig(
+            run_green=False,
+            run_coupling=True,
+            green_pretrained_path=green_path,
+        ),
+        work_dir=tmp_path,
+    ).run()
 
     assert summary["geometry_mode"] == "complex"
+    assert summary["generation_trigger"] == "post_training"
+    assert summary["checkpoint_selector"] == "best_energy"
+    assert summary["config"] == str(config_path.resolve())
+    assert summary["coupling_checkpoint"] == str(coupling_path.resolve())
+    assert summary["green_checkpoint"] == str(green_path.resolve())
+    assert summary["outdir"] == str(outdir.resolve())
+    assert summary["theme"] == "plotly_white"
+    assert summary["generated_at"]
     assert summary["complex_coupling_architecture"]["active_branch_components"] == [
         "source",
         "coefficient",
@@ -859,7 +886,7 @@ def test_complex_artifact_export_writes_outputs_without_cross_fields(
     ]
     assert summary["optional_flux_targets_exported"] is True
     directional_range = summary["directional_color_range"]
-    assert directional_range["configured_quantile"] is None
+    assert directional_range["configured_quantile"] == pytest.approx(0.99)
     assert directional_range["resolved_quantile"] == pytest.approx(0.99)
     assert directional_range["value_policy"] == "shared_lower_upper_quantile"
     assert directional_range["error_policy"] == "symmetric_absolute_quantile"

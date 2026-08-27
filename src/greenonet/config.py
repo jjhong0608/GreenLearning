@@ -2373,6 +2373,158 @@ class PipelineConfig:
     coupling_pretrained_path: Optional[Path] = None
 
 
+@dataclass(frozen=True)
+class CouplingArtifactsConfig:
+    """Optional post-training export settings for complex CouplingNet."""
+
+    enabled: bool = False
+    checkpoint: Literal["best_energy"] = "best_energy"
+    device: str | None = None
+    theme: str = "plotly_white"
+    selected_samples: tuple[int, ...] | None = None
+    save_generated_data: bool = True
+    plot_workers: int = 1
+    coefficient_vector_max_points: int = 400
+    show_domain_boundary: bool = True
+    visualization_mesh: Path | None = None
+    directional_color_quantile: float = 0.99
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("coupling_artifacts.enabled must be a boolean.")
+        if not isinstance(self.checkpoint, str):
+            raise TypeError("coupling_artifacts.checkpoint must be a string.")
+        if self.checkpoint != "best_energy":
+            raise ValueError("coupling_artifacts.checkpoint must be 'best_energy'.")
+        if self.device is not None:
+            if not isinstance(self.device, str):
+                raise TypeError("coupling_artifacts.device must be a string or null.")
+            if not self.device.strip():
+                raise ValueError("coupling_artifacts.device cannot be empty.")
+            device = self.device.strip()
+            try:
+                torch.device(device)
+            except (RuntimeError, TypeError) as exc:
+                raise ValueError(
+                    "coupling_artifacts.device must be a valid torch device."
+                ) from exc
+            object.__setattr__(self, "device", device)
+        if not isinstance(self.theme, str):
+            raise TypeError("coupling_artifacts.theme must be a string.")
+        if not self.theme.strip():
+            raise ValueError("coupling_artifacts.theme cannot be empty.")
+        object.__setattr__(self, "theme", self.theme.strip())
+
+        selected = self.selected_samples
+        if selected is not None:
+            if not isinstance(selected, (tuple, list)):
+                raise TypeError(
+                    "coupling_artifacts.selected_samples must be an array or null."
+                )
+            parsed_selected: list[int] = []
+            for value in selected:
+                if not isinstance(value, int) or isinstance(value, bool):
+                    raise TypeError(
+                        "coupling_artifacts.selected_samples must contain integers."
+                    )
+                if value < 0:
+                    raise ValueError(
+                        "coupling_artifacts.selected_samples must be non-negative."
+                    )
+                parsed_selected.append(value)
+            object.__setattr__(self, "selected_samples", tuple(parsed_selected))
+
+        for field_name, value in (
+            ("save_generated_data", self.save_generated_data),
+            ("show_domain_boundary", self.show_domain_boundary),
+        ):
+            if not isinstance(value, bool):
+                raise TypeError(f"coupling_artifacts.{field_name} must be a boolean.")
+        for field_name, value in (
+            ("plot_workers", self.plot_workers),
+            ("coefficient_vector_max_points", self.coefficient_vector_max_points),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"coupling_artifacts.{field_name} must be an integer.")
+            if value <= 0:
+                raise ValueError(f"coupling_artifacts.{field_name} must be positive.")
+
+        visualization_mesh = self.visualization_mesh
+        if isinstance(visualization_mesh, str):
+            visualization_mesh = Path(visualization_mesh)
+            object.__setattr__(self, "visualization_mesh", visualization_mesh)
+        if visualization_mesh is not None and not isinstance(visualization_mesh, Path):
+            raise TypeError(
+                "coupling_artifacts.visualization_mesh must be a path or null."
+            )
+
+        quantile = self.directional_color_quantile
+        if not isinstance(quantile, (int, float)) or isinstance(quantile, bool):
+            raise TypeError(
+                "coupling_artifacts.directional_color_quantile must be numeric."
+            )
+        quantile = float(quantile)
+        if not math.isfinite(quantile) or quantile <= 0.5 or quantile > 1.0:
+            raise ValueError(
+                "coupling_artifacts.directional_color_quantile must be finite "
+                "and in (0.5, 1.0]."
+            )
+        object.__setattr__(self, "directional_color_quantile", quantile)
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: CouplingArtifactsConfig | dict[str, Any] | None,
+    ) -> CouplingArtifactsConfig:
+        if raw is None:
+            return cls()
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise TypeError("coupling_artifacts must be an object.")
+        data = dict(raw)
+        allowed = {
+            "enabled",
+            "checkpoint",
+            "device",
+            "theme",
+            "selected_samples",
+            "save_generated_data",
+            "plot_workers",
+            "coefficient_vector_max_points",
+            "show_domain_boundary",
+            "visualization_mesh",
+            "directional_color_quantile",
+        }
+        unknown = sorted(set(data) - allowed)
+        if unknown:
+            raise TypeError(
+                f"coupling_artifacts has unknown keys: {', '.join(unknown)}."
+            )
+        return cls(**data)
+
+    def to_raw(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "checkpoint": self.checkpoint,
+            "device": self.device,
+            "theme": self.theme,
+            "selected_samples": (
+                None if self.selected_samples is None else list(self.selected_samples)
+            ),
+            "save_generated_data": self.save_generated_data,
+            "plot_workers": self.plot_workers,
+            "coefficient_vector_max_points": self.coefficient_vector_max_points,
+            "show_domain_boundary": self.show_domain_boundary,
+            "visualization_mesh": (
+                None
+                if self.visualization_mesh is None
+                else str(self.visualization_mesh)
+            ),
+            "directional_color_quantile": self.directional_color_quantile,
+        }
+
+
 def validate_active_training_seeds(
     *,
     training: TrainingConfig,
@@ -2387,3 +2539,70 @@ def validate_active_training_seeds(
         raise ValueError(
             "coupling_training.seed is required when pipeline.run_coupling=true."
         )
+
+
+def validate_coupling_artifacts_config(
+    *,
+    artifacts: CouplingArtifactsConfig,
+    dataset: DatasetConfig,
+    coupling_training: CouplingTrainingConfig,
+    pipeline: PipelineConfig,
+) -> None:
+    """Validate the optional post-training complex artifact lifecycle."""
+
+    if not artifacts.enabled:
+        return
+    if not pipeline.run_coupling:
+        raise ValueError(
+            "coupling_artifacts.enabled=true requires pipeline.run_coupling=true."
+        )
+    if dataset.geometry_mode != "complex":
+        raise ValueError(
+            "coupling_artifacts.enabled=true is available only for complex "
+            "CouplingNet training."
+        )
+    if dataset.geometry_path is None:
+        raise ValueError(
+            "dataset.geometry_path is required when coupling_artifacts is enabled."
+        )
+    if not Path(dataset.geometry_path).is_file():
+        raise FileNotFoundError(dataset.geometry_path)
+    if not CouplingBestEnergyCheckpointConfig.from_raw(
+        coupling_training.best_energy_checkpoint
+    ).enabled:
+        raise ValueError(
+            "coupling_artifacts.enabled=true requires "
+            "coupling_training.best_energy_checkpoint.enabled=true."
+        )
+    validate_complex_coupling_source_config(dataset, coupling_training)
+    source = ComplexCouplingSourceConfig.from_raw(dataset.coupling_source)
+    if source.mode == "npz":
+        if dataset.validation_path is None:
+            raise RuntimeError(
+                "Artifact validation unexpectedly resolved no validation path."
+            )
+        validation_path = Path(dataset.validation_path)
+        if not validation_path.is_dir():
+            raise FileNotFoundError(validation_path)
+        if not any(validation_path.glob("*.npz")):
+            raise FileNotFoundError(
+                f"No validation npz files found in {validation_path}"
+            )
+    if dataset.test_path is None:
+        raise ValueError(
+            "dataset.test_path is required when coupling_artifacts is enabled."
+        )
+    if not Path(dataset.test_path).is_dir():
+        raise FileNotFoundError(dataset.test_path)
+    if not pipeline.run_green:
+        if pipeline.green_pretrained_path is None:
+            raise ValueError(
+                "pipeline.green_pretrained_path is required when "
+                "coupling_artifacts is enabled and pipeline.run_green=false."
+            )
+        if not Path(pipeline.green_pretrained_path).is_file():
+            raise FileNotFoundError(pipeline.green_pretrained_path)
+    if artifacts.visualization_mesh is not None and not (
+        artifacts.visualization_mesh.is_file()
+    ):
+        raise FileNotFoundError(artifacts.visualization_mesh)

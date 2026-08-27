@@ -339,6 +339,16 @@ def test_show_domain_boundary_request_and_cli_contract(tmp_path: Path) -> None:
         "outdir": tmp_path / "artifacts",
     }
     assert CouplingArtifactRequest(**kwargs).show_domain_boundary is True
+    assert CouplingArtifactRequest(**kwargs).generation_trigger == "standalone_cli"
+    assert CouplingArtifactRequest(**kwargs).checkpoint_selector is None
+    with pytest.raises(ValueError, match="requires checkpoint_selector"):
+        CouplingArtifactRequest(**kwargs, generation_trigger="post_training")
+    post_training = CouplingArtifactRequest(
+        **kwargs,
+        generation_trigger="post_training",
+        checkpoint_selector="best_energy",
+    )
+    assert post_training.checkpoint_selector == "best_energy"
     assert (
         CouplingArtifactRequest(
             **kwargs, show_domain_boundary=False

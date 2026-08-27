@@ -12,6 +12,7 @@ from greenonet.config import (
     ComplexPreProjectionFusionConfig,
     ComplexResponseTrustConfig,
     CouplingBranchFusionConfig,
+    CouplingArtifactsConfig,
     CouplingCoefficientTermsConfig,
     CouplingGeometryBranchConfig,
     CouplingModelConfig,
@@ -37,6 +38,61 @@ def _assert_state_dict_equal(
     assert left.keys() == right.keys()
     for key in left:
         assert torch.equal(left[key], right[key])
+
+
+def test_coupling_artifacts_config_defaults_and_round_trip() -> None:
+    default = CouplingArtifactsConfig.from_raw(None)
+
+    assert default == CouplingArtifactsConfig()
+    assert default.enabled is False
+    assert default.checkpoint == "best_energy"
+    assert default.directional_color_quantile == pytest.approx(0.99)
+
+    configured = CouplingArtifactsConfig.from_raw(
+        {
+            "enabled": True,
+            "checkpoint": "best_energy",
+            "device": " cpu ",
+            "theme": "plotly_white",
+            "selected_samples": [4, 1],
+            "save_generated_data": False,
+            "plot_workers": 2,
+            "coefficient_vector_max_points": 200,
+            "show_domain_boundary": False,
+            "visualization_mesh": "mesh.npz",
+            "directional_color_quantile": 0.95,
+        }
+    )
+
+    assert configured.device == "cpu"
+    assert configured.selected_samples == (4, 1)
+    assert configured.visualization_mesh == Path("mesh.npz")
+    assert CouplingArtifactsConfig.from_raw(configured.to_raw()) == configured
+
+
+@pytest.mark.parametrize(
+    ("raw", "error_type"),
+    [
+        ({"outdir": "artifacts"}, TypeError),
+        ({"enabled": "true"}, TypeError),
+        ({"checkpoint": "final"}, ValueError),
+        ({"device": " "}, ValueError),
+        ({"theme": " "}, ValueError),
+        ({"selected_samples": [-1]}, ValueError),
+        ({"selected_samples": [True]}, TypeError),
+        ({"plot_workers": 0}, ValueError),
+        ({"coefficient_vector_max_points": 0}, ValueError),
+        ({"show_domain_boundary": 1}, TypeError),
+        ({"directional_color_quantile": 0.5}, ValueError),
+        ({"directional_color_quantile": float("nan")}, ValueError),
+    ],
+)
+def test_coupling_artifacts_config_rejects_invalid_values(
+    raw: dict[str, object],
+    error_type: type[Exception],
+) -> None:
+    with pytest.raises(error_type):
+        CouplingArtifactsConfig.from_raw(raw)
 
 
 def test_complex_pre_projection_fusion_config_round_trip():

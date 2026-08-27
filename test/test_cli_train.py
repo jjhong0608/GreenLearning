@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
@@ -18,6 +19,7 @@ from greenonet.config import (
     CouplingTrainingConfig,
     DatasetConfig,
     IndexedGpSourceConfig,
+    ModelConfig,
     PipelineConfig,
     TrainingConfig,
     validate_complex_coupling_source_config,
@@ -73,6 +75,7 @@ class TestTrainCLIConfigCopy:
         assert used["green_learning_rate_schedule"]["resolution"] == (
             "runtime_after_dataloader"
         )
+        assert "coupling_artifacts" not in used
         assert used["training"]["seed"] == 0
         seed_provenance = used["green_training_seed_provenance"]
         assert seed_provenance["base_seed"] == 0
@@ -2006,3 +2009,187 @@ class TestTerminalConfig:
     def test_eval_cli_rejects_non_positive_terminal_width(self):
         with pytest.raises(ValueError, match="terminal.width"):
             EvalCouplingCLI._build_terminal_config({"width": -1})
+
+
+def _write_post_training_artifact_config(
+    tmp_path: Path,
+    *,
+    enabled: bool,
+) -> Path:
+    geometry_path = tmp_path / "geometry.npz"
+    geometry_path.touch()
+    green_path = tmp_path / "green.safetensors"
+    green_path.touch()
+    test_path = tmp_path / "test"
+    test_path.mkdir()
+    zeros = np.zeros((2, 2), dtype=np.float64)
+    np.savez(
+        test_path / "sample.npz",
+        rhs=zeros,
+        sol=zeros,
+        phi=zeros,
+        psi=zeros,
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "dataset": {
+                    "geometry_mode": "complex",
+                    "geometry_path": str(geometry_path),
+                    "test_path": str(test_path),
+                    "coupling_source": {
+                        "mode": "indexed_gp",
+                        "indexed_gp": {
+                            "num_train": 2,
+                            "num_valid": 1,
+                            "seed": 0,
+                        },
+                    },
+                    "reference_diagnostics": {
+                        "training": False,
+                        "validation": False,
+                    },
+                },
+                "model": {},
+                "training": {},
+                "coupling_model": {},
+                "coupling_training": {
+                    "seed": 0,
+                    "best_energy_checkpoint": {"enabled": True},
+                },
+                "pipeline": {
+                    "run_green": False,
+                    "run_coupling": True,
+                    "green_pretrained_path": str(green_path),
+                },
+                "coupling_artifacts": {"enabled": enabled},
+            }
+        )
+    )
+    return config_path
+
+
+def _patch_post_training_artifact_dependencies(
+    monkeypatch,
+    *,
+    events: list[str],
+    artifact_error: Exception | None = None,
+) -> None:
+    monkeypatch.setattr(
+        "cli.train.load_complex_geometry",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "cli.train.GeometryTangentDimensionResolver",
+        SimpleNamespace(
+            resolve=lambda **kwargs: SimpleNamespace(
+                model_config=kwargs["model_config"],
+                provenance=None,
+            )
+        ),
+    )
+    monkeypatch.setattr("cli.train.load_coefficient_functions", lambda _path: object())
+    monkeypatch.setattr(
+        "cli.train.load_model_with_config",
+        lambda _path: (torch.nn.Linear(1, 1), ModelConfig()),
+    )
+    monkeypatch.setattr(
+        TrainCLI,
+        "_should_apply_cpu_runtime",
+        staticmethod(lambda *_args, **_kwargs: False),
+    )
+
+    def _fake_complex_run(self, **kwargs):
+        del self
+        events.append("final_model_test_complete")
+        (kwargs["work_dir"] / "complex_coupling_model_best_energy.safetensors").touch()
+
+    monkeypatch.setattr(TrainCLI, "_run_complex_coupling", _fake_complex_run)
+
+    class _FakePostTrainingRunner:
+        def __init__(self, **_kwargs):
+            events.append("artifact_runner_created")
+
+        def run(self):
+            events.append("artifact_export")
+            if artifact_error is not None:
+                raise artifact_error
+            return {"selected_samples": [0]}
+
+    monkeypatch.setattr(
+        "cli.train.PostTrainingCouplingArtifactRunner",
+        _FakePostTrainingRunner,
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+
+def test_post_training_artifacts_run_once_after_final_test(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = _write_post_training_artifact_config(tmp_path, enabled=True)
+    work_dir = tmp_path / "run"
+    events: list[str] = []
+    _patch_post_training_artifact_dependencies(monkeypatch, events=events)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["train.py", "--config", str(config_path), "--work-dir", str(work_dir)],
+    )
+
+    TrainCLI().run()
+
+    assert events == [
+        "final_model_test_complete",
+        "artifact_runner_created",
+        "artifact_export",
+    ]
+    used = json.loads((work_dir / "config_used.json").read_text())
+    assert used["coupling_artifacts"]["enabled"] is True
+    assert used["coupling_artifacts"]["checkpoint"] == "best_energy"
+
+
+def test_disabled_post_training_artifacts_do_not_invoke_runner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = _write_post_training_artifact_config(tmp_path, enabled=False)
+    work_dir = tmp_path / "run"
+    events: list[str] = []
+    _patch_post_training_artifact_dependencies(monkeypatch, events=events)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["train.py", "--config", str(config_path), "--work-dir", str(work_dir)],
+    )
+
+    TrainCLI().run()
+
+    assert events == ["final_model_test_complete"]
+    assert not (work_dir / "artifacts_best_energy").exists()
+
+
+def test_post_training_artifact_failure_propagates_and_preserves_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = _write_post_training_artifact_config(tmp_path, enabled=True)
+    work_dir = tmp_path / "run"
+    events: list[str] = []
+    _patch_post_training_artifact_dependencies(
+        monkeypatch,
+        events=events,
+        artifact_error=RuntimeError("artifact export failed"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["train.py", "--config", str(config_path), "--work-dir", str(work_dir)],
+    )
+
+    with pytest.raises(RuntimeError, match="artifact export failed"):
+        TrainCLI().run()
+
+    assert (work_dir / "complex_coupling_model_best_energy.safetensors").is_file()
+    assert events[-1] == "artifact_export"

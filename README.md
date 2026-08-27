@@ -819,6 +819,7 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - CouplingNet coefficient terms: in the standard branch path (`source_stencil_lift.enabled=false`), `coupling_model.coefficient_terms` controls which operator coefficients enter the generic `branch_coefficient`. Unit-square mode concatenates enabled terms in `[a, b, c]` order from `diffusion`, `convection`, and `reaction`; complex mode expands enabled convection into `[b_primary, b_transverse]` while preserving the same config surface. The default `diffusion=true, convection=false, reaction=false` preserves the diffusion-only coefficient branch. If all three are false, CouplingNet uses a source-only pure Poisson branch path and skips `branch_coefficient`.
 - CouplingNet branch fusion: set `coupling_model.branch_fusion.mode` to choose how active branch features are combined before the trunk readout. The default `product` multiplies every active branch embedding. `product_fuser` concatenates the active embeddings with their component-wise product and maps the resulting `(N_active+1)H` vector back to `H`; the minimal source+coefficient model therefore uses `[h_f,h_a,h_f*h_a]` with a `3H -> H` fuser. Complex CouplingNet additionally supports the opt-in `concat_fuser`, which omits the product feature and maps `[h_1,...,h_N]` from `N_active*H` to `H`; the minimal model therefore uses `[h_f,h_a]` with a `2H -> H` fuser, and its forward/autograd graph contains no branch-product operation. Unit-square CouplingNet rejects branch-side `concat_fuser`. Independently, `axis_1d_trunk.transverse_trunk.fusion` supports `product`, `product_fuser`, and `concat_fuser`: trunk `product_fuser` maps `[T_parallel,T_perp,T_parallel*T_perp]` through `3H -> H`, while trunk `concat_fuser` maps `[T_parallel,T_perp]` through `2H -> H` without constructing the product. If only one branch is active, branch fusion is an identity and no branch fuser parameters are created.
 - Minimal concat-fuser example: `configs/unit_square_minimal_concat_fuser.json` derives from `numerical_examples/unit_square/base_config.json` and disables the complex geometry branch, fixed-line transverse branch, and pointwise transverse trunk while retaining the mandatory primary trunk. Because this Pure Poisson config disables every coefficient term, its only active branch is the source branch; `concat_fuser` is therefore configured but resolves to identity and creates no branch-fuser parameters. A variable-coefficient minimal experiment with an enabled coefficient term resolves to the intended `[h_f,h_a]`, `2H -> H` concat fuser.
+- Unit-square minimal-network result: the four seed-0, 4,800-source, 2,400-step runs under `checkpoints/unit_square_minimal/` isolate the minimal source/primary-trunk model, geometry branch, fixed-line transverse branch, and pointwise transverse trunk. Best-energy artifacts on the common 100-sample test set give mean `rel_sol` values of `0.852489%`, `0.856076%`, `0.373521%`, and `0.374788%`, respectively. The geometry branch is ineffective on this square because every axial segment has the same endpoints and length, whereas both transverse alternatives expose the missing cross-axis position and improve `rel_sol` on all 100 samples. Their optimized-energy means are `1.714629e-5` and `1.709644e-5`, versus `9.464625e-5` for the minimal model. The fixed-line branch is the preferred unit-square choice: its solution accuracy is statistically tied with the larger pointwise transverse trunk, while it uses fewer parameters and lower measured SOAP optimizer-step time. These are one-training-seed architecture results, not a multi-seed uncertainty estimate. Before repeating seeds, run the same controlled architecture screen on a non-square geometry where segment lengths vary; only the surviving cross-domain candidates should proceed to paired multi-seed confirmation.
 - CouplingNet optional source stencil lift: set `coupling_model.source_stencil_lift.enabled=true` to add input-side learned source and coefficient 5-point stencil encoders. It reconstructs canonical full grids from `rhs_raw` and `a_vals`, feeds normalized source `f` stencils to a source encoder and raw coefficient `a` stencils to a separate coefficient encoder, optionally normalizes the source lifted scalar field by interior RMS, and sends the two lifted fields through separate source and coefficient branch networks before multiplying their branch features. Set `coupling_model.source_stencil_lift.encoder_type` to `"mlp"` for nonlinear five-stencil encoders or `"linear"` for direct affine maps from each five-stencil to its scalar field. The coefficient lift keeps RMS output normalization by default with `coefficient_normalization="rms"`; opt into the bounded coefficient output `beta * tanh(r_coef)` with `coefficient_normalization="tanh"` and `coefficient_tanh_beta`. `b_vals` and `c_vals` are not part of this first coefficient encoder version, and the physical `rhs_raw`, `rhs_norm`, balance projection, losses, and evaluation targets remain unchanged.
 - CouplingNet optional Green response feature: set `coupling_model.green_response_feature.enabled=true` to append the frozen axial Green response `G(rhs_tilde)` to the existing normalized source branch input, so the branch sees `[rhs_tilde, G(rhs_tilde)]`. The trainer and evaluator compute this feature from the current `green_kernel`; `CouplingNet` does not own the Green kernel and still uses `rhs_raw` for balance projection. This first version is axis-local only, has no separate normalization option, and cannot be enabled together with `source_stencil_lift`.
 - CouplingNet optional trunk positional encoding: set `coupling_model.trunk_positional_encoding.enabled=true` to replace raw unit-square trunk coordinates with deterministic coordinate features. The default `mode="fourier"` appends axis-aligned Fourier features `[sin(2*pi*f*x), cos(2*pi*f*x), sin(2*pi*f*y), cos(2*pi*f*y)]` with log-spaced frequencies from `1` to `max_frequency`; the defaults `num_frequencies=4` and `max_frequency=8.0` give `[1, 2, 4, 8]`. Set `mode="boundary_algebraic"` to append Dirichlet/domain-aware algebraic features `[x(1-x), y(1-y), x*y, x^2, y^2, x(1-x)y(1-y)]`. Set `include_input=false` to drop raw `(x, y)` from either encoded trunk input. This feature is unit-square-only and cannot be enabled in complex geometry mode.
@@ -930,6 +931,45 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
     --theme plotly_white
   ```
   The exporter reads `dataset.test_path` as a `CouplingDataset`, uses `dataset.coefficient_functions_path` unless `--coefficients` overrides it, and uses `coupling_training.device` unless `--device` is provided. If `--selected-samples` is omitted, selected heatmaps default to five `rel_sol` representatives: min, q25, q50, q75, and max; pass `--selected-samples 0 5 12` to override this policy explicitly. It writes `summary.json`, per-sample and aggregate metric CSVs, selected raw `.npz` archives, coefficient/source context figures, solution figures, flux-divergence figures, and balance figures. Reference/prediction non-error comparison heatmaps share color ranges within each selected sample for `u/u_pred/u_pred_x/u_pred_y`, `phi/phi_pred`, and `psi/psi_pred`. Paper-facing error heatmaps are signed differences only: `u_pred - u`, `u_pred_x - u`, `u_pred_y - u`, `u_pred_x - u_pred_y`, `phi_pred - phi`, and `psi_pred - psi`. The paper exporter does not create null-space or closure diagnostic figures; those remain in the debug evaluator path.
+- Optional post-training complex CouplingNet artifact export: add the following
+  top-level block to the training config to export the saved best-energy model
+  automatically after training:
+
+  ```json
+  "coupling_artifacts": {
+    "enabled": true,
+    "checkpoint": "best_energy",
+    "device": null,
+    "theme": "plotly_white",
+    "selected_samples": null,
+    "save_generated_data": true,
+    "plot_workers": 1,
+    "coefficient_vector_max_points": 400,
+    "show_domain_boundary": true,
+    "visualization_mesh": null,
+    "directional_color_quantile": 0.99
+  }
+  ```
+
+  This is a complex-only opt-in path. It requires `pipeline.run_coupling=true`,
+  `coupling_training.best_energy_checkpoint.enabled=true`, a validation source,
+  and a full-reference `dataset.test_path` whose every NPZ contains `rhs`, `sol`,
+  and either `phi/psi` or `uxx/uyy`. These conditions are checked before training.
+  The sequence is training, the existing final in-memory model test diagnostic,
+  release of training/model references, and then a fresh export from
+  `<work-dir>/complex_coupling_model_best_energy.safetensors`. The output is fixed
+  at `<work-dir>/artifacts_best_energy`; `outdir` is intentionally not a config
+  option. The exporter reads `<work-dir>/config_used.json`, uses
+  `<work-dir>/model.safetensors` when GreenNet was trained in the same run or the
+  configured pretrained GreenNet otherwise, and reuses the resolved tangent
+  context path. An existing nonempty output directory is rejected without
+  overwriting it. Export errors propagate as training-command failures while all
+  completed checkpoints and metrics remain available. Omitting the block or
+  setting `enabled=false` leaves training unchanged, and the standalone
+  `cli/export_coupling_artifacts.py` interface remains available. The complex
+  `summary.json` records `generation_trigger`, `checkpoint_selector`, and all
+  resolved config/checkpoint/output paths so final-model diagnostics are not
+  confused with best-energy artifacts.
 - CouplingNet debug evaluation on test data (per-sample metrics and diagnostic plots):
   1. Set `dataset.test_path` in your config.
   2. Run:

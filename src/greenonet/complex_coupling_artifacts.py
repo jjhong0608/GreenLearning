@@ -5,6 +5,7 @@ import json
 import logging
 import shutil
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 import numpy as np
@@ -1493,8 +1494,21 @@ class ComplexCouplingArtifactExporter(
         )
         architecture = coupling_model.architecture_provenance()
         summary = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generation_trigger": self.request.generation_trigger,
+            "checkpoint_selector": self.request.checkpoint_selector,
+            "config": str(self.request.config.resolve()),
+            "coupling_checkpoint": str(self.request.coupling_checkpoint.resolve()),
+            "green_checkpoint": str(self.request.green_checkpoint.resolve()),
+            "outdir": str(self.request.outdir.resolve()),
             "geometry_mode": "complex",
             "device": str(device),
+            "theme": self.request.theme,
+            "tangent_context": (
+                None
+                if self.request.tangent_context is None
+                else str(self.request.tangent_context.resolve())
+            ),
             "coefficients": None if coeff_path is None else str(coeff_path),
             "geometry_path": str(configs.dataset.geometry_path),
             "test_path": str(configs.dataset.test_path),

@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import math
 from pathlib import Path
 
-from rich.logging import RichHandler
-
-from greenonet.coupling_artifacts import (
-    CouplingArtifactRequest,
-    export_coupling_artifacts,
+from greenonet.coupling_artifact_runtime import (
+    build_coupling_artifact_logger,
+    export_coupling_artifact_request,
 )
-from greenonet.complex_coupling_artifacts import export_complex_coupling_artifacts
+from greenonet.coupling_artifacts import CouplingArtifactRequest
 
 
 class ExportCouplingArtifactsCLI:
@@ -152,31 +149,7 @@ class ExportCouplingArtifactsCLI:
 
     @staticmethod
     def _build_logger(outdir: Path) -> logging.Logger:
-        outdir.mkdir(parents=True, exist_ok=True)
-        logger = logging.getLogger("ExportCouplingArtifacts")
-        logger.handlers.clear()
-        logger.propagate = False
-        logger.setLevel(logging.INFO)
-
-        formatter = logging.Formatter("%(funcName)s - %(message)s")
-        rich_handler = RichHandler(
-            rich_tracebacks=True,
-            show_path=True,
-            omit_repeated_times=False,
-        )
-        rich_handler.setFormatter(formatter)
-        rich_handler.setLevel(logging.INFO)
-
-        file_handler = logging.FileHandler(
-            outdir / "export_coupling_artifacts.log",
-            mode="w",
-        )
-        file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.INFO)
-
-        logger.addHandler(rich_handler)
-        logger.addHandler(file_handler)
-        return logger
+        return build_coupling_artifact_logger(outdir)
 
     def run(self) -> None:
         args = self.parser.parse_args()
@@ -202,20 +175,7 @@ class ExportCouplingArtifactsCLI:
             tangent_context=args.tangent_context,
         )
         logger = self._build_logger(request.outdir)
-        with request.config.open() as fp:
-            raw = json.load(fp)
-        dataset_raw = raw.get("dataset", {})
-        if (
-            isinstance(dataset_raw, dict)
-            and dataset_raw.get("geometry_mode") == "complex"
-        ):
-            summary = export_complex_coupling_artifacts(request, logger=logger)
-        else:
-            summary = export_coupling_artifacts(request, logger=logger)
-        logger.info(
-            "Completed CouplingNet artifact export (selected_samples=%s)",
-            summary["selected_samples"],
-        )
+        export_coupling_artifact_request(request, logger=logger)
 
 
 def main() -> None:

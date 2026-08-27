@@ -2406,6 +2406,25 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   configured `concat_fuser`는 effective identity이며 fuser parameter를 만들지 않는다.
   실제 `[h_f,h_a]`의 `2H -> H` concat을 비교하려면 variable-coefficient problem에서
   적어도 하나의 coefficient term을 활성화해야 한다.
+- `checkpoints/unit_square_minimal/`의 seed-0 네 run은 다른 설정을 모두 고정하고
+  minimal, geometry branch, fixed-line transverse branch, pointwise transverse trunk를
+  비교한다. Best-energy 100-sample mean `rel_sol`은 각각
+  `0.852489%/0.856076%/0.373521%/0.374788%`, mean `rel_flux`는
+  `7.834327%/7.835841%/3.044616%/2.959063%`다. Geometry branch는 같은 square
+  segment feature만 받아 minimal보다 개선되지 않지만, 두 transverse 경로는 모든
+  test sample에서 minimal의 `rel_sol`, `rel_flux`, optimized energy를 낮춘다.
+  Boundary-weight가 0인데도 boundary diagnostic mean은 minimal `4.207822e-4`에서
+  fixed-line `1.087419e-5`, pointwise trunk `1.069453e-5`로 약 97.4% 감소한다.
+  이는 parameter/fuser 증가만의 효과가 아니라 explicit cross-axis position이
+  필요하다는 evidence다. Fixed-line과 pointwise trunk의 mean `rel_sol` 차이는
+  `0.339%` relative이고 paired win은 50/100이라 사실상 동률이며, fixed-line은
+  `957012` parameters와 `120.74 ms` optimizer-step mean으로 pointwise trunk의
+  `1021530`과 `155.04 ms`보다 효율적이다. 다음 우선순위는 곧바로 seed를 반복하는
+  것이 아니라 segment length가 실제로 변하는 non-square domain에서 같은 controlled
+  architecture screen을 수행하는 것이다. Disk의 smooth length variation을 먼저
+  사용하고, topology 분별이 더 필요하면 Annulus 또는 Pentagram으로 확장한다. 이
+  cross-domain screen에서 남은 후보만 논문용 기본 확정 전에 paired multi-seed로
+  검증한다.
 
 ## Tangent Preconditioner Variant Design
 
@@ -2598,6 +2617,34 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `if_available` builds only when missing; corrupt or incompatible existing files fail
   instead of rebuilding. The sidecar and JSON manifest are written atomically, and
   logs/summaries record source, context ID, schema, byte size, path and timings.
+
+## Optional Post-Training Coupling Artifact Export
+
+- Top-level `coupling_artifacts` is an opt-in Complex CouplingNet training
+  lifecycle option. An absent block or `enabled=false` does not invoke the
+  exporter. Unit-square CouplingNet rejects the enabled option.
+- Automatic export supports only `checkpoint="best_energy"`. It requires active
+  CouplingNet training, an enabled best-energy checkpoint, a validation source,
+  and a full-reference test NPZ directory. Every test sample must contain
+  `rhs`, `sol`, and directional targets as `phi/psi` or legacy `uxx/uyy`; this is
+  validated before training starts.
+- The fixed automatic paths are `<work_dir>/config_used.json`,
+  `<work_dir>/complex_coupling_model_best_energy.safetensors`, and
+  `<work_dir>/artifacts_best_energy/`. There is deliberately no config `outdir`.
+  A nonempty output directory fails before model loading and is never merged or
+  overwritten.
+- Green checkpoint resolution is `<work_dir>/model.safetensors` for a same-run
+  GreenNet or `pipeline.green_pretrained_path` otherwise. Tangent context keeps
+  the established priority: training CLI override, config path, then the
+  checkpoint-directory default `tangent_response_context.safetensors`.
+- Runtime order is Complex CouplingNet training, existing final in-memory model
+  test diagnostic, release/cache cleanup, then a fresh best-energy checkpoint
+  artifact export. Export failure is not swallowed: the command fails, while
+  already written training checkpoints and metrics remain intact.
+- Standalone `cli/export_coupling_artifacts.py` and its arguments remain valid.
+  Both entrypoints share logger and geometry dispatch code. Complex summaries
+  record the generation trigger, checkpoint selector, generated time, theme,
+  tangent path, and resolved config/CouplingNet/GreenNet/output paths.
 
 ## Geometry-Only Automatic Tangent Dimension Selection
 
