@@ -27,7 +27,9 @@ from greenonet.complex_tangent_projection import (
 from greenonet.config import SymmetricTangentGreenResponseProjectionConfig
 
 
-def _operator() -> FrozenBidirectionalResponseOperator:
+def _operator(
+    device: torch.device | str = "cpu",
+) -> FrozenBidirectionalResponseOperator:
     dtype = torch.float64
     return FrozenBidirectionalResponseOperator(
         x=FrozenAxialResponseOperator(
@@ -35,12 +37,14 @@ def _operator() -> FrozenBidirectionalResponseOperator:
             point_count=4,
             blocks=(
                 AxialResponseBlock(
-                    torch.tensor([0, 1], dtype=torch.long),
-                    torch.tensor([[1.0, 0.2], [0.1, 0.8]], dtype=dtype),
+                    torch.tensor([0, 1], dtype=torch.long, device=device),
+                    torch.tensor([[1.0, 0.2], [0.1, 0.8]], dtype=dtype, device=device),
                 ),
                 AxialResponseBlock(
-                    torch.tensor([2, 3], dtype=torch.long),
-                    torch.tensor([[0.7, -0.1], [0.25, 1.1]], dtype=dtype),
+                    torch.tensor([2, 3], dtype=torch.long, device=device),
+                    torch.tensor(
+                        [[0.7, -0.1], [0.25, 1.1]], dtype=dtype, device=device
+                    ),
                 ),
             ),
         ),
@@ -49,12 +53,14 @@ def _operator() -> FrozenBidirectionalResponseOperator:
             point_count=4,
             blocks=(
                 AxialResponseBlock(
-                    torch.tensor([0, 2], dtype=torch.long),
-                    torch.tensor([[0.9, -0.2], [0.3, 1.2]], dtype=dtype),
+                    torch.tensor([0, 2], dtype=torch.long, device=device),
+                    torch.tensor([[0.9, -0.2], [0.3, 1.2]], dtype=dtype, device=device),
                 ),
                 AxialResponseBlock(
-                    torch.tensor([1, 3], dtype=torch.long),
-                    torch.tensor([[1.1, 0.1], [-0.15, 0.75]], dtype=dtype),
+                    torch.tensor([1, 3], dtype=torch.long, device=device),
+                    torch.tensor(
+                        [[1.1, 0.1], [-0.15, 0.75]], dtype=dtype, device=device
+                    ),
                 ),
             ),
         ),
@@ -82,10 +88,11 @@ def _context(
     *,
     variant: str = "separable",
     subspace_dimension: int = 1,
+    device: torch.device | str = "cpu",
 ) -> SymmetricTangentGreenResponseContext:
     return SymmetricTangentGreenResponseContext.from_response_operator(
-        response_operator=_operator(),
-        point_mass=torch.tensor(0.125, dtype=torch.float64),
+        response_operator=_operator(device),
+        point_mass=torch.tensor(0.125, dtype=torch.float64, device=device),
         config=_config(
             variant=variant,
             subspace_dimension=subspace_dimension,
@@ -252,3 +259,90 @@ def test_sidecar_rejects_missing_file(tmp_path: Path) -> None:
             config=_config(),
             device=torch.device("cpu"),
         )
+
+
+def test_static_payload_accepts_roundoff_but_rejects_material_drift() -> None:
+    tensors = TangentResponseContextStore._context_tensors(_context())
+    gain_scale = tensors["gain_scale"]
+    tensors["gain_scale"] = torch.nextafter(
+        gain_scale,
+        torch.full_like(gain_scale, torch.inf),
+    )
+
+    TangentResponseContextStore._validate_static_payload(tensors)
+
+    tensors["gain_scale"] = gain_scale * (1.0 + 1.0e-8)
+    with pytest.raises(
+        ValueError,
+        match=r"gain scale invariant failed: max_abs_error=.*rtol=.*atol=",
+    ):
+        TangentResponseContextStore._validate_static_payload(tensors)
+
+
+def test_static_payload_rejects_material_denominator_drift() -> None:
+    tensors = TangentResponseContextStore._context_tensors(_context())
+    tensors["separable_denominator"] = tensors["separable_denominator"].clone()
+    tensors["separable_denominator"][0] += tensors["gain_scale"].item() * 1.0e-8
+
+    with pytest.raises(ValueError, match="separable_denominator invariant failed"):
+        TangentResponseContextStore._validate_static_payload(tensors)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable.")
+@pytest.mark.parametrize("subspace_dimension", [1, 9])
+def test_cuda_context_save_load_preserves_response_and_balance(
+    tmp_path: Path,
+    subspace_dimension: int,
+) -> None:
+    device = torch.device("cuda")
+    path = tmp_path / f"context_k{subspace_dimension}.safetensors"
+    built = _context(device=device)
+    manifest = TangentResponseContextStore.save(
+        path=path,
+        context=built,
+        identity=_identity(),
+    )
+    config = _config(subspace_dimension=subspace_dimension)
+    loaded = TangentResponseContextStore.load(
+        path=path,
+        identity=_identity(),
+        config=config,
+        device=device,
+    )
+    restored = SymmetricTangentGreenResponseContext.from_preconditioner_terms(
+        response_operator=loaded.response_operator,
+        point_mass=loaded.point_mass,
+        terms=loaded.terms,
+        config=config,
+    )
+
+    assert loaded.manifest["context_id"] == manifest["context_id"]
+    torch.testing.assert_close(restored.denominator, built.denominator)
+    rhs = torch.tensor([[0.7, -0.4, 0.2, 0.9]], dtype=torch.float64, device=device)
+    proposal_difference = torch.tensor(
+        [[0.1, 0.3, -0.5, 0.2]], dtype=torch.float64, device=device
+    )
+    phi = 0.5 * (rhs + proposal_difference)
+    psi = 0.5 * (rhs - proposal_difference)
+    mismatch = restored.response_operator.x.forward(
+        phi
+    ) - restored.response_operator.y.forward(psi)
+    gradient = restored.tangent_gradient(mismatch)
+    step = restored.tangent_step(mismatch=mismatch, gradient=gradient)
+    corrected_phi = phi + step.delta
+    corrected_psi = psi - step.delta
+
+    torch.testing.assert_close(
+        corrected_phi + corrected_psi,
+        rhs,
+        rtol=0.0,
+        atol=32.0 * torch.finfo(torch.float64).eps,
+    )
+    torch.testing.assert_close(
+        restored.response_operator.x.forward(rhs),
+        built.response_operator.x.forward(rhs),
+    )
+    torch.testing.assert_close(
+        restored.response_operator.y.adjoint(rhs),
+        built.response_operator.y.adjoint(rhs),
+    )

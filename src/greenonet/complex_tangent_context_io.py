@@ -90,6 +90,7 @@ class TangentResponseContextStore:
     RECONSTRUCTION_CONTRACT_ID = (
         "segment_green_kernel_nonuniform_unit_quadrature_physical_source_l2_v1"
     )
+    _FLOATING_INVARIANT_EPS_FACTOR = 512.0
 
     _PRECONDITIONER_KEYS = (
         "gamma_x_squared",
@@ -623,23 +624,77 @@ class TangentResponseContextStore:
             ),
         }
         expected_q = c.square() / (separable + q_epsilon)
-        if not torch.equal(tensors["normalized_quadratic_cross_axis"], expected_q):
-            raise ValueError(
-                "Tangent context normalized_quadratic_cross_axis invariant failed."
-            )
-        if not torch.equal(gain_scale, separable.mean()):
-            raise ValueError("Tangent context gain scale invariant failed.")
+        cls._validate_floating_invariant(
+            name="normalized_quadratic_cross_axis",
+            actual=tensors["normalized_quadratic_cross_axis"],
+            expected=expected_q,
+            reference_scale=gain_scale,
+        )
+        cls._validate_floating_invariant(
+            name="gain scale",
+            actual=gain_scale,
+            expected=separable.mean(),
+            reference_scale=gain_scale,
+        )
         for key, expected_base in expected.items():
-            if not torch.equal(tensors[key], expected_base):
-                raise ValueError(f"Tangent context {key} invariant failed.")
+            cls._validate_floating_invariant(
+                name=key,
+                actual=tensors[key],
+                expected=expected_base,
+                reference_scale=gain_scale,
+            )
         for base_key, denominator_key in (
             ("separable_preconditioner_base", "separable_denominator"),
             ("exact_preconditioner_base", "exact_denominator"),
             ("absolute_preconditioner_base", "absolute_denominator"),
             ("quadratic_preconditioner_base", "quadratic_denominator"),
         ):
-            if not torch.equal(tensors[denominator_key], tensors[base_key] + damping):
-                raise ValueError(f"Tangent context {denominator_key} invariant failed.")
+            cls._validate_floating_invariant(
+                name=denominator_key,
+                actual=tensors[denominator_key],
+                expected=tensors[base_key] + damping,
+                reference_scale=gain_scale,
+            )
+
+    @classmethod
+    def _validate_floating_invariant(
+        cls,
+        *,
+        name: str,
+        actual: torch.Tensor,
+        expected: torch.Tensor,
+        reference_scale: torch.Tensor,
+    ) -> None:
+        if actual.shape != expected.shape or actual.dtype != expected.dtype:
+            raise ValueError(
+                f"Tangent context {name} invariant shape/dtype mismatch: "
+                f"actual_shape={tuple(actual.shape)}, "
+                f"expected_shape={tuple(expected.shape)}, "
+                f"actual_dtype={actual.dtype}, expected_dtype={expected.dtype}."
+            )
+        epsilon = torch.finfo(expected.dtype).eps
+        rtol = cls._FLOATING_INVARIANT_EPS_FACTOR * epsilon
+        scale = max(
+            float(reference_scale.detach().abs().max().item()),
+            torch.finfo(expected.dtype).tiny,
+        )
+        atol = rtol * scale
+        if torch.allclose(actual, expected, rtol=rtol, atol=atol):
+            return
+
+        absolute_error = (actual - expected).abs()
+        relative_floor = torch.as_tensor(
+            scale * epsilon,
+            dtype=expected.dtype,
+            device=expected.device,
+        )
+        relative_error = absolute_error / expected.abs().clamp_min(relative_floor)
+        raise ValueError(
+            f"Tangent context {name} invariant failed: "
+            f"max_abs_error={float(absolute_error.max().item()):.6e}, "
+            f"max_rel_error={float(relative_error.max().item()):.6e}, "
+            f"rtol={rtol:.6e}, atol={atol:.6e}."
+        )
 
     @classmethod
     def _context_id(

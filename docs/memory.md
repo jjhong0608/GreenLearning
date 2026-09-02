@@ -2623,6 +2623,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   `if_available` builds only when missing; corrupt or incompatible existing files fail
   instead of rebuilding. The sidecar and JSON manifest are written atomically, and
   logs/summaries record source, context ID, schema, byte size, path and timings.
+- CUDA-built context tensors are packed on CPU before safetensors validation. Structural
+  identities, integer topology and SHA-256 payload digests remain exact, while recomputed
+  floating algebraic invariants use `512 * eps(dtype)` relative tolerance and a
+  `gain_scale`-scaled absolute tolerance. This admits only backend reduction roundoff;
+  one-ULP drift passes, material gain/denominator corruption still fails with reported
+  absolute/relative error and tolerance.
 
 ## Optional Post-Training Coupling Artifact Export
 

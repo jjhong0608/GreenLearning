@@ -558,8 +558,12 @@ operator/context를 다른 directory에서 만들면 같은 ID가 나와야 한�
    range를 검증한다.
 3. 각 axis에서 모든 valid point가 정확히 한 block에 한 번 배정되는지 기존
    `FrozenAxialResponseOperator` validation을 다시 통과시킨다.
-4. Context tensors가 finite인지 검사한다.
-5. 다음 algebraic invariants를 검사한다.
+4. Context tensors를 detached CPU contiguous representation으로 pack하고 finite인지
+   검사한다.
+5. 다음 floating-point algebraic invariants를 dtype machine epsilon에 비례하는
+   엄격한 scale-aware tolerance로 검사한다. GPU에서 계산된 reduction과 CPU에서
+   재계산한 reduction은 수학적으로 같아도 마지막 비트가 다를 수 있으므로 bitwise
+   equality를 요구하지 않는다.
 
    \[
    D_{\mathrm{base}}=\gamma_x^2+\gamma_y^2
@@ -574,13 +578,16 @@ operator/context를 다른 directory에서 만들면 같은 ID가 나와야 한�
    (\lambda_{\mathrm{rel}}+\epsilon_{D,\mathrm{rel}})\mathrm{gain\_scale}
    \]
 
-6. Tensors를 detached CPU contiguous representation으로 pack한다.
-7. Payload digest와 context ID를 계산한다.
-8. Destination과 같은 directory에 unique temporary safetensors file을 쓴다.
-9. Temporary file을 다시 safe-open하여 metadata와 required keys를 검증한다.
-10. `os.replace`로 authoritative sidecar를 atomic replace한다.
-11. Human-readable JSON manifest를 별도 temporary file에 쓴 뒤 atomic replace한다.
-12. File size, context ID, save duration과 destination을 log한다.
+   허용오차는 `rtol = 512 eps(dtype)`와
+   `atol = rtol * max(abs(gain_scale), tiny(dtype))`이다. Shape, dtype, integer
+   structure, compatibility identity와 SHA-256 payload digest는 계속 exact하게
+   비교한다. 검증 실패 메시지는 최대 절대/상대 오차와 적용한 tolerance를 기록한다.
+6. Payload digest와 context ID를 계산한다.
+7. Destination과 같은 directory에 unique temporary safetensors file을 쓴다.
+8. Temporary file을 다시 safe-open하여 metadata와 required keys를 검증한다.
+9. `os.replace`로 authoritative sidecar를 atomic replace한다.
+10. Human-readable JSON manifest를 별도 temporary file에 쓴 뒤 atomic replace한다.
+11. File size, context ID, save duration과 destination을 log한다.
 
 Parent directory는 생성할 수 있지만 기존 unrelated file을 삭제하지 않는다. Save 실패
 시 기존 valid sidecar를 보존한다.
@@ -863,7 +870,9 @@ tensor를 0으로 간주하거나 알 수 없는 schema를 migration하는 fallb
 - Variable-size x/y blocks의 pack/unpack round-trip
 - Empty/malformed pointer, non-square matrix, duplicate/missing valid index rejection
 - Float64 tensor bitwise round-trip
-- CPU save/load와 optional CUDA load smoke
+- CPU save/load와 CUDA-built context의 CPU safetensors validation 및 CUDA load smoke
+- K=1/K=9 CUDA round-trip의 response action, denominator, context ID와 exact balance
+- One-ULP floating invariant 차이는 허용하고 material drift는 거부
 - Unknown/missing tensor key rejection
 - Unknown schema/format rejection
 - Corrupted payload/context ID rejection
