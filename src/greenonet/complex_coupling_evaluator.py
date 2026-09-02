@@ -180,7 +180,11 @@ class ComplexCouplingEvaluator(LoggingMixin):
         tangent_forward_source = (
             f"unconstrained_k{tangent_config.subspace_dimension}_coefficients"
             if tangent_subspace
-            else "capped_eta_applied"
+            else (
+                "capped_eta_applied"
+                if tangent_config.eta_cap_enabled
+                else "uncapped_eta_star"
+            )
         )
         self.logger.info(
             "canonical energy boundary_weight=%.6e "
@@ -580,7 +584,6 @@ class ComplexCouplingEvaluator(LoggingMixin):
             if tangent.eta_star is not None:
                 if (
                     tangent.eta_applied is None
-                    or tangent.eta_cap is None
                     or tangent.eta_capped is None
                     or tangent.line_search_numerator is None
                     or tangent.line_search_denominator is None
@@ -588,7 +591,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
                     raise RuntimeError("Adaptive tangent diagnostics are incomplete.")
                 row.update(
                     {
-                        "tangent_eta_cap": tangent.eta_cap,
+                        "tangent_eta_cap_enabled": int(tangent.eta_cap_enabled),
                         "tangent_eta_star": float(
                             tangent.eta_star[sample_offset].item()
                         ),
@@ -606,6 +609,8 @@ class ComplexCouplingEvaluator(LoggingMixin):
                         ),
                     }
                 )
+                if tangent.eta_cap is not None:
+                    row["tangent_eta_cap"] = tangent.eta_cap
             if tangent.subspace_dimension >= 2:
                 subspace = tangent.subspace_result
                 if subspace is None:

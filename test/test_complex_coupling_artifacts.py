@@ -1559,14 +1559,15 @@ def test_column_diagonal_green_response_artifact_provenance_and_fields(
 
 
 @pytest.mark.parametrize(
-    ("eta_strategy", "subspace_dimension"),
+    ("eta_strategy", "subspace_dimension", "eta_cap_enabled"),
     [
-        ("fixed", 1),
-        ("closed_loop_exact_line_search", 1),
-        ("closed_loop_exact_line_search", 2),
-        ("closed_loop_exact_line_search", 3),
-        ("closed_loop_exact_line_search", 4),
-        ("closed_loop_exact_line_search", 5),
+        ("fixed", 1, True),
+        ("closed_loop_exact_line_search", 1, True),
+        ("closed_loop_exact_line_search", 1, False),
+        ("closed_loop_exact_line_search", 2, True),
+        ("closed_loop_exact_line_search", 3, True),
+        ("closed_loop_exact_line_search", 4, True),
+        ("closed_loop_exact_line_search", 5, True),
     ],
 )
 def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
@@ -1574,6 +1575,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     monkeypatch,
     eta_strategy,
     subspace_dimension,
+    eta_cap_enabled,
 ):
     _patch_static_export(monkeypatch)
     geometry_path = write_geometry_npz(tmp_path / "geometry.npz")
@@ -1590,6 +1592,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
             symmetric_tangent_green_response={
                 "subspace_dimension": subspace_dimension,
                 "eta": 0.01,
+                "eta_cap_enabled": eta_cap_enabled,
                 "eta_strategy": eta_strategy,
                 "line_search_relative_eps": 3.0e-12,
                 "relative_lambda": 0.1,
@@ -1634,6 +1637,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         "symmetric_tangent_green_response": {
             "subspace_dimension": subspace_dimension,
             "eta": 0.01,
+            "eta_cap_enabled": eta_cap_enabled,
             "eta_strategy": eta_strategy,
             "line_search_relative_eps": 3.0e-12,
             "relative_lambda": 0.1,
@@ -1668,6 +1672,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
     assert tangent["active"] is True
     assert tangent["subspace_dimension"] == subspace_dimension
     assert tangent["eta"] == pytest.approx(0.01)
+    assert tangent["eta_cap_enabled"] is eta_cap_enabled
     assert tangent["eta_strategy"] == eta_strategy
     assert tangent["line_search_relative_eps"] == pytest.approx(3.0e-12)
     assert tangent["relative_lambda"] == pytest.approx(0.1)
@@ -1697,7 +1702,9 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         "not_applicable" if subspace else "uncapped_eta_star"
     )
     assert stationarity_summary["forward_eta_source"] == (
-        "not_applicable" if subspace else "capped_eta_applied"
+        "not_applicable"
+        if subspace
+        else ("capped_eta_applied" if eta_cap_enabled else "uncapped_eta_star")
     )
     assert stationarity_summary["matrix_free"] is True
     assert stationarity_summary["extra_adjoint_actions_per_enabled_batch"] == (
@@ -1744,6 +1751,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         "exact_roundoff_clamp_count",
         "point_mass",
         "eta",
+        "eta_cap_enabled",
         "eta_strategy",
         "line_search_relative_eps",
         "relative_lambda",
@@ -1753,6 +1761,7 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
         expected_context_fields.update({"subspace_dimension", "eta_applicability"})
     assert set(context_fields.files) == expected_context_fields
     assert context_fields["eta"].item() == pytest.approx(0.01)
+    assert context_fields["eta_cap_enabled"].item() == eta_cap_enabled
     assert context_fields["eta_strategy"].item() == eta_strategy
     assert context_fields["preconditioner_variant"].item() == "separable"
     assert context_fields["line_search_relative_eps"].item() == pytest.approx(3.0e-12)
@@ -1856,9 +1865,22 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
             ):
                 assert any(key.endswith(suffix) for key in selected.files)
     elif adaptive:
-        assert tangent["eta_role"] == "final_safety_cap"
-        assert tangent["eta_cap_schedule"]["validation_policy"] == "final_cap"
-        assert tangent["eta_cap_schedule"]["post_warmup_behavior"] == ("hold_final_eta")
+        expected_eta_role = (
+            "final_safety_cap" if eta_cap_enabled else "uncapped_exact_line_search"
+        )
+        assert tangent["eta_role"] == expected_eta_role
+        assert tangent["eta_applicability"] == (
+            "applied" if eta_cap_enabled else "disabled_uncapped"
+        )
+        if eta_cap_enabled:
+            assert tangent["eta_cap_schedule"]["validation_policy"] == "final_cap"
+            assert tangent["eta_cap_schedule"]["post_warmup_behavior"] == (
+                "hold_final_eta"
+            )
+        else:
+            assert tangent["eta_cap_schedule"]["applicable"] is False
+            assert tangent["eta_cap_schedule"]["kind"] == "disabled_uncapped"
+            assert tangent["eta_cap_schedule"]["validation_policy"] == "uncapped"
         assert "eta_star_statistics" in tangent
         assert "eta_applied_statistics" in tangent
         assert "eta_cap_hit_fraction" in tangent
@@ -1868,13 +1890,16 @@ def test_symmetric_tangent_green_response_artifact_provenance_and_fields(
             "_tangent_line_search_denominator",
             "_tangent_eta_star",
             "_tangent_eta_applied",
-            "_tangent_eta_cap",
             "_tangent_eta_capped",
             "_tangent_hessian_direction",
             "_tangent_stationarity_residual",
             "_tangent_stationarity_ratio",
         ):
             assert any(key.endswith(suffix) for key in selected.files)
+        assert any(key.endswith("_tangent_eta_cap_enabled") for key in selected.files)
+        assert any(key.endswith("_tangent_eta_cap") for key in selected.files) is (
+            eta_cap_enabled
+        )
         assert "tangent_eta_star" in metric_rows[0]
         assert "tangent_eta_applied" in metric_rows[0]
         assert "tangent_eta_capped" in metric_rows[0]

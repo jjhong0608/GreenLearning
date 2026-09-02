@@ -1,0 +1,898 @@
+/*-- scss:defaults --*/
+
+$body-bg: #f4f6f3;
+$body-color: #172126;
+$link-color: #087c82;
+$presentation-heading-color: #172126;
+$presentation-heading-font: "Aptos Display", "Trebuchet MS", sans-serif;
+$presentation-font-size-root: 27px;
+
+/*-- scss:rules --*/
+
+:root {
+  --ink: #172126;
+  --muted: #647178;
+  --paper: #f4f6f3;
+  --panel: #ffffff;
+  --line: #cfd8d3;
+  --teal: #087c82;
+  --teal-soft: #dcefed;
+  --coral: #cf5b48;
+  --coral-soft: #f5e1dc;
+  --amber: #b97716;
+  --amber-soft: #f6ead3;
+  --steel: #466c7b;
+  --steel-soft: #e0eaee;
+  --green: #3f7759;
+  --green-soft: #e1eee4;
+}
+
+.reveal {
+  color: var(--ink);
+  font-family: "Aptos", "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+.reveal .slides {
+  text-align: left;
+}
+
+.reveal .slides section {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 8px 12px 18px;
+  background:
+    linear-gradient(90deg, rgba(8, 124, 130, 0.05) 1px, transparent 1px) 0 0 / 52px 52px,
+    linear-gradient(rgba(8, 124, 130, 0.04) 1px, transparent 1px) 0 0 / 52px 52px,
+    var(--paper);
+}
+
+.reveal h2 {
+  margin: 0 0 12px;
+  padding: 0 0 8px;
+  border-bottom: 3px solid var(--teal);
+  font-size: 41px;
+  line-height: 1.08;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.compact-title h2 {
+  font-size: 36px;
+}
+
+.reveal h3 {
+  margin: 0 0 8px;
+  font-size: 25px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.reveal p,
+.reveal li {
+  font-size: 22px;
+  line-height: 1.28;
+}
+
+.reveal p {
+  margin: 8px 0;
+}
+
+.reveal ul {
+  margin: 8px 0 0 24px;
+}
+
+.reveal .slide-number {
+  color: var(--muted);
+  background: transparent;
+  font-family: "Aptos", sans-serif;
+  font-size: 15px;
+}
+
+.reveal .MathJax,
+.reveal math {
+  color: var(--ink);
+}
+
+.title-slide {
+  display: flex !important;
+  flex-direction: column;
+  justify-content: center;
+  padding: 56px 78px !important;
+  background:
+    linear-gradient(90deg, var(--ink) 0 16px, transparent 16px),
+    repeating-linear-gradient(135deg, transparent 0 34px, rgba(8, 124, 130, 0.055) 34px 36px),
+    #f8faf7 !important;
+}
+
+.title-slide h2 {
+  max-width: 1320px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+  font-size: 66px;
+  line-height: 1.02;
+}
+
+.title-kicker,
+.small-label {
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.title-subtitle {
+  color: var(--teal);
+  font-family: "Georgia", serif;
+  font-size: 35px;
+  line-height: 1.15;
+}
+
+.title-question {
+  max-width: 1240px;
+  margin-top: 34px;
+  padding: 20px 24px;
+  border-left: 7px solid var(--coral);
+  background: var(--panel);
+  box-shadow: 0 8px 28px rgba(23, 33, 38, 0.08);
+  font-size: 27px;
+  line-height: 1.28;
+}
+
+.title-levels {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.title-levels > div {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.title-levels strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.evidence-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+.evidence-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.evidence-badge.exact {
+  color: #155c42;
+  background: var(--green-soft);
+  border: 1px solid #94bda4;
+}
+
+.evidence-badge.production {
+  color: #285668;
+  background: var(--steel-soft);
+  border: 1px solid #9cb8c2;
+}
+
+.evidence-badge.proxy {
+  color: #80500a;
+  background: var(--amber-soft);
+  border: 1px solid #d3ad70;
+}
+
+.evidence-badge.empirical {
+  color: #8a372a;
+  background: var(--coral-soft);
+  border: 1px solid #d8a397;
+}
+
+.concept-card,
+.formula-card,
+.proof-card,
+.operator-card,
+.step-card,
+.mgs-card,
+.graph-rule-card,
+.layer-card,
+.synthesis-card,
+.decision-panel,
+.objective-card,
+.rule-card-wide {
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 5px 18px rgba(23, 33, 38, 0.055);
+}
+
+.concept-card,
+.operator-card {
+  min-height: 240px;
+  padding: 24px;
+}
+
+.concept-card p,
+.operator-card p {
+  color: var(--muted);
+  font-size: 20px;
+}
+
+.concept-card .math.display,
+.operator-card .math.display {
+  margin: 28px 0;
+  font-size: 1.18em;
+}
+
+.source-card,
+.x-op {
+  border-top: 6px solid var(--teal);
+}
+
+.response-card,
+.y-op {
+  border-top: 6px solid var(--coral);
+}
+
+.danger-card {
+  border-top: 6px solid var(--coral);
+}
+
+.safe-card {
+  border-top: 6px solid var(--green);
+}
+
+.compare-grid,
+.operator-grid,
+.proof-grid,
+.global-field-grid,
+.definition-grid,
+.do-dont-grid,
+.narrative-shift {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: stretch;
+}
+
+.pipeline,
+.direction-flow,
+.probe-flow,
+.operator-action-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 46px minmax(0, 1fr) 46px minmax(0, 1fr) 46px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.direction-flow,
+.probe-flow {
+  grid-template-columns: minmax(0, 1fr) 52px minmax(0, 1fr) 52px minmax(0, 1fr);
+}
+
+.probe-flow {
+  grid-template-columns: minmax(0, 1fr) 70px minmax(0, 1fr);
+}
+
+.operator-action-strip {
+  grid-template-columns: minmax(0, 1fr) 90px minmax(0, 1fr) 110px minmax(0, 1fr);
+}
+
+.arrow,
+.shift-arrow {
+  color: var(--teal);
+  font-size: 38px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.formula-card {
+  display: flex;
+  min-height: 130px;
+  padding: 14px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.formula-card.large {
+  min-height: 180px;
+}
+
+.formula-card span,
+.step-card span {
+  color: var(--muted);
+  font-size: 16px;
+  text-align: center;
+}
+
+.formula-card .math.display,
+.proof-card .math.display,
+.step-card .math.display {
+  margin: 8px 0;
+}
+
+.coordinate-note,
+.identity-band,
+.warning-band,
+.takeaway,
+.highlight-equation,
+.component-meaning,
+.definition-hero,
+.final-claim {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 15px;
+  padding: 14px 18px;
+  border-radius: 5px;
+  font-size: 21px;
+  line-height: 1.26;
+}
+
+.coordinate-note,
+.identity-band,
+.highlight-equation,
+.definition-hero,
+.final-claim {
+  color: #174d50;
+  background: var(--teal-soft);
+  border-left: 6px solid var(--teal);
+}
+
+.warning-band {
+  color: #71450a;
+  background: var(--amber-soft);
+  border-left: 6px solid var(--amber);
+}
+
+.takeaway {
+  color: #7f3529;
+  background: var(--coral-soft);
+  border-left: 6px solid var(--coral);
+}
+
+.identity-band .math.display,
+.highlight-equation .math.display,
+.definition-hero .math.display {
+  margin: 2px 0;
+}
+
+.equation-stack {
+  padding: 25px 32px;
+  border: 1px solid var(--line);
+  border-left: 8px solid var(--teal);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.equation-stack.compact {
+  padding: 14px 26px;
+}
+
+.equation-stack .math.display {
+  margin: 13px 0;
+}
+
+.proof-card {
+  min-height: 150px;
+  padding: 18px;
+  text-align: center;
+}
+
+.objective-card {
+  padding: 28px;
+  border-left: 8px solid var(--teal);
+  text-align: center;
+}
+
+.objective-card .math.display {
+  margin: 0;
+  font-size: 1.28em;
+}
+
+.balance-plane-layout {
+  display: grid;
+  grid-template-columns: 1.08fr 0.92fr;
+  gap: 22px;
+}
+
+.plane-diagram {
+  position: relative;
+  min-height: 510px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, transparent 49.8%, #90a19a 50%, transparent 50.2%),
+    linear-gradient(transparent 49.8%, #90a19a 50%, transparent 50.2%),
+    var(--panel);
+}
+
+.plane-diagram .axis {
+  position: absolute;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.phi-axis { top: 10px; left: 51%; }
+.psi-axis { right: 12px; top: 51%; }
+
+.balance-line {
+  position: absolute;
+  left: 14%;
+  top: 49%;
+  width: 72%;
+  height: 6px;
+  transform: rotate(-34deg);
+  background: var(--teal);
+}
+
+.proposal-point,
+.projected-point {
+  position: absolute;
+  padding: 7px 10px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 18px;
+}
+
+.proposal-point { left: 23%; top: 23%; background: var(--coral); }
+.projected-point { left: 48%; top: 43%; background: var(--teal); }
+.normal-arrow,
+.tangent-arrow {
+  position: absolute;
+  padding: 7px 10px;
+  border: 2px solid;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 18px;
+}
+.normal-arrow { left: 29%; top: 34%; color: var(--coral); transform: rotate(34deg); }
+.tangent-arrow { left: 57%; top: 29%; color: var(--teal); transform: rotate(-34deg); }
+
+.plane-equations {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  justify-content: center;
+}
+
+.plotly-shell {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 6px 22px rgba(23, 33, 38, 0.06);
+}
+
+.plotly-shell.tall { height: 610px; }
+.plotly-shell.medium { height: 610px; }
+.plotly-shell.compact { height: 590px; }
+
+.plotly-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.step-strip,
+.recurrence-grid,
+.mgs-grid,
+.graph-rule-grid,
+.three-layer-grid,
+.final-synthesis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.recurrence-grid,
+.mgs-grid,
+.graph-rule-grid,
+.three-layer-grid,
+.final-synthesis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.step-card,
+.mgs-card,
+.graph-rule-card,
+.layer-card,
+.synthesis-card {
+  display: flex;
+  min-height: 170px;
+  padding: 18px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.step-card .math.display {
+  font-size: 0.91em;
+}
+
+.mgs-card p,
+.graph-rule-card p,
+.layer-card p,
+.synthesis-card p {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.definition-hero {
+  margin-top: 38px;
+  padding: 28px;
+  text-align: center;
+}
+
+.rule-card-wide {
+  padding: 18px;
+  border-left: 6px solid var(--amber);
+  color: #75480a;
+  font-size: 22px;
+  text-align: center;
+}
+
+.dual-figure-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  height: 585px;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.metric-strip span {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--teal);
+  font-size: 17px;
+  font-weight: 760;
+  text-align: center;
+}
+
+.do-card,
+.dont-card {
+  min-height: 390px;
+  padding: 24px 30px;
+  border-radius: 6px;
+}
+
+.do-card {
+  background: var(--green-soft);
+  border: 1px solid #9bbba6;
+}
+
+.dont-card {
+  background: var(--amber-soft);
+  border: 1px solid #d3ad70;
+}
+
+.do-card li,
+.dont-card li {
+  margin-bottom: 18px;
+}
+
+.result-layout {
+  display: grid;
+  grid-template-columns: 1.35fr 0.65fr;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.benchmark-problem-layout,
+.field-comparison-layout,
+.statistics-layout {
+  display: grid;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.benchmark-problem-layout {
+  grid-template-columns: 0.82fr 1.18fr;
+}
+
+.problem-contract {
+  display: flex;
+  min-width: 0;
+  padding: 18px 22px;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--teal);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.problem-contract h3 {
+  margin: 0 0 10px;
+  color: var(--steel);
+  font-size: 22px;
+}
+
+.problem-contract .math.display {
+  margin: 8px 0;
+  font-size: 0.78em;
+}
+
+.problem-contract p {
+  margin: 7px 0;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.benchmark-mesh-shell {
+  height: 570px;
+}
+
+.field-comparison-layout {
+  grid-template-columns: 0.27fr 0.73fr;
+  height: 610px;
+}
+
+.source-field-card {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 6px 22px rgba(23, 33, 38, 0.06);
+}
+
+.source-field-card h3 {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--steel);
+  background: var(--panel);
+  font-size: 19px;
+  text-align: center;
+}
+
+.directional-mesh-shell,
+.solution-mesh-shell,
+.statistics-plot-shell {
+  min-width: 0;
+  height: 610px;
+}
+
+.statistics-layout {
+  grid-template-columns: 1.24fr 0.76fr;
+}
+
+.stats-panel {
+  display: flex;
+  min-width: 0;
+  padding: 18px;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.stats-panel h3 {
+  margin: 0 0 14px;
+  color: var(--steel);
+  font-size: 21px;
+}
+
+.stats-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.stats-summary-table th,
+.stats-summary-table td {
+  padding: 9px 7px;
+  border: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.stats-summary-table th:first-child,
+.stats-summary-table td:first-child {
+  text-align: left;
+}
+
+.stats-summary-table th {
+  color: #fff;
+  background: var(--steel);
+}
+
+.stats-footnote,
+.field-footnote {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.field-footnote strong,
+.stats-footnote strong {
+  color: var(--coral);
+}
+
+.compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  font-size: 17px;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 10px 7px;
+  border: 1px solid var(--line);
+  text-align: right;
+}
+
+.compact-table th:first-child,
+.compact-table td:first-child {
+  text-align: center;
+}
+
+.compact-table th {
+  color: #fff;
+  background: var(--steel);
+}
+
+.compact-table tr:last-child td {
+  color: #155c42;
+  background: var(--green-soft);
+  font-weight: 760;
+}
+
+.layer-card.proxy { border-top: 6px solid var(--amber); }
+.layer-card.production { border-top: 6px solid var(--steel); }
+.layer-card.empirical { border-top: 6px solid var(--coral); }
+
+.old-story,
+.new-story {
+  min-height: 280px;
+  padding: 30px;
+  border-radius: 6px;
+}
+
+.old-story {
+  color: #6d4b17;
+  background: var(--amber-soft);
+  border: 1px solid #d3ad70;
+}
+
+.new-story {
+  color: #174d50;
+  background: var(--teal-soft);
+  border: 1px solid #94bfc0;
+}
+
+.narrative-shift {
+  grid-template-columns: 1fr 70px 1fr;
+  align-items: center;
+}
+
+.source-count {
+  grid-template-columns: 1.55fr 0.45fr;
+}
+
+.metric-column {
+  display: grid;
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.metric-column > div {
+  display: flex;
+  padding: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--teal);
+  border-radius: 5px;
+  background: var(--panel);
+}
+
+.metric-column strong { color: var(--muted); font-size: 19px; }
+.metric-column span { color: var(--teal); font-size: 23px; font-weight: 760; }
+
+.source-paired {
+  grid-template-columns: 1.45fr 0.55fr;
+}
+
+.decision-panel {
+  display: grid;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 13px;
+}
+
+.decision-row {
+  display: flex;
+  padding: 12px;
+  flex-direction: column;
+  justify-content: center;
+  border-left: 5px solid var(--teal);
+  background: var(--teal-soft);
+}
+
+.decision-row span,
+.decision-row em { color: var(--muted); font-size: 16px; }
+.decision-row strong { color: var(--teal); font-size: 27px; }
+
+.final-synthesis {
+  margin-top: 45px;
+}
+
+.synthesis-card {
+  min-height: 300px;
+  justify-content: flex-start;
+}
+
+.synthesis-card h3 {
+  margin-top: 18px;
+}
+
+.final-claim {
+  margin-top: 26px;
+  padding: 20px;
+  font-family: "Georgia", serif;
+  font-size: 25px;
+  text-align: center;
+}
+
+@media (max-width: 1300px) {
+  .reveal h2 { font-size: 38px; }
+  .compact-title h2 { font-size: 34px; }
+  .benchmark-title h2 { font-size: 30px; }
+  .reveal p,
+  .reveal li { font-size: 20px; }
+  .title-slide h2 { font-size: 58px; }
+  .concept-card,
+  .operator-card { min-height: 220px; padding: 19px; }
+  .plotly-shell.tall { height: 580px; }
+  .plotly-shell.medium { height: 580px; }
+  .plotly-shell.compact { height: 555px; }
+  .dual-figure-grid { height: 550px; }
+  .benchmark-mesh-shell { height: 540px; }
+  .field-comparison-layout,
+  .directional-mesh-shell,
+  .solution-mesh-shell,
+  .statistics-plot-shell { height: 565px; }
+  .problem-contract p { font-size: 17px; }
+  .stats-summary-table { font-size: 14px; }
+}

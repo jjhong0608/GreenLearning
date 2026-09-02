@@ -1450,6 +1450,15 @@ class ComplexCouplingArtifactExporter(
             and tangent_projection.subspace_dimension >= 2
         )
         tangent_dimension = tangent_projection.subspace_dimension
+        tangent_forward_source = (
+            f"unconstrained_k{tangent_dimension}_coefficients"
+            if tangent_subspace
+            else (
+                "capped_eta_applied"
+                if tangent_projection.eta_cap_enabled
+                else "uncapped_eta_star"
+            )
+        )
         best_energy = CouplingBestEnergyCheckpointConfig.from_raw(
             configs.coupling_training.best_energy_checkpoint
         )
@@ -1738,7 +1747,7 @@ class ComplexCouplingArtifactExporter(
                     "not_applicable" if tangent_subspace else "uncapped_eta_star"
                 ),
                 "forward_eta_source": (
-                    "not_applicable" if tangent_subspace else "capped_eta_applied"
+                    "not_applicable" if tangent_subspace else tangent_forward_source
                 ),
                 "residual_source": (
                     f"post_k{tangent_dimension}_residual_gradient"
@@ -1779,13 +1788,9 @@ class ComplexCouplingArtifactExporter(
                 "post_mismatch": "m_post=H_x*phi-H_y*psi",
                 "correction_response": "S*delta=m_post-m_pre",
                 "eta_source": (
-                    "not_applicable" if tangent_subspace else "capped_eta_applied"
+                    "not_applicable" if tangent_subspace else tangent_forward_source
                 ),
-                "correction_source": (
-                    f"unconstrained_k{tangent_dimension}_coefficients"
-                    if tangent_subspace
-                    else "capped_eta_applied"
-                ),
+                "correction_source": (tangent_forward_source),
                 "source_normalization": "H_x(f/2)^2+H_y(f/2)^2",
                 "stationarity_diagnostic_computed": response_trust.enabled,
                 "stationarity_diagnostic_eta_source": (
@@ -2208,7 +2213,6 @@ class ComplexCouplingArtifactExporter(
                     if tangent.eta_star is not None:
                         if (
                             tangent.eta_applied is None
-                            or tangent.eta_cap is None
                             or tangent.eta_capped is None
                             or tangent.line_search_numerator is None
                             or tangent.line_search_denominator is None
@@ -2244,9 +2248,9 @@ class ComplexCouplingArtifactExporter(
                                     tangent.eta_applied[0].detach().cpu().item(),
                                     dtype=np.float64,
                                 ),
-                                "tangent_eta_cap": np.asarray(
-                                    tangent.eta_cap,
-                                    dtype=np.float64,
+                                "tangent_eta_cap_enabled": np.asarray(
+                                    tangent.eta_cap_enabled,
+                                    dtype=np.bool_,
                                 ),
                                 "tangent_eta_capped": np.asarray(
                                     tangent.eta_capped[0].detach().cpu().item(),
@@ -2254,6 +2258,11 @@ class ComplexCouplingArtifactExporter(
                                 ),
                             }
                         )
+                        if tangent.eta_cap is not None:
+                            arrays["tangent_eta_cap"] = np.asarray(
+                                tangent.eta_cap,
+                                dtype=np.float64,
+                            )
                     if tangent.subspace_dimension >= 2:
                         subspace = tangent.subspace_result
                         if subspace is None:
@@ -2834,6 +2843,10 @@ class ComplexCouplingArtifactExporter(
             ),
             "point_mass": context.point_mass.detach().cpu().numpy(),
             "eta": np.asarray(context.eta, dtype=np.float64),
+            "eta_cap_enabled": np.asarray(
+                context.eta_cap_enabled,
+                dtype=np.bool_,
+            ),
             "eta_strategy": np.asarray(context.eta_strategy),
             "line_search_relative_eps": np.asarray(
                 context.line_search_relative_eps,
@@ -3102,11 +3115,16 @@ class ComplexCouplingArtifactExporter(
                 "phi=p_tilde+delta; psi=q_tilde-delta"
             )
         elif adaptive:
+            eta_update = (
+                "eta_applied=min(eta_star,eta_cap)"
+                if config.eta_cap_enabled
+                else "eta_applied=eta_star"
+            )
             update = (
                 "z=g/D; v=(H_x+H_y)z; "
                 "eta_star=(g^T z)/(<v,v>_M+relative_eps); "
-                "eta_applied=min(eta_star,eta_cap); "
-                "delta=-eta_applied*z; phi=p_tilde+delta; psi=q_tilde-delta"
+                f"{eta_update}; delta=-eta_applied*z; "
+                "phi=p_tilde+delta; psi=q_tilde-delta"
             )
         else:
             update = "delta=-eta*g/D; phi=p_tilde+delta; psi=q_tilde-delta"
@@ -3122,6 +3140,16 @@ class ComplexCouplingArtifactExporter(
                 "validation_policy": "not_applied",
                 "evaluation_policy": "not_applied",
                 "artifact_policy": "not_applied",
+            }
+        elif not config.eta_cap_enabled:
+            eta_schedule_summary = {
+                "applicable": False,
+                "kind": "disabled_uncapped",
+                "reason": "K=1 applies the sample-wise exact line-search eta_star",
+                "training_policy": "uncapped",
+                "validation_policy": "uncapped",
+                "evaluation_policy": "uncapped",
+                "artifact_policy": "uncapped",
             }
         else:
             eta_schedule_enabled = bool(adaptive and configured_lr_schedule["enabled"])
@@ -3163,12 +3191,21 @@ class ComplexCouplingArtifactExporter(
             "max_subspace_dimension": config.max_subspace_dimension,
             "geometry_k_selection_enabled_at_runtime": (geometry_k_selection.enabled),
             "eta": config.eta,
+            "eta_cap_enabled": config.eta_cap_enabled,
             "eta_role": (
                 "k1_only_not_applied"
                 if subspace
-                else ("final_safety_cap" if adaptive else "fixed_step")
+                else (
+                    "final_safety_cap"
+                    if adaptive and config.eta_cap_enabled
+                    else ("uncapped_exact_line_search" if adaptive else "fixed_step")
+                )
             ),
-            "eta_applicability": ("k1_only_not_applied" if subspace else "applied"),
+            "eta_applicability": (
+                "k1_only_not_applied"
+                if subspace
+                else ("applied" if config.eta_cap_enabled else "disabled_uncapped")
+            ),
             "eta_strategy": config.eta_strategy,
             "line_search_relative_eps": config.line_search_relative_eps,
             "relative_lambda": config.relative_lambda,

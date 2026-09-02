@@ -156,6 +156,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         "tangent_response_cost_k3_over_k2",
         "tangent_response_cost_k4_over_k3",
         "tangent_response_orthogonality_max",
+        "tangent_eta_cap_enabled",
         "tangent_eta_cap",
         "tangent_eta_star_mean",
         "tangent_eta_applied_mean",
@@ -761,6 +762,12 @@ class ComplexCouplingTrainer(LoggingMixin):
                 tangent_config.subspace_dimension,
             )
             return None
+        if not tangent_config.eta_cap_enabled:
+            self.logger.info(
+                "tangent-eta schedule disabled subspace_dimension=1 "
+                "eta_applicability=disabled_uncapped"
+            )
+            return None
         return SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
             config=tangent_config,
             learning_rate_schedule=learning_rate_schedule,
@@ -943,7 +950,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         forward_source = (
             f"unconstrained_k{tangent.subspace_dimension}_coefficients"
             if subspace
-            else "capped_eta_applied"
+            else (
+                "capped_eta_applied" if tangent.eta_cap_enabled else "uncapped_eta_star"
+            )
         )
         self.logger.info(
             "post-line-search stationarity enabled=%s weight=%.6e eps=%.6e "
@@ -976,7 +985,9 @@ class ComplexCouplingTrainer(LoggingMixin):
         correction_source = (
             f"unconstrained_k{tangent.subspace_dimension}_coefficients"
             if subspace
-            else "capped_eta_applied"
+            else (
+                "capped_eta_applied" if tangent.eta_cap_enabled else "uncapped_eta_star"
+            )
         )
         self.logger.info(
             "response-trust enabled=%s weight=%.6e trust_weight=%.6e eps=%.6e "

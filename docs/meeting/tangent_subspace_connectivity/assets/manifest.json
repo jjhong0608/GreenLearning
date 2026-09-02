@@ -1,0 +1,900 @@
+{
+  "assets": {
+    "annulus_transition_sample47_error_matrix.html": {
+      "generated_sha256": "77e0b1053839c8d72a7bcab31f40473d20eba1f2223a34e9f52daf0ea3374b7a",
+      "generated_size_bytes": 2771784,
+      "metric_keys": [
+        "sample_id=47",
+        "phi_error",
+        "psi_error",
+        "u_phi_error",
+        "u_pred_error",
+        "u_psi_error"
+      ],
+      "source_files": [
+        "docs/meeting/annulus_transition_error/assets/annulus_transition_sample47_error_matrix.html",
+        "docs/meeting/annulus_transition_error/assets/manifest.json"
+      ]
+    },
+    "geometry_all_domains_k_reach.html": {
+      "generated_sha256": "7c740e9c4149f33cf9601e354392d7a1fc822d21a14e40f1d5b1f97e625badc4",
+      "generated_size_bytes": 10591100,
+      "metric_keys": [
+        "C_i(K)",
+        "K=1..4",
+        "square/disk/annulus/pentagram"
+      ],
+      "source_files": [
+        "checkpoints/geometry_k_connectivity_visualization/figures/all_domains_pointwise_reach_k1_k4.json"
+      ]
+    },
+    "geometry_annulus_k_reach.html": {
+      "generated_sha256": "099e438f759a4bc238b602ea63dd7738d0ba4539c62dad974d5dbfb6b10a4a43",
+      "generated_size_bytes": 1380233,
+      "metric_keys": [
+        "representative_seed_reach_fraction",
+        "annulus",
+        "K=1..4"
+      ],
+      "source_files": [
+        "checkpoints/geometry_k_connectivity_visualization/figures/annulus_representative_seed_k1_k4.json"
+      ]
+    },
+    "geometry_disk_k_reach.html": {
+      "generated_sha256": "6492cc312e8e08042b242c984a0d35c10650d68edcf1258acc357140e9af34c9",
+      "generated_size_bytes": 1664043,
+      "metric_keys": [
+        "representative_seed_reach_fraction",
+        "disk",
+        "K=1..4"
+      ],
+      "source_files": [
+        "checkpoints/geometry_k_connectivity_visualization/figures/disk_representative_seed_k1_k4.json"
+      ]
+    },
+    "geometry_pentagram_k_reach.html": {
+      "generated_sha256": "a77754828e797538186c0d3451d27d9188de1bb448926429eb903e5165023946",
+      "generated_size_bytes": 600775,
+      "metric_keys": [
+        "representative_seed_reach_fraction",
+        "pentagram",
+        "K=1..4"
+      ],
+      "source_files": [
+        "checkpoints/geometry_k_connectivity_visualization/figures/pentagram_representative_seed_k1_k4.json"
+      ]
+    },
+    "geometry_square_k_reach.html": {
+      "generated_sha256": "53421324ed2c22d50f5f7c5c93b2643030fe342d9142f2738656d2821d24bdac",
+      "generated_size_bytes": 2086460,
+      "metric_keys": [
+        "representative_seed_reach_fraction",
+        "square",
+        "K=1..4"
+      ],
+      "source_files": [
+        "checkpoints/geometry_k_connectivity_visualization/figures/square_representative_seed_k1_k4.json"
+      ]
+    },
+    "pentagram_cost_quality_tradeoff.html": {
+      "generated_sha256": "ed9a9d8bc9d68cec45aef5e9650a9f896d6e2f2c53369472d88afcec2fa0e3ac",
+      "generated_size_bytes": 8770,
+      "metric_keys": [
+        "forward_backward_ms",
+        "rel_sol",
+        "K=1..4"
+      ],
+      "source_files": [
+        "checkpoints/pentagram/tangent_topology_k_analysis/figures/performance/cost_quality_tradeoff.json"
+      ]
+    },
+    "pentagram_problem_coefficients.html": {
+      "generated_sha256": "392dd2dea2cd78208e728763697867ec2ce893ec15d0abe40aa6c10ce252b0fc",
+      "generated_size_bytes": 552100,
+      "metric_keys": [
+        "a(x,y)",
+        "|b(x,y)|",
+        "c(x,y)",
+        "R=0.5"
+      ],
+      "source_files": [
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/convection_magnitude_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/convection_magnitude_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/reaction_c_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/reaction_c_mesh.png"
+      ]
+    },
+    "pentagram_sample79_directional.html": {
+      "generated_sha256": "7eb8c95f436a6ad0faa8c716663c2d185e02992bc5caae69518e342ef6757891",
+      "generated_size_bytes": 1122010,
+      "metric_keys": [
+        "sample_id=79",
+        "target_phi",
+        "phi",
+        "phi_error",
+        "target_psi",
+        "psi",
+        "psi_error"
+      ],
+      "source_files": [
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_phi/sample_0079_sample_000079_target_phi_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_phi/sample_0079_sample_000079_target_phi_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi/sample_0079_sample_000079_phi_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi/sample_0079_sample_000079_phi_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi_error/sample_0079_sample_000079_phi_error_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi_error/sample_0079_sample_000079_phi_error_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_psi/sample_0079_sample_000079_target_psi_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_psi/sample_0079_sample_000079_target_psi_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi/sample_0079_sample_000079_psi_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi/sample_0079_sample_000079_psi_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi_error/sample_0079_sample_000079_psi_error_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi_error/sample_0079_sample_000079_psi_error_mesh.png"
+      ]
+    },
+    "pentagram_sample79_rhs.html": {
+      "generated_sha256": "9b7b0cb48fc929520eca9ca78574cbb8b5e5eb72b583cf85c9996b425e171f5f",
+      "generated_size_bytes": 193892,
+      "metric_keys": [
+        "sample_id=79",
+        "rhs",
+        "q50_rel_sol"
+      ],
+      "source_files": [
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/rhs/sample_0079_sample_000079_rhs_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/rhs/sample_0079_sample_000079_rhs_mesh.png"
+      ]
+    },
+    "pentagram_sample79_solution.html": {
+      "generated_sha256": "c36b65ec2f1dce3c7567b4d79a25e68ca45bee5b63b5d5aed5cc033911565ee2",
+      "generated_size_bytes": 620538,
+      "metric_keys": [
+        "sample_id=79",
+        "sol",
+        "u_pred",
+        "u_pred_error"
+      ],
+      "source_files": [
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/sol/sample_0079_sample_000079_sol_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/sol/sample_0079_sample_000079_sol_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred/sample_0079_sample_000079_u_pred_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred/sample_0079_sample_000079_u_pred_mesh.png",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred_error/sample_0079_sample_000079_u_pred_error_mesh.json",
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred_error/sample_0079_sample_000079_u_pred_error_mesh.png"
+      ]
+    },
+    "pentagram_test_distribution.html": {
+      "generated_sha256": "96a606d53d048e0399f40c9034b32cc7ac845c42c5fe39a987c34b865421819f",
+      "generated_size_bytes": 19881,
+      "metric_keys": [
+        "rel_sol",
+        "rel_flux",
+        "loss_energy_consistency",
+        "tangent_response_mismatch_ratio"
+      ],
+      "source_files": [
+        "checkpoints/pentagram/coupling11/artifacts_best_energy/metrics/per_sample_metrics.csv"
+      ]
+    },
+    "pentagram_trained_k_quality.html": {
+      "generated_sha256": "06828704a72e89d43f155a015a70eeb8c6f6be3cceaef91249eff47394483ee0",
+      "generated_size_bytes": 10428,
+      "metric_keys": [
+        "rel_sol",
+        "rel_u_phi",
+        "rel_u_psi",
+        "rel_flux",
+        "K=1..4"
+      ],
+      "source_files": [
+        "checkpoints/pentagram/tangent_topology_k_analysis/figures/performance/trained_k_quality.json"
+      ]
+    },
+    "unit_square_paired_seed_errors.html": {
+      "generated_sha256": "aa86e715eba0636dca7bf6ff3758c266d6504f2056727916c4da02b856ccbbe4",
+      "generated_size_bytes": 11770,
+      "metric_keys": [
+        "paired_seed",
+        "rel_sol",
+        "num_train"
+      ],
+      "source_files": [
+        "checkpoints/numerical_examples/unit_square_poisson/training_size_analysis/figures/paired_seed_errors.json"
+      ]
+    },
+    "unit_square_problem_coefficient.html": {
+      "generated_sha256": "a1b281b2020f1b232139405575a58986bc41b8e9a1d6567e0fc9c3bfb6755a4e",
+      "generated_size_bytes": 80616,
+      "metric_keys": [
+        "a(x,y)=1",
+        "b(x,y)=0",
+        "c(x,y)=0"
+      ],
+      "source_files": [
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.png"
+      ]
+    },
+    "unit_square_sample11_directional.html": {
+      "generated_sha256": "7c1a5a106495dceb356b1b01158cb75707afe766474b708eb46662d45ba1a4b0",
+      "generated_size_bytes": 2070198,
+      "metric_keys": [
+        "sample_id=11",
+        "target_phi",
+        "phi",
+        "phi_error",
+        "target_psi",
+        "psi",
+        "psi_error"
+      ],
+      "source_files": [
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_phi/sample_0011_sample_000011_target_phi_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_phi/sample_0011_sample_000011_target_phi_mesh.png",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi/sample_0011_sample_000011_phi_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi/sample_0011_sample_000011_phi_mesh.png",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi_error/sample_0011_sample_000011_phi_error_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi_error/sample_0011_sample_000011_phi_error_mesh.png",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_psi/sample_0011_sample_000011_target_psi_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_psi/sample_0011_sample_000011_target_psi_mesh.png",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi/sample_0011_sample_000011_psi_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi/sample_0011_sample_000011_psi_mesh.png",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi_error/sample_0011_sample_000011_psi_error_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi_error/sample_0011_sample_000011_psi_error_mesh.png"
+      ]
+    },
+    "unit_square_sample11_rhs.html": {
+      "generated_sha256": "a2cd2844aeb121220a0445726c66acffa8d1095b5a5f1a0b53dcb266a4b56789",
+      "generated_size_bytes": 287982,
+      "metric_keys": [
+        "sample_id=11",
+        "rhs",
+        "q50_rel_sol"
+      ],
+      "source_files": [
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/rhs/sample_0011_sample_000011_rhs_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/rhs/sample_0011_sample_000011_rhs_mesh.png"
+      ]
+    },
+    "unit_square_sample11_solution.html": {
+      "generated_sha256": "8a038e9271ece11d381291c4bfcaaa170a7233082b7206c999b244872016a29c",
+      "generated_size_bytes": 1168754,
+      "metric_keys": [
+        "sample_id=11",
+        "sol",
+        "u_pred",
+        "u_pred_error"
+      ],
+      "source_files": [
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/sol/sample_0011_sample_000011_sol_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/sol/sample_0011_sample_000011_sol_mesh.png",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred/sample_0011_sample_000011_u_pred_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred/sample_0011_sample_000011_u_pred_mesh.png",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred_error/sample_0011_sample_000011_u_pred_error_mesh.json",
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred_error/sample_0011_sample_000011_u_pred_error_mesh.png"
+      ]
+    },
+    "unit_square_test_distribution.html": {
+      "generated_sha256": "3b105081c9d015436054b675a6460a747a588a6c3f7bdea9c20d46d263e4f0c9",
+      "generated_size_bytes": 20015,
+      "metric_keys": [
+        "rel_sol",
+        "rel_flux",
+        "loss_energy_consistency",
+        "tangent_response_mismatch_ratio"
+      ],
+      "source_files": [
+        "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv"
+      ]
+    },
+    "unit_square_training_size.html": {
+      "generated_sha256": "fd07d4001c6342063b764b7e800071a4c8eb5902895b51a4a0b8b001f9f2a8fb",
+      "generated_size_bytes": 10565,
+      "metric_keys": [
+        "rel_sol_mean",
+        "rel_flux_mean",
+        "num_train",
+        "seed_count=4"
+      ],
+      "source_files": [
+        "checkpoints/numerical_examples/unit_square_poisson/training_size_analysis/figures/test_metrics_by_train_size.json"
+      ]
+    }
+  },
+  "benchmark_contracts": {
+    "pentagram": {
+      "artifact_summary": "checkpoints/pentagram/coupling11/artifacts_best_energy/summary.json",
+      "coefficient_mesh_figure_fields": [
+        "diffusion_a",
+        "reaction_c",
+        "convection_bx",
+        "convection_by",
+        "convection_magnitude"
+      ],
+      "coefficient_source": "coefficients/CDR_pentagram.py",
+      "coefficient_terms": {
+        "convection": true,
+        "diffusion": true,
+        "reaction": true
+      },
+      "config": "checkpoints/pentagram/coupling11/config_used.json",
+      "distributions": {
+        "loss_energy_consistency": {
+          "max": 0.0002145297555080038,
+          "mean": 3.950382972137689e-05,
+          "median": 3.0205709218936146e-05,
+          "min": 5.488099926623971e-06,
+          "p90": 8.148715695533241e-05,
+          "p95": 0.00010029086460998549,
+          "q25": 1.6262085711752418e-05,
+          "q75": 4.7053875757164525e-05,
+          "std": 3.445887564982866e-05
+        },
+        "rel_flux": {
+          "max": 0.44313833850101714,
+          "mean": 0.31929772791968114,
+          "median": 0.32528720301758296,
+          "min": 0.21471214935456004,
+          "p90": 0.3890633451489651,
+          "p95": 0.41436544790395485,
+          "q25": 0.28059302658449736,
+          "q75": 0.34983948283451105,
+          "std": 0.053709703722273336
+        },
+        "rel_sol": {
+          "max": 0.032381896457311994,
+          "mean": 0.011122212653144637,
+          "median": 0.00966121209825456,
+          "min": 0.006291409298933678,
+          "p90": 0.01663279967350042,
+          "p95": 0.01842735980520419,
+          "q25": 0.00823987606658392,
+          "q75": 0.012739400906058799,
+          "std": 0.004153922748954929
+        },
+        "tangent_response_mismatch_ratio": {
+          "max": 0.13215079898200843,
+          "mean": 0.06713836417661512,
+          "median": 0.06101413928119456,
+          "min": 0.030372784855880353,
+          "p90": 0.10953534211763734,
+          "p95": 0.12030817666430751,
+          "q25": 0.05005957096636327,
+          "q75": 0.08086267819578868,
+          "std": 0.024865721982239606
+        }
+      },
+      "mesh_figure_fields": [
+        "sol",
+        "u_pred",
+        "u_pred_error",
+        "rhs",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error"
+      ],
+      "projection_mode": "symmetric_tangent_green_response",
+      "representative_metrics": {
+        "loss_energy_consistency": 0.00014126639697330706,
+        "rel_flux": 0.3999654776205116,
+        "rel_sol": 0.009674764294881701,
+        "tangent_response_mismatch_ratio": 0.05024857849554036
+      },
+      "representative_sample": 79,
+      "representative_sample_role": "q50_rel_sol",
+      "source_config": {
+        "amplitude": 1.0,
+        "lengthscale": 0.15,
+        "mean": 0.0,
+        "num_train": 4800,
+        "num_valid": 300,
+        "seed": 0
+      },
+      "subspace_dimension": 4,
+      "test_sample_count": 100
+    },
+    "unit_square": {
+      "artifact_summary": "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/summary.json",
+      "coefficient_mesh_figure_fields": [
+        "diffusion_a"
+      ],
+      "coefficient_source": "numerical_examples/unit_square/coefficients.py",
+      "coefficient_terms": {
+        "convection": false,
+        "diffusion": false,
+        "reaction": false
+      },
+      "config": "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/config_used.json",
+      "distributions": {
+        "loss_energy_consistency": {
+          "max": 4.11737943034829e-05,
+          "mean": 2.4156678236500135e-05,
+          "median": 2.39222091993789e-05,
+          "min": 1.2777933584176354e-05,
+          "p90": 3.1767081772875624e-05,
+          "p95": 3.524927598360244e-05,
+          "q25": 1.9924570567038973e-05,
+          "q75": 2.795668381454311e-05,
+          "std": 5.811886244342735e-06
+        },
+        "rel_flux": {
+          "max": 0.04243202255351654,
+          "mean": 0.030186603381894283,
+          "median": 0.029707177678685175,
+          "min": 0.022028648400927213,
+          "p90": 0.03594715798828584,
+          "p95": 0.037523682631437794,
+          "q25": 0.027261298476432348,
+          "q75": 0.03287528075407333,
+          "std": 0.004335853253207174
+        },
+        "rel_sol": {
+          "max": 0.008191726087850841,
+          "mean": 0.003493041829364563,
+          "median": 0.0034139095747214585,
+          "min": 0.0010945030134063539,
+          "p90": 0.005371057208854779,
+          "p95": 0.006226737171169185,
+          "q25": 0.002257699024381707,
+          "q75": 0.0043210775751079955,
+          "std": 0.0014689541071161165
+        },
+        "tangent_response_mismatch_ratio": {
+          "max": 0.08590197670824748,
+          "mean": 0.04681501996965194,
+          "median": 0.045154091801540036,
+          "min": 0.023067839150941336,
+          "p90": 0.06589351603865296,
+          "p95": 0.0712121590618941,
+          "q25": 0.03719236697556438,
+          "q75": 0.05445087916186306,
+          "std": 0.013109896010961679
+        }
+      },
+      "mesh_figure_fields": [
+        "sol",
+        "u_pred",
+        "u_pred_error",
+        "rhs",
+        "phi",
+        "psi",
+        "target_phi",
+        "target_psi",
+        "phi_error",
+        "psi_error"
+      ],
+      "projection_mode": "symmetric_tangent_green_response",
+      "representative_metrics": {
+        "loss_energy_consistency": 2.3739737538919854e-05,
+        "rel_flux": 0.02413183131965043,
+        "rel_sol": 0.0034188983389419935,
+        "tangent_response_mismatch_ratio": 0.039714280191271566
+      },
+      "representative_sample": 11,
+      "representative_sample_role": "q50_rel_sol",
+      "source_config": {
+        "amplitude": 1.0,
+        "lengthscale": 0.15,
+        "mean": 0.0,
+        "num_train": 4800,
+        "num_valid": 300,
+        "seed": 0
+      },
+      "subspace_dimension": 4,
+      "test_sample_count": 100
+    }
+  },
+  "builder_version": 3,
+  "geometry_contract": {
+    "representative_reach_percent": {
+      "annulus": [
+        0.009269558769002595,
+        31.21060437523174,
+        98.26659251019652,
+        100.0
+      ],
+      "disk": [
+        0.0077827068254338865,
+        100.0,
+        100.0,
+        100.0
+      ],
+      "pentagram": [
+        0.021872265966754158,
+        83.61767279090114,
+        98.81889763779527,
+        99.86876640419948
+      ],
+      "square": [
+        0.006200012400024801,
+        100.0,
+        100.0,
+        100.0
+      ]
+    },
+    "selected_k": {
+      "annulus": 4,
+      "disk": 2,
+      "pentagram": 4,
+      "square": 2
+    },
+    "selection_rule": {
+      "global_threshold": 0.99,
+      "tail_quantile": 0.05,
+      "tail_threshold": 0.99
+    },
+    "semantics": {
+      "a_distance": "ceil(point_graph_distance / 2)",
+      "actual_gradient_caveat": "production g0 is generally dense; the figure is structural reach, not a literal zero/nonzero gradient map",
+      "first_reach_k": "a_distance + 1 for a localized source-coordinate seed",
+      "point_graph": "active points share an edge when they lie on the same connected horizontal or vertical axial segment"
+    }
+  },
+  "model_inference_used": false,
+  "offline_plotly": true,
+  "pentagram_contract": {
+    "evidence_caveat": "Separate trained runs; engineering trend, not a same-initialization causal ablation.",
+    "forward_backward_ms": [
+      141.373,
+      211.807,
+      282.183,
+      361.773
+    ],
+    "rel_flux_percent": [
+      46.558,
+      39.658,
+      35.261,
+      31.929999999999996
+    ],
+    "rel_sol_percent": [
+      2.678,
+      1.59,
+      1.234,
+      1.112
+    ],
+    "rel_u_phi_percent": [
+      5.022,
+      3.289,
+      2.552,
+      2.394
+    ],
+    "rel_u_psi_percent": [
+      4.832,
+      2.711,
+      2.12,
+      1.865
+    ],
+    "subspace_dimension": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "plotly_bundle": {
+    "path": "plotly.min.js",
+    "sha256": "28498fa2ea4ba45c8633218088eb223436ca0ca02fc57027fd6fa841ad1901f9",
+    "size_bytes": 4847499
+  },
+  "source_provenance": {
+    "checkpoints/geometry_k_connectivity_visualization/figures/all_domains_pointwise_reach_k1_k4.json": {
+      "sha256": "68822f790005508ac45c47e880d04e2074bc7e2e922f37adc82f1458f21b83b5",
+      "size_bytes": 10617252
+    },
+    "checkpoints/geometry_k_connectivity_visualization/figures/annulus_representative_seed_k1_k4.json": {
+      "sha256": "edd1aab3b2dbfdd26dd79d98d5dbe8d8026c6c3bdcd09fb2541194a33f18f5df",
+      "size_bytes": 1395530
+    },
+    "checkpoints/geometry_k_connectivity_visualization/figures/disk_representative_seed_k1_k4.json": {
+      "sha256": "fe081c3c4f3c726924cd7219bbb5bde4c3a86c05d180f315ee0eedd1e489cda1",
+      "size_bytes": 1678891
+    },
+    "checkpoints/geometry_k_connectivity_visualization/figures/pentagram_representative_seed_k1_k4.json": {
+      "sha256": "844019add8241b36f4bb7373bea2b4a8af78b0cea18d9cd472427dc74c5cb081",
+      "size_bytes": 616158
+    },
+    "checkpoints/geometry_k_connectivity_visualization/figures/square_representative_seed_k1_k4.json": {
+      "sha256": "d746751fd5f464c41031979bbe6ff1d86056334836b78a2edc02de01bce2b2b8",
+      "size_bytes": 2101307
+    },
+    "checkpoints/geometry_k_connectivity_visualization/summary.json": {
+      "sha256": "64bd0763ca6493dab21fb1c70392d4c83e0e3ca9e5b031c1f076bd04ebc4605a",
+      "size_bytes": 10310
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.json": {
+      "sha256": "eec810a0eb6d75726c3dc4d5c109532acff8c380dd1cf2b3e8312009c5272346",
+      "size_bytes": 1845514
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.png": {
+      "sha256": "ed58a35b0d8be11218fa88c3fdd968617a4f244a8d720ef5e42f1783a2ecbeef",
+      "size_bytes": 59496
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi/sample_0011_sample_000011_phi_mesh.json": {
+      "sha256": "b91f1e5f217494392f7dc92817dc98058a23b8876c9e7864b72624ca69e667a0",
+      "size_bytes": 2113466
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi/sample_0011_sample_000011_phi_mesh.png": {
+      "sha256": "595d7d621512e8e943127b55903e6e05db23ee5238ea6ff50647689bac5d9afa",
+      "size_bytes": 233680
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi_error/sample_0011_sample_000011_phi_error_mesh.json": {
+      "sha256": "7dfa65c4df76aa6b84fcb6254e0124b5cc2c9bc0dc27505a1c667ba7cab79494",
+      "size_bytes": 2097474
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/phi_error/sample_0011_sample_000011_phi_error_mesh.png": {
+      "sha256": "10103f65af2ffb41bcf37cfe0ace706ff85c2915b04a3bf28d1c5f340dddb95c",
+      "size_bytes": 335415
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi/sample_0011_sample_000011_psi_mesh.json": {
+      "sha256": "2961a98fd055d4e945e85574f6ec1a8db17e6abd244f91afc1fb14cb245e9bbc",
+      "size_bytes": 2112122
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi/sample_0011_sample_000011_psi_mesh.png": {
+      "sha256": "06d9e0abfa53070432219f350784570c14dc7501821e102ecc354a3a6127237f",
+      "size_bytes": 206449
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi_error/sample_0011_sample_000011_psi_error_mesh.json": {
+      "sha256": "57cf9266187c829fae2abf33bdb9da47c07a99ce5b248041c821819d7426ebff",
+      "size_bytes": 2095327
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/psi_error/sample_0011_sample_000011_psi_error_mesh.png": {
+      "sha256": "638a12be24382fad10fc1ebd913c85e35e3e782fd530223d5ef2bd59b97440db",
+      "size_bytes": 335353
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/rhs/sample_0011_sample_000011_rhs_mesh.json": {
+      "sha256": "639ef7d2606bdb0b867d660259a73f39cce6942a62ded2f1039b2a4f1afeb22e",
+      "size_bytes": 2115423
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/rhs/sample_0011_sample_000011_rhs_mesh.png": {
+      "sha256": "1979633d63a8dd9f7118b83a2b28b88ffecd6ce9dcad1957c582aab3b827350a",
+      "size_bytes": 215033
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/sol/sample_0011_sample_000011_sol_mesh.json": {
+      "sha256": "7848fdd790107a651091c6bc835c1b957f37e599020b6c2953603e851d11c375",
+      "size_bytes": 1880548
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/sol/sample_0011_sample_000011_sol_mesh.png": {
+      "sha256": "33607a97c479c33032ddc2ff7e1d93d1b241eb35a9037418c960113805f1d060",
+      "size_bytes": 251815
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_phi/sample_0011_sample_000011_target_phi_mesh.json": {
+      "sha256": "2ac87ed5ff5e09153ca9f28e844199e79db9c4fc63099cc8749112897472673c",
+      "size_bytes": 2113853
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_phi/sample_0011_sample_000011_target_phi_mesh.png": {
+      "sha256": "66846988b8159810cf8a384cc3c903dfc89d4eadbc3ba08a4e5f6735b07154d5",
+      "size_bytes": 234618
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_psi/sample_0011_sample_000011_target_psi_mesh.json": {
+      "sha256": "8ff45e2d3b6c733bd60921c958d5fbbc9c915cdbb95ef54d6a725f6220cee047",
+      "size_bytes": 2113229
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/target_psi/sample_0011_sample_000011_target_psi_mesh.png": {
+      "sha256": "c95fdd70fbf8c64e17a9821507cd91a6825c673d884c15ffd62e0d361ce14fa9",
+      "size_bytes": 205583
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred/sample_0011_sample_000011_u_pred_mesh.json": {
+      "sha256": "46a85375631aeda0a015bd6028d7b15a4d6d743972829c4445cad8364d977a77",
+      "size_bytes": 1880550
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred/sample_0011_sample_000011_u_pred_mesh.png": {
+      "sha256": "0a69284114f47a0405bceb137d595329f2ac5fbc59c88d21953ac2380029415e",
+      "size_bytes": 253294
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred_error/sample_0011_sample_000011_u_pred_error_mesh.json": {
+      "sha256": "b8f7770bbb81c56a60e200d1a14ea7b7f0767e9f43507e62e69865c6c02150a2",
+      "size_bytes": 1842434
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/figures/mesh/u_pred_error/sample_0011_sample_000011_u_pred_error_mesh.png": {
+      "sha256": "b494dd4ed4b463588698f8abbbc20f4716ba88ec201cb5cd956b8db101eea3af",
+      "size_bytes": 370256
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv": {
+      "sha256": "de8bae6e1c59d9c0a9753a495722954e944631b6d29ab034513c9829671a1800",
+      "size_bytes": 92463
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/artifacts_best_energy/summary.json": {
+      "sha256": "1249b586e7e1507fd283de679008b623c808f1f4480f01e2f3733fd75a91bd82",
+      "size_bytes": 39856
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/coupling_train4800_seed0/config_used.json": {
+      "sha256": "6d9cef2c0508a237bf6479c88e74af94614f70d07141fa73e0e1ef78cf5ff15b",
+      "size_bytes": 5163
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/training_size_analysis/adjacent_comparisons.csv": {
+      "sha256": "46ca66ef2509e11dbaec3f20de1b7cd2882db33325c53c732b8648bc25657fab",
+      "size_bytes": 1267
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/training_size_analysis/dataset_size_summary.csv": {
+      "sha256": "b9f17506cc56993b14a66426598ac47f74e5416cde17b19c8706d8734e87f079",
+      "size_bytes": 2221
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/training_size_analysis/figures/paired_seed_errors.json": {
+      "sha256": "82ddb9ad2ad7c4d8ed58be96e3b76aa80c474fd531ecf34c532dba8b609db023",
+      "size_bytes": 24543
+    },
+    "checkpoints/numerical_examples/unit_square_poisson/training_size_analysis/figures/test_metrics_by_train_size.json": {
+      "sha256": "e21497bb3fae7c5d8fbb43bd272a1b8270d1b6563ca138c45c7ab08886aaae5a",
+      "size_bytes": 22707
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/convection_magnitude_mesh.json": {
+      "sha256": "a597f1083859e1c56f6b48920089769a2157f6afd24f3cf0ddf60207986a14e1",
+      "size_bytes": 560018
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/convection_magnitude_mesh.png": {
+      "sha256": "778f4d9fc7ae3055e11a91feb1696e06bbf5ffc1fa95695afa9fb525064d1520",
+      "size_bytes": 139889
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.json": {
+      "sha256": "9623cadc7657bf4de02a5b245500ef89429defb2299e434031613b28f83c814e",
+      "size_bytes": 563693
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/diffusion_a_mesh.png": {
+      "sha256": "80f41eaf0e3dc9c46cf5cd1c83756283c79e6f9363f1900bb868a36da118e90c",
+      "size_bytes": 135849
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/reaction_c_mesh.json": {
+      "sha256": "449634dbe372d62bfa3d38e76c3b09b40e3e843ebb7656a324f1ac9fca303ba1",
+      "size_bytes": 565402
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/coefficients/mesh/reaction_c_mesh.png": {
+      "sha256": "c271cf7766261bc334dc864de47615c35570252a5d2c01f4d9b2fd458d9a6bb7",
+      "size_bytes": 137116
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi/sample_0079_sample_000079_phi_mesh.json": {
+      "sha256": "2a0bce816d3fe26ff25bb09d8e234de3d7f6b52ffef1c236c7a7d32e20921f95",
+      "size_bytes": 631993
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi/sample_0079_sample_000079_phi_mesh.png": {
+      "sha256": "4552ed52ca612a4390f17961852dc6664147453024d8f0bddea33c00865a6029",
+      "size_bytes": 141209
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi_error/sample_0079_sample_000079_phi_error_mesh.json": {
+      "sha256": "61411989b46e9e9e9596a9d3ad9fc5e27afa1c8f86f6dbb67452b1c7246d4a72",
+      "size_bytes": 629771
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/phi_error/sample_0079_sample_000079_phi_error_mesh.png": {
+      "sha256": "0089b3bd6b81deb9c9a96b337afc9890315ee60b9928d6ea5d8b16060b5ed0c7",
+      "size_bytes": 145590
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi/sample_0079_sample_000079_psi_mesh.json": {
+      "sha256": "7b8738066646a2675a3ce348d00adab752c9168fcede648790fb87cb6e21d120",
+      "size_bytes": 633043
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi/sample_0079_sample_000079_psi_mesh.png": {
+      "sha256": "344c0899fac08c1a1e97b37d12597f6d8dde6b058e15ed71f43814c1e862e836",
+      "size_bytes": 137895
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi_error/sample_0079_sample_000079_psi_error_mesh.json": {
+      "sha256": "256d0877a670556020571b6af37c52e78f233ddc8312dd26f3bcdc2edc392d21",
+      "size_bytes": 629729
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/psi_error/sample_0079_sample_000079_psi_error_mesh.png": {
+      "sha256": "822f11d0b46ad72700cadfbfe3672d9ace7af82da21b6f8d1cb2d911e3dbf732",
+      "size_bytes": 144433
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/rhs/sample_0079_sample_000079_rhs_mesh.json": {
+      "sha256": "6c98077989fe5759a63d92603d65f6858b38ef371d30131ff47caf3213e987e5",
+      "size_bytes": 627809
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/rhs/sample_0079_sample_000079_rhs_mesh.png": {
+      "sha256": "05f3b820a017ce39fde6838734f8197abe673724f0b2f22ce76e194c42c1fde0",
+      "size_bytes": 144467
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/sol/sample_0079_sample_000079_sol_mesh.json": {
+      "sha256": "8fedff0ff03e9b203d58ef3b0ea7b02ea5d8c77a0f2a1d85b27b5d4624d7e101",
+      "size_bytes": 558237
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/sol/sample_0079_sample_000079_sol_mesh.png": {
+      "sha256": "d6237116baff75e921029fc0260c7c90af6478397fcb7c21c230e09a8b86152c",
+      "size_bytes": 152166
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_phi/sample_0079_sample_000079_target_phi_mesh.json": {
+      "sha256": "111e0ee2828a115ab26fd5e5acaec0b46715498319a88fa9e70b6dc53280f5e6",
+      "size_bytes": 631605
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_phi/sample_0079_sample_000079_target_phi_mesh.png": {
+      "sha256": "952feae320d1333115041dde75474ba3da603f3346b591f53285040c340430b9",
+      "size_bytes": 138357
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_psi/sample_0079_sample_000079_target_psi_mesh.json": {
+      "sha256": "7aa1538fbfb6db4c5bae693e0eb78c84a50db68cb640853f1befe5b020e3bb11",
+      "size_bytes": 633135
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/target_psi/sample_0079_sample_000079_target_psi_mesh.png": {
+      "sha256": "34526108cb05317dd7fdbefffcb3ea60f79211a4cd315df7693c956bbb412ad1",
+      "size_bytes": 132477
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred/sample_0079_sample_000079_u_pred_mesh.json": {
+      "sha256": "4ebd10eaf1a8e34a05070efd8155a171c354f685e9d682abfebce9bcc7c8fba7",
+      "size_bytes": 558344
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred/sample_0079_sample_000079_u_pred_mesh.png": {
+      "sha256": "3690c99b9ed7caa03ef94376454a8c2a5d6227ce02baba0c336bbdb5aac8e142",
+      "size_bytes": 152900
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred_error/sample_0079_sample_000079_u_pred_error_mesh.json": {
+      "sha256": "baf1003d14102433bf803675fdae6394b2f4250d8a6577165d5bfef42f3de0e4",
+      "size_bytes": 550342
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/figures/mesh/u_pred_error/sample_0079_sample_000079_u_pred_error_mesh.png": {
+      "sha256": "4d1a1db3d45323153dcf70f61fcab2d942e3d53cd9a300c258afd9fbfebdfdb3",
+      "size_bytes": 159139
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/metrics/per_sample_metrics.csv": {
+      "sha256": "2e1b8a2589beebcd0440b57eda1801ae2044166acc3e908cc7e9ec7009e7f7c2",
+      "size_bytes": 91975
+    },
+    "checkpoints/pentagram/coupling11/artifacts_best_energy/summary.json": {
+      "sha256": "37cb0aafe2bb68edfddc553273d64abedc6a1eec2724bdebee13bc237d310bbe",
+      "size_bytes": 39716
+    },
+    "checkpoints/pentagram/coupling11/config_used.json": {
+      "sha256": "a43a5aac2feebe83d925cffcd7ea4870873edd4cc2d6555ff85ab634c184c37f",
+      "size_bytes": 4258
+    },
+    "checkpoints/pentagram/tangent_topology_k_analysis/figures/performance/cost_quality_tradeoff.json": {
+      "sha256": "c4440d528aad51675b3e15df69a50a527ef5be40ed800aed68e82eb9d1a1f844",
+      "size_bytes": 19969
+    },
+    "checkpoints/pentagram/tangent_topology_k_analysis/figures/performance/trained_k_quality.json": {
+      "sha256": "969baf6cedf8f0390861f6da20e1f4069a9d258ad7334849300113153f92a1fa",
+      "size_bytes": 23204
+    },
+    "checkpoints/pentagram/tangent_topology_k_analysis/metrics/tangent_runtime_metrics.csv": {
+      "sha256": "afd4576f02cb1df07f8f3f6ee4ab744c365eca6f3cfbdff5972175cae62d15dd",
+      "size_bytes": 205
+    },
+    "checkpoints/pentagram/tangent_topology_k_analysis/metrics/trained_k_metrics.csv": {
+      "sha256": "eca95e0ad21ead36ed33e8e4353d93553ac520700674a052e424bd8a2584ac73",
+      "size_bytes": 605
+    },
+    "coefficients/CDR_pentagram.py": {
+      "sha256": "bf612535e6ca615bcfa6d436a9d71a29e4b5738dd513b52c392d80cb2af5eaad",
+      "size_bytes": 1357
+    },
+    "docs/meeting/annulus_transition_error/assets/annulus_transition_sample47_error_matrix.html": {
+      "sha256": "77e0b1053839c8d72a7bcab31f40473d20eba1f2223a34e9f52daf0ea3374b7a",
+      "size_bytes": 2771784
+    },
+    "docs/meeting/annulus_transition_error/assets/manifest.json": {
+      "sha256": "7b23490aab84b293321b3cb0737a7a5c9e7a4d454a26922db49a5b95154d8c8b",
+      "size_bytes": 25197
+    },
+    "numerical_examples/unit_square/coefficients.py": {
+      "sha256": "51f506157e118052d6e5543974e9680192c72503c1391a6e6668686cd4361982",
+      "size_bytes": 535
+    }
+  },
+  "unit_square_contract": {
+    "fixed_optimizer_steps": 2400,
+    "num_train": [
+      600,
+      1200,
+      2400,
+      4800
+    ],
+    "paired_seed_improvements": [
+      4,
+      4,
+      4
+    ],
+    "rel_flux_percent": [
+      3.6192161504160545,
+      3.312075728764653,
+      3.0733737400004997,
+      3.0319584857115904
+    ],
+    "rel_sol_percent": [
+      0.42547671154041755,
+      0.39311790743094077,
+      0.3695945505358992,
+      0.3504999895637964
+    ],
+    "seed_count": 4,
+    "selected_num_train": 4800
+  }
+}

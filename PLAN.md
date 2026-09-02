@@ -1,185 +1,104 @@
-# Optional Post-Training Best-Energy CouplingNet Artifact Export Plan
+# Matrix-Free Tangent Subspace and Geometry Connectivity Meeting Deck Plan
 
 ## Summary
 
-Complex CouplingNet 학습과 기존 final-model test diagnostic이 모두 끝난 뒤, 저장된 **best-energy checkpoint를 다시 로드하여** 기존 CouplingNet artifact exporter를 자동 실행하는 optional post-training 단계를 추가한다.
+- 기존 Annulus 미팅 덱은 수정하지 않고, 새 후속 미팅 자료를 `docs/meeting/tangent_subspace_connectivity/`에 독립적인 Quarto Reveal.js 덱으로 작성한다.
+- 발표 제목은 **“From Exact Balance to Geometry-Aware Response Alignment”**, 부제는 **“Matrix-Free Tangent Subspaces and Structural K-Connectivity”**로 고정한다.
+- 슬라이드의 visible text와 수식 설명은 영어로 작성하고, 모든 슬라이드에 정확히 하나의 상세한 한국어 발표자 노트를 작성한다. 발표 시간 제한은 두지 않으며 노트에 시간 단축용 문구를 넣지 않는다.
+- Reveal.js fragment는 한 번의 click마다 하나의 수학적 또는 논리적 단계만 추가한다. 발표자 노트의 `Click:` cue와 실제 fragment 순서를 일치시킨다. Quarto의 공식 [speaker notes](https://quarto.org/docs/presentations/revealjs/#speaker-notes)와 [fragment ordering](https://quarto.org/docs/presentations/revealjs/advanced.html#fragment-order) 방식을 따른다.
+- 덱은 title을 포함한 **39개 main slide**로 구성하며 backup slide는 두지 않는다. Unit-square source-count 결과는 합의대로 본편 후반에 배치한다.
+- 기존 model, training, projection, checkpoint, geometry/sample NPZ와 frozen 실험 결과는 변경하거나 다시 계산하지 않는다.
 
-이 기능은 다음 원칙으로 고정한다.
+## Slide Content Contract
 
-- `coupling_artifacts` block이 없거나 `enabled=false`이면 현재 학습 동작이 완전히 유지된다.
-- 자동 생성은 `dataset.geometry_mode="complex"`인 Complex CouplingNet에만 적용한다.
-- artifact는 항상 `complex_coupling_model_best_energy.safetensors`에서 생성한다.
-- 출력 위치는 config로 받지 않고 checkpoint와 같은 디렉터리의 `artifacts_best_energy/`로 고정한다.
-- 학습 중 사용한 `config_used.json`, GreenNet checkpoint, tangent response context를 재사용한다.
-- 기존 standalone `cli/export_coupling_artifacts.py`는 그대로 지원한다.
-- model architecture, loss, checkpoint tensor key, dataset/geometry NPZ schema는 변경하지 않는다.
+### 1. Motivation and Exact Balance: Slides 1–7
 
-## Public Config
+1. **Title:** 발표 질문을 source balance와 directional response alignment의 관계로 제시한다.
+2. **Previous Observation:** 기존 Annulus sample 47의 \(\phi,\psi,u_\phi,u_\psi,u_{\mathrm{pred}}\) error를 이용해 transition-localized error를 한 장으로 복습한다.
+3. **Exact Source Balance Is Not Equal Response:** \(\phi+\psi=f\)와 \(H_x\phi=H_y\psi\)가 서로 다른 조건임을 분리한다.
+4. **Raw Output to Physical Proposals:** \(P,Q\rightarrow p=P/L_x^2,\;q=Q/L_y^2\)와 projection/pull-back 좌표계를 설명한다.
+5. **Symmetric Projection Algebra:** \(\widetilde\phi=\tfrac12[f+(p-q)]\), \(\widetilde\psi=\tfrac12[f-(p-q)]\)를 유도하고 sum은 고정하며 difference mode를 보존함을 보인다.
+6. **Geometry of the Balance Plane:** normal \((1,1)\), tangent \((1,-1)\), affine balance plane을 점별 그림으로 설명한다.
+7. **Global Tangent Field:** \(\delta\in\mathbb R^P\), \(\phi=\widetilde\phi+\delta\), \(\psi=\widetilde\psi-\delta\)이며 \(\delta\)가 sample별·point별 field임을 설명한다.
 
-다음 top-level config를 추가한다.
+### 2. Response Least Squares: Slides 8–13
 
-```json
-"coupling_artifacts": {
-  "enabled": true,
-  "checkpoint": "best_energy",
-  "device": null,
-  "theme": "plotly_white",
-  "selected_samples": null,
-  "save_generated_data": true,
-  "plot_workers": 1,
-  "coefficient_vector_max_points": 400,
-  "show_domain_boundary": true,
-  "visualization_mesh": "data/visualization_mesh/unit_square_h_1_128.npz",
-  "directional_color_quantile": 0.99
-}
-```
+8. \(H_x,H_y\)를 physical directional source-to-response operator로 정의한다.
+9. \(m_0=H_x\widetilde\phi-H_y\widetilde\psi\), \(S=H_x+H_y\), \(m(\delta)=m_0+S\delta\)를 부호까지 유도한다.
+10. \(J(\delta)=\tfrac12\|m_0+S\delta\|_{M_\Omega}^2\)와 physical mass inner product를 정의한다.
+11. \(g(\delta)=S^\top M_\Omega(m_0+S\delta)\)와 \((g_0)_j=\langle Se_j,m_0\rangle_{M_\Omega}\)의 adjoint 의미를 설명한다.
+12. \(A=S^\top M_\Omega S\), \(A_{ij}=\langle Se_i,Se_j\rangle_{M_\Omega}\)를 response Gram operator로 해석한다.
+13. 이상적인 \(A\delta^\star=-g_0\)와 production의 matrix-free \(Az=S^\top M_\Omega(Sz)\)를 비교하고 global matrix/solve가 없음을 명시한다.
 
-`outdir`는 config option으로 제공하지 않는다. 다음 경로를 항상 사용한다.
+### 3. \(K=1\) and General \(K\): Slides 14–22
 
-```python
-coupling_checkpoint = work_dir / "complex_coupling_model_best_energy.safetensors"
-artifact_outdir = coupling_checkpoint.parent / "artifacts_best_energy"
-```
+14. Production \(D=\gamma_x^2+\gamma_y^2+\lambda_{\mathrm{damp}}\)가 exact \(\operatorname{diag}(A)\)가 아니라 positive column-gain Jacobi surrogate임을 구분한다.
+15. \(z_0=D^{-1}g_0\), \(v_0=Sz_0\), \(\delta(\eta)=-\eta z_0\)의 source/response 역할을 설명한다.
+16. \(\eta^\star=\langle m_0,v_0\rangle_M/(\langle v_0,v_0\rangle_M+\varepsilon)\)를 미분으로 유도하고 “fixed 1D line에서만 exact”임을 강조한다.
+17. \(K=1\)의 한계는 point support가 아니라 correction subspace가 한 방향뿐이라는 것임을 설명한다.
+18. 첫 update 후 \(m_1\), \(g_1\), \(z_{1,\mathrm{raw}}\), \(v_{1,\mathrm{raw}}\)를 순차적으로 구성한다.
+19. 목적함수와 일치하도록 response \(M_\Omega\)-inner product에서 orthogonalize하며 같은 combination을 source direction에도 적용함을 설명한다.
+20. 두 번의 modified Gram-Schmidt, degenerate-direction fallback, \(Sz_k=v_k\) invariant를 설명한다.
+21. \(c_k\), \(\delta_{k+1}=\delta_k-c_kz_k\), \(m_{k+1}=m_k-c_kv_k\), \(\delta_K=-\sum c_kz_k\)의 전체 recurrence를 단계별 animation으로 제시한다.
+22. \(K\)를 “response-orthogonal tangent correction patterns의 수”로 정의하고, 모든 \(K\)에서 \(\phi_K+\psi_K=f\)가 정확히 유지됨을 정리한다.
 
-경로는 비교와 존재 검사를 하기 전에 `Path.resolve()`로 정규화한다. 이는 상대 경로와 상위 디렉터리 성분을 일관되게 처리하기 위한 것이다. [Python pathlib documentation](https://docs.python.org/3/library/pathlib.html)
+### 4. Krylov Interpretation and Geometry Reach: Slides 23–32
 
-Config 기본값은 다음으로 고정한다.
+23. 표준 \(\mathcal K_K(A,g_0)=\operatorname{span}\{g_0,Ag_0,\ldots,A^{K-1}g_0\}\)를 conceptual bridge로 소개하되, production basis는 preconditioned residual과 response-space MGS를 쓰는 **Krylov-like nested response subspace**라고 명시한다.
+24. 실제 \(g_0\)는 dense할 수 있으므로 \(K=1\)을 pointwise-independent 계산으로 해석하지 않는다. Support와 independent correlation capacity를 분리한다.
+25. Geometry visualization의 \(g_0=e_i\)는 실제 sample gradient가 아니라 operator reach를 보기 위한 localized canonical probe임을 설명한다.
+26. 같은 connected horizontal/vertical axial segment를 공유하는 point graph와 \(d_L(i,j)\)를 정의한다.
+27. 한 conceptual \(A=S^\top M_\Omega S\) action의 forward/adjoint mixing을 반영한 \(d_A=\lceil d_L/2\rceil\), \(K_{\mathrm{first}}=d_A+1\)을 설명한다.
+28. \(C_i(K)\), \(C_{\mathrm{global}}(K)\), global/tail 99% geometry-only selection rule을 정의한다.
+29. Unit-square와 Disk를 비교하여 두 geometry 모두 \(K=2\)에서 structural reach 100%임을 보인다.
+30. Annulus representative seed의 \(K=1\ldots4\) reach \(0.00927\%,31.2106\%,98.2666\%,100\%\)를 hole-induced split-segment 구조와 연결한다.
+31. Pentagram representative seed의 \(K=2,3,4\) reach \(83.6177\%,98.8189\%,99.8688\%\)와 extreme-tip full-reach 한계를 함께 보여준다.
+32. Geometry reach가 structural accessibility는 설명하지만 PDE-specific optimal \(K\), 실제 production support 또는 numerical causality를 증명하지 않는다는 한계 슬라이드를 둔다.
 
-- `enabled=false`
-- `checkpoint="best_energy"`
-- `device=null`: `coupling_training.device` 사용
-- `theme="plotly_white"`
-- `selected_samples=null`: 기존 min/q25/q50/q75/max `rel_sol` sample 선택
-- `save_generated_data=true`
-- `plot_workers=1`: 기존 exporter와 마찬가지로 provenance 값이며 새 병렬 plotting은 추가하지 않음
-- `coefficient_vector_max_points=400`
-- `show_domain_boundary=true`
-- `visualization_mesh=null`
-- `directional_color_quantile=0.99`
+### 5. Numerical Evidence and Protocol: Slides 33–39
 
-`checkpoint`는 이번 구현에서 `"best_energy"`만 허용한다. `outdir`를 포함한 unknown key, 잘못된 boolean, 빈 theme, 음수 sample index, nonpositive integer, `(0.5,1.0]` 밖의 quantile은 fail fast한다.
+33. Pentagram trained \(K=1,2,3,4\)의 `rel_sol`, `rel_u_phi`, `rel_u_psi`, `rel_flux`를 동일한 표와 error bars/paired sample distribution으로 비교한다.
+34. Tangent core forward+backward \(141.4/211.8/282.2/361.8\) ms와 정확도 개선을 한 그래프에서 비교해 accuracy optimum \(K=4\), cost-quality knee \(K=3\)를 구분한다.
+35. Geometry reach, spectral enrichment, trained accuracy가 서로 다른 evidence layer임을 설명하고 Pentagram 개선을 reach 하나로 인과 해석하지 않는다.
+36. 해석을 “transition repair”에서 “balance-preserving general directional response alignment”로 확장한다.
+37. Unit-square 4-seed fixed-2400-step source-count 실험 \(600/1200/2400/4800\)과 mean `rel_sol` \(0.4255/0.3931/0.3696/0.3505\%\)를 제시한다.
+38. 이후 실험의 공통 source budget을 \(N_{\mathrm{train}}=4800\)으로 선택한 근거를 paired-seed 및 sample-win 결과와 함께 정리한다.
+39. Exact algebra, structural proxy, empirical evidence를 한 장에서 분리한 뒤 최종 결론과 현재 주장 가능한 범위를 정리한다.
 
-## Validation Contract
+## Implementation Changes
 
-`coupling_artifacts.enabled=true`이면 학습 시작 전에 다음을 검증한다.
-
-- `pipeline.run_coupling=true`
-- `dataset.geometry_mode="complex"`
-- `coupling_training.best_energy_checkpoint.enabled=true`
-- best-energy checkpoint를 생성할 validation source가 존재함
-- `dataset.test_path`가 지정되어 있고 full-reference test NPZ를 제공함
-- test data에 `sol`과 directional target `phi/psi` 또는 기존 alias `uxx/uyy`가 있음
-- `pipeline.run_green=false`이면 `pipeline.green_pretrained_path`가 존재함
-- `visualization_mesh`가 설정되면 파일이 존재함
-- unit-square legacy CouplingNet에서 `enabled=true`이면 complex-only option이라는 오류를 발생시킴
-
-Artifact가 disabled이면 위 추가 조건을 적용하지 않는다. 따라서 source-only training/validation만 사용하는 기존 실행에는 영향이 없다.
-
-## Path Resolution
-
-자동 export request는 다음과 같이 구성한다.
-
-- Config: `<work_dir>/config_used.json`
-- CouplingNet: `<work_dir>/complex_coupling_model_best_energy.safetensors`
-- Output: `<work_dir>/artifacts_best_energy/`
-- GreenNet, `pipeline.run_green=false`: `pipeline.green_pretrained_path`
-- GreenNet, `pipeline.run_green=true`: `<work_dir>/model.safetensors`
-- Coefficients: `dataset.coefficient_functions_path`
-- Test data: `dataset.test_path`
-- Visualization mesh: `coupling_artifacts.visualization_mesh`
-- Tangent context: training CLI의 `--tangent-context`가 있으면 그 경로를 우선하고, 없으면 `<work_dir>/tangent_response_context.safetensors`
-- Directional color range와 figure option: `coupling_artifacts`의 resolved config
-
-Exporter는 원본 config가 아니라 `config_used.json`을 읽는다. 따라서 geometry-only로 자동 결정된 tangent subspace dimension과 실제 optimizer/source provenance가 artifact에 반영된다.
-
-## Implementation Steps
-
-1. `src/greenonet/config.py`에 strict `CouplingArtifactsConfig` dataclass와 `from_raw(...)`/`to_raw(...)`를 추가한다.
-2. cross-config validator를 추가해 complex mode, best-energy checkpoint, validation, test reference, Green checkpoint 및 visualization mesh 조건을 학습 전에 검사한다.
-3. `cli/train.py`에서 top-level `coupling_artifacts`를 parse하고 resolved config를 `config_used.json`에 materialize한다.
-4. 새 `src/greenonet/post_training_coupling_artifacts.py`에 `PostTrainingCouplingArtifactRunner`와 request resolver를 구현한다.
-5. runner는 고정된 checkpoint/config/output 경로를 계산하고 기존 `CouplingArtifactRequest`를 생성한다.
-6. `cli/export_coupling_artifacts.py`의 geometry dispatch와 logger 구성을 공용 helper로 분리하여 standalone CLI와 post-training runner가 같은 exporter entrypoint를 사용하게 한다.
-7. Complex CouplingNet 실행 순서는 `training → 기존 final-model test evaluation → in-memory trainer/model 해제 → best-energy artifact export`로 고정한다.
-8. artifact 생성 전에 training DataLoader, trainer, final CouplingNet reference를 해제한다. CUDA에서는 필요할 때 cache를 비운 뒤 best-energy model을 exporter가 다시 로드하도록 한다.
-9. existing nonempty `artifacts_best_energy/`가 있으면 덮어쓰거나 섞지 않고 fail fast한다. 비어 있거나 존재하지 않을 때만 export를 시작한다.
-10. exporter 오류는 catch하여 성공처럼 처리하지 않는다. 학습 checkpoint는 보존하지만 train process는 nonzero로 종료되어 queue의 `_SUCCESS`가 작성되지 않게 한다.
-11. `src/greenonet/complex_coupling_artifacts.py` summary에 `generation_trigger`, `checkpoint_selector`, config/checkpoint/GreenNet/outdir 경로를 추가한다.
-12. artifact export가 성공하면 기존 `summary.json`, per-sample CSV, raw NPZ, scatter/mesh/coefficient/projection figures와 export log가 `artifacts_best_energy/`에 존재해야 한다.
-13. README와 `docs/memory.md`에 optional config, 고정 경로, 실행 순서, best-energy와 final-model diagnostic의 차이, 실패 정책을 기록한다.
-14. 기존 numerical experiment config는 자동으로 활성화하지 않는다. 새 block이 없는 모든 config는 현재와 동일하게 artifacts를 자동 생성하지 않는다.
-
-## Affected Files
-
-- Config와 validation: `src/greenonet/config.py`
-- Post-training orchestration: 새 `src/greenonet/post_training_coupling_artifacts.py`
-- Training lifecycle: `cli/train.py`
-- Shared exporter dispatch/logger: `cli/export_coupling_artifacts.py`, `src/greenonet/coupling_artifacts.py`
-- Complex summary provenance: `src/greenonet/complex_coupling_artifacts.py`
-- Tests: `test/test_io_config.py`, `test/test_cli_train.py`, `test/test_export_coupling_artifacts.py`, `test/test_complex_coupling_artifacts.py`
-- Documentation: `README.md`, `docs/memory.md`
+- 새 content contract를 `docs/meeting/tangent_subspace_connectivity_slide_plan.md`에 작성한다. 각 slide의 영어 headline, visible claim, 수식, fragment 순서, 한국어 발표자 노트의 핵심 문장, frozen source provenance를 기록한다.
+- 새 덱 디렉터리에 `tangent_subspace_connectivity.qmd`, `styles.scss`, `build_assets.py`, `qa_reveal.js`를 둔다. 기존 Annulus 덱의 1600×900 canvas, 1280×720 QA, local Plotly, MathML, linear navigation과 offline policy를 계승하되 스타일은 새 덱 전용 class로 분리한다.
+- `build_assets.py`는 frozen NPZ/CSV/JSON/기존 offline HTML만 읽는다. model/checkpoint loading이나 inference를 하지 않으며, deck-local Plotly HTML/PNG와 `assets/manifest.json`에 source path, metric key, sample/seed, SHA-256를 기록한다.
+- Annulus historical figure는 기존 frozen offline asset을 hash-verified deck-local copy로 보존한다. Geometry \(K\)-figures는 `geometry_k_connectivity_visualization`의 JSON/NPZ를 이용해 동일 color scale의 incremental K shell figure로 다시 구성한다.
+- Pentagram \(K=1\ldots4\) 자산은 `tangent_topology_k_analysis`와 `coupling8/9/10/11` best-energy 결과만 사용한다. Unit-square 자산은 `training_size_analysis`의 frozen CSV/JSON을 사용한다.
+- 수식·알고리즘 슬라이드는 이미지에 수식을 굽지 않고 QMD MathML과 HTML/CSS diagram으로 만든다. `EXACT ALGEBRA`, `PRODUCTION ALGORITHM`, `STRUCTURAL PROXY`, `EMPIRICAL RESULT` badge를 사용해 근거 수준을 구분한다.
+- fragment animation은 `raw proposal → balance projection`, `mismatch → adjoint gradient → preconditioned direction → response direction`, `K=1→4 reach shell` 순서로 사용한다. 단순 장식 animation은 추가하지 않는다.
+- 최종 산출물은 `tangent_subspace_connectivity.html`, deck-local assets/manifest, QA report와 screenshots다. PDF는 생성하거나 저장하지 않는다.
+- 새 deck 사용법과 provenance는 `README.md`에 추가하고, 합의된 발표 해석과 검증 명령은 `docs/memory.md`에 기록한다. 기존 Annulus deck, slide plan, rendered HTML은 수정하지 않는다.
 
 ## Test Plan
 
-- Config omission과 `enabled=false`가 기존 동작을 보존하는지 확인한다.
-- valid config round-trip과 unknown `outdir`, 잘못된 checkpoint/boolean/integer/quantile/sample index 거부를 확인한다.
-- enabled 상태에서 unit-square mode, `run_coupling=false`, best-energy disabled, validation/test/Green checkpoint 누락을 각각 거부한다.
-- `run_green=false/true`에서 Green checkpoint가 각각 pretrained path와 `<work_dir>/model.safetensors`로 결정되는지 확인한다.
-- coupling/config/tangent/output 경로가 모두 `<work_dir>` 기준으로 정확히 결정되는지 확인한다.
-- disabled 상태에서는 exporter가 호출되지 않고 artifact directory도 생성되지 않는지 확인한다.
-- enabled 상태에서는 trainer와 기존 final test evaluation 이후 exporter가 정확히 한 번 호출되는지 확인한다.
-- exporter request가 final checkpoint가 아니라 best-energy checkpoint를 사용하는지 확인한다.
-- nonempty output directory가 있으면 model load 전에 실패하고 기존 파일이 유지되는지 확인한다.
-- exporter failure가 process failure로 전파되지만 training checkpoint와 metrics가 유지되는지 확인한다.
-- generated summary가 post-training trigger와 resolved provenance를 기록하는지 확인한다.
-- standalone export CLI의 기존 arguments와 결과가 유지되는지 regression test를 수행한다.
-- 작은 complex fixture로 best-energy checkpoint부터 실제 artifact bundle까지 생성하는 smoke test를 수행한다.
-- model state-dict key, GreenNet, unit-square CouplingNet, loss와 checkpoint selection의 regression이 없는지 확인한다.
-
-검증 순서는 다음과 같이 고정한다.
-
-```bash
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest \
-  test/test_io_config.py \
-  test/test_cli_train.py \
-  test/test_export_coupling_artifacts.py \
-  test/test_complex_coupling_artifacts.py
-
-PYTHONPATH=src ~/.conda/envs/green_net/bin/python -m pytest test
-ruff check src cli test
-ruff format src cli test
-~/.conda/envs/green_net/bin/python -m mypy src
-git diff --check
-```
-
-실제 장기 CouplingNet 재학습은 구현 검증 범위에 포함하지 않는다.
+- 새 asset test는 frozen source 존재 여부, SHA-256 provenance, exact metric extraction, local Plotly dependency, deterministic rebuild, checkpoint/model loading 부재를 검증한다.
+- 새 deck test는 logical slide count 39, 영어 visible text, 슬라이드당 한국어 notes 하나, formula/sign contract, production-vs-proxy caveat, fragment-index uniqueness와 `Click:` cue 일치를 검증한다.
+- Content tests는 \(S=H_x+H_y\), \(A=S^\top M_\Omega S\), \(D\neq\operatorname{diag}(A)\), \(\delta_K=-\sum c_kz_k\), exact balance, localized-seed caveat와 주요 numerical value를 고정한다.
+- Quarto render 후 1600×900과 1280×720에서 모든 final state와 모든 intermediate fragment state를 검사한다. Overflow, overlap, page error, broken iframe, external request와 clipped formula가 없어야 한다.
+- 검증 순서는 focused asset/deck pytest, asset rebuild, Quarto render, browser QA, 전체 `pytest test`, `ruff check`, non-mutating format check, `mypy src`, `git diff --check`로 고정한다.
 
 ## Rollback Strategy
 
-- 실행 단위 rollback은 `coupling_artifacts.enabled=false`로 바꾸거나 block을 삭제하는 것이다.
-- 생성 기능을 제거해도 기존 model-only safetensors와 standalone exporter는 그대로 사용할 수 있다.
-- Code rollback은 config dataclass, post-training runner와 train CLI hook만 제거한다.
-- model, trainer objective, projection, reconstruction, GreenNet과 NPZ schema에는 rollback 변경이 없어야 한다.
-- export 도중 실패해 부분적인 `artifacts_best_energy/`가 남으면 자동 덮어쓰지 않는다. 해당 디렉터리를 명시적으로 이동 또는 삭제한 뒤 standalone exporter나 학습 후 export를 다시 실행한다.
-- artifact export 실패는 기존 학습 결과를 무효화하지 않으며 best-energy checkpoint를 standalone CLI로 다시 export할 수 있다.
+- 새 덱은 독립 디렉터리와 독립 tests로 구성하므로 rollback은 새 content contract, deck directory, tests와 README/memory 항목만 제거하는 것이다.
+- 기존 Annulus QMD/HTML/assets와 frozen checkpoint/analysis 결과는 rollback 대상에 포함하지 않는다.
+- Interactive Plotly가 특정 viewport에서 안정적으로 배치되지 않으면 numerical content는 유지하고 해당 panel만 hash-verified static PNG로 교체한다.
+- Frozen source와 슬라이드 numerical claim이 불일치하면 수치를 재계산하거나 checkpoint를 실행하지 않고 작업을 중단한다. 충돌한 metric key, source artifact와 최소 content-only 수정안을 보고한다.
 
-## Acceptance Criteria
+## Assumptions and Confidence
 
-- config block이 없거나 disabled이면 현재 실행과 수치 결과가 바뀌지 않는다.
-- enabled이면 Complex CouplingNet 학습 종료 후 정확히 한 번 artifact export가 실행된다.
-- artifact는 final model이 아니라 best-energy checkpoint에서 생성된다.
-- artifact output은 항상 checkpoint 디렉터리의 `artifacts_best_energy/`이다.
-- `outdir`는 public config에 존재하지 않으며 입력하면 오류가 발생한다.
-- `config_used.json`, Green checkpoint와 tangent context가 실제 학습 실행과 일치한다.
-- 기존 standalone artifact CLI가 계속 동작한다.
-- artifact 오류가 숨겨지지 않으며 학습 checkpoint는 보존된다.
-- model architecture, checkpoint tensor contract와 dataset schema가 변경되지 않는다.
-
-## Confidence
-
-- 구현 계획 확신도: **0.98**
-- 필요한 설정과 실패 정책에는 정보 부족이나 규칙 모호성이 없다.
-- 남은 위험은 artifact export의 실행 시간과 GPU peak memory라는 운영 비용이며, 학습 객체를 먼저 해제하고 checkpoint를 다시 로드하는 순서로 완화한다.
+- 이번 자료는 기존 Annulus 덱을 대체하지 않는 후속 독립 덱이다.
+- Unit-square source-count 결과는 본편 Slides 37–38에 포함한다.
+- Product/product_fuser screening, 네 수치 예제 전체 프로토콜, minimal-network/transverse-branch 실험과 unfinished Disk 결과는 포함하지 않는다.
+- Geometry-only visualization은 production tangent direction의 literal support map으로 표현하지 않는다.
+- 구현 계획 확신도는 **0.98**이다. 규칙이나 목적의 모호성은 없다. 남은 불확실성은 geometry reach와 trained accuracy 사이의 정량적 인과관계가 아직 분리 검증되지 않았다는 경험적 정보 부족이며, 덱은 이를 limitation으로 명시한다.
 
 ## Executable `/goal` Draft
 
@@ -187,46 +106,55 @@ git diff --check
 /goal
 
 `/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/PLAN.md`의
-"Optional Post-Training Best-Energy CouplingNet Artifact Export Plan"을 기준
-문서로 참고하여 CouplingNet post-training artifact generation을 끝까지
+"Matrix-Free Tangent Subspace and Geometry Connectivity Meeting Deck Plan"을
+기준 문서로 참고하여 후속 공동연구자 미팅용 Quarto Reveal.js 덱을 끝까지
 구현한다.
 
 완료는 다음 조건으로 검증한다.
 
-- coupling_artifacts block이 없거나 enabled=false이면 기존 학습 동작이 유지될 것,
-- enabled=true는 complex CouplingNet, run_coupling, validation source,
-  best-energy checkpoint와 full-reference test data를 strict하게 요구할 것,
-- artifact가 final model이 아닌
-  complex_coupling_model_best_energy.safetensors에서 생성될 것,
-- output directory가 checkpoint 위치의 artifacts_best_energy로 고정될 것,
-- outdir config option은 제공되지 않고 입력하면 오류가 발생할 것,
-- config_used.json, 실제 GreenNet checkpoint와 tangent response context를
-  재사용할 것,
-- 기존 final-model test diagnostic 이후 artifact export가 정확히 한 번 실행될 것,
-- 기존 nonempty artifact directory를 덮어쓰거나 기존 결과와 섞지 않을 것,
-- artifact export 실패는 nonzero로 전파하되 완료된 학습 checkpoint와 metrics를
-  보존할 것,
-- standalone export_coupling_artifacts.py 동작이 유지될 것,
-- summary에 post-training trigger, best-energy selector와 resolved path
-  provenance가 기록될 것,
-- model architecture, checkpoint tensor key, loss, projection, reconstruction,
-  GreenNet 및 geometry/sample NPZ schema가 변경되지 않을 것,
-- focused tests와 전체 pytest, Ruff, mypy, git diff check가 통과할 것.
+- 기존 Annulus 미팅 덱을 수정하지 않고 별도의 tangent-subspace-connectivity
+  QMD, SCSS, assets, HTML과 QA 구성을 만들 것,
+- title을 포함한 39개 main slide가 계획된 순서와 수학적 서사를 유지할 것,
+- 모든 visible slide text는 영어이고 각 slide에 정확히 하나의 상세한 한국어
+  speaker note가 있을 것,
+- symmetric balance plane, response least-squares objective, gradient, Hessian,
+  K=1 exact line search와 K-dimensional matrix-free recurrence가 부호와
+  source/response-space 의미까지 정확히 설명될 것,
+- production preconditioned response subspace와 표준 Krylov interpretation,
+  localized-seed geometry-only reach proxy를 서로 혼동하지 않을 것,
+- Unit square, Disk, Annulus, Pentagram K-connectivity 결과와 Pentagram
+  K=1..4 accuracy/cost 결과가 frozen source와 정확히 일치할 것,
+- Unit-square 4-seed source-count 결과와 4800-source 선택 근거가 본편에
+  포함될 것,
+- exact algebra, production algorithm, structural proxy, empirical result가
+  시각적으로 구분될 것,
+- asset generation은 frozen NPZ/CSV/JSON/HTML만 읽고 model inference,
+  checkpoint loading 또는 장기 계산을 수행하지 않을 것,
+- 모든 asset에 source path, metric key와 SHA-256 provenance를 기록할 것,
+- Reveal fragment 한 단계가 하나의 논리적 설명만 추가하고 한국어 Click cue와
+  실제 fragment 순서가 일치할 것,
+- 1600x900과 1280x720의 final 및 intermediate fragment browser QA에서
+  overflow, overlap, clipped formula, page error, broken iframe과 external
+  request가 없을 것,
+- focused deck/assets tests, 전체 pytest, Ruff, mypy와 git diff check가
+  통과할 것.
 
-수정 범위는 artifact config/validation, post-training runner, train CLI lifecycle,
-공유 exporter dispatch/logger, complex artifact provenance, 관련 tests,
-README와 docs/memory.md로 제한한다.
+수정 범위는 새 meeting slide plan, 새 Quarto Reveal.js deck directory와
+presentation-only asset builder, deck QA, 관련 tests, README 및 docs/memory.md로
+제한한다.
 
-기존 experiment config를 자동 활성화하거나 장기 retraining을 실행하지 않는다.
-Unit-square legacy CouplingNet의 artifact lifecycle도 변경하지 않는다.
+Model, trainer, projection, tangent implementation, checkpoint, geometry/sample
+NPZ, frozen experiment result, 기존 Annulus meeting deck와 numerical value는
+변경하지 않는다. PDF는 생성하지 않는다.
 
-각 구현 단계 후 가장 작은 config/request/lifecycle tests를 먼저 실행하고,
-통과한 뒤 실제 complex artifact smoke와 전체 regression suite를 실행한다.
+각 구현 단계 후 가장 작은 asset/deck test를 먼저 실행하고, assets와 Quarto
+HTML을 다시 생성한 뒤 두 viewport의 모든 fragment state를 검토한다.
 
-best-energy checkpoint 또는 기존 standalone exporter compatibility를 유지할 수
-없다면 작업을 중단하고 다음을 보고한다.
+Frozen source와 계획된 numerical claim 또는 code-consistent tangent formula를
+동시에 유지할 수 없다면 작업을 중단하고 다음을 보고한다.
 
-1. 정확히 충돌하는 config, checkpoint, path 또는 artifact contract,
-2. 영향을 받는 training run, checkpoint와 artifact,
-3. 기존 standalone export와 disabled 기본 동작을 보존하는 가장 작은 rollback 전략.
+1. 충돌하는 formula, metric key, slide 또는 frozen artifact,
+2. 영향을 받는 figure, speaker note와 provenance record,
+3. frozen evidence와 기존 production semantics를 유지하는 가장 작은
+   content/layout-only 수정안.
 ```

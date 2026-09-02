@@ -45,6 +45,7 @@ class SymmetricTangentProjectionDiagnostics:
     mismatch_post: torch.Tensor
     subspace_dimension: int
     eta_strategy: str
+    eta_cap_enabled: bool
     eta_applied: torch.Tensor | None
     eta_cap: float | None
     eta_star: torch.Tensor | None
@@ -249,6 +250,7 @@ def apply_complex_balance_projection(
             mismatch_post=mismatch_post,
             subspace_dimension=tangent_step.subspace_dimension,
             eta_strategy=symmetric_tangent_context.eta_strategy,
+            eta_cap_enabled=symmetric_tangent_context.eta_cap_enabled,
             eta_applied=tangent_step.eta_applied,
             eta_cap=tangent_step.eta_cap,
             eta_star=tangent_step.eta_star,
@@ -369,7 +371,6 @@ def symmetric_tangent_metric_tensors(
     if tangent.eta_star is not None:
         if (
             tangent.eta_applied is None
-            or tangent.eta_cap is None
             or tangent.eta_capped is None
             or tangent.line_search_numerator is None
             or tangent.line_search_denominator is None
@@ -377,7 +378,9 @@ def symmetric_tangent_metric_tensors(
             raise RuntimeError("Adaptive tangent diagnostics are incomplete.")
         metrics.update(
             {
-                "tangent_eta_cap": tangent.mismatch_pre.new_tensor(tangent.eta_cap),
+                "tangent_eta_cap_enabled": tangent.mismatch_pre.new_tensor(
+                    float(tangent.eta_cap_enabled)
+                ),
                 "tangent_eta_star_mean": tangent.eta_star.mean(),
                 "tangent_eta_applied_mean": tangent.eta_applied.mean(),
                 "tangent_eta_cap_fraction": tangent.eta_capped.to(
@@ -391,6 +394,10 @@ def symmetric_tangent_metric_tensors(
                 ),
             }
         )
+        if tangent.eta_cap is not None:
+            metrics["tangent_eta_cap"] = tangent.mismatch_pre.new_tensor(
+                tangent.eta_cap
+            )
     if tangent.subspace_dimension >= 2:
         subspace = tangent.subspace_result
         if subspace is None:

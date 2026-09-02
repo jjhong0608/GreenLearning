@@ -1,0 +1,1183 @@
+---
+pagetitle: "From Exact Balance to Geometry-Aware Response Alignment"
+format:
+  revealjs:
+    theme: [default, styles.scss]
+    html-math-method: mathml
+    slide-number: c/t
+    show-slide-number: all
+    controls: true
+    progress: true
+    hash: true
+    transition: slide
+    transition-speed: fast
+    center: false
+    width: 1600
+    height: 900
+    margin: 0.035
+    navigation-mode: linear
+    incremental: false
+execute:
+  echo: false
+---
+
+## From Exact Balance to Geometry-Aware Response Alignment {.title-slide}
+
+<div class="title-kicker">Axial Green operator learning on complex geometries</div>
+
+<div class="title-subtitle">Matrix-Free Tangent Subspaces and Structural $K$-Connectivity</div>
+
+<div class="title-question">
+How many balance-preserving response-correction patterns are needed to connect local axial information across a two-dimensional geometry?
+</div>
+
+<div class="title-levels">
+<div><span class="evidence-badge exact">EXACT ALGEBRA</span><strong>Balance plane</strong></div>
+<div><span class="evidence-badge production">PRODUCTION ALGORITHM</span><strong>Matrix-free tangent subspace</strong></div>
+<div><span class="evidence-badge proxy">STRUCTURAL PROXY</span><strong>Geometry reach</strong></div>
+<div><span class="evidence-badge empirical">EMPIRICAL RESULT</span><strong>Trained accuracy and cost</strong></div>
+</div>
+
+::: {.notes}
+이번 발표는 이전 Annulus transition 진단에서 출발하지만, 목적은 특정 transition만 고치는 방법을 설명하는 것이 아닙니다. 핵심 질문은 exact source balance를 유지하면서 두 방향 Green reconstruction의 response mismatch를 줄이기 위해 몇 개의 독립적인 correction pattern이 필요한가입니다.
+
+설명은 네 층위로 분리합니다. 먼저 balance plane의 정확한 대수, 다음으로 실제 코드의 matrix-free tangent 알고리즘, 그 다음 localized seed를 이용한 geometry-only structural proxy, 마지막으로 학습된 Pentagram 결과와 계산비용입니다. 이 층위를 구분해야 구조적 reach를 수치 정확도의 증명으로 과도하게 해석하지 않을 수 있습니다.
+<!-- speaker-note-end -->
+:::
+
+## Previous Observation: Transition-Localized Directional Error
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Historical Annulus Poisson diagnostic | frozen sample 47</span></div>
+
+<div class="plotly-shell tall">
+<iframe class="plotly-frame" src="assets/annulus_transition_sample47_error_matrix.html" title="Annulus sample 47 directional-source and reconstruction errors"></iframe>
+</div>
+
+::: {.fragment data-fragment-index="0"}
+<div class="takeaway">The geometry transition is visible before and after Green reconstruction. It exposes a directional response-alignment problem; it does not define a transition-only method.</div>
+:::
+
+::: {.notes}
+이 그림은 이전 회의에서 보았던 Annulus Poisson sample 47입니다. 위쪽은 directional source인 phi와 psi의 target error이고, 아래쪽은 u_phi, u_pred, u_psi의 solution error입니다. transition 부근의 구조가 source split과 reconstruction 모두에 남아 있다는 것이 출발점입니다.
+
+**Click 1:** 이번 발표에서는 이 현상을 line-length transition에만 특화된 결함으로 정의하지 않습니다. 오히려 exact balance를 만족하는 두 directional source가 서로 다른 Green response를 만들 때 나타나는 일반적인 response-alignment 문제를 가장 분명하게 보여준 사례로 해석합니다.
+<!-- speaker-note-end -->
+:::
+
+## Exact Source Balance Is Not Equal Response
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Two constraints live in different spaces</span></div>
+
+<div class="compare-grid">
+<div class="concept-card source-card">
+<div class="small-label">Physical source space</div>
+$$\phi+\psi=f$$
+<p>Pointwise admissibility of the directional source split.</p>
+</div>
+<div class="fragment concept-card response-card" data-fragment-index="0">
+<div class="small-label">Reconstructed response space</div>
+$$H_x\phi=H_y\psi$$
+<p>Agreement of two nonlocal, geometry-dependent axial inverse responses.</p>
+</div>
+</div>
+
+::: {.fragment data-fragment-index="1"}
+<div class="takeaway">Projection can enforce the first equality exactly. It cannot enforce the second equality unless the Green-response operators are included.</div>
+:::
+
+::: {.notes}
+첫 번째 식은 physical directional source의 admissibility 조건입니다. 각 point에서 phi와 psi의 합이 주어진 source f와 같아야 하며, 현재 symmetric projection은 이 조건을 round-off 수준까지 정확히 만족시킵니다.
+
+**Click 1:** 두 번째 식은 전혀 다른 공간의 조건입니다. H_x와 H_y는 각 source를 axial Green response로 보내는 비국소 연산자이므로, source 합이 같다고 해서 두 reconstructed response가 같아지는 것은 아닙니다.
+
+**Click 2:** 따라서 projection만으로 response mismatch를 제거할 수 없습니다. balance는 projection이 담당하고, balance plane 안에서의 response alignment는 tangent correction이 담당한다는 역할 분리가 필요합니다.
+<!-- speaker-note-end -->
+:::
+
+## Raw Output, Physical Proposal, and Pull-Back
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Coordinate contract</span></div>
+
+<div class="pipeline four-stage">
+<div class="formula-card"><div class="small-label">Raw reference response</div>$$P,\;Q$$</div>
+<div class="arrow">→</div>
+<div class="fragment formula-card" data-fragment-index="0"><div class="small-label">Physical proposal</div>$$p=\frac{P}{L_x^2},\quad q=\frac{Q}{L_y^2}$$</div>
+<div class="arrow fragment" data-fragment-index="0">→</div>
+<div class="fragment formula-card" data-fragment-index="1"><div class="small-label">Physical projection</div>$$p,q\mapsto\phi,\psi$$</div>
+<div class="arrow fragment" data-fragment-index="1">→</div>
+<div class="fragment formula-card" data-fragment-index="2"><div class="small-label">Reference pull-back</div>$$\Phi=L_x^2\phi,\quad\Psi=L_y^2\psi$$</div>
+</div>
+
+<div class="fragment coordinate-note" data-fragment-index="3">Projection is performed in physical directional-source coordinates; Green reconstruction consumes the pulled-back interval sources.</div>
+
+::: {.notes}
+CouplingNet의 raw output P와 Q는 reference interval Green response에 맞는 크기를 가집니다. 따라서 projection을 하기 전에 실제 physical directional source proposal로 해석해야 합니다.
+
+**Click 1:** second-order axial operator의 scaling에 따라 P와 Q를 각각 L_x squared와 L_y squared로 나누어 p와 q를 얻습니다.
+
+**Click 2:** symmetric balance projection은 이 physical source 좌표에서 수행됩니다. 이때 phi plus psi equals f가 정확히 성립합니다.
+
+**Click 3:** Green reconstruction에 넣기 위해 projected physical source를 다시 각 reference interval source Phi와 Psi로 pull-back합니다.
+
+**Click 4:** 따라서 response space와 reference interval, physical source space를 혼동하면 안 됩니다. 현재 projection은 physical source space에 있고, Green integral만 reference interval에서 계산됩니다.
+<!-- speaker-note-end -->
+:::
+
+## Symmetric Projection Preserves the Difference Mode
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Orthogonal projection with equal source metric</span></div>
+
+<div class="equation-stack">
+$$\widetilde\phi=\frac12\left[f+(p-q)\right],\qquad
+\widetilde\psi=\frac12\left[f-(p-q)\right]$$
+</div>
+
+<div class="proof-grid">
+<div class="fragment proof-card" data-fragment-index="0">
+<div class="small-label">Exact sum</div>
+$$\widetilde\phi+\widetilde\psi=f$$
+</div>
+<div class="fragment proof-card" data-fragment-index="1">
+<div class="small-label">Preserved difference</div>
+$$\widetilde\phi-\widetilde\psi=p-q$$
+</div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="2">The projection removes only the balance-normal error. The network-proposed difference mode remains the initial tangent coordinate.</div>
+
+::: {.notes}
+이 식은 p와 q를 phi plus psi equals f인 affine plane으로 대칭적으로 투영한 결과입니다. 두 output의 평균 방향, 즉 sum mode를 필요한 값으로 교체하고, difference mode는 그대로 보존합니다.
+
+**Click 1:** 두 식을 더하면 p와 q가 사라지고 정확히 f만 남습니다. 이것이 source admissibility를 구조적으로 보장하는 부분입니다.
+
+**Click 2:** 두 식을 빼면 원래 network proposal의 p minus q가 그대로 남습니다. 따라서 CouplingNet이 학습한 directional preference는 projection으로 제거되지 않습니다.
+
+**Click 3:** 이후 tangent correction은 이 preserved difference coordinate를 출발점으로 사용합니다. Projection과 tangent correction은 각각 normal mode와 tangent mode를 담당합니다.
+<!-- speaker-note-end -->
+:::
+
+## The Balance Plane Has One Tangent Direction per Point
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>One physical point</span></div>
+
+<div class="balance-plane-layout">
+<div class="plane-diagram">
+<div class="axis phi-axis">$\phi$</div><div class="axis psi-axis">$\psi$</div>
+<div class="balance-line"></div>
+<div class="proposal-point">$(p,q)$</div>
+<div class="projected-point">$(\widetilde\phi,\widetilde\psi)$</div>
+<div class="normal-arrow">normal $(1,1)$</div>
+<div class="tangent-arrow fragment" data-fragment-index="0">tangent $(1,-1)$</div>
+</div>
+<div class="plane-equations">
+$$\mathcal B_f=\{(\phi,\psi):\phi+\psi=f\}$$
+<div class="fragment formula-card" data-fragment-index="1">$$\begin{bmatrix}\phi\\\psi\end{bmatrix}
+=\begin{bmatrix}\widetilde\phi\\\widetilde\psi\end{bmatrix}
++\delta\begin{bmatrix}1\\-1\end{bmatrix}$$</div>
+</div>
+</div>
+
+::: {.notes}
+한 physical point에서 phi와 psi를 좌표축으로 보면 balance condition은 기울기 minus one인 affine line입니다. Raw proposal은 이 line 바깥에 있을 수 있고 symmetric projection은 normal direction인 one-one 방향으로 움직여 balanced point를 만듭니다.
+
+**Click 1:** balance line을 따라 움직일 수 있는 유일한 tangent direction은 one-minus-one입니다. phi를 늘린 만큼 psi를 줄이면 합은 바뀌지 않습니다.
+
+**Click 2:** 따라서 한 점에서 남은 자유도는 scalar delta 하나입니다. 하지만 다음 슬라이드에서 보듯 전체 domain에서는 모든 point의 delta를 모은 고차원 field가 됩니다.
+<!-- speaker-note-end -->
+:::
+
+## The Tangent Variable Is a Global Source Field
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>One sample with P active points</span></div>
+
+<div class="global-field-grid">
+<div class="formula-card large">$$\delta=[\delta_1,\ldots,\delta_P]^\top\in\mathbb R^P$$</div>
+<div class="fragment formula-card large" data-fragment-index="0">$$\phi=\widetilde\phi+\delta,\qquad
+\psi=\widetilde\psi-\delta$$</div>
+</div>
+
+::: {.fragment data-fragment-index="1"}
+<div class="identity-band">For every sample and every valid point: $\phi+\psi=\widetilde\phi+\widetilde\psi=f$.</div>
+:::
+
+<div class="fragment takeaway" data-fragment-index="2">The learning problem chooses the initial balanced proposal. The tangent solver chooses a sample-dependent field inside the same balance plane.</div>
+
+::: {.notes}
+전체 geometry에 P개의 valid point가 있으면 delta는 P차원 vector입니다. 따라서 한 sample 안에서도 point마다 다른 correction을 가질 수 있고, source가 바뀌면 delta field도 바뀝니다.
+
+**Click 1:** phi에는 delta를 더하고 psi에는 같은 delta를 뺍니다. 이 구조가 balance plane의 tangent coordinate를 전체 domain으로 확장한 것입니다.
+
+**Click 2:** 두 식을 더하면 delta가 pointwise로 정확히 소거됩니다. Tangent correction의 크기나 K와 관계없이 source balance는 항상 유지됩니다.
+
+**Click 3:** CouplingNet과 tangent solver의 역할도 여기서 분리됩니다. 네트워크는 좋은 initial balanced proposal을 만들고, matrix-free tangent solver는 현재 sample의 response mismatch를 보고 balance plane 안에서 correction field를 계산합니다.
+<!-- speaker-note-end -->
+:::
+
+## Directional Green Operators Map Sources to Responses
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>Frozen source-to-response actions</span></div>
+
+<div class="operator-grid">
+<div class="operator-card x-op"><div class="small-label">Horizontal axial family</div>$$u_\phi=H_x\phi$$<p>Connected x-segments, x-direction coefficients, Green quadrature.</p></div>
+<div class="fragment operator-card y-op" data-fragment-index="0"><div class="small-label">Vertical axial family</div>$$u_\psi=H_y\psi$$<p>Connected y-segments, y-direction coefficients, Green quadrature.</p></div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="1">$H_x$ and $H_y$ are nonlocal along connected axial intervals and depend on geometry, coefficients, Green kernels, and quadrature.</div>
+
+::: {.notes}
+H_x는 physical x-directional source phi를 모든 horizontal connected interval의 Green response로 보내는 연산자입니다. 행렬 기호를 쓰지만 production에서는 segment-local Green action으로 계산합니다.
+
+**Click 1:** H_y도 같은 역할을 vertical connected interval에서 수행합니다. 두 연산자는 geometry와 coefficient slice가 다르므로 일반적으로 같은 source perturbation에 같은 response를 만들지 않습니다.
+
+**Click 2:** 이 비대칭성이 exact source balance와 response agreement를 구분하게 만듭니다. 또한 각 H action은 connected segment 안에서는 비국소적이므로 K equals one을 pointwise independent 계산으로 이해할 수 없습니다.
+<!-- speaker-note-end -->
+:::
+
+## A Tangent Source Perturbation Produces a Sum Operator
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Code-consistent sign convention</span></div>
+
+<div class="equation-stack compact">
+$$m_0=H_x\widetilde\phi-H_y\widetilde\psi$$
+<div class="fragment" data-fragment-index="0">$$\begin{aligned}
+m(\delta)
+&=H_x(\widetilde\phi+\delta)-H_y(\widetilde\psi-\delta)\\
+&=m_0+(H_x+H_y)\delta
+\end{aligned}$$</div>
+<div class="fragment highlight-equation" data-fragment-index="1">$$S=H_x+H_y,\qquad m(\delta)=m_0+S\delta$$</div>
+</div>
+
+::: {.notes}
+초기 mismatch m0는 symmetric-balanced source를 두 axial Green operator로 reconstruction한 차이입니다. 목표는 이 mismatch를 balance plane 안에서 줄이는 것입니다.
+
+**Click 1:** phi에는 plus delta가 들어가므로 H_x delta가 더해집니다. psi에는 minus delta가 들어가지만 mismatch 자체가 minus H_y psi이므로, 두 minus가 만나 plus H_y delta가 됩니다.
+
+**Click 2:** 따라서 tangent response operator는 H_x minus H_y가 아니라 H_x plus H_y입니다. 이 부호는 이후 gradient, Hessian, line search와 K-step recurrence 전체를 결정하므로 슬라이드와 코드가 반드시 일치해야 합니다.
+<!-- speaker-note-end -->
+:::
+
+## The Tangent Objective Measures Physical Response Mismatch
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Reference-free least squares</span></div>
+
+<div class="objective-card">
+$$J(\delta)=\frac12\left\|m_0+S\delta\right\|_{M_\Omega}^2$$
+</div>
+
+<div class="fragment definition-grid" data-fragment-index="0">
+<div>$$\langle a,b\rangle_{M_\Omega}=a^\top M_\Omega b$$</div>
+<div>$$\|a\|_{M_\Omega}^2=a^\top M_\Omega a$$</div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="1">Only predicted directional responses, geometry, quadrature, coefficients, and the source are used. No reference solution or directional target enters $J$.</div>
+
+::: {.notes}
+목적함수는 post-correction response mismatch의 physical L2 norm입니다. M_Omega는 valid point가 대표하는 physical area를 반영하는 mass 또는 quadrature weight입니다.
+
+**Click 1:** inner product를 M_Omega로 정의하면 서로 다른 grid resolution이나 geometry에서도 physical response energy로 비교할 수 있습니다. 이후 orthogonalization 역시 이 목적함수와 같은 inner product를 사용합니다.
+
+**Click 2:** 이 objective는 reference-free입니다. FEniCSx solution, target phi, target psi는 학습이나 tangent coefficient 계산에 들어가지 않고 오직 최종 평가에만 사용됩니다.
+<!-- speaker-note-end -->
+:::
+
+## The Gradient Pulls Response Mismatch Back to Source Space
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Adjoint sensitivity</span></div>
+
+<div class="objective-card">
+$$g(\delta):=\nabla_\delta J(\delta)$$
+<p>Gradient of the physical response-mismatch objective with respect to the directional source correction.</p>
+</div>
+
+<div class="equation-stack compact">
+<div class="fragment" data-fragment-index="0">$$g(\delta)=S^\top M_\Omega\left(m_0+S\delta\right)$$</div>
+<div class="fragment" data-fragment-index="1">$$g_0=g(0)=S^\top M_\Omega m_0$$</div>
+<div class="fragment component-meaning" data-fragment-index="2">$$(g_0)_j=\langle Se_j,m_0\rangle_{M_\Omega}$$</div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="3">$g$ is a source-correction-space sensitivity, not another response residual. Its $j$th component tests whether the response from $e_j$ aligns with the current mismatch.</div>
+
+::: {.notes}
+먼저 g는 새로운 response residual이 아니라, physical response-mismatch objective J를 directional source correction delta에 대해 미분한 gradient입니다. 따라서 g는 delta와 같은 source-correction space에 속하며, 각 성분은 해당 source degree of freedom에 대한 J의 일차 민감도를 나타냅니다.
+
+**Click 1:** J를 delta에 대해 미분하면 response mismatch에 physical mass M_Omega를 적용한 뒤 S transpose로 source coordinate에 pull-back한 식을 얻습니다. S transpose는 새로운 PDE solve가 아니라 frozen response operator의 adjoint action입니다.
+
+**Click 2:** 초기점 delta equals zero에서는 g0가 현재 symmetric-balanced response mismatch m0의 source-space sensitivity입니다. 아직 tangent correction을 적용하기 전의 gradient입니다.
+
+**Click 3:** j번째 성분은 source coordinate e_j에 unit tangent perturbation을 주었을 때 response pattern S e_j가 현재 mismatch m0와 physical L2 inner product에서 얼마나 정렬되는지를 측정합니다.
+
+**Click 4:** 따라서 g0는 단순한 local finite difference가 아닙니다. 각 connected axial segment를 통과한 response information이 adjoint를 통해 source space로 돌아온 결과이며, 이후 minus D inverse g0가 preconditioned descent direction을 정의합니다.
+<!-- speaker-note-end -->
+:::
+
+## The Hessian Is a Response Gram Operator
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Source coordinates compared through response images</span></div>
+
+<div class="equation-stack compact">
+$$A=S^\top M_\Omega S$$
+<div class="fragment" data-fragment-index="0">$$A_{ij}=\langle Se_i,Se_j\rangle_{M_\Omega}$$</div>
+<div class="fragment" data-fragment-index="1">$$x^\top Ax=\|Sx\|_{M_\Omega}^2\ge0$$</div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="2">$A$ is not merely a geometry adjacency matrix. It is a positive-semidefinite Gram operator for tangent-source response patterns.</div>
+
+::: {.notes}
+목적함수가 quadratic이므로 Hessian은 delta와 무관한 A equals S transpose M S입니다. 이 연산자는 source correction을 response로 보냈다가 mass inner product를 거쳐 다시 source space로 가져옵니다.
+
+**Click 1:** A의 i-j 성분은 두 source basis perturbation e_i와 e_j가 response space에서 얼마나 비슷한 pattern을 만드는지 나타냅니다. 여기서 correlation은 통계적 상관계수가 아니라 algebraic Gram coupling입니다.
+
+**Click 2:** 임의의 x에 대해 quadratic form이 response norm의 제곱이므로 A는 positive semidefinite입니다.
+
+**Click 3:** geometry connectivity는 A의 구조를 해석하는 데 중요하지만, A의 실제 값은 Green kernel, coefficient, quadrature까지 포함합니다. 이후 geometry-only reach는 이 full operator의 structural proxy입니다.
+<!-- speaker-note-end -->
+:::
+
+## The Production Path Never Assembles the Global Hessian
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>Matrix-free operator actions</span></div>
+
+<div class="objective-card">
+$$g(\delta)=g_0+A\delta$$
+<p>The Hessian action is the change in the source-space gradient induced by the correction $\delta$.</p>
+</div>
+
+<div class="compare-grid">
+<div class="fragment concept-card danger-card" data-fragment-index="0"><div class="small-label">Exact stationarity</div>$$g(\delta^\star)=0\quad\Longrightarrow\quad A\delta^\star=-g_0$$<p>The full minimizer would require a global $P\times P$ operator and a sample-wise solve.</p></div>
+<div class="fragment concept-card safe-card" data-fragment-index="1"><div class="small-label">Production action</div>$$Az=S^\top M_\Omega(Sz)$$<p>Forward response action, physical mass weighting, and one adjoint pull-back.</p></div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="2">No global matrix is assembled. No dense linear system is solved. Production evaluates only the selected Hessian-vector actions.</div>
+
+::: {.notes}
+앞 슬라이드의 정의를 결합하면 gradient는 g of delta equals g0 plus A delta로 전개됩니다. 따라서 A는 별도로 도입된 행렬이 아니라, source correction delta가 response를 통해 gradient를 얼마나 변화시키는지를 나타내는 Hessian action입니다.
+
+**Click 1:** exact least-squares minimizer에서는 gradient가 zero이므로 g0 plus A delta star equals zero이고, 따라서 full normal equation A delta star equals minus g0를 얻습니다. 하지만 이를 직접 풀려면 각 sample에 대해 global P by P response Gram operator가 필요합니다.
+
+**Click 2:** production에서는 A 자체를 구성하지 않고, 선택된 vector z에 대한 A z만 계산합니다. 먼저 S z로 response 변화에 보낸 뒤 physical mass M_Omega를 적용하고, S transpose adjoint action으로 source-correction space에 pull-back합니다.
+
+**Click 3:** 따라서 mesh global stiffness matrix나 full response Gram matrix를 조립하지 않고 dense linear system도 풀지 않습니다. 계산은 이미 존재하는 axial Green response block과 adjoint gather/scatter를 재사용하며, 이후 K-dimensional tangent subspace에 필요한 Hessian-vector information만 얻습니다.
+<!-- speaker-note-end -->
+:::
+
+## A Positive Diagonal Surrogate Approximates the Inverse-Hessian Direction {.compact-title}
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>Low-cost inverse action</span></div>
+
+<div class="objective-card">
+<div class="definition-grid">
+<div><span class="small-label">Exact, if nonsingular</span>$$\delta^\star=-A^{-1}g_0$$</div>
+<div><span class="small-label">Production direction</span>$$z_0=D^{-1}g_0\ \approx\ A^{-1}g_0$$</div>
+</div>
+<p>The full inverse is never formed; $D^{-1}$ approximates its action on the current gradient.</p>
+</div>
+
+<div class="fragment equation-stack compact" data-fragment-index="0">
+$$A_{jj}=\langle Se_j,Se_j\rangle_{M_\Omega}=\|Se_j\|_{M_\Omega}^2$$
+<p>Directional response gains provide a coordinatewise curvature scale.</p>
+</div>
+
+<div class="fragment equation-stack compact" data-fragment-index="1">
+$$D=\gamma_x^2+\gamma_y^2+\lambda_{\mathrm{damp}}$$
+<div class="definition-grid">
+<div>$$\gamma_x^2\approx\operatorname{diag}(H_x^\top M_\Omega H_x)$$</div>
+<div>$$\gamma_y^2\approx\operatorname{diag}(H_y^\top M_\Omega H_y)$$</div>
+</div>
+</div>
+
+<div class="fragment warning-band" data-fragment-index="2">$D$ is <strong>not the exact diagonal of</strong> $A$: it is a positive separable surrogate that omits the cross-axis diagonal contribution.</div>
+
+::: {.notes}
+정확한 stationary correction은 A delta star equals minus g0를 풀어 얻습니다. A가 nonsingular하면 delta star equals minus A inverse g0입니다. 하지만 production에서는 global Hessian이나 inverse를 만들지 않으므로, A inverse가 현재 gradient g0에 작용한 방향을 positive diagonal surrogate D inverse g0로 근사합니다. 여기서 z0는 inverse-Hessian direction의 근사이고 실제 correction의 minus sign과 scalar magnitude는 다음 슬라이드와 line-search 슬라이드에서 결정됩니다.
+
+**Click 1:** diagonal surrogate의 근거는 A의 j번째 diagonal이 unit source perturbation e_j가 만드는 response norm squared라는 점입니다. 이 column gain은 point별 local curvature scale을 나타냅니다. 따라서 equal source perturbations가 unequal physical response changes를 만드는 anisotropy를 coordinatewise하게 근사할 수 있습니다.
+
+**Click 2:** production D는 두 directional self-response Gram diagonal을 더하고 damping을 추가합니다. gamma_x와 gamma_y는 각 source column의 x와 y response gain을 근사하며, damping은 거의 response-null인 coordinate에서 inverse scaling이 불안정해지는 것을 막습니다.
+
+**Click 3:** 중요한 제한은 D가 full A의 exact diagonal이 아니라는 점입니다. A를 전개하면 cross-axis diagonal contribution이 존재하지만 기본 separable D에서는 이를 생략합니다. 따라서 D inverse g0는 exact Newton correction이 아니라 inverse-Hessian action에 대한 low-cost positive diagonal approximation입니다. 이후 scalar line search가 이 approximate direction 위에서 magnitude를 정합니다.
+<!-- speaker-note-end -->
+:::
+
+## K=1 Chooses One Source Direction and One Response Direction
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>One-dimensional correction space</span></div>
+
+<div class="direction-flow">
+<div class="formula-card">$$z_0=D^{-1}g_0$$<span>one source-space direction</span></div><div class="arrow">→</div>
+<div class="fragment formula-card" data-fragment-index="0">$$v_0=Sz_0$$<span>its physical response image</span></div>
+</div>
+
+<div class="fragment highlight-equation" data-fragment-index="1">$$\delta(\eta)=-\eta z_0,\qquad m(\eta)=m_0-\eta v_0$$</div>
+
+<div class="fragment identity-band" data-fragment-index="2">K=1 searches only on $\operatorname{span}\{z_0\}$; it does not solve the full $P$-dimensional normal equation.</div>
+
+::: {.notes}
+앞 슬라이드에서 response gain으로 preconditioning한 z0를 정의했습니다. K equals one에서는 이 vector 하나가 가능한 source-correction space 전체를 정의합니다. z0가 domain 전체에서 dense할 수 있더라도 자유롭게 선택할 수 있는 것은 각 point의 correction이 아니라 하나의 scalar coefficient eta뿐입니다.
+
+**Click 1:** z0를 tangent response operator S에 통과시키면 physical response-space direction v0를 얻습니다. z0는 source correction이고 v0는 그 correction이 만드는 directional response mismatch의 변화입니다.
+
+**Click 2:** objective를 줄이기 위해 실제 correction은 minus eta z0이고, 그 결과 mismatch는 같은 coefficient로 minus eta v0만큼 움직입니다. 다음 슬라이드는 이 고정된 직선 위에서 eta를 정확히 최소화하는 scalar line search를 설명합니다.
+
+**Click 3:** 따라서 K equals one은 full P-dimensional normal equation을 푸는 것이 아니라 span of z0라는 한 방향에서만 response mismatch를 최소화합니다. Preconditioning은 coordinate scale을 정하고, K equals one은 그 결과로 선택된 한 direction을 탐색합니다.
+<!-- speaker-note-end -->
+:::
+
+## The Scalar Line Search Is Exact Only on the Chosen Line {.compact-title}
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Closed-loop coefficient</span></div>
+
+<div class="equation-stack compact">
+$$J(\eta)=\frac12\|m_0-\eta v_0\|_{M_\Omega}^2$$
+<div class="fragment" data-fragment-index="0">$$\frac{dJ}{d\eta}=-\langle m_0,v_0\rangle_{M_\Omega}+\eta\langle v_0,v_0\rangle_{M_\Omega}$$</div>
+<div class="fragment highlight-equation" data-fragment-index="1">$$\eta^\star=\frac{\langle m_0,v_0\rangle_{M_\Omega}}{\langle v_0,v_0\rangle_{M_\Omega}+\varepsilon}$$</div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="2">Exact on $\operatorname{span}\{z_0\}$; generally not equal to the full-space minimizer $\delta^\star$.</div>
+
+::: {.notes}
+z0가 고정되면 남은 문제는 scalar eta 하나를 선택하는 quadratic minimization입니다. 이 부분은 별도의 optimizer나 iterative matrix solve 없이 closed form으로 계산할 수 있습니다.
+
+**Click 1:** J를 eta에 대해 미분하면 현재 mismatch와 response direction의 inner product, 그리고 response direction norm이 나타납니다.
+
+**Click 2:** derivative를 zero로 두면 eta star가 나옵니다. epsilon은 degenerate response direction에서 division을 안정화합니다.
+
+**Click 3:** exact라는 표현의 범위를 제한해야 합니다. 이 값은 선택된 line 위에서는 exact이지만 P차원 전체에서의 delta star를 구한 것이 아닙니다. K를 늘리는 이유는 이 line 자체를 더 높은 차원의 subspace로 확장하기 위해서입니다.
+<!-- speaker-note-end -->
+:::
+
+## K=1 Is Globally Supported but One-Dimensional
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>Support is not dimension</span></div>
+
+<div class="compare-grid">
+<div class="concept-card"><div class="small-label">Possible support</div>$$z_0=[z_{0,1},\ldots,z_{0,P}]^\top$$<p>Many or all entries may already be nonzero.</p></div>
+<div class="fragment concept-card" data-fragment-index="0"><div class="small-label">Available subspace</div>$$\mathcal Z_1=\operatorname{span}\{z_0\}$$<p>Only one global correction pattern can be scaled.</p></div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="1">The limitation of K=1 is not locality of nonzero entries. It is the rank-one correction space.</div>
+
+::: {.notes}
+실제 g0와 z0는 일반적으로 dense합니다. H와 H transpose action이 connected axial line 전체의 정보를 모으기 때문에 K equals one에서도 많은 point가 동시에 움직일 수 있습니다.
+
+**Click 1:** 하지만 correction space의 차원은 여전히 하나입니다. 모든 point의 correction ratio가 z0라는 한 pattern에 묶여 있고, line search는 전체 pattern의 scale만 바꿀 수 있습니다.
+
+**Click 2:** 따라서 K equals one을 각 point에서 독립적으로 local 계산한다고 표현하면 정확하지 않습니다. 올바른 표현은 추가 A-action으로 새로운 correlation pattern을 만들기 전의 one-dimensional global correction입니다.
+<!-- speaker-note-end -->
+:::
+
+## The Remaining Mismatch Generates the Next Direction
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>Residual-driven enrichment</span></div>
+
+<div class="step-strip">
+<div class="step-card">$$m_1=m_0-c_0v_0$$<span>remaining mismatch</span></div>
+<div class="fragment step-card" data-fragment-index="0">$$g_1=S^\top M_\Omega m_1$$<span>new source gradient</span></div>
+<div class="fragment step-card" data-fragment-index="1">$$z_{1,\mathrm{raw}}=D^{-1}g_1$$<span>candidate source direction</span></div>
+<div class="fragment step-card" data-fragment-index="2">$$v_{1,\mathrm{raw}}=Sz_{1,\mathrm{raw}}$$<span>candidate response image</span></div>
+</div>
+
+::: {.notes}
+첫 번째 line minimization이 끝나면 남은 mismatch m1을 계산합니다. 다음 direction은 미리 고정된 geometry basis가 아니라 이 residual이 직접 결정합니다.
+
+**Click 1:** m1을 adjoint로 source space에 pull-back하여 g1을 얻습니다. 이미 제거된 v0 component는 이론적으로 작아졌지만 finite precision과 preconditioning 때문에 새 candidate가 완전히 독립이라고 보장할 수는 없습니다.
+
+**Click 2:** 같은 D inverse를 적용해 source-space scale을 조정한 raw candidate z1을 만듭니다.
+
+**Click 3:** objective에서 이 direction의 효과를 비교하기 위해 response image v1 raw를 계산합니다. 다음 단계에서 이 response를 기존 v0에 대해 orthogonalize합니다.
+<!-- speaker-note-end -->
+:::
+
+## Orthogonalization Removes Previously Optimized Response Components {.compact-title}
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Match the objective metric</span></div>
+
+<div class="objective-card">
+$$v_{k,\mathrm{raw}}=
+\underbrace{\sum_{j=0}^{k-1}\beta_jv_j}_{\text{previously optimized components}}
++\underbrace{v_{k,\perp}}_{\text{new response information}},
+\qquad
+\beta_j=\frac{\langle v_{k,\mathrm{raw}},v_j\rangle_{M_\Omega}}
+{\langle v_j,v_j\rangle_{M_\Omega}+\varepsilon}$$
+<p>The raw candidate is not guaranteed to add a new response direction.</p>
+</div>
+
+<div class="fragment warning-band" data-fragment-index="0">$$\begin{aligned}
+\langle m_k,v_j\rangle_{M_\Omega}&=0,\\
+\langle m_k-c_kv_{k,\mathrm{raw}},v_j\rangle_{M_\Omega}
+&=-c_k\langle v_{k,\mathrm{raw}},v_j\rangle_{M_\Omega}.
+\end{aligned}$$
+Using the raw candidate can destroy stationarity already achieved along $v_j$.</div>
+
+<div class="fragment definition-grid" data-fragment-index="1">
+<div>$$v_k=v_{k,\mathrm{raw}}-\sum_{j=0}^{k-1}\beta_jv_j$$<span>remove repeated response components</span></div>
+<div>$$z_k=z_{k,\mathrm{raw}}-\sum_{j=0}^{k-1}\beta_jz_j$$<span>apply the identical source combination</span></div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="2">The paired update preserves $Sz_k=v_k$, keeps previous stationarity, and yields $\langle v_i,v_j\rangle_{M_\Omega}\approx0$.</div>
+
+::: {.notes}
+새 candidate v k raw는 남은 mismatch에서 생성되지만 이전 response directions와 자동으로 직교하지 않습니다. 일반적으로 이전에 이미 최적화한 response component의 선형결합과 실제로 새로운 직교 성분이 함께 들어 있습니다. Objective가 response M_Omega norm을 측정하므로 중복성도 source Euclidean space가 아니라 같은 response metric에서 판단해야 합니다.
+
+**Click 1:** 이전 exact line searches 이후 현재 mismatch m_k는 각 active previous direction v_j에 직교합니다. 하지만 v k raw를 그대로 사용하면 그 안의 previous-direction component가 다시 들어와 다음 mismatch가 v_j와 직교하지 않게 됩니다. 즉 이미 달성한 stationarity를 깨고, numerator에는 기여하지 않는 중복 component가 line-search denominator만 키울 수 있습니다.
+
+**Click 2:** 따라서 v k raw에서 모든 이전 response component를 제거해 genuinely new response direction v_k를 만듭니다. Source direction에도 반드시 같은 beta coefficient의 linear combination을 적용합니다. 그렇지 않으면 z_k의 실제 response image가 v_k와 달라져 response-space line coefficient와 source update가 불일치합니다.
+
+**Click 3:** Paired orthogonalization은 S z_k equals v_k를 유지하고 이전 stationarity를 보존합니다. 또한 새 candidate가 기존 response subspace 안에만 있으면 orthogonalized norm이 거의 zero가 되므로, K를 형식적으로 늘리지 않고 실제로 새로운 response information이 있는지를 판별할 수 있습니다.
+<!-- speaker-note-end -->
+:::
+
+## Two-Pass Modified Gram-Schmidt Protects Numerical Independence
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>Finite-precision safeguards</span></div>
+
+<div class="objective-card">
+$$\langle v_i,v_k\rangle_{M_\Omega}=0\quad\text{in exact arithmetic}$$
+<p>Finite-precision cancellation can leave or reintroduce small projections onto earlier response directions.</p>
+</div>
+
+<div class="mgs-grid">
+<div class="mgs-card"><strong>Pass 1</strong><p>Sequentially remove the dominant projection from both $v_k$ and $z_k$ using the same coefficients.</p></div>
+<div class="fragment mgs-card" data-fragment-index="0"><strong>Pass 2</strong><p>Remove residual projection introduced by floating-point cancellation.</p></div>
+<div class="fragment mgs-card" data-fragment-index="1"><strong>Activity test</strong><p>If the orthogonalized response norm is numerically degenerate, mark the direction inactive and set its coefficient to zero.</p></div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="2">Two-pass paired MGS protects response independence; a degenerate candidate safely falls back to the lower-dimensional result without affecting balance.</div>
+
+::: {.notes}
+앞 슬라이드는 왜 orthogonalization이 필요한지를 exact algebra로 설명했습니다. 이 슬라이드는 같은 paired projection을 finite precision에서 안정적으로 수행하는 production implementation을 설명합니다. Classical Gram-Schmidt보다 modified Gram-Schmidt가 각 previous direction의 projection을 순차적으로 제거하므로 numerical stability가 더 좋습니다.
+
+첫 번째 pass에서는 모든 active previous response direction을 순서대로 사용해 v_k의 dominant projection을 제거합니다. 매 projection coefficient를 z_k에도 동일하게 적용하여 S z_k equals v_k 관계를 유지합니다.
+
+**Click 1:** 첫 pass 이후 floating-point cancellation과 basis scale 차이 때문에 이전 directions와 작은 inner product가 남거나 다시 나타날 수 있습니다. 두 번째 modified Gram-Schmidt pass는 현재 갱신된 vector를 기준으로 이 residual projection을 다시 제거합니다.
+
+**Click 2:** 두 pass 이후 orthogonalized response norm이 tolerance보다 작으면 raw candidate가 실질적으로 기존 response subspace 안에 있었다고 판단합니다. 이 direction을 inactive로 표시하고 coefficient를 zero로 두어 작은 denominator로 인한 NaN이나 과도한 amplification을 막습니다.
+
+**Click 3:** 따라서 two-pass paired MGS는 numerical response independence를 보호하고, fallback은 K를 강제로 채우지 않은 채 실질적인 lower-dimensional solution을 유지합니다. Active direction의 source update는 항상 paired tangent form이므로 balance는 영향을 받지 않습니다.
+<!-- speaker-note-end -->
+:::
+
+## The General K-Step Recurrence Minimizes Along Nested Directions
+
+<div class="evidence-row"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><span>Unconstrained K-step response minimization</span></div>
+
+<div class="recurrence-grid">
+<div class="formula-card">$$c_k=\frac{\langle m_k,v_k\rangle_{M_\Omega}}{\langle v_k,v_k\rangle_{M_\Omega}+\varepsilon}$$</div>
+<div class="fragment formula-card" data-fragment-index="0">$$\delta_{k+1}=\delta_k-c_kz_k$$</div>
+<div class="fragment formula-card" data-fragment-index="1">$$m_{k+1}=m_k-c_kv_k$$</div>
+</div>
+
+<div class="fragment highlight-equation" data-fragment-index="2">$$\delta_K=-\sum_{k=0}^{K-1}c_kz_k$$</div>
+
+::: {.notes}
+각 orthogonal response direction v_k에 대해서 현재 mismatch를 가장 많이 제거하는 scalar coefficient c_k를 closed form으로 계산합니다. Direction이 M-orthogonal하므로 이전에 제거한 component를 다시 증가시키지 않는 nested minimization이 됩니다.
+
+**Click 1:** Source correction field에는 minus c_k z_k를 누적합니다. 이 부호가 앞에서 정의한 m equals m0 plus S delta와 일치합니다.
+
+**Click 2:** Response mismatch에는 정확히 같은 coefficient로 minus c_k v_k가 적용됩니다. S z_k equals v_k invariant 덕분에 source update와 response update가 일치합니다.
+
+**Click 3:** 최종 delta는 모든 active source direction의 음의 weighted sum입니다. K가 둘 이상인 production path에서는 K equals one의 eta cap을 사용하지 않고 이 subspace coefficient들을 직접 적용합니다.
+<!-- speaker-note-end -->
+:::
+
+## K Counts Independent Response-Correction Patterns
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>Meaning of the subspace dimension</span></div>
+
+<div class="definition-hero">$$K=\text{number of active response-orthogonal tangent correction patterns}$$</div>
+
+<div class="fragment proof-grid" data-fragment-index="0">
+<div>$$\phi_K=\widetilde\phi+\delta_K$$</div>
+<div>$$\psi_K=\widetilde\psi-\delta_K$$</div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="1">$$\phi_K+\psi_K=\widetilde\phi+\widetilde\psi=f\qquad\text{for every }K$$</div>
+
+<div class="fragment warning-band" data-fragment-index="2">K is not a literal graph radius, not a count of nonzero points, and not a claim that each point is independent at K=1.</div>
+
+::: {.notes}
+K의 production 의미는 active response-orthogonal correction pattern의 수입니다. 각 direction은 residual gradient, preconditioner, response action과 orthogonalization을 거쳐 sample별로 계산됩니다.
+
+**Click 1:** 최종 source는 symmetric-balanced source에 delta K를 더하고 빼는 형태입니다.
+
+**Click 2:** 따라서 K의 값과 direction의 모양에 관계없이 source balance는 정확히 유지됩니다. 이 invariant가 tangent subspace를 일반적인 unconstrained source correction과 구분합니다.
+
+**Click 3:** 이후 geometry visualization에서는 K를 structural reach와 연결하지만, 이 정의를 graph hop 수와 동일시하면 안 됩니다. Geometry reach는 production K를 해석하는 proxy입니다.
+<!-- speaker-note-end -->
+:::
+
+## Standard Krylov Space Is a Conceptual Bridge
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>Idealized linear-algebra interpretation</span></div>
+
+<div class="objective-card">$$\mathcal K_K(A,g_0)=\operatorname{span}\{g_0,Ag_0,\ldots,A^{K-1}g_0\}$$</div>
+
+<div class="fragment compare-grid" data-fragment-index="0">
+<div class="concept-card"><div class="small-label">Standard picture</div><p>Repeated powers of one fixed operator expose progressively richer algebraic directions.</p></div>
+<div class="concept-card"><div class="small-label">Production basis</div><p>Preconditioned residual directions plus response-space two-pass MGS.</p></div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="1">The production method is a <strong>Krylov-like nested response subspace</strong>, not a literal stored basis of $A^kg_0$.</div>
+
+::: {.notes}
+표준 Krylov space는 fixed operator A를 초기 vector에 반복 적용하여 만들어지는 nested subspace입니다. 이 그림은 K가 증가할 때 새로운 algebraic correlation pattern이 생기는 이유를 이해하는 데 유용합니다.
+
+**Click 1:** 하지만 실제 코드는 A power를 저장하거나 직접 생성하지 않습니다. 매 단계의 residual gradient에 D inverse를 적용하고, response space에서 MGS로 orthogonalize합니다.
+
+**Click 2:** 따라서 발표에서는 Krylov-like라는 표현을 사용합니다. Exact arithmetic에서 preconditioned residual recurrence는 Krylov 해석과 연결되지만, geometry reach 그림을 production basis 자체라고 주장하지 않습니다.
+<!-- speaker-note-end -->
+:::
+
+## Dense Support and Correlation Capacity Are Different
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>A critical interpretation boundary</span></div>
+
+<div class="equation-stack compact">
+$$g_0=\sum_{i=1}^{P}\alpha_i e_i$$
+<div class="fragment" data-fragment-index="0">$$Ag_0=\sum_{i=1}^{P}\alpha_i Ae_i,\qquad A^2g_0=\sum_{i=1}^{P}\alpha_i A^2e_i$$</div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="1">The production gradient is generally dense: K=1 may already move the whole domain.</div>
+
+<div class="fragment takeaway" data-fragment-index="2">Increasing K adds independent operator-mediated patterns; it does not merely turn zero entries into nonzero entries.</div>
+
+::: {.notes}
+실제 initial gradient는 한 점에 국소화되어 있지 않고 여러 basis vector의 합으로 볼 수 있습니다. Source mismatch가 domain 전체에 존재하면 상당수 alpha가 처음부터 nonzero입니다.
+
+**Click 1:** A를 적용한 결과는 각 localized seed response propagation의 중첩입니다. 따라서 standard Krylov sequence도 모든 seed에서 동시에 시작한다고 볼 수 있습니다.
+
+**Click 2:** 이 때문에 K equals one에서 한 점만 영향을 받는다고 말할 수 없습니다. 이미 domain 전체가 움직일 수 있습니다.
+
+**Click 3:** K 증가의 핵심은 support expansion 자체가 아니라 서로 독립적으로 조합할 수 있는 operator-mediated response pattern의 수가 증가하는 것입니다.
+<!-- speaker-note-end -->
+:::
+
+## A Localized Seed Is a Structural Probe, Not a Training Sample
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>Canonical geometry experiment</span></div>
+
+<div class="probe-flow">
+<div class="formula-card">$$g_0=e_i$$<span>one localized source-coordinate seed</span></div>
+<div class="arrow">→</div>
+<div class="fragment formula-card" data-fragment-index="0">$$e_i,\;Ae_i,\;A^2e_i,\ldots$$<span>idealized structural propagation</span></div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="1">This is a <strong>localized canonical probe</strong> of operator reach. It is not the actual gradient, correction, or support of a trained sample.</div>
+
+::: {.notes}
+Geometry visualization을 위해서만 g0를 한 point basis e_i로 둡니다. 이렇게 하면 모든 seed의 중첩을 제거하고 하나의 perturbation이 geometry connectivity를 통해 어디까지 전달될 수 있는지 볼 수 있습니다.
+
+**Click 1:** Idealized A action을 반복하면 e_i에서 시작한 structural propagation shell을 정의할 수 있습니다. 이것이 K equals one부터 four까지의 색 영역을 만드는 해석입니다.
+
+**Click 2:** 회색 point가 실제 production에서 정확히 zero라는 뜻은 아닙니다. 그림은 actual gradient나 learned correction을 그린 것이 아니라 geometry가 허용하는 correlation route를 보여주는 canonical probe입니다.
+<!-- speaker-note-end -->
+:::
+
+## The Axial Point Graph Encodes Connected-Line Incidence
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>Geometry only</span></div>
+
+<div class="graph-rule-grid">
+<div class="graph-rule-card"><strong>Horizontal incidence</strong><p>Two active points share one connected x-segment.</p></div>
+<div class="fragment graph-rule-card" data-fragment-index="0"><strong>Vertical incidence</strong><p>Two active points share one connected y-segment.</p></div>
+<div class="fragment graph-rule-card" data-fragment-index="1"><strong>Disconnected intervals</strong><p>Same fixed coordinate does not create an edge across a hole or gap.</p></div>
+</div>
+
+<div class="fragment highlight-equation" data-fragment-index="2">$$d_L(i,j)=\text{minimum connected-line incidence distance from }i\text{ to }j$$</div>
+
+::: {.notes}
+Point graph의 edge는 Euclidean nearest neighbor가 아닙니다. 같은 connected horizontal segment 위의 active point들은 하나의 axial Green block을 통해 서로 정보를 주고받을 수 있으므로 line incidence로 연결합니다.
+
+**Click 1:** Vertical segment도 동일하게 연결합니다. Horizontal과 vertical segment의 교차가 2D geometry 전체의 chain을 형성합니다.
+
+**Click 2:** Annulus hole처럼 같은 y coordinate에 두 개의 disconnected x interval이 있으면 그 사이를 직접 연결하지 않습니다. 다른 방향 segment의 교차 chain을 통해서만 우회할 수 있습니다.
+
+**Click 3:** d_L은 이 connected-line incidence graph에서의 최소 거리입니다. 한 edge가 grid 한 칸이 아니라 connected axial segment 한 번의 mixing을 의미한다는 점이 중요합니다.
+<!-- speaker-note-end -->
+:::
+
+## One Conceptual A-Action Spans Forward and Adjoint Mixing
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>From line incidence to an A-distance proxy</span></div>
+
+<div class="operator-action-strip">
+<div class="step-card">source point</div><div class="arrow">$S$</div><div class="step-card">axial response</div><div class="fragment arrow" data-fragment-index="0">$S^\top M_\Omega$</div><div class="fragment step-card" data-fragment-index="0">source correlation</div>
+</div>
+
+<div class="fragment equation-stack compact" data-fragment-index="1">
+$$d_A(i,j)=\left\lceil\frac{d_L(i,j)}{2}\right\rceil$$
+$$K_{\mathrm{first}}(i,j)=d_A(i,j)+1$$
+</div>
+
+<div class="fragment warning-band" data-fragment-index="2">The factor of two is a structural support proxy for forward-plus-adjoint axial mixing, not an equality for the numerical magnitude of $A_{ij}$.</div>
+
+::: {.notes}
+한 번의 conceptual A action은 먼저 S로 source correction을 response space에 보내고, 다시 S transpose M으로 source space에 가져옵니다. 따라서 line incidence 관점에서 forward와 adjoint 두 단계의 mixing이 포함됩니다.
+
+**Click 1:** 이 두 action이 결합되어 한 A action이 point graph의 대략 두 incidence transition을 포괄할 수 있다는 structural interpretation을 만듭니다.
+
+**Click 2:** 그래서 d_L을 two로 나누어 올림한 d_A를 proxy distance로 정의하고, localized seed가 처음 포함되는 subspace dimension을 d_A plus one으로 둡니다.
+
+**Click 3:** 이것은 nonzero pattern과 reach를 설명하는 proxy입니다. A_ij의 실제 magnitude나 spectral importance는 Green kernel과 coefficient에 따라 달라지므로 이 식이 numerical equality를 뜻하지는 않습니다.
+<!-- speaker-note-end -->
+:::
+
+## Cumulative Reach Produces a Geometry-Only K Rule
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>No PDE, source, prediction, or reference target</span></div>
+
+<div class="equation-stack compact">
+$$C_i(K)=\frac1P\sum_j\mathbf1\!\left[d_A(i,j)\le K-1\right]$$
+<div class="fragment" data-fragment-index="0">$$C_{\mathrm{global}}(K)=\frac1P\sum_i C_i(K)$$</div>
+</div>
+
+<div class="fragment rule-card-wide" data-fragment-index="1">Choose the smallest K with global reach at least 99% and lower-5% pointwise reach at least 99%.</div>
+
+<div class="fragment takeaway" data-fragment-index="2">This rule selects a structural default. It does not prove a PDE-specific optimal K.</div>
+
+::: {.notes}
+C_i of K는 seed point i에서 시작했을 때 K-step proxy 안에서 구조적으로 도달 가능한 전체 point의 비율입니다. 모든 point를 seed로 바꾸어 계산하므로 geometry 전체의 위치별 난이도를 볼 수 있습니다.
+
+**Click 1:** C global은 모든 ordered point pair에 대한 cumulative reach와 같습니다. 평균만 보면 작은 tail region을 놓칠 수 있으므로 pointwise distribution도 함께 봅니다.
+
+**Click 2:** 자동 geometry rule은 global reach와 lower five percent tail reach가 모두 ninety-nine percent 이상인 가장 작은 K를 선택합니다.
+
+**Click 3:** 이 선택에는 PDE coefficient, source sample, model prediction, reference target이 전혀 들어가지 않습니다. 따라서 안정적인 structural default이지만 numerical optimality theorem은 아닙니다.
+<!-- speaker-note-end -->
+:::
+
+## Unit Square and Disk Reach Every Point Pair at K=2
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>Simple connected axial families</span></div>
+
+<div class="dual-figure-grid">
+<iframe class="plotly-frame" src="assets/geometry_square_k_reach.html" title="Unit-square representative K reach"></iframe>
+<iframe class="fragment plotly-frame" data-fragment-index="0" src="assets/geometry_disk_k_reach.html" title="Disk representative K reach"></iframe>
+</div>
+
+<div class="fragment metric-strip" data-fragment-index="1"><span>Unit square: K=2 → 100%</span><span>Disk: K=2 → 100%</span><span>Point-graph diameter: 2</span><span>Proxy A-diameter: 1</span></div>
+
+::: {.notes}
+Unit square에서는 한 horizontal segment와 한 vertical segment의 교차만으로 임의의 두 point를 연결할 수 있습니다. Representative localized seed에서 K equals two가 되면 모든 point가 structural reach 안에 들어옵니다.
+
+**Click 1:** Disk도 boundary 때문에 segment length는 달라지지만 hole이 없고 각 fixed coordinate에 connected interval이 하나이므로 같은 topology result를 가집니다.
+
+**Click 2:** 두 geometry 모두 point graph diameter가 two이고 proxy A-distance diameter가 one입니다. 이것은 K equals two가 structural reach를 포화한다는 뜻이지, K greater than two가 spectral accuracy를 절대로 개선하지 못한다는 뜻은 아닙니다.
+<!-- speaker-note-end -->
+:::
+
+## The Annulus Hole Delays Structural Reach to K=4
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>Representative lower-tail seed</span></div>
+
+<div class="plotly-shell medium">
+<iframe class="plotly-frame" src="assets/geometry_annulus_k_reach.html" title="Annulus representative K reach"></iframe>
+</div>
+
+<div class="fragment metric-strip" data-fragment-index="0"><span>K=1: 0.00927%</span><span>K=2: 31.2106%</span><span>K=3: 98.2666%</span><span>K=4: 100%</span></div>
+
+<div class="fragment takeaway" data-fragment-index="1">The hole splits same-coordinate axial intervals, so information must travel through alternating x/y intersection chains.</div>
+
+::: {.notes}
+Annulus의 representative seed는 geometry-selected K 직전의 lower-five-percent tail을 대표하도록 선택했습니다. K equals one은 seed point 자체만 표시합니다.
+
+**Click 1:** K equals two에서는 약 thirty-one percent, K equals three에서는 ninety-eight-point-two-seven percent, K equals four에서 full reach가 됩니다. 전체 global reach는 K equals two에서 더 높지만 이 그림은 어려운 tail seed를 보여줍니다.
+
+**Click 2:** Hole이 same-coordinate axial line을 두 connected interval로 나누므로 직접 Green block으로 건널 수 없습니다. Horizontal과 vertical segment intersection을 번갈아 따라가야 하므로 square나 disk보다 structural depth가 커집니다.
+<!-- speaker-note-end -->
+:::
+
+## Pentagram Tips Create a Long Structural Tail
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>Representative lower-tail seed near a tip</span></div>
+
+<div class="plotly-shell medium">
+<iframe class="plotly-frame" src="assets/geometry_pentagram_k_reach.html" title="Pentagram representative K reach"></iframe>
+</div>
+
+<div class="fragment metric-strip" data-fragment-index="0"><span>K=1: 0.02187%</span><span>K=2: 83.6177%</span><span>K=3: 98.8189%</span><span>K=4: 99.8688%</span></div>
+
+<div class="fragment warning-band" data-fragment-index="1">K=4 satisfies the global/tail 99% rule, but the full proxy A-distance diameter is 8 because of extreme tip-to-tip paths.</div>
+
+::: {.notes}
+Pentagram에서는 대부분의 domain이 K equals two에서 이미 연결되지만, 뾰족한 tip 주변의 tail seed는 훨씬 긴 alternating axial path를 가집니다.
+
+**Click 1:** Representative reach는 K equals two에서 eighty-three-point-six percent, K equals three에서 ninety-eight-point-eight percent, K equals four에서 ninety-nine-point-eight-seven percent입니다.
+
+**Click 2:** Geometry selection rule은 global과 lower-five-percent가 ninety-nine percent를 넘는 K equals four를 선택합니다. 그러나 extreme tip pair까지 완전히 연결하는 proxy A-distance diameter는 eight입니다. 따라서 selected K는 full graph diameter가 아니라 robust global-tail criterion입니다.
+<!-- speaker-note-end -->
+:::
+
+## Structural Reach Is an Interpretation, Not an Accuracy Proof
+
+<div class="evidence-row"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><span>Epistemic boundary</span></div>
+
+<div class="do-dont-grid">
+<div class="do-card"><h3>What it establishes</h3><ul><li>Connected axial correlation routes</li><li>Hole and tip induced structural depth</li><li>A geometry-only default K rule</li></ul></div>
+<div class="fragment dont-card" data-fragment-index="0"><h3>What it cannot establish</h3><ul><li>Actual sample gradient support</li><li>Magnitude or spectrum of the full response Gram operator</li><li>PDE-specific optimal K or causal error reduction</li></ul></div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="1">Numerical evidence must be presented separately, using trained checkpoints and measured cost.</div>
+
+::: {.notes}
+Geometry proxy가 직접 말해주는 것은 어떤 connected axial route가 존재하고, localized perturbation이 구조적으로 어느 depth에서 reach될 수 있는가입니다. Hole과 tip이 왜 더 큰 K를 요구할 수 있는지 설명합니다.
+
+**Click 1:** 반대로 실제 g0의 support, A entry의 magnitude, spectral importance, PDE-specific optimality는 geometry만으로 결정할 수 없습니다. 특히 K equals four의 accuracy improvement를 새로 reach된 point 비율 하나로 설명하면 과도한 주장입니다.
+
+**Click 2:** 따라서 다음 슬라이드부터는 frozen trained checkpoints의 empirical result를 별도의 evidence layer로 제시합니다. 두 층위가 같은 방향을 보이는지 비교하되 인과관계를 동일시하지 않습니다.
+<!-- speaker-note-end -->
+:::
+
+## Pentagram Benchmark: Variable-Coefficient CDR on a Nonconvex Domain {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Filled Pentagram | outer radius $R=0.5$ | homogeneous Dirichlet boundary</span></div>
+
+<div class="benchmark-problem-layout">
+<div class="problem-contract">
+<h3>Domain and operator</h3>
+<p>Origin-centered filled Pentagram with one tip pointing upward.</p>
+$$-\nabla\!\cdot\!\left(a\nabla u\right)+\mathbf b\!\cdot\!\nabla u+c\,u=f,\qquad u|_{\partial\Omega}=0$$
+<h3>Frozen coefficients</h3>
+$$a=1+\frac12\sin\!\left(\frac{\pi x}{R}\right)\sin\!\left(\frac{\pi y}{R}\right)$$
+$$\mathbf b=\left(-\frac{y}{2R},\frac{x}{2R}\right),\qquad
+c=1+\frac12\cos\!\left(\frac{\pi x}{R}\right)\cos\!\left(\frac{\pi y}{R}\right)$$
+<p>The convection field rotates counter-clockwise; all coefficients are fixed while the source varies.</p>
+</div>
+<div class="plotly-shell benchmark-mesh-shell"><iframe class="plotly-frame" src="assets/pentagram_problem_coefficients.html" title="Pentagram diffusion, convection magnitude, and reaction coefficient meshes"></iframe></div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="0">4,800 indexed-GP training sources | 300 validation sources | 100 full-reference test samples | trained $K=4$ best-energy checkpoint</div>
+
+::: {.notes}
+이 슬라이드는 뒤의 K 비교가 어떤 문제를 푼 결과인지 먼저 고정합니다. 도메인은 원점 중심, 외접반지름 zero-point-five, 위쪽 tip을 가진 filled Pentagram이며 경계조건은 homogeneous Dirichlet입니다. Diffusion과 reaction은 공간적으로 변하며, convection은 반시계 방향 회전장입니다. 가운데 coefficient 그림은 magnitude만 보여주므로 방향은 왼쪽 벡터식으로 함께 읽어야 합니다.
+
+**Click 1:** 이 benchmark에서는 coefficient family를 sample마다 바꾸지 않고 source만 indexed Gaussian process로 생성했습니다. Training four-thousand-eight-hundred, validation three-hundred, full-reference test one-hundred이며, 이후 field와 통계는 coupling11의 reference-free best-energy K equals four checkpoint를 사용합니다.
+<!-- speaker-note-end -->
+:::
+
+## Pentagram q50 Test Source and Directional Split {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Sample 79 | selected by the median test-set relative solution error</span></div>
+
+<div class="field-comparison-layout">
+<div class="source-field-card"><h3>Test source $f$</h3><iframe class="plotly-frame" src="assets/pentagram_sample79_rhs.html" title="Pentagram test sample 79 source mesh"></iframe></div>
+<div class="plotly-shell directional-mesh-shell"><iframe class="plotly-frame" src="assets/pentagram_sample79_directional.html" title="Pentagram sample 79 reference, predicted, and error directional source meshes"></iframe></div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="0">Reference $\phi^\star,\psi^\star$ are evaluation-only. The prediction preserves $\widehat\phi+\widehat\psi=f$ pointwise.</div>
+<div class="field-footnote">Black boundary outlines mean that directional source values are <strong>not evaluated on the boundary</strong>; they do not prescribe zero source values.</div>
+
+::: {.notes}
+대표 그림은 가장 잘 나온 sample이 아니라 전체 rel_sol 순서의 q-fifty 역할로 선택된 sample seventy-nine입니다. 왼쪽은 source f이고, 오른쪽 위는 reference phi와 predicted phi 및 signed error, 아래는 같은 구성을 psi에 적용한 것입니다. 이 phi와 psi는 physical directional source이며 u_phi와 u_psi라는 reconstructed response와 구분해야 합니다.
+
+**Click 1:** Reference phi와 psi는 test evaluation에만 사용되며 training loss나 checkpoint selection에는 들어가지 않습니다. Predicted phi와 psi는 symmetric balance와 K-four tangent correction 뒤의 값이므로 각 valid point에서 합이 f와 같습니다. 검정 경계는 source를 평가하지 않았다는 표시이며 zero boundary source를 의미하지 않습니다.
+<!-- speaker-note-end -->
+:::
+
+## Pentagram Reconstruction for the Same Test Source {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Sample 79 | same source, checkpoint, and visualization mesh</span></div>
+
+<div class="plotly-shell solution-mesh-shell"><iframe class="plotly-frame" src="assets/pentagram_sample79_solution.html" title="Pentagram sample 79 reference solution, prediction, and signed error meshes"></iframe></div>
+
+<div class="fragment metric-strip" data-fragment-index="0"><span>rel_sol: 0.9675%</span><span>rel_flux: 39.9965%</span><span>energy: 1.413e-4</span><span>post/pre mismatch: 5.025%</span></div>
+
+<div class="fragment takeaway" data-fragment-index="1">A sub-percent solution error can coexist with a much larger directional-flux error; the two diagnostics answer different questions.</div>
+
+::: {.notes}
+같은 sample에 대해 왼쪽부터 reference solution, predicted solution, signed error를 동일한 mesh와 paired color range로 비교합니다. Solution field는 homogeneous Dirichlet condition을 사용하므로 실제 경계값 zero가 mesh에 포함됩니다. Error panel만 zero-centered symmetric range를 사용합니다.
+
+**Click 1:** 이 sample의 relative solution error는 zero-point-nine-six-seven-five percent이고 rel_flux는 약 forty percent입니다. Canonical energy consistency는 one-point-four-one-three times ten-to-the-minus-four이며 tangent correction 뒤 response mismatch는 correction 전의 five-point-zero-two-five percent로 감소했습니다.
+
+**Click 2:** Solution error와 directional flux error의 크기가 크게 다른 점을 숨기지 않습니다. Final solution은 두 axial reconstruction을 결합한 결과이고, rel_flux는 directional source 또는 flux decomposition의 품질을 더 직접적으로 측정하므로 서로 다른 diagnostic입니다.
+<!-- speaker-note-end -->
+:::
+
+## Pentagram Test-Set Distribution Exposes the Tail {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>100 samples | K=4 best-energy checkpoint | no sample filtering</span></div>
+
+<div class="statistics-layout">
+<div class="plotly-shell statistics-plot-shell"><iframe class="plotly-frame" src="assets/pentagram_test_distribution.html" title="Pentagram test-set solution, flux, energy, and response mismatch distributions"></iframe></div>
+<div class="stats-panel">
+<h3>Full test-set summary</h3>
+<table class="stats-summary-table">
+<thead><tr><th>Metric</th><th>Mean ± std</th><th>Median</th><th>P90</th><th>P95</th><th>Max</th></tr></thead>
+<tbody>
+<tr><td>rel_sol</td><td>1.112 ± 0.415%</td><td>0.966%</td><td>1.663%</td><td>1.843%</td><td>3.238%</td></tr>
+<tr><td>rel_flux</td><td>31.930 ± 5.371%</td><td>32.529%</td><td>38.906%</td><td>41.437%</td><td>44.314%</td></tr>
+</tbody>
+</table>
+<div class="stats-footnote"><strong>Red point:</strong> sample 79 shown on the preceding field slides. Lower panels report canonical energy and the post/pre tangent-response mismatch ratio.</div>
+</div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="0">The worst solution error is 3.35× the median, so the mean alone does not describe the Pentagram tail.</div>
+
+::: {.notes}
+이 슬라이드는 대표 sample과 전체 test set을 연결합니다. 위쪽 ECDF는 rel_sol과 rel_flux의 empirical cumulative distribution이고, 빨간 점이 앞에서 본 sample seventy-nine입니다. 아래쪽은 canonical energy consistency와 tangent response mismatch의 post-over-pre ratio 분포입니다. 요청대로 phi와 psi의 개별 error distribution은 추가하지 않았습니다.
+
+표는 평균뿐 아니라 표준편차, 중앙값, p-ninety, p-ninety-five와 최대값을 함께 보여줍니다. Sample seventy-nine의 rel_sol은 zero-point-nine-six-seven-five percent로 전체 median zero-point-nine-six-six percent와 거의 일치합니다.
+
+**Click 1:** Worst rel_sol은 three-point-two-three-eight percent로 median의 약 three-point-three-five 배입니다. 따라서 average K-four result만 제시하면 Pentagram에서 남는 sample-dependent tail을 설명할 수 없으며, 이 분포가 mean table의 한계를 보완합니다.
+<!-- speaker-note-end -->
+:::
+
+## Pentagram Accuracy Improves from K=1 through K=4
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Best-energy checkpoints | shared 100-sample test set</span></div>
+
+<div class="result-layout">
+<div class="plotly-shell compact"><iframe class="plotly-frame" src="assets/pentagram_trained_k_quality.html" title="Pentagram trained K quality"></iframe></div>
+<table class="compact-table">
+<thead><tr><th>K</th><th>rel_sol</th><th>rel_u_phi</th><th>rel_u_psi</th><th>rel_flux</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>2.678%</td><td>5.022%</td><td>4.832%</td><td>46.558%</td></tr>
+<tr><td>2</td><td>1.590%</td><td>3.289%</td><td>2.711%</td><td>39.658%</td></tr>
+<tr><td>3</td><td>1.234%</td><td>2.552%</td><td>2.120%</td><td>35.261%</td></tr>
+<tr><td>4</td><td>1.112%</td><td>2.394%</td><td>1.865%</td><td>31.930%</td></tr>
+</tbody>
+</table>
+</div>
+
+::: {.fragment data-fragment-index="0"}
+<div class="takeaway">Every reported solution, directional-response, and flux metric improves monotonically across these trained K=1...4 runs.</div>
+:::
+
+::: {.notes}
+Pentagram CDR에서 coupling8부터 coupling11까지가 각각 production K equals one through four입니다. 표는 각 run의 reference-free best-energy checkpoint를 동일한 one-hundred-sample test set에서 평가한 결과입니다.
+
+K가 증가할수록 rel_sol뿐 아니라 u_phi와 u_psi의 directional reconstruction error, 그리고 flux error가 모두 감소합니다. 특히 K one에서 two로 갈 때 가장 큰 improvement가 있고, K three와 four에서도 추가 개선이 남습니다.
+
+**Click 1:** 모든 metric의 monotone trend는 tangent subspace 확장이 단순히 final averaging만 개선한 것이 아니라 두 directional response의 quality를 함께 개선했다는 engineering evidence입니다. 다만 별도 training run이므로 같은 initialization의 strict causal ablation이라고 표현하지 않습니다.
+<!-- speaker-note-end -->
+:::
+
+## K=4 Maximizes Accuracy; K=3 Is the Cost-Quality Knee {.compact-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Measured tangent-core CPU forward + backward</span></div>
+
+<div class="plotly-shell tall"><iframe class="plotly-frame" src="assets/pentagram_cost_quality_tradeoff.html" title="Pentagram K cost-quality tradeoff"></iframe></div>
+
+<div class="fragment metric-strip" data-fragment-index="0"><span>K=1: 141.373 ms</span><span>K=2: 211.807 ms</span><span>K=3: 282.183 ms</span><span>K=4: 361.773 ms</span></div>
+
+<div class="fragment takeaway" data-fragment-index="1">Accuracy default: K=4. Engineering knee when runtime matters: K=3.</div>
+
+::: {.notes}
+Tangent core의 forward와 backward만 측정하면 K 증가에 따라 비용이 거의 선형적으로 증가합니다. 여기에는 model forward, data loading, validation은 포함되지 않습니다.
+
+**Click 1:** K equals four는 K equals one의 약 two-point-five-six 배입니다. 각 추가 direction마다 response action과 adjoint gradient가 필요하고, orthogonalization 비용도 증가합니다.
+
+**Click 2:** 현재 정확도만 보면 K equals four가 가장 좋습니다. 반면 K three에서 four로 갈 때 rel_sol improvement는 이전 step보다 작으므로 wall-clock을 중요하게 보면 K equals three가 cost-quality knee입니다. 이 둘을 하나의 최적이라고 섞지 않고 사용 목적에 따라 구분합니다.
+<!-- speaker-note-end -->
+:::
+
+## Three Mechanisms Can Move Together without Being Equivalent
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Interpretation across evidence layers</span></div>
+
+<div class="three-layer-grid">
+<div class="layer-card proxy"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><h3>Reach</h3><p>Which axial correlation routes become accessible?</p></div>
+<div class="fragment layer-card production" data-fragment-index="0"><span class="evidence-badge production">PRODUCTION ALGORITHM</span><h3>Subspace enrichment</h3><p>Which independent response modes can be corrected?</p></div>
+<div class="fragment layer-card empirical" data-fragment-index="1"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><h3>Trained accuracy</h3><p>What does the jointly trained network achieve on test samples?</p></div>
+</div>
+
+<div class="fragment warning-band" data-fragment-index="2">The K=1...4 runs use separate training trajectories; the monotone trend is strong engineering evidence, not a same-initialization causal proof.</div>
+
+::: {.notes}
+K가 증가할 때 세 가지 메커니즘이 동시에 변합니다. Geometry reach는 새로운 axial route가 structural proxy 안에 포함되는지를 말합니다.
+
+**Click 1:** Production subspace enrichment는 같은 reach 안에서도 서로 다른 response mode를 독립적으로 조합할 수 있게 합니다. K가 커져서 얻는 이득이 반드시 새로운 point reach 때문만은 아닙니다.
+
+**Click 2:** Trained accuracy는 CouplingNet이 새로운 tangent solver와 함께 어떤 proposal을 학습했는지까지 포함합니다. Frozen post-hoc correction과도 의미가 다릅니다.
+
+**Click 3:** 따라서 monotone result를 보고 K의 효과가 강하다고 말할 수는 있지만, geometry reach 하나가 error reduction을 인과적으로 설명한다고 주장하지 않습니다. 이 제한을 논문과 미팅 모두에서 유지해야 합니다.
+<!-- speaker-note-end -->
+:::
+
+## Revised Interpretation: General Response Alignment
+
+<div class="evidence-row"><span class="evidence-badge exact">EXACT ALGEBRA</span><span>From one observed seam to a general operator mechanism</span></div>
+
+<div class="narrative-shift">
+<div class="old-story"><div class="small-label">Narrow interpretation</div><p>Repair a transition seam caused by an Annulus hole.</p></div>
+<div class="fragment shift-arrow" data-fragment-index="0">→</div>
+<div class="fragment new-story" data-fragment-index="0"><div class="small-label">General interpretation</div><p>Align directional Green responses inside the exact source-balance plane.</p></div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="1">Transitions reveal where a low-dimensional correction space is insufficient; the tangent method itself is geometry-general.</div>
+
+::: {.notes}
+초기에는 Annulus transition discontinuity를 고치는 방법으로 tangent correction을 도입했습니다. 그러나 수식상 tangent objective는 transition 위치나 line-length jump를 직접 사용하지 않습니다.
+
+**Click 1:** 일반적인 해석은 exact balance plane 안에서 H_x phi와 H_y psi를 align하는 것입니다. Geometry와 coefficient는 H operators를 통해 들어가고, current mismatch가 sample-specific direction을 결정합니다.
+
+**Click 2:** Annulus transition은 low-dimensional correction space의 한계가 공간적으로 집중되어 보인 사례입니다. 같은 mechanism은 unit square, disk, pentagram에서도 적용되므로 method claim을 transition repair보다 general response alignment로 확장합니다.
+<!-- speaker-note-end -->
+:::
+
+## Unit-Square Benchmark: Poisson on the Complex-Geometry Path {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>$\Omega=(0,1)^2$ | homogeneous Dirichlet boundary | constant coefficients</span></div>
+
+<div class="benchmark-problem-layout">
+<div class="problem-contract">
+<h3>Domain and operator</h3>
+$$-\Delta u=f\quad\text{in }(0,1)^2,\qquad u|_{\partial\Omega}=0$$
+<h3>General elliptic notation</h3>
+$$a(x,y)=1,\qquad \mathbf b(x,y)=\mathbf 0,\qquad c(x,y)=0$$
+<p>The same flattened complex-geometry CouplingNet, physical projection, axial Green reconstruction, and matrix-free tangent path are used.</p>
+<p>The coefficient mesh is intentionally flat: it verifies the Poisson contract rather than introducing a variable operator.</p>
+</div>
+<div class="plotly-shell benchmark-mesh-shell"><iframe class="plotly-frame" src="assets/unit_square_problem_coefficient.html" title="Unit-square constant diffusion coefficient mesh"></iframe></div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="0">4,800 indexed-GP training sources | 300 validation sources | 100 full-reference test samples | seed-0 $K=4$ best-energy checkpoint</div>
+
+::: {.notes}
+Unit-square 결과도 단순히 source-count 평균으로 시작하지 않고 어떤 PDE를 풀었는지 먼저 보여줍니다. 도메인은 zero-to-one square이고 pure Poisson equation과 homogeneous Dirichlet condition을 사용합니다. General elliptic notation에서는 diffusion one, convection zero, reaction zero입니다. 오른쪽 mesh가 한 색으로 보이는 것은 정보가 없는 그림이 아니라 constant coefficient contract를 확인하는 그림입니다.
+
+**Click 1:** Field와 test distribution은 source-count study의 selected budget인 training four-thousand-eight-hundred와 seed zero run의 best-energy checkpoint를 사용합니다. Training과 validation은 source-only indexed GP이고, reference solution과 directional targets는 one-hundred-sample test evaluation에만 사용됩니다.
+<!-- speaker-note-end -->
+:::
+
+## Unit-Square q50 Test Source and Directional Split {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Sample 11 | selected by the median test-set relative solution error</span></div>
+
+<div class="field-comparison-layout">
+<div class="source-field-card"><h3>Test source $f$</h3><iframe class="plotly-frame" src="assets/unit_square_sample11_rhs.html" title="Unit-square test sample 11 source mesh"></iframe></div>
+<div class="plotly-shell directional-mesh-shell"><iframe class="plotly-frame" src="assets/unit_square_sample11_directional.html" title="Unit-square sample 11 reference, predicted, and error directional source meshes"></iframe></div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="0">Reference $\phi^\star,\psi^\star$ are evaluation-only. The prediction preserves $\widehat\phi+\widehat\psi=f$ pointwise.</div>
+<div class="field-footnote">The same target/prediction color range is used within each directional pair; signed errors use zero-centered ranges.</div>
+
+::: {.notes}
+Unit-square도 동일한 presentation contract를 사용합니다. Sample eleven은 rel_sol 기준 q-fifty sample이며, 왼쪽은 source f, 오른쪽은 phi와 psi 각각의 reference, prediction, signed error입니다. Pentagram과 panel 순서와 color contract를 같게 유지하여 geometry 차이를 시각적으로 비교할 수 있습니다.
+
+**Click 1:** Reference directional source는 evaluation-only이고 predicted pair는 pointwise balance를 정확히 만족합니다. Target과 prediction은 같은 color range를 공유하며 error는 zero-centered range입니다. 여기에서도 phi와 psi는 directional source이고 reconstructed u_phi와 u_psi가 아닙니다.
+<!-- speaker-note-end -->
+:::
+
+## Unit-Square Reconstruction for the Same Test Source {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Sample 11 | same source, checkpoint, and visualization mesh</span></div>
+
+<div class="plotly-shell solution-mesh-shell"><iframe class="plotly-frame" src="assets/unit_square_sample11_solution.html" title="Unit-square sample 11 reference solution, prediction, and signed error meshes"></iframe></div>
+
+<div class="fragment metric-strip" data-fragment-index="0"><span>rel_sol: 0.3419%</span><span>rel_flux: 2.4132%</span><span>energy: 2.374e-5</span><span>post/pre mismatch: 3.971%</span></div>
+
+<div class="fragment takeaway" data-fragment-index="1">On the simple geometry, the same balance-preserving tangent machinery produces a tightly matched solution and a much smaller flux error than on the Pentagram.</div>
+
+::: {.notes}
+동일 sample의 reference solution, predicted solution, signed error입니다. Square boundary의 prescribed zero가 mesh에 포함되고 target과 prediction은 같은 full solution range를 공유합니다. Error panel만 zero-centered range를 사용합니다.
+
+**Click 1:** Sample eleven의 rel_sol은 zero-point-three-four-one-nine percent, rel_flux는 two-point-four-one-three-two percent입니다. Canonical energy는 two-point-three-seven-four times ten-to-the-minus-five이고, post-over-pre response mismatch는 three-point-nine-seven-one percent입니다.
+
+**Click 2:** 같은 architecture와 projection/tangent contract를 사용해도 Pentagram보다 solution과 flux distribution이 훨씬 좁습니다. 이 차이는 square 결과를 쉬운 sanity check로, Pentagram 결과를 geometry와 full coefficient complexity를 포함한 stress case로 해석하게 합니다.
+<!-- speaker-note-end -->
+:::
+
+## Unit-Square Test Errors Are Tightly Concentrated {.compact-title .benchmark-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>100 samples | 4,800-source seed-0 best-energy checkpoint | no sample filtering</span></div>
+
+<div class="statistics-layout">
+<div class="plotly-shell statistics-plot-shell"><iframe class="plotly-frame" src="assets/unit_square_test_distribution.html" title="Unit-square test-set solution, flux, energy, and response mismatch distributions"></iframe></div>
+<div class="stats-panel">
+<h3>Full test-set summary</h3>
+<table class="stats-summary-table">
+<thead><tr><th>Metric</th><th>Mean ± std</th><th>Median</th><th>P90</th><th>P95</th><th>Max</th></tr></thead>
+<tbody>
+<tr><td>rel_sol</td><td>0.349 ± 0.147%</td><td>0.341%</td><td>0.537%</td><td>0.623%</td><td>0.819%</td></tr>
+<tr><td>rel_flux</td><td>3.019 ± 0.434%</td><td>2.971%</td><td>3.595%</td><td>3.752%</td><td>4.243%</td></tr>
+</tbody>
+</table>
+<div class="stats-footnote"><strong>Red point:</strong> sample 11 shown on the preceding field slides. Lower panels report canonical energy and the post/pre tangent-response mismatch ratio.</div>
+</div>
+</div>
+
+<div class="fragment takeaway" data-fragment-index="0">The q50 field sample is representative, while the p95 and maximum quantify the remaining tail before source-count means are compared.</div>
+
+::: {.notes}
+이 슬라이드는 seed-zero, four-thousand-eight-hundred-source run의 one-hundred test sample 분포입니다. 위쪽 ECDF는 rel_sol과 rel_flux, 아래쪽은 canonical energy와 post-over-pre response mismatch ratio입니다. 빨간 점은 앞에서 본 sample eleven입니다. 요청에 따라 phi와 psi의 개별 error distribution은 넣지 않았습니다.
+
+표에서 rel_sol mean은 zero-point-three-four-nine percent, median은 zero-point-three-four-one percent, p-ninety-five는 zero-point-six-two-three percent, maximum은 zero-point-eight-one-nine percent입니다. Pentagram과 비교하면 tail이 훨씬 좁습니다.
+
+**Click 1:** 이 분포는 한 run 안의 test-sample variation입니다. 다음 source-count 슬라이드의 four-seed variation과 합쳐서 독립적인 four-hundred sample처럼 취급하지 않습니다. 먼저 canonical run의 distribution을 본 뒤, 별도의 paired-seed study로 data-budget effect를 판단합니다.
+<!-- speaker-note-end -->
+:::
+
+## Unit-Square Source-Count Study Uses a Fixed Compute Budget
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Four paired seeds | 2,400 optimizer steps per run</span></div>
+
+<div class="result-layout source-count">
+<div class="plotly-shell compact"><iframe class="plotly-frame" src="assets/unit_square_training_size.html" title="Unit-square source-count metrics"></iframe></div>
+<div class="metric-column">
+<div><strong>600</strong><span>0.4255%</span></div>
+<div><strong>1,200</strong><span>0.3931%</span></div>
+<div><strong>2,400</strong><span>0.3696%</span></div>
+<div><strong>4,800</strong><span>0.3505%</span></div>
+</div>
+</div>
+
+::: {.fragment data-fragment-index="0"}
+<div class="takeaway">Epoch counts were adjusted so every source count followed the same 2,400-step optimizer and learning-rate budget.</div>
+:::
+
+::: {.notes}
+이 실험은 Unit-square Poisson에서 training source 수만 바꾸고 나머지 compute budget을 맞춘 four-seed study입니다. 각 숫자는 best-energy checkpoint의 mean relative solution error입니다.
+
+Source count가 six hundred에서 four thousand eight hundred로 증가할 때 평균 error가 계속 감소하고, seed variation도 함께 줄어듭니다. 데이터가 많아지면 한 epoch의 step 수가 달라지므로 epoch 수는 반대로 조정했습니다.
+
+**Click 1:** 모든 run이 총 two thousand four hundred optimizer step, 같은 warmup step과 validation interval을 사용합니다. 따라서 이 결과는 더 많은 source가 단순히 더 많은 optimizer update를 받았기 때문이 아니라 source diversity의 효과를 비교합니다.
+<!-- speaker-note-end -->
+:::
+
+## A Common Source Budget: 4,800 {.compact-title}
+
+<div class="evidence-row"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><span>Paired-seed decision rule</span></div>
+
+<div class="dual-figure-grid source-paired">
+<iframe class="plotly-frame" src="assets/unit_square_paired_seed_errors.html" title="Unit-square paired-seed source-count errors"></iframe>
+<div class="decision-panel">
+<div class="decision-row"><span>600 → 1,200</span><strong>-7.61%</strong><em>4/4 seeds improve</em></div>
+<div class="decision-row"><span>1,200 → 2,400</span><strong>-5.98%</strong><em>4/4 seeds improve</em></div>
+<div class="decision-row"><span>2,400 → 4,800</span><strong>-5.17%</strong><em>4/4 seeds improve</em></div>
+</div>
+</div>
+
+<div class="fragment identity-band" data-fragment-index="0">Selected common budget: $N_{\mathrm{train}}=4{,}800$, $N_{\mathrm{valid}}=300$, batch 200, total optimizer steps 2,400.</div>
+
+<div class="fragment warning-band" data-fragment-index="1">4,800 is the best tested budget, not evidence that the data-scaling curve has fully converged.</div>
+
+::: {.notes}
+Paired seed 결과를 보면 각 doubling에서 four seeds 모두 같은 방향으로 개선됩니다. 따라서 평균 하나의 우연한 변화가 아니라 source count에 따른 안정적인 trend입니다.
+
+**Click 1:** 후속 numerical example의 공통 설정은 training four thousand eight hundred, validation three hundred, batch two hundred, total two thousand four hundred optimizer step으로 고정합니다. 이 선택은 현재 테스트한 범위에서 saturation rule을 만족하는 유일한 값입니다.
+
+**Click 2:** 다만 four thousand eight hundred 이후의 scaling을 계산하지 않았으므로 완전히 수렴했다고 주장하지 않습니다. 논문의 목적은 무한 data scaling law가 아니라 이후 ablation에서 공통 data budget을 정당하게 고정하는 것입니다.
+<!-- speaker-note-end -->
+:::
+
+## Three Levels of Evidence Support One Method {.compact-title}
+
+<div class="final-synthesis">
+<div class="synthesis-card"><span class="evidence-badge exact">EXACT ALGEBRA</span><h3>Admissibility</h3><p>Symmetric projection and every tangent update preserve $\phi+\psi=f$ exactly.</p></div>
+<div class="fragment synthesis-card" data-fragment-index="0"><span class="evidence-badge proxy">STRUCTURAL PROXY</span><h3>Geometry</h3><p>Axial connectivity explains why simple domains saturate at K=2 while holes and tips create longer tails.</p></div>
+<div class="fragment synthesis-card" data-fragment-index="1"><span class="evidence-badge empirical">EMPIRICAL RESULT</span><h3>Accuracy and cost</h3><p>Pentagram improves through K=4; K=3 is the measured cost-quality knee.</p></div>
+</div>
+
+<div class="fragment final-claim" data-fragment-index="2">Balance is structural. Response alignment is matrix-free. Geometry guides K, while trained evidence determines numerical value.</div>
+
+::: {.notes}
+첫 번째 결론은 exact algebra입니다. Symmetric projection이 balance plane을 만들고, 모든 tangent update가 plus-minus delta 구조를 사용하므로 phi plus psi equals f는 K와 관계없이 유지됩니다.
+
+**Click 1:** 두 번째는 structural interpretation입니다. Axial connectivity graph는 square와 disk가 K two에서 포화되고, Annulus hole과 Pentagram tip이 더 긴 tail을 만드는 이유를 설명합니다. 하지만 numerical optimality를 증명하지는 않습니다.
+
+**Click 2:** 세 번째는 empirical evidence입니다. Pentagram에서는 K one부터 four까지 solution, directional response, flux가 모두 개선되고, tangent-core 비용도 측정했습니다. Accuracy default는 K four이고 runtime을 중시하면 K three가 engineering option입니다.
+
+**Click 3:** 전체 방법의 역할 분담은 명확합니다. Projection은 admissibility를 구조적으로 보장하고, matrix-free tangent subspace는 sample-specific response mismatch를 줄이며, geometry proxy는 K 선택의 구조적 근거를 제공합니다. 최종 numerical value는 반드시 trained evidence로 판단합니다.
+<!-- speaker-note-end -->
+:::

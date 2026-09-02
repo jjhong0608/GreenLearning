@@ -1,0 +1,182 @@
+{
+  "dataset": {
+    "geometry_mode": "complex",
+    "geometry_path": "data/geometry/pentagram_r05_h00078125.npz",
+    "test_path": "data/complex_samples/pentagram_r05_h00078125/test",
+    "coefficient_functions_path": "coefficients/CDR_pentagram.py",
+    "coupling_source": {
+      "mode": "indexed_gp",
+      "indexed_gp": {
+        "num_train": 4800,
+        "num_valid": 300,
+        "seed": 1,
+        "lengthscale": 0.15,
+        "amplitude": 1.0,
+        "mean": 0.0
+      }
+    },
+    "reference_diagnostics": {
+      "training": false,
+      "validation": false
+    },
+    "dtype": "float64"
+  },
+  "terminal": {
+    "width": 150
+  },
+  "coupling_model": {
+    "branch_input_dim": 129,
+    "hidden_dim": 256,
+    "depth": 4,
+    "activation": "rational",
+    "use_bias": true,
+    "dropout": 0.0,
+    "dtype": "float64",
+    "coefficient_terms": {
+      "diffusion": true,
+      "convection": true,
+      "reaction": true
+    },
+    "balance_projection": {
+      "enabled": true,
+      "mode": "symmetric_tangent_green_response",
+      "symmetric_tangent_green_response": {
+        "subspace_dimension": 10,
+        "max_subspace_dimension": 10,
+        "geometry_k_selection": {
+          "enabled": false,
+          "global_reach_threshold": 1.0,
+          "pointwise_tail_reach_threshold": 1.0
+        },
+        "eta": 0.015,
+        "eta_strategy": "closed_loop_exact_line_search",
+        "line_search_relative_eps": 1e-12,
+        "relative_lambda": 0.01,
+        "denominator_relative_eps": 1e-12,
+        "preconditioner_variant": "separable",
+        "cross_axis_relative_eps": 1e-12,
+        "eta_cap_enabled": false
+      }
+    },
+    "pre_projection_fusion": {
+      "enabled": false,
+      "mode": "absolute",
+      "hidden_dim": 16,
+      "depth": 1,
+      "eps": 1e-12,
+      "final_layer_init_scale": 0.0
+    },
+    "branch_fusion": {
+      "mode": "concat_fuser"
+    },
+    "geometry_branch": {
+      "enabled": false
+    },
+    "axis_1d_trunk": {
+      "enabled": true,
+      "num_frequencies": 4,
+      "max_frequency": 8.0,
+      "fixed_line_transverse_branch": {
+        "enabled": false
+      },
+      "transverse_trunk": {
+        "enabled": true,
+        "fusion": "concat_fuser",
+        "length_context": true
+      }
+    },
+    "cross_axis_reconstruction": {
+      "enabled": true,
+      "mode": "local_weak_residual_reliability",
+      "gamma": 0.5,
+      "smoothing_steps": 2,
+      "smoothing_relaxation": 0.5,
+      "relative_floor": 0.1,
+      "eps": 1e-12
+    }
+  },
+  "coupling_training": {
+    "learning_rate": 0.002,
+    "epochs": 100,
+    "batch_size": 200,
+    "weight_decay": 0.05,
+    "log_interval": 1,
+    "device": "cpu",
+    "seed": 1,
+    "deterministic_algorithms": true,
+    "gradient_clip_max_norm": 1.0,
+    "use_lr_schedule": true,
+    "validation_every_steps": 24,
+    "min_lr": 1e-05,
+    "canonical_energy": {
+      "boundary_weight": 0.0
+    },
+    "post_line_search_stationarity": {
+      "enabled": false,
+      "weight": 0.01,
+      "eps": 1e-12
+    },
+    "response_trust": {
+      "enabled": false,
+      "weight": 0.1,
+      "trust_weight": 0.0,
+      "eps": 1e-12
+    },
+    "optimizer": {
+      "name": "soap",
+      "betas": [
+        0.95,
+        0.99
+      ],
+      "eps": 1e-08,
+      "profile_step_time": true,
+      "soap": {
+        "shampoo_beta": 0.95,
+        "precondition_frequency": 3,
+        "max_precondition_dim": 1024,
+        "merge_dims": false,
+        "precondition_1d": true,
+        "normalize_grads": false,
+        "correct_bias": true
+      }
+    },
+    "periodic_checkpoint": {
+      "enabled": true,
+      "every_epochs": 50
+    },
+    "compile": {
+      "enabled": true
+    },
+    "best_energy_checkpoint": {
+      "enabled": true
+    },
+    "best_physics_checkpoint": {
+      "enabled": false
+    },
+    "tangent_context_checkpoint": {
+      "enabled": true,
+      "path": null,
+      "load_policy": "if_available",
+      "save_after_build": true
+    },
+    "warmup_steps": 240
+  },
+  "coupling_artifacts": {
+    "enabled": true,
+    "checkpoint": "best_energy",
+    "device": null,
+    "theme": "plotly_white",
+    "selected_samples": null,
+    "save_generated_data": true,
+    "plot_workers": 1,
+    "coefficient_vector_max_points": 400,
+    "show_domain_boundary": true,
+    "visualization_mesh": "data/visualization_mesh/pentagram_r05_h00078125_mesh.npz",
+    "directional_color_quantile": 0.99
+  },
+  "pipeline": {
+    "run_green": false,
+    "run_coupling": true,
+    "green_pretrained_path": "checkpoints/pentagram/green/model.safetensors"
+  }
+}

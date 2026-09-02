@@ -696,6 +696,7 @@ class SymmetricTangentGreenResponseProjectionConfig:
         default_factory=GeometryKSelectionConfig
     )
     eta: float = 0.01
+    eta_cap_enabled: bool = True
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"] = "fixed"
     line_search_relative_eps: float = 1.0e-12
     relative_lambda: float = 0.01
@@ -742,6 +743,11 @@ class SymmetricTangentGreenResponseProjectionConfig:
             self.geometry_k_selection
         )
         self._validate_nonnegative("eta", self.eta)
+        if not isinstance(self.eta_cap_enabled, bool):
+            raise TypeError(
+                "balance_projection.symmetric_tangent_green_response."
+                "eta_cap_enabled must be a boolean."
+            )
         if not isinstance(self.eta_strategy, str):
             raise TypeError(
                 "balance_projection.symmetric_tangent_green_response."
@@ -760,6 +766,15 @@ class SymmetricTangentGreenResponseProjectionConfig:
             raise ValueError(
                 "balance_projection.symmetric_tangent_green_response."
                 "subspace_dimension>=2 requires "
+                "eta_strategy='closed_loop_exact_line_search'."
+            )
+        if (
+            not self.eta_cap_enabled
+            and self.eta_strategy != "closed_loop_exact_line_search"
+        ):
+            raise ValueError(
+                "balance_projection.symmetric_tangent_green_response."
+                "eta_cap_enabled=false requires "
                 "eta_strategy='closed_loop_exact_line_search'."
             )
         self._validate_positive(
@@ -837,6 +852,7 @@ class SymmetricTangentGreenResponseProjectionConfig:
                     "max_subspace_dimension",
                     "geometry_k_selection",
                     "eta",
+                    "eta_cap_enabled",
                     "eta_strategy",
                     "line_search_relative_eps",
                     "relative_lambda",

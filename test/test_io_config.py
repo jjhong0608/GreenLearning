@@ -614,7 +614,47 @@ def test_symmetric_tangent_green_response_defaults_to_fixed_eta_strategy():
     tangent = config.balance_projection.symmetric_tangent_green_response
     assert tangent.subspace_dimension == 1
     assert tangent.eta_strategy == "fixed"
+    assert tangent.eta_cap_enabled
     assert tangent.line_search_relative_eps == pytest.approx(1.0e-12)
+
+
+def test_k1_tangent_uncapped_exact_line_search_config_round_trip():
+    from greenonet.io import _deserialize_config, _serialize_config
+
+    config = CouplingModelConfig(
+        balance_projection={
+            "mode": "symmetric_tangent_green_response",
+            "symmetric_tangent_green_response": {
+                "eta": 0.015,
+                "eta_cap_enabled": False,
+                "eta_strategy": "closed_loop_exact_line_search",
+            },
+        }
+    )
+
+    loaded = _deserialize_config(_serialize_config(config), CouplingModelConfig)
+    tangent = loaded.balance_projection.symmetric_tangent_green_response
+    assert not tangent.eta_cap_enabled
+    assert tangent.eta_strategy == "closed_loop_exact_line_search"
+
+    with pytest.raises(TypeError, match="eta_cap_enabled must be a boolean"):
+        CouplingModelConfig(
+            balance_projection={
+                "mode": "symmetric_tangent_green_response",
+                "symmetric_tangent_green_response": {"eta_cap_enabled": 0},
+            }
+        )
+
+    with pytest.raises(ValueError, match="eta_cap_enabled=false requires"):
+        CouplingModelConfig(
+            balance_projection={
+                "mode": "symmetric_tangent_green_response",
+                "symmetric_tangent_green_response": {
+                    "eta_cap_enabled": False,
+                    "eta_strategy": "fixed",
+                },
+            }
+        )
 
 
 @pytest.mark.parametrize("subspace_dimension", [2, 3, 4])

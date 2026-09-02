@@ -2406,6 +2406,12 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   configured `concat_fuser`는 effective identity이며 fuser parameter를 만들지 않는다.
   실제 `[h_f,h_a]`의 `2H -> H` concat을 비교하려면 variable-coefficient problem에서
   적어도 하나의 coefficient term을 활성화해야 한다.
+- `configs/unit_square_minimal_concat_fuser_auto_k_artifacts.json`은 위 minimal
+  설정을 보존하면서 geometry-only K selection을 `0.99/0.99`, 최대 K=8로 켠다.
+  canonical unit-square geometry에서는 K=2로 resolve된다. 또한 top-level
+  `coupling_artifacts`를 켜서 best-energy checkpoint와
+  `data/visualization_mesh/unit_square_h_1_128_mesh.npz`를 사용하고, 학습 성공 후
+  고정 경로 `<work_dir>/artifacts_best_energy/`에 artifact를 생성한다.
 - `checkpoints/unit_square_minimal/`의 seed-0 네 run은 다른 설정을 모두 고정하고
   minimal, geometry branch, fixed-line transverse branch, pointwise transverse trunk를
   비교한다. Best-energy 100-sample mean `rel_sol`은 각각
@@ -2675,8 +2681,102 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
   metric order remain stable. The response context sidecar and model checkpoint
   tensor keys remain unchanged because K changes only the matrix-free online
   Krylov/MGS work, approximately O(K) operator actions and O(K^2) orthogonalization.
+- Pentagram의 strict full-reach rule `C_global=Q_0.05(C_i)=1.0`은 A-graph
+  diameter 8 때문에 `max_subspace_dimension=9`에서 K=9를 선택한다. Explicit
+  K=9와 automatic 1.0/1.0 모두 config resolver를 통과했다. Current GreenNet에서
+  response context를 한 번 재구성하고 C-trunk frozen raw output 5개를 사용한
+  4,572-point CPU smoke에서는 K=9의 9개 방향이 모두 active였고, balance max
+  residual `1.33e-15`, monotonicity violation 0, finite forward/backward를
+  확인했다. K4/K9 median forward+backward는 `0.221/0.525 s`, retained projection
+  tensor는 `10.54/15.77 MiB`, isolated sampled peak-RSS delta는
+  `6.93/49.10 MiB`였다. Active 9x9 response Gram condition number의 sample
+  median/max는 약 `3.66e4/8.71e4`였지만 inactive fallback은 없었다. 이 검증은
+  optimizer step이나 training epoch를 실행하지 않았다.
+- 위 frozen C-trunk run에 저장된 기존 `tangent_response_context.safetensors`는
+  현재 loader의 gain-scale invariant와 맞지 않아 직접 load되지 않았다. 따라서
+  검증은 같은 frozen GreenNet checkpoint로 static context를 새로 build했다.
+  새 work directory의 training은 context를 새 schema로 build할 수 있지만, 이
+  특정 old sidecar를 재사용하려면 current code로 다시 생성해야 한다.
+
+## Matrix-Free Tangent Subspace Meeting Deck
+
+- `docs/tangent_subspace_saturation_and_adaptive_stopping.md` is the canonical
+  future-design note for tangent saturation handling. Exhausted masking,
+  adaptive stopping, restart, and block tangent candidates are not implemented.
+- An inactive orthogonalized response direction contributes zero to effective K.
+  In the current deterministic recurrence, mismatch and residual gradient then
+  remain unchanged, so later configured-K slots repeat the same candidate unless
+  a distinct restart mechanism is introduced.
+- Direction activity is a numerical response-norm safeguard, not a convergence
+  proof. Future work must audit normalized stationarity, marginal objective
+  gain, remaining mismatch, and effective K separately before selecting stopping
+  thresholds.
+- The low-risk order is frozen-checkpoint saturation audit, result-preserving
+  sample-exhausted masking, then opt-in adaptive stopping. Restart or block
+  extensions require evidence of stationary but still-large mismatch.
+- The follow-up meeting deck is a separate 47-slide Reveal.js presentation at
+  `docs/meeting/tangent_subspace_connectivity/tangent_subspace_connectivity.qmd`;
+  the earlier Annulus deck is unchanged. Visible text is English, while every
+  slide contains exactly one detailed Korean speaker-note block whose `Click`
+  cues match contiguous Reveal.js fragment indices.
+- The method narrative must keep four evidence classes separate: exact
+  symmetric-balance algebra, the production matrix-free K-step tangent method,
+  localized-seed/Krylov connectivity as a geometry-only structural proxy, and
+  frozen trained numerical evidence. Structural reach explains correlation
+  capacity but is not an accuracy theorem or a literal support trace of the
+  dense production gradient.
+- The frozen presentation contracts are Square/Disk/Annulus/Pentagram selected
+  geometry K = `2/2/4/4`; Pentagram trained rel_sol =
+  `2.678/1.590/1.234/1.112%` for K=1..4 with isolated tangent forward+backward
+  costs `141.373/211.807/282.183/361.773 ms`; and the unit-square fixed-compute
+  study selects `N_train=4,800` from four paired seeds and 2,400 optimizer
+  steps. These values are copied from frozen artifacts, not recomputed by model
+  inference.
+- The empirical section now gives the Pentagram CDR and unit-square Poisson PDE,
+  domain, fixed coefficients, one median-`rel_sol` representative source,
+  reference/predicted directional-source and solution meshes, signed errors,
+  and full 100-sample distributions. Test distribution plots include `rel_sol`,
+  `rel_flux`, canonical energy, and post/pre tangent-response mismatch. Separate
+  `phi` and `psi` error distributions are deliberately excluded.
+- The two test-distribution Plotly assets must size to their iframe viewport,
+  retain a 72 px bottom margin, and enable lower-axis automargins. This keeps the
+  energy and remaining-mismatch tick labels and titles visible at `1600x900` and
+  `1280x720`; do not restore the former fixed 620 px figure height.
+- `docs/meeting/tangent_subspace_connectivity/build_assets.py` creates a local
+  20-asset bundle and a SHA-256 manifest from frozen HTML/JSON/CSV/NPZ/PNG
+  sources only. Coefficient/source/solution views use self-contained static HTML
+  grids of the artifact exporter's frozen mesh PNGs, avoiding concurrent WebGL
+  context loss while preserving exported ranges and boundary semantics. Test
+  distributions and earlier quantitative figures remain offline Plotly. The
+  deck build must not load model checkpoints, run training, or alter frozen
+  evidence.
+- Browser acceptance covers every initial/intermediate/final fragment state at
+  both `1600x900` and `1280x720`. The QA report must have no overflow, overlap,
+  iframe readiness failure, external request, or page error. Quarto rendering in
+  the restricted workspace uses `HOME=/tmp/quarto-home-tangent` so its Sass
+  cache is writable.
 
 ## Verification Defaults
+
+- 논문용 Pentagram tangent-reach 실험은
+  `numerical_examples/pentagram/{nvidia_a40,mac_studio}/seed*/` 아래의 32개
+  config로 고정한다. 비교 K는 `0,1,2,3,4,5,9,10`이며, seed `0,2`는
+  `nvidia_a40`의 `cuda:1`, seed `1,3`은 `mac_studio`의 CPU에 배정한다. 같은
+  seed의 모든 K는 같은 장비에서 실행한다. 각 config는 source seed와 CouplingNet
+  seed를 동일하게 맞추고, 4,800/300 sources, batch 200, 100 epochs, 총 2,400
+  optimizer calls, `warmup_steps=240`, `validation_every_steps=24`, C-trunk,
+  separable preconditioner, canonical-energy-only objective, SOAP, deterministic
+  algorithms, best-energy artifact export를 공유한다. K=0은 physical symmetric,
+  K=1은 `eta_cap_enabled=false`인 uncapped exact line search, K>=2는 uncapped nested
+  tangent subspace다. NVIDIA에서 두 run을 동시에 실행할 때의
+  `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=50`은 JSON 과학 설정이 아니라 launcher별
+  runtime 환경 설정이다.
+- `symmetric_tangent_green_response.eta_cap_enabled`의 기본값은 `true`라서 기존
+  K=1 config의 capped 수치를 보존한다. `false`는
+  `eta_strategy=closed_loop_exact_line_search`에서만 허용되고
+  `eta_applied=eta_star`를 사용한다. 이 경우 trainer는 eta-cap schedule을 만들지
+  않으며 evaluator/artifact provenance와 raw arrays에는 uncapped 정책과 cap 비활성
+  상태를 기록한다. K>=2는 기존처럼 eta/cap을 적용하지 않는다.
 
 - GreenNet과 CouplingNet의 AdamW/SOAP first stage는 cumulative optimizer call을
   기준으로 scheduler를 한 번씩 advance한다. SOAP의 첫 preconditioner 초기화

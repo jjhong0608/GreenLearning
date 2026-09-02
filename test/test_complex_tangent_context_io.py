@@ -68,6 +68,7 @@ def _config(
 ) -> SymmetricTangentGreenResponseProjectionConfig:
     return SymmetricTangentGreenResponseProjectionConfig(
         subspace_dimension=subspace_dimension,
+        max_subspace_dimension=max(8, subspace_dimension),
         eta=0.1,
         eta_strategy="closed_loop_exact_line_search",
         relative_lambda=0.01,
@@ -138,7 +139,7 @@ def test_schema_v2_round_trip_is_shared_by_all_variants_and_k(tmp_path: Path) ->
         dtype=torch.float64,
     )
     for variant in TANGENT_PRECONDITIONER_VARIANTS:
-        for dimension in (1, 2, 3, 4):
+        for dimension in (1, 2, 3, 4, 9):
             config = _config(variant=variant, subspace_dimension=dimension)
             loaded = TangentResponseContextStore.load(
                 path=path,

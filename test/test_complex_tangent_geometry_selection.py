@@ -74,6 +74,22 @@ def test_geometry_k_config_is_strict_and_independently_configurable() -> None:
     assert config.geometry_k_selection.enabled
     assert config.geometry_k_selection.global_reach_threshold == 0.97
     assert config.geometry_k_selection.pointwise_tail_reach_threshold == 0.93
+    full_reach = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+        {
+            "subspace_dimension": 9,
+            "max_subspace_dimension": 9,
+            "geometry_k_selection": {
+                "enabled": True,
+                "global_reach_threshold": 1.0,
+                "pointwise_tail_reach_threshold": 1.0,
+            },
+            "eta_strategy": "closed_loop_exact_line_search",
+        }
+    )
+    assert full_reach.subspace_dimension == 9
+    assert full_reach.max_subspace_dimension == 9
+    assert full_reach.geometry_k_selection.global_reach_threshold == 1.0
+    assert full_reach.geometry_k_selection.pointwise_tail_reach_threshold == 1.0
     with pytest.raises(TypeError, match="unknown keys"):
         GeometryKSelectionConfig.from_raw({"enabled": True, "tail_quantile": 0.05})
     with pytest.raises(TypeError, match="must be numeric"):
@@ -261,3 +277,23 @@ def test_canonical_geometry_k_regression(path: Path, expected_k: int) -> None:
     )
 
     assert selection.selected_subspace_dimension == expected_k
+
+
+def test_pentagram_full_reach_selects_k9() -> None:
+    path = Path("data/geometry/pentagram_r05_h00078125.npz")
+    geometry = load_complex_geometry(path, dtype=torch.float64)
+    topology = AxialSegmentTopologyAnalyzer.from_geometry(geometry).analyze()
+    selection = select_geometry_k(
+        topology,
+        config=GeometryKSelectionConfig(
+            enabled=True,
+            global_reach_threshold=1.0,
+            pointwise_tail_reach_threshold=1.0,
+        ),
+        max_subspace_dimension=9,
+    )
+
+    assert topology.a_graph_diameter == 8
+    assert selection.selected_subspace_dimension == 9
+    assert selection.selected_metric.global_reach_fraction == 1.0
+    assert selection.selected_metric.pointwise_tail_reach_fraction == 1.0

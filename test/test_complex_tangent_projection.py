@@ -62,6 +62,7 @@ def _context(
     subspace_dimension: int = 1,
     relative_lambda: float = 0.01,
     eta_strategy: str = "fixed",
+    eta_cap_enabled: bool = True,
     line_search_relative_eps: float = 1.0e-12,
 ) -> SymmetricTangentGreenResponseContext:
     dtype = torch.float64
@@ -80,7 +81,9 @@ def _context(
         point_mass=torch.tensor(0.125, dtype=dtype),
         config={
             "subspace_dimension": subspace_dimension,
+            "max_subspace_dimension": max(8, subspace_dimension),
             "eta": eta,
+            "eta_cap_enabled": eta_cap_enabled,
             "eta_strategy": eta_strategy,
             "line_search_relative_eps": line_search_relative_eps,
             "relative_lambda": relative_lambda,
@@ -410,7 +413,7 @@ def test_generic_k2_subspace_preserves_existing_k2_tensors_bitwise():
     )
 
 
-@pytest.mark.parametrize("subspace_dimension", [3, 4, 5, 8])
+@pytest.mark.parametrize("subspace_dimension", [3, 4, 5, 8, 9])
 def test_dynamic_k_projection_is_nested_balanced_and_matrix_free(
     tmp_path,
     monkeypatch,
@@ -443,6 +446,7 @@ def test_dynamic_k_projection_is_nested_balanced_and_matrix_free(
             mode="symmetric_tangent_green_response",
             symmetric_tangent_green_response={
                 "subspace_dimension": subspace_dimension,
+                "max_subspace_dimension": max(8, subspace_dimension),
                 "eta_strategy": "closed_loop_exact_line_search",
                 "line_search_relative_eps": 1.0e-15,
                 "relative_lambda": 0.1,
@@ -455,6 +459,11 @@ def test_dynamic_k_projection_is_nested_balanced_and_matrix_free(
     subspace = tangent.subspace_result
     assert subspace is not None
     assert subspace.subspace_dimension == subspace_dimension
+    assert subspace.response_gram.shape == (
+        raw_physical.shape[0],
+        subspace_dimension,
+        subspace_dimension,
+    )
     assert tangent.eta_applied is None
     assert tangent.eta_cap is None
     assert torch.all(subspace.costs[1:] <= subspace.costs[:-1] * (1.0 + 1.0e-10))
@@ -472,6 +481,7 @@ def test_dynamic_k_projection_is_nested_balanced_and_matrix_free(
     metrics = symmetric_tangent_metric_tensors(projection)
     assert metrics["tangent_subspace_dimension"].item() == subspace_dimension
     assert f"tangent_coefficient_{subspace_dimension - 1}_mean" in metrics
+    assert f"tangent_direction_{subspace_dimension - 1}_active_fraction" in metrics
     assert f"tangent_response_cost_k{subspace_dimension}_mean" in metrics
     assert "tangent_eta_cap" not in metrics
     tangent.projected_solution.square().mean().backward()
@@ -479,7 +489,7 @@ def test_dynamic_k_projection_is_nested_balanced_and_matrix_free(
     assert torch.all(torch.isfinite(raw_physical.grad))
 
 
-@pytest.mark.parametrize("subspace_dimension", [2, 3, 4, 5, 8])
+@pytest.mark.parametrize("subspace_dimension", [2, 3, 4, 5, 8, 9])
 def test_k2_plus_rejects_eta_cap_and_degenerate_directions_fall_back(
     subspace_dimension,
 ):
@@ -492,6 +502,7 @@ def test_k2_plus_rejects_eta_cap_and_degenerate_directions_fall_back(
         point_mass=1.0,
         config={
             "subspace_dimension": subspace_dimension,
+            "max_subspace_dimension": max(8, subspace_dimension),
             "eta_strategy": "closed_loop_exact_line_search",
             "line_search_relative_eps": 1.0e-12,
             "relative_lambda": 0.0,
@@ -682,6 +693,64 @@ def test_closed_loop_eta_matches_analytic_line_search_and_preserves_balance(
     )
 
 
+def test_k1_uncapped_exact_line_search_uses_eta_star_and_preserves_balance(tmp_path):
+    geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
+    context = _context(
+        eta=1.0e-12,
+        eta_strategy="closed_loop_exact_line_search",
+        eta_cap_enabled=False,
+        line_search_relative_eps=1.0e-15,
+    )
+    raw_physical = torch.tensor(
+        [[[0.2, -0.4, 0.8], [0.7, 0.1, -0.3]]],
+        dtype=torch.float64,
+    )
+    rhs = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float64)
+
+    result = apply_complex_balance_projection(
+        _raw_response(geometry, raw_physical),
+        rhs,
+        geometry,
+        BalanceProjectionConfig(
+            mode="symmetric_tangent_green_response",
+            symmetric_tangent_green_response={
+                "eta": 1.0e-12,
+                "eta_cap_enabled": False,
+                "eta_strategy": "closed_loop_exact_line_search",
+                "line_search_relative_eps": 1.0e-15,
+            },
+        ),
+        symmetric_tangent_context=context,
+    )
+
+    tangent = result.symmetric_tangent_diagnostics
+    assert tangent is not None
+    assert not tangent.eta_cap_enabled
+    assert tangent.eta_cap is None
+    assert tangent.eta_star is not None
+    assert tangent.eta_applied is not None
+    assert tangent.eta_capped is not None
+    torch.testing.assert_close(tangent.eta_applied, tangent.eta_star)
+    assert not bool(tangent.eta_capped.any().item())
+    assert bool((tangent.eta_applied > context.eta).all().item())
+    torch.testing.assert_close(
+        result.projected_physical[:, 0] + result.projected_physical[:, 1],
+        rhs,
+        atol=0.0,
+        rtol=0.0,
+    )
+    metrics = symmetric_tangent_metric_tensors(result)
+    assert metrics["tangent_eta_cap_enabled"].item() == 0.0
+    assert "tangent_eta_cap" not in metrics
+
+    with pytest.raises(ValueError, match="eta_cap cannot be supplied"):
+        context.tangent_step(
+            mismatch=tangent.mismatch_pre,
+            gradient=tangent.gradient,
+            eta_cap=0.01,
+        )
+
+
 def test_closed_loop_eta_is_scale_invariant_and_batch_independent(tmp_path):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     context = _context(
@@ -847,6 +916,15 @@ def test_tangent_eta_cap_schedule_reuses_lr_warmup_and_holds_final_eta():
         SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
             config={
                 "subspace_dimension": 2,
+                "eta_strategy": "closed_loop_exact_line_search",
+            },
+            learning_rate_schedule=fixed_lr,
+        )
+
+    with pytest.raises(ValueError, match="eta_cap_enabled=true"):
+        SymmetricTangentEtaCapSchedule.from_learning_rate_schedule(
+            config={
+                "eta_cap_enabled": False,
                 "eta_strategy": "closed_loop_exact_line_search",
             },
             learning_rate_schedule=fixed_lr,

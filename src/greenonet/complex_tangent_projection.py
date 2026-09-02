@@ -56,6 +56,10 @@ class SymmetricTangentEtaCapSchedule:
             raise ValueError(
                 "Tangent eta-cap scheduling is available only for subspace_dimension=1."
             )
+        if not resolved.eta_cap_enabled:
+            raise ValueError(
+                "Tangent eta-cap scheduling requires eta_cap_enabled=true."
+            )
         adaptive = resolved.eta_strategy == "closed_loop_exact_line_search"
         enabled = adaptive and learning_rate_schedule.enabled
         return cls(
@@ -266,6 +270,7 @@ class SymmetricTangentGreenResponseContext:
     cauchy_violation_max: torch.Tensor
     exact_roundoff_clamp_mask: torch.Tensor
     exact_roundoff_clamp_count: int
+    eta_cap_enabled: bool = True
 
     @classmethod
     def from_response_operator(
@@ -321,6 +326,7 @@ class SymmetricTangentGreenResponseContext:
             point_mass=point_mass.detach(),
             subspace_dimension=config.subspace_dimension,
             eta=float(config.eta),
+            eta_cap_enabled=config.eta_cap_enabled,
             eta_strategy=config.eta_strategy,
             line_search_relative_eps=float(config.line_search_relative_eps),
             relative_lambda=float(config.relative_lambda),
@@ -447,7 +453,6 @@ class SymmetricTangentGreenResponseContext:
                 residual_gradient_post=result.residual_gradient_post,
                 subspace_result=result,
             )
-        resolved_cap = self._resolve_eta_cap(eta_cap)
         if self.eta_strategy == "fixed":
             delta = self.tangent_delta(gradient)
             applied = gradient.new_full((gradient.shape[0],), self.eta)
@@ -457,6 +462,9 @@ class SymmetricTangentGreenResponseContext:
                 eta_applied=applied,
                 eta_cap=self.eta,
             )
+        if not self.eta_cap_enabled and eta_cap is not None:
+            raise ValueError("eta_cap cannot be supplied when eta_cap_enabled=false.")
+        resolved_cap = self._resolve_eta_cap(eta_cap) if self.eta_cap_enabled else None
         direction = gradient / self.denominator.unsqueeze(0)
         directional_response = self.response_operator.forward_pair(
             torch.stack((direction, direction), dim=1)
@@ -471,8 +479,13 @@ class SymmetricTangentGreenResponseContext:
         numerator = (gradient * direction).sum(dim=1).clamp_min(0.0)
         denominator = response_energy + numerical_eps
         eta_star = numerator / denominator
-        cap = eta_star.new_full(eta_star.shape, resolved_cap)
-        eta_applied = torch.minimum(eta_star, cap)
+        if resolved_cap is None:
+            eta_applied = eta_star
+            eta_capped = torch.zeros_like(eta_star, dtype=torch.bool)
+        else:
+            cap = eta_star.new_full(eta_star.shape, resolved_cap)
+            eta_applied = torch.minimum(eta_star, cap)
+            eta_capped = eta_star > cap
         delta = -eta_applied.unsqueeze(1) * direction
         return SymmetricTangentStepResult(
             delta=delta,
@@ -480,7 +493,7 @@ class SymmetricTangentGreenResponseContext:
             eta_applied=eta_applied,
             eta_cap=resolved_cap,
             eta_star=eta_star,
-            eta_capped=eta_star > cap,
+            eta_capped=eta_capped,
             line_search_numerator=numerator,
             line_search_denominator=denominator,
             response_direction=response_direction,
@@ -505,8 +518,15 @@ class SymmetricTangentGreenResponseContext:
         return {
             "subspace_dimension": self.subspace_dimension,
             "eta": self.eta,
+            "eta_cap_enabled": self.eta_cap_enabled,
             "eta_applicability": (
-                "k1_only_not_applied" if self.subspace_dimension >= 2 else "applied"
+                "k1_only_not_applied"
+                if self.subspace_dimension >= 2
+                else (
+                    "applied"
+                    if self.eta_strategy == "fixed" or self.eta_cap_enabled
+                    else "disabled_uncapped"
+                )
             ),
             "eta_strategy": self.eta_strategy,
             "line_search_relative_eps": self.line_search_relative_eps,
