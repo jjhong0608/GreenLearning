@@ -1,0 +1,9 @@
+{
+  "checkpoint_sha256": "cf62d290c0fd8a8cc0aaeaf2c1ad2b783f1087f1e75f4d0e9d42b5fdaeeb3172",
+  "device": "cpu",
+  "threads": 4,
+  "batch_size": 10,
+  "seconds_including_setup": 11.225972786545753,
+  "prediction_seconds_including_first_context_build": 8.284771554172039,
+  "no_training": true
+}

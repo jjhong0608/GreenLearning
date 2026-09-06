@@ -10,6 +10,61 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
 - Ensure `PYTHONPATH` includes `src` when running commands in this repo.
 - FEniCSx sample generation is intentionally isolated from the main `green_net` training environment. Create the optional solver environment with `conda env create -f environment-fenicsx.yml`, then verify it with `conda run -n green_fenicsx python -c "import dolfinx, gmsh, petsc4py, torch"`. Do not add FEniCSx to the main `pyproject.toml` dependencies.
 
+## Sequential Frozen-Checkpoint CSV Audit
+
+`cli/audit_frozen_tangent_csv.py` evaluates multiple **best-energy** checkpoints
+sequentially on one explicitly selected device. It does not train, plot, or write
+pointwise NPZ archives. The saved training K must equal `--baseline-k`; defaults
+are K=10 through K=64, float64, Eager (no `torch.compile`), batch size 10, and four
+PyTorch intra-op threads. Original training compile settings remain metadata only.
+
+Run from the project root, for example:
+
+```bash
+PYTHONPATH=src python cli/audit_frozen_tangent_csv.py \
+  --run-dirs \
+    checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0 \
+    checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1 \
+    checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2 \
+    checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3 \
+  --outdir checkpoints/numerical_examples/pentagram/posthoc_k10_k64_same_device \
+  --device cuda:1 --baseline-k 10 --max-k 64 --batch-size 10 --num-threads 4 \
+  --benchmark --warmup-repeats 3 --timing-repeats 5
+```
+
+Use `--device cpu` on Mac Studio. CUDA ordinals follow `CUDA_VISIBLE_DEVICES`;
+the CLI never chooses another device automatically. Copy all four run directories,
+their `artifacts_best_energy` folders, and the common inputs to that machine first.
+`--green-checkpoint`, `--geometry`, `--test-path`, and `--coefficients` override
+relocated paths without editing saved configs. Missing references, missing or
+inconsistent baseline artifacts, incompatible inputs, duplicate seeds, and corrupt
+sidecars are errors. Existing sidecars are validated read-only; absent sidecars
+are built in memory and matching contexts are reused across runs.
+
+Outputs are `posthoc_per_sample.csv`, `posthoc_per_seed.csv`,
+`posthoc_summary.csv`, `posthoc_timing.csv`, `metadata.json`, `verification.json`,
+`run.log`, an output `README.md`, and baseline evaluator logs. Only use completed
+tables when both JSON status fields are `complete`. `--overwrite` is restricted
+to outputs owned by this CLI, not training directories. Failed runs retain partial
+evidence without publishing completed aggregates.
+
+Each sample starts from its original symmetric-balanced proposal; K=10 is not
+used as a restarted initial condition. Accuracy shares nested K-prefixes, while
+optional benchmarks independently execute each K. One timing repeat covers the
+whole test set; transfer, setup, reference metrics, and CSV writes are excluded.
+`tangent_only` starts from prepared mismatch/gradient; `prediction_forward`
+includes the network, projection, reconstruction, and configured weak blend.
+Production MGS and safety/orthogonality diagnostics remain timed. CUDA timing is
+synchronized; memory reports allocated MiB, and CPU peak memory is NA, not zero.
+
+Response cost is `hx*hy*sum((u_phi-u_psi)^2)` without a half factor. The tables also
+include weak/equal-mean solution errors, directional solution/source errors,
+energy, correction norms, activity, and geometry-only reach. Ratios/gains are
+fractions; ratio-of-means and mean-of-sample-ratios are separate columns. Summaries
+use seed means and sample SD (`ddof=1`); shared test samples are not independent
+replicates. Do not compare these Eager inference timings with training epoch times
+or use reference test errors to select a new production K automatically.
+
 ## Usage
 - Train with the sample config: `PYTHONPATH=src python cli/train.py --config configs/default.json --work-dir checkpoints/run`
 - Logs: Rich console output plus `training.log` in the chosen `work-dir`.
@@ -1384,6 +1439,19 @@ Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundari
   external requests, and browser page errors. Layout screenshots disable only
   the transition animation to avoid capturing an in-between frame; the rendered
   presentation keeps its configured Reveal.js transitions.
+
+## Pentagram Paper Experiment Analysis
+
+- The four-seed, 32-run A40/Mac comparison is documented in
+  [the Pentagram paper report](docs/analysis/pentagram_paper_20260905/report.md),
+  with per-run tables, paired effects, geometry reach, training-time estimates,
+  offline Plotly figures, and frozen input hashes.
+- The primary comparison uses `artifacts_best_energy`, not final-model test
+  metrics. Directional solution errors are supplemented by CPU-only inference;
+  no training or original checkpoint/artifact modification is performed.
+- Reach saturation is structural, not a claim of numerical convergence. Hardware
+  and seed are blocked together, and logged epoch times include validation and
+  concurrent-run effects; they are not isolated GPU/CPU benchmarks.
 
 ## Development
 

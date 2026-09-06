@@ -143,6 +143,44 @@ class PreparedTangentBatch:
     gradient: torch.Tensor
 
 
+@torch.no_grad()
+def prepare_tangent_audit_batch(
+    *,
+    model: ComplexCouplingNet,
+    context: SymmetricTangentGreenResponseContext,
+    batch: ComplexCouplingBatch,
+) -> PreparedTangentBatch:
+    """Freeze the original proposal, never a previously corrected K-prefix."""
+    raw_response, _fusion = model.forward_with_fusion_diagnostics(
+        geometry=batch.geometry,
+        x_source_branch=batch.x_source_branch,
+        y_source_branch=batch.y_source_branch,
+        x_source_amplitude=batch.x_source_amplitude,
+        y_source_amplitude=batch.y_source_amplitude,
+        x_coefficient_branch=batch.x_coefficient_branch,
+        y_coefficient_branch=batch.y_coefficient_branch,
+        rhs_phys=batch.rhs_valid,
+    )
+    sigma_x = batch.geometry.x_lengths_for_valid_points().to(raw_response).square()
+    sigma_y = batch.geometry.y_lengths_for_valid_points().to(raw_response).square()
+    raw_physical = torch.stack(
+        (raw_response[:, 0] / sigma_x, raw_response[:, 1] / sigma_y), dim=1
+    )
+    difference = raw_physical[:, 0] - raw_physical[:, 1]
+    symmetric = torch.stack(
+        (0.5 * (batch.rhs_valid + difference), 0.5 * (batch.rhs_valid - difference)),
+        dim=1,
+    )
+    solution = context.response_operator.forward_pair(symmetric)
+    mismatch = solution[:, 0] - solution[:, 1]
+    return PreparedTangentBatch(
+        raw_physical=raw_physical,
+        symmetric_physical=symmetric,
+        mismatch=mismatch,
+        gradient=context.tangent_gradient(mismatch),
+    )
+
+
 KrylovSubspaceAuditResult = KrylovSubspaceStepResult
 
 
@@ -452,46 +490,10 @@ class ComplexTangentSubspaceAudit(
         self,
         batch: ComplexCouplingBatch,
     ) -> PreparedTangentBatch:
-        raw_response, _fusion = self._coupling_model.forward_with_fusion_diagnostics(
-            geometry=batch.geometry,
-            x_source_branch=batch.x_source_branch,
-            y_source_branch=batch.y_source_branch,
-            x_source_amplitude=batch.x_source_amplitude,
-            y_source_amplitude=batch.y_source_amplitude,
-            x_coefficient_branch=batch.x_coefficient_branch,
-            y_coefficient_branch=batch.y_coefficient_branch,
-            rhs_phys=batch.rhs_valid,
-        )
-        sigma_x = (
-            batch.geometry.x_lengths_for_valid_points()
-            .to(device=self._device, dtype=raw_response.dtype)
-            .square()
-        )
-        sigma_y = (
-            batch.geometry.y_lengths_for_valid_points()
-            .to(device=self._device, dtype=raw_response.dtype)
-            .square()
-        )
-        raw_physical = torch.stack(
-            (raw_response[:, 0] / sigma_x, raw_response[:, 1] / sigma_y),
-            dim=1,
-        )
-        raw_difference = raw_physical[:, 0] - raw_physical[:, 1]
-        symmetric = torch.stack(
-            (
-                0.5 * (batch.rhs_valid + raw_difference),
-                0.5 * (batch.rhs_valid - raw_difference),
-            ),
-            dim=1,
-        )
-        symmetric_solution = self.response_operator.forward_pair(symmetric)
-        mismatch = symmetric_solution[:, 0] - symmetric_solution[:, 1]
-        gradient = self.tangent_context.tangent_gradient(mismatch)
-        return PreparedTangentBatch(
-            raw_physical=raw_physical,
-            symmetric_physical=symmetric,
-            mismatch=mismatch,
-            gradient=gradient,
+        return prepare_tangent_audit_batch(
+            model=self._coupling_model,
+            context=self.tangent_context,
+            batch=batch,
         )
 
     @torch.no_grad()

@@ -1,0 +1,1422 @@
+[
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/config_used.json",
+    "sha256": "8143cc6e247d3d1a73d7ef3c77cda378c007db39e93beb36f9afdd98a9170cf1",
+    "bytes": 6126
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/complex_training_metrics.csv",
+    "sha256": "6883841003ae86ca99f695858e816de37796f5d63a103394d2471469b34f7095",
+    "bytes": 53047
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/training.log",
+    "sha256": "7b68eceda197dbe38578dc23daff2386c3431e5457ef31c47f6c2d3f4c0ee9c1",
+    "bytes": 119513
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/popen_stdout_stderr.log",
+    "sha256": "85e554a46ff23a4d9a0fb36c72df0587aed4443742dee6db52cb0f7c0df94be9",
+    "bytes": 415783
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "ccbf3a3314e2cd29d21c49f441b3e689ebaf99d8ff474bfc9fb9a5fffd71784c",
+    "bytes": 30252
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/artifacts_best_energy/summary.json",
+    "sha256": "27e0767fb3097cfe93ac25e6801fb8df380c149896149868f14b5ceb9c05a728",
+    "bytes": 37553
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "ccbf3a3314e2cd29d21c49f441b3e689ebaf99d8ff474bfc9fb9a5fffd71784c",
+    "bytes": 30252
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k0_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "0c5f224e73f3480b377522c430a1d2fa90dd327b3ab3a9988263400a6277c8d1",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/config_used.json",
+    "sha256": "a156246903a9487df4411f41b0c90a98cbe760be4c42cfcc4f97f0071a227cc5",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/complex_training_metrics.csv",
+    "sha256": "1c6f6e7bc843c28ed798366c3cb714372155ad5372cbb6f9ba8fe4cf20ccba2d",
+    "bytes": 100957
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/training.log",
+    "sha256": "1f3d8399481a17935674956691c5d7c1a58db8157ff7503c89e2bdba959a0d54",
+    "bytes": 223853
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/popen_stdout_stderr.log",
+    "sha256": "40f18b17b01e3fbd589102ed404345cae64dc1da40f68a674b65bc13657fc0ab",
+    "bytes": 749647
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "b374f5f8182e03c5ed060b29aef46bb8ff2be634a17edbb4b6b11f5498fcf84c",
+    "bytes": 54178
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/artifacts_best_energy/summary.json",
+    "sha256": "caa99479d73601d736f7e359a86f21822023bba89abdad07503be16b39bb0e72",
+    "bytes": 41119
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "7de72aedcb5f00315589edd17eb99fab0e85f2665e5bf38c1535403942cde352",
+    "bytes": 54129
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "3abab9b5d27f2dd17c63ee6843ee54931aca73e736f6042c276e2641b8dd14b7",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k1_seed0/tangent_response_context.json",
+    "sha256": "d14fda88ee818e14146de6d0207ca9d82b9057932ddcc96c59b8a202dbc7c640",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/config_used.json",
+    "sha256": "4669d69f508a783aa1e3415e561f0c3ec16123da340d194f12bd8f7da0c9ac8f",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/complex_training_metrics.csv",
+    "sha256": "c5e6aa93f56ac006398f34c33b11ea82247ec384d796bb1ea859502d36707c5b",
+    "bytes": 111400
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/training.log",
+    "sha256": "5e52b58c9d7ce942d2af64033f862296f9104c0de005ecfdc3306dbfe6511204",
+    "bytes": 262515
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/popen_stdout_stderr.log",
+    "sha256": "a1352ca70f9765316de003e8fcf3bd6c74aea63897b4c1a3437e10701abc587d",
+    "bytes": 910829
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "7d706e8272815463306ee823bfa1ede86f42f58be46b701c9e7fc0c66a68a8f3",
+    "bytes": 59087
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/artifacts_best_energy/summary.json",
+    "sha256": "bb2b4a32845be857d3e9b359395c4c2afe27a69da609e2d99b90bb52d646fe54",
+    "bytes": 42550
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "a7e42b22bd4db411f41849cd9de4f554605014bd96f81a35861e38249a532e04",
+    "bytes": 59036
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "0a0ef647a464c8363735ffd905b5d2454df7775b3e2216af7bc637d54b33bddf",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k2_seed0/tangent_response_context.json",
+    "sha256": "4957f9ccfb167b7ad9139ed391312905d53007e0b25bb6619b902c29d022bd09",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/config_used.json",
+    "sha256": "067b9f004d296844ffa5d7db0d2a0fe2b563d70504a2d2e358225948e4481544",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/complex_training_metrics.csv",
+    "sha256": "6a008d13518f43d48b4d556f96449c559233dc4d3afc457c611304dcfa3002a1",
+    "bytes": 124996
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/training.log",
+    "sha256": "b3ff125e003c73b8f67dc8952e316dff6a4d25818fb5b13e4ecefd56e1146d12",
+    "bytes": 299669
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/popen_stdout_stderr.log",
+    "sha256": "3a89812d8d419a3479f390c30f38d67ac4aa61d4c7989b65ff014d7af66da08a",
+    "bytes": 1035289
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "31d038e3bd20b5554a4795921dbc35d366900308d094f6a4bf5282a10033ef32",
+    "bytes": 65513
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/artifacts_best_energy/summary.json",
+    "sha256": "abc3ffb5f6111492b9a25ad4c911a448dcdb2c21e1cde929f7eef250dfb64bc9",
+    "bytes": 43542
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "9cb97e84f05a9bb948cc5a93fdbbe12dd662511bdf843db8b2cd92581bea83e2",
+    "bytes": 65519
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "ccbd6a3cab8d8e5432736a3996404198f87c7fe0751fa973bf9bd2c8ca8c9802",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k3_seed0/tangent_response_context.json",
+    "sha256": "c9ec422589dc7ec28a2f4dd46f40b78cb74ecc5f9dccb60cc9e22093186c0e3c",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/config_used.json",
+    "sha256": "1fbc12470baa884eb54fbe7d03ccc828d7b764fc5f8de274642e5494e315e229",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/complex_training_metrics.csv",
+    "sha256": "3110c5974934db5b6ae5e9ff571d9473c276b2d90ce96af044903c5ae23d194f",
+    "bytes": 138393
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/training.log",
+    "sha256": "701749409a118ac81678405e1b3bbf85b4d67c5d63432fe062032fe1a404b5ef",
+    "bytes": 335528
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/popen_stdout_stderr.log",
+    "sha256": "08e34e629ef8fc52b8dab20039f18698cf4f08f4ef50f7278eed1b4e603e3109",
+    "bytes": 1156699
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "387b9b8260034d34fa3d20a4141242709c4cbad90dee98df5d512bf174b607f0",
+    "bytes": 72024
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/artifacts_best_energy/summary.json",
+    "sha256": "269448d9456032cfef247dd7124b2758e5b992954632b9e1b833ca0c260d0fc0",
+    "bytes": 44347
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "6c2a0b71026f92dbbf0aae9d375850f239437295d6732bf14d5d12cabff9aead",
+    "bytes": 72093
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "9f66a03f34da8a7e1efe8a6881bf3aee1b75fc89a0246e12332a8c3ea6b15b8e",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k4_seed0/tangent_response_context.json",
+    "sha256": "456977d2336bb921dcd1e6ffa6b1863290e34fad7b92096054acd799caedf24b",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/config_used.json",
+    "sha256": "c4d071106063e497847433e5a11224fa8f9180cd0a6c0a050e5868ecdc31f30f",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/complex_training_metrics.csv",
+    "sha256": "0f50aa1b4bc80b3f6d834f8494c7149d3228f14cf9ee797e8fe7c2adbe88c01c",
+    "bytes": 151832
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/training.log",
+    "sha256": "fe9932013dfaecfa785915d5aad300ea971d5fa0b7b5988b56daec3f4e10865a",
+    "bytes": 371128
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/popen_stdout_stderr.log",
+    "sha256": "99ebd399fd263106546e5bbb00bde15bb81a087631d1c15c45dfe8b2b51c6e30",
+    "bytes": 1277499
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "133d846e9b9b9152da4b1549d35e6ad12a68621528195adf324e3a99a2c882b9",
+    "bytes": 78507
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/artifacts_best_energy/summary.json",
+    "sha256": "07e07f4b22cb013941ecf74ca912ee94fa2c8befaa35f28f9b7891e05c055758",
+    "bytes": 45178
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "1051950ee085f0279a4bb8c449ef55dda5080001c2f84f243425e1f99c09911d",
+    "bytes": 78502
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "d16b5fb60ef9d57efbc5707220c0ffebf61f105cc832f0a14c6935f089fb6428",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k5_seed0/tangent_response_context.json",
+    "sha256": "15df590f9afa4d7a1ae0c2427ce8e9319ef663aa55d6c512bb20cf180ac37e5b",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/config_used.json",
+    "sha256": "6fe312b618bfea529e92aa21f5233c985dec08df09a5384fec8a78aebd53b524",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/complex_training_metrics.csv",
+    "sha256": "cb2db4a9c60c6a5d41c0bc69d8db94b42240170636ab182c02f19cc5d0277424",
+    "bytes": 204217
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/training.log",
+    "sha256": "92ab32374485ad72072a3a52d04556859a39a78beba5a9f783cf05fbfc15aa97",
+    "bytes": 517413
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/popen_stdout_stderr.log",
+    "sha256": "7f9a657c4261ec7e49c3d49ed51354baf4245cd3b0c33b36b75a8c07143936dc",
+    "bytes": 1769768
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "9db352186a021db50be391fe57c1e446a37eceaccb0ab21fa578eb491180e4c5",
+    "bytes": 104369
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/artifacts_best_energy/summary.json",
+    "sha256": "e6a6b83f76a4442991ae6c842ef8a0579ccf87815b227f3fa1218cf1afbb6d34",
+    "bytes": 48381
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "9db352186a021db50be391fe57c1e446a37eceaccb0ab21fa578eb491180e4c5",
+    "bytes": 104369
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "f2e82f2db071ae5455590b8a83835303fb5fff0004f9eda1d863655df7bc2c17",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0/tangent_response_context.json",
+    "sha256": "fa8390963c298475a98c0e27b07940020a7b3596b8a0cda162d57995e855ec0e",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/config_used.json",
+    "sha256": "085cb8e0ba76c8614675db603c6a3eca90277954fc719609d1ad0a7d2a4a3291",
+    "bytes": 6408
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/complex_training_metrics.csv",
+    "sha256": "c1d41c8d1b6997f166e9e2e92c0333d6cb96bd0b686e83b9a17e6498e84ad161",
+    "bytes": 217631
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/training.log",
+    "sha256": "6db1f7bb43f6836236da5e7886fa32d911fcf300034622c2dc59ef5e296436ed",
+    "bytes": 553484
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/popen_stdout_stderr.log",
+    "sha256": "329e03801b719d100e182a43609a14b0120a97bdfa7dda2fb56804ae91c14b13",
+    "bytes": 1891378
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/metrics/test_per_sample_metrics.csv",
+    "sha256": "bce4aa8c725528ec97fd89abaf308b24cab74eff97e132ec3d38ea8ec894c062",
+    "bytes": 110919
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/artifacts_best_energy/summary.json",
+    "sha256": "28e97a742d7820afbff16d0e0f3f3ae3e8abb65ab826d1ff5d1de09aa34b3d95",
+    "bytes": 49236
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "bce4aa8c725528ec97fd89abaf308b24cab74eff97e132ec3d38ea8ec894c062",
+    "bytes": 110919
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/complex_coupling_model_best_energy.safetensors",
+    "sha256": "ebe8d2bb7e0f37e433368248f59b6260b675024b5a9f974d5a551d1547bde0ad",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k10_seed0/tangent_response_context.json",
+    "sha256": "4fd1bb23b63d04f8bbf96bfb3ec1f2cbd803148baf25884665948d2e1697b2ee",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/config_used.json",
+    "sha256": "7d2f3201fc5676b3c4eebbd79ba680365aff3d0bd8b6d4ee316f27d195b1941d",
+    "bytes": 6126
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/complex_training_metrics.csv",
+    "sha256": "e405eb00b97e3516da65743ff31952a5a73ca0fcd5f6b547792a298d7270fe10",
+    "bytes": 52937
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/training.log",
+    "sha256": "f5bd79616c07d9560e42831243ee371bc27602067f5830f0e3ca9d04035861a0",
+    "bytes": 120935
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/popen_stdout_stderr.log",
+    "sha256": "2c112f29c3b051ae30cd2933900e4bf9ee04c0d44490a78a52efbf593110885c",
+    "bytes": 418537
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "668882483e84a40d16cf93e10d8cf1be483ea9535253272aa121db1eae5af4f5",
+    "bytes": 30172
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/artifacts_best_energy/summary.json",
+    "sha256": "6337447eaeb791621db09460dfc842c4c44755cf03b10b0186aefb04d7653d53",
+    "bytes": 37543
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "a9df8bf585884d0a9d4adc46fff3033407d5f4e2e960c37653bcd3e78576f594",
+    "bytes": 30228
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k0_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "905c965d5cbb4830b402fe21817b19767b3f8624aebe8c7db8b4aee3c073293c",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/config_used.json",
+    "sha256": "0d583d42597eb348e3f7a59ad5a80e4afc9a670934a72f27f78a8ccd5eb04299",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/complex_training_metrics.csv",
+    "sha256": "108d0a6684834d0af1eb8ea7808c40c85e24f710cda58b79b9dfa42f58a1bff6",
+    "bytes": 100826
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/training.log",
+    "sha256": "8465aa2cfa8699c6bc43631eda4bc0f0f19c6085093508ac064a9ef876fcaff3",
+    "bytes": 223335
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/popen_stdout_stderr.log",
+    "sha256": "31cfc1fa71ced665f37e43daa5fc92bfcb4e19b709325f88909ed53deface36d",
+    "bytes": 748508
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "ca92257d484ed75f50494bd14ed10004727ae613e024b8393a3d43da7c31e687",
+    "bytes": 54113
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/artifacts_best_energy/summary.json",
+    "sha256": "6951c44c196ab0def7be10e273f4234dbe1bb868d58c77dd3b063dcffed4ec96",
+    "bytes": 41128
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "7a94fb21294cc32aac98f23e98b7edebfe86b3ed039a88ecfefe5bd41ce8a0a2",
+    "bytes": 54095
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "b5eefbdd62a24476a79904f7fb77c8407713f33414a7dcd43afea5a264c6216a",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k1_seed2/tangent_response_context.json",
+    "sha256": "72d41cca1726dfa8f80453d398f37c1ce4a35e9aee0b61583e4e0d3a0bffb366",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/config_used.json",
+    "sha256": "591cd7e450b77dbedf730c44676d000f0ae6dcc6cc5018f2a3a5630ed0536f20",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/complex_training_metrics.csv",
+    "sha256": "e96ef35ccbab10f1ad802668b9721f058bbc382533722a497865d6b17d7b9dc6",
+    "bytes": 111383
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/training.log",
+    "sha256": "545c83bbdafdc0bec80a8ffcc5133e1ab501eaa41f4624dd86374ea6aa413efb",
+    "bytes": 263551
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/popen_stdout_stderr.log",
+    "sha256": "d9505bb287e6e64839c828089060c6afde3d718490ef7ce43c2d16f7773c0725",
+    "bytes": 913269
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "4f00a8957c4de88bdcfb378db51b3347aaa939ee640caf44dcc75495a4d5bce6",
+    "bytes": 59091
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/artifacts_best_energy/summary.json",
+    "sha256": "3135441dce48f4c2e418bc8ad6411fe15a6bf24f476581a73822909c4ebc8a7e",
+    "bytes": 42541
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "0e6741f677336fe974739bf6e9b6c464f8ac0a7436e3aeb6b0add01f1eb02fa8",
+    "bytes": 59079
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "f8b2996042cbd00ef540889dc512a50f477d02fd7f49087a821cdff0979df282",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k2_seed2/tangent_response_context.json",
+    "sha256": "228a74018222d27a7536db44e6658a5e49c04f0afb7fb4dfb2c255a21cdf203c",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/config_used.json",
+    "sha256": "2b0eeaad1d4a73a82dc9b44d94baad3296d117344af1669d4988e0e71ada3101",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/complex_training_metrics.csv",
+    "sha256": "037501110012b8c563b1bb34ad82ff28e8a2b01f145a73c653657668e47b544a",
+    "bytes": 125043
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/training.log",
+    "sha256": "9a1e78bdabfb35419e5f939fb79b08b33be80342a6dcc21fb23d152eb460c8ea",
+    "bytes": 298892
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/popen_stdout_stderr.log",
+    "sha256": "8e606dcfdefdf88867858cd0df299e62a082162b41a095bc04e9ce9f69d8bd2b",
+    "bytes": 1033378
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "55c2a7df98ac522db75b4109b7cf8e82b0bc68a2757d202bbb1726cf17401a37",
+    "bytes": 65462
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/artifacts_best_energy/summary.json",
+    "sha256": "9ef6200a493c46ebc66168c56bba5266d4a9f2a3f9e41f4387f9310553132b66",
+    "bytes": 43545
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "10ca5c3e03687cb8ac6425700a5a887a7b0e479a49626e803e0d5e8f139e096f",
+    "bytes": 65543
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "9a47fb34bedaab938c6b58db633de60b5eda4e58994c04f568c78690f9ec80f4",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k3_seed2/tangent_response_context.json",
+    "sha256": "8183bd11c6fb01d9f0bc4dac3eac3288415a07d08bf7d1335654e3334d5f48b7",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/config_used.json",
+    "sha256": "d27f709e59f171d32f11a0ce97134cdd3af4f648569115b73a42088bfbfa0b97",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/complex_training_metrics.csv",
+    "sha256": "e0ce2bd578f55fac2af4402d4b881ea38a56defa0a09c5232357dba8434ea8cc",
+    "bytes": 138401
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/training.log",
+    "sha256": "e6bcd2c1c0d5581aae47304644d0dba2a30545e3ceed683359e5a96269dc864e",
+    "bytes": 335528
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/popen_stdout_stderr.log",
+    "sha256": "3a50d3792f9aa7b8f3e18afa6ff41733bc8ea6b2c2beb41636823511fd5cba8a",
+    "bytes": 1156699
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "e22ad8083af1ec94ccc1604f37c6195b17926ef1b38a1796c38a1c29b421db48",
+    "bytes": 72022
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/artifacts_best_energy/summary.json",
+    "sha256": "676c1c5418476b5e4a5b05a3b243751243ed9785266cf687c18f5823ea55d890",
+    "bytes": 44348
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "0f40c6d598d8fb3c6c147d3618af763539880179045f507785841d44c5d7bea3",
+    "bytes": 72080
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "1ec0baa69860bfe32702f9cf547d4f9acce6ce96704336153853d4b56052800d",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k4_seed2/tangent_response_context.json",
+    "sha256": "1525bff1aac8e310895adb55698dd906a9e9194894a178a1e388d3f119442029",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/config_used.json",
+    "sha256": "9614fb31f88139d7a956fd4b4706238f6522fba471438b844b22b1c5e5d87ff1",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/complex_training_metrics.csv",
+    "sha256": "45aa84f4ef2b5487ead6a22ec9d260e3ed1bfb9125772c786330dc862370a945",
+    "bytes": 151886
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/training.log",
+    "sha256": "f60f70d5b863d160da0b94a08cfe369f355337bfc4cb274bca3e25d0de029058",
+    "bytes": 370610
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/popen_stdout_stderr.log",
+    "sha256": "fa8fc193ae8a479bcb4b0735c5c229129a4cce1f70a9029c29ea641064c7c71f",
+    "bytes": 1276279
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "c1a42ee484ac701dce45056ff8aa339cf1746a51d138d0e8135519bdf7808875",
+    "bytes": 78592
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/artifacts_best_energy/summary.json",
+    "sha256": "6208ab7ceb9f4760a2e10b1f001255828181ae0d8e082a41114c08cd9406d06f",
+    "bytes": 45167
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "f51ebde20a540389e20a940627c32ad2978740033b20baefd694d55839883da1",
+    "bytes": 78487
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "22f049911daed76be753c024b217f092ac05630f8fd23d137dae9287dcba7f7f",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k5_seed2/tangent_response_context.json",
+    "sha256": "6bf87702c99d3a418e9784c3a48a4723831f1e71f6594989061336da013a49c0",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/config_used.json",
+    "sha256": "16b35a803626fb10a6a20aed12406cfc141b95696745c2882b641ef35df81937",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/complex_training_metrics.csv",
+    "sha256": "0169133fbf3c0a88c6e509a8cf2deea81ed18e4c0acb0aa6459fab235b7293d7",
+    "bytes": 204187
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/training.log",
+    "sha256": "4e688611710400406dbefb055f427deca457a7d3f88dd033fd4a8b7bcb8d6c70",
+    "bytes": 514046
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/popen_stdout_stderr.log",
+    "sha256": "4207223f8dd6406e372af3b6ff00d17a9983f6dc5a9001ea3a7a54a0649d8879",
+    "bytes": 1761919
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "ba9c9c1dbc0eee8af1f718491242d917227aed3a42fa3c46f7a8080f8c492c22",
+    "bytes": 104311
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/artifacts_best_energy/summary.json",
+    "sha256": "2a7fcee0febe1ed984778b267b1ac34263476f26d300d86fcbfe4419faa26861",
+    "bytes": 48405
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "43facb8136a5ab3cbf09badf999085fce06f135198869fb83814b0c609917c79",
+    "bytes": 104221
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "131357a087f8aeb6abd4f0b5e699b0dd952a5d465031c393c660d496508bcaac",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2/tangent_response_context.json",
+    "sha256": "02c34ba1fad7ad4090c8d1844da461e6a7db62eec58079942ffdc2d228a9a0de",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/config_used.json",
+    "sha256": "d7f3a841ca6f98d8ae1a0d49bfd0c7751ded982181016ce13ac72e6b3204e63a",
+    "bytes": 6408
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/complex_training_metrics.csv",
+    "sha256": "240b92848083fbdcdcaa0eac33b635aaf64243c7d4817969939e1999598ecf04",
+    "bytes": 217652
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/training.log",
+    "sha256": "23776e19c733e0ccc447ad5082800d178f2c5bb73459172d9e9a523c817ef826",
+    "bytes": 554264
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/popen_stdout_stderr.log",
+    "sha256": "5fd155cd98d7a4abe63ab0f878733982001f340c890bc4c188c222635476a630",
+    "bytes": 1893208
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/metrics/test_per_sample_metrics.csv",
+    "sha256": "e831ea6951737afe627ae5cf793e1c6266e0e649f205f8050f6cb5adebdf477a",
+    "bytes": 110948
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/artifacts_best_energy/summary.json",
+    "sha256": "005baea7d33d1cb952d577e6e64bc7520de0eb69cbca3c63baddc8a2c0c25b72",
+    "bytes": 49241
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "e831ea6951737afe627ae5cf793e1c6266e0e649f205f8050f6cb5adebdf477a",
+    "bytes": 110948
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/complex_coupling_model_best_energy.safetensors",
+    "sha256": "4bb0239199fd6fda1cac6bd2878c62e643e5a8c5a73439c0dc4f6666eb215a2d",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k10_seed2/tangent_response_context.json",
+    "sha256": "c1e452e98e2ea6ead122a33a423924a5711ed8f7de5c3b88cd5172a6404dcbbb",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/config_used.json",
+    "sha256": "979543fe0bea14d748cdb467e0a011157f5fc6f47b8584205ff9a0828163c0bc",
+    "bytes": 6121
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/complex_training_metrics.csv",
+    "sha256": "572371432e8698d081ac78e9c692e9f3f1dbf4f495fabc58d847d26ea070e11c",
+    "bytes": 51814
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/training.log",
+    "sha256": "3f9862074bad530a4b27019b00cd09401f90666b2a15bdee4f5450b943572c3a",
+    "bytes": 120364
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/popen_stdout_stderr.log",
+    "sha256": "e9aacae6580a9fb1e5a4db0a7bc309959daabc628882c8151cfe07f6a8741d88",
+    "bytes": 259011
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "3d3d40589d176aebcc425947816b3eed5672fe4d4b7defb2f5bcef0c349b4039",
+    "bytes": 30186
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/artifacts_best_energy/summary.json",
+    "sha256": "8f699d4684afe3fee043431316094a035b5d168434376ee974a77afa17e43a7b",
+    "bytes": 37493
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "3d3d40589d176aebcc425947816b3eed5672fe4d4b7defb2f5bcef0c349b4039",
+    "bytes": 30186
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k0_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "e58bce115007434ed9fbf48d634bba5f5437af539b03bb05c29b9d6efd36e500",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/config_used.json",
+    "sha256": "9cc2b51b21cb5ecc430072b064ce63b680494274ab84424324050c6c8a9489ee",
+    "bytes": 6398
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/complex_training_metrics.csv",
+    "sha256": "434be4106c358798d8a2391b10f5c67647eea898a18903c53d71d415cbcb4bea",
+    "bytes": 99743
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/training.log",
+    "sha256": "9c3e9ab223731a4f7ce5b0f22b7a0c2fc08df8fec9508cf0d0f94a476130b6c4",
+    "bytes": 222217
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/popen_stdout_stderr.log",
+    "sha256": "e1b3d43b3d9add00ee72004f7eb61122e726f03e684781d7925adde1682325bb",
+    "bytes": 479761
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "bc92b3ee521fc4009f7abafbc4b6325602f3893f401168ba8da7c606a8ec57f0",
+    "bytes": 54118
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/artifacts_best_energy/summary.json",
+    "sha256": "fa19304cebc7b0b8494a4caf983a35be340e312a9ce6a56dc6319fd4c175fdec",
+    "bytes": 40956
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "4066f85800deef700ba89a52802fba3051295338f6c7d21a30832eb80a36a584",
+    "bytes": 54176
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "396862727a0d6acd2e2d64df779705f97908c238be05d2e5428e3ef01ccd8487",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k1_seed1/tangent_response_context.json",
+    "sha256": "4c10329324a7975531e28a1f5aec09fdac2d6ccc22d78e0223d159509bb9e051",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/config_used.json",
+    "sha256": "030ad715b32372c518935b00527795335eab49f6235934212ac717a4e304f582",
+    "bytes": 6398
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/complex_training_metrics.csv",
+    "sha256": "a4c9aa7d164b3ae5e15f18a3f974abafcc0c98829dfa040ca9e5d6d520b8b57f",
+    "bytes": 110346
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/training.log",
+    "sha256": "7c473af99ebc0110ad45d3f5f42e7d32d8f79afcb74b436f7752b2f398a8a9ff",
+    "bytes": 263684
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/popen_stdout_stderr.log",
+    "sha256": "ce0d109f20c46632fd54241a5db390495971375e88af86272fdaf310bc44c03b",
+    "bytes": 570033
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "35bc43b04c49587a4838cb1ae1fe45cbeefe05aa743080c0742c47ad8da4c06c",
+    "bytes": 59084
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/artifacts_best_energy/summary.json",
+    "sha256": "c9bd905378669cc5a13121304d45e73f423e6bcfe64ccf63eebbb411377fd172",
+    "bytes": 42469
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "fcf3eaaa99362d36b3c4fd7759f11f5b5c495e358cb82da62cb0a29a6f0154e9",
+    "bytes": 59047
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "cf62d290c0fd8a8cc0aaeaf2c1ad2b783f1087f1e75f4d0e9d42b5fdaeeb3172",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k2_seed1/tangent_response_context.json",
+    "sha256": "58387234a66e89e14171e361bec2baae06dd0ba9ae03c400858f2669f4c17680",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/config_used.json",
+    "sha256": "ce4232f1f64a58f40f4081efcd306782b2495dde37ffcd34b231c6c02ab1e2b3",
+    "bytes": 6398
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/complex_training_metrics.csv",
+    "sha256": "3fa9a0fac01bb1a74b35a4f72632247641b83a4619b5f6645782eeb7786f5998",
+    "bytes": 123845
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/training.log",
+    "sha256": "bbd9eb933d8216e655a8da0fc2fa757211ddd12c00375acb23d7ff10ada8ecbb",
+    "bytes": 298531
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/popen_stdout_stderr.log",
+    "sha256": "54e28f380e9ced99c6de0f5a8bad0ded8b2e4dac0c2f0b5d9e81bafeff725402",
+    "bytes": 659193
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "e4d1f1b921eb46dfb961b68c013db65e1876ff3b3c954d82c1866d1267871928",
+    "bytes": 65511
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/artifacts_best_energy/summary.json",
+    "sha256": "8f916e912fdfcfa00dd256a6564562a237a7104e264fe324ceb22dad4c7551dd",
+    "bytes": 43478
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "fe2f24e1a73d1cbcdd71643c89ed39c4892aca508a794ed0f4c2dcb04b8d7ee0",
+    "bytes": 65497
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "3746be3284bdb8a5718291e794a945f5838c2722d8cbdfaf361102a2894fb4c9",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k3_seed1/tangent_response_context.json",
+    "sha256": "2bd3422e19f884c6a4e8cf1e319318fa451d8b0e9cf00327968a50c0843c51a8",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/config_used.json",
+    "sha256": "f84ae54c1573520102783ce79b187a280a1c185c4536526058db2f325d2b9d55",
+    "bytes": 6398
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/complex_training_metrics.csv",
+    "sha256": "a19b18b4cec2fc1aad6da1a4a2fd2f4910715e235cb48746b84272f26f0c994a",
+    "bytes": 137088
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/training.log",
+    "sha256": "8b4cb864232c038647ca32f41b28e2a87028bf505cdc410997371ccd48394847",
+    "bytes": 335386
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/popen_stdout_stderr.log",
+    "sha256": "122b14ab0e0730895dd3bc1a6d93581768b3aac1b5bb2892adf1d038d759b6c8",
+    "bytes": 752139
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "1d9b4c0cb85f5fa68221fd407510d22d648c5da8c35d5e92d14c8cbe454e5360",
+    "bytes": 72003
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/artifacts_best_energy/summary.json",
+    "sha256": "1188a6fbf4b31708c77881e16f4f56a1d33d6da9bc3becb23032143ea3d549a7",
+    "bytes": 44281
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "205526d1b8619c86c7e2e35f7ac33f30c405ef482568e01ff381fddaf933ca4e",
+    "bytes": 72041
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "f0283544da0ea8a633ee58ed6ed54a273dca35986c7b80b0fe12138d257127cd",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k4_seed1/tangent_response_context.json",
+    "sha256": "f56b4a1dac07bbd122524ce0fc80bbccae84b9a4a008d6ffcd92388801cad290",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/config_used.json",
+    "sha256": "a61b4b17b676134d0b3cae698b37fdd4911f2e02ca054249b56eea65d0f94a76",
+    "bytes": 6398
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/complex_training_metrics.csv",
+    "sha256": "329331a11f727d561ad53ca338cf2eb07ba80fb5453b32c5730cc94d896e388d",
+    "bytes": 150677
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/training.log",
+    "sha256": "71aa2f2d94631f2096b874bef61e04557babc57dd75779c85b704a04d1d79d12",
+    "bytes": 369982
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/popen_stdout_stderr.log",
+    "sha256": "5ca82e5b1c609d17b73e25feb48a12f4eeafb64b705749c7ab131bbc6daa1723",
+    "bytes": 810727
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "06e60dc2dd689dbb5d754835ed3d1ad254872b00a4b8a6b5c33f62a06530c403",
+    "bytes": 78461
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/artifacts_best_energy/summary.json",
+    "sha256": "a808f966bf947999e4151997d3076004a8ae0d042003383d986c4c59ab079df8",
+    "bytes": 45078
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "90aa744f93a982d44602ffc87684fe62b8f95cae3a05a2aac82c9a21e272f532",
+    "bytes": 78513
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "e98772a441cfd5af0ecab18cdb947f52464da6c6f9f2ac6a8682f54577206bf4",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k5_seed1/tangent_response_context.json",
+    "sha256": "f63b3d42731ce9769149460033c23363bfcca0fa384f727eb3691c29dda60a6c",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/config_used.json",
+    "sha256": "0ed1efd2b63184590e8ef8202eac2339bafc56412edc7210b4f6f02644d0f78c",
+    "bytes": 6398
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/complex_training_metrics.csv",
+    "sha256": "84945149c7d13860664bcf5bb56176e4ec1c4fc5fabffc11673e5e558a265dfe",
+    "bytes": 202889
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/training.log",
+    "sha256": "be525c74a720b493c37611fb22e8be67f85ec07053adc2f4c00fecf52f9344ef",
+    "bytes": 516649
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/popen_stdout_stderr.log",
+    "sha256": "0992bae522a58b49854f23b52596e562dc48f575b1beee0fe7a7ed255a081c2b",
+    "bytes": 1120428
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "cb399b78924320ae9cac39d6085fd90d896e90811e5022399b5f17e1b58c6e6b",
+    "bytes": 104347
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/artifacts_best_energy/summary.json",
+    "sha256": "5d05eaf5178a97f8d0d67698652915deb7ed91e2fe7649edda5e5245ef7d2bcf",
+    "bytes": 48315
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "1bdf76ec46fc6b4a3582515b1bdf810f3e1d8d0f1ed9e1b61f1fd99af44595ad",
+    "bytes": 104336
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "54ef0c922559ed81ef25cd3e4dd0c40b9dd82987fc061bec82b48a4e062ea91c",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1/tangent_response_context.json",
+    "sha256": "25751a291eb0681c3f75b973087c0a4231b8448a76f0eb4533eb77ba75f5ad1d",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/config_used.json",
+    "sha256": "c73433ba50d1631291a1540a6d2d5c949ea5ee3b9db460b942a5a8bde107bcd3",
+    "bytes": 6403
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/complex_training_metrics.csv",
+    "sha256": "6643b8c9e9a5bfc80fba983b463b286b2aa9b2443cb5d47b67bbd7dad7a5d2cb",
+    "bytes": 216481
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/training.log",
+    "sha256": "3dd5f77a6b677cc2c39d4d8f83d4e977d25eefcdb77a870a4b1af67be1774c01",
+    "bytes": 554734
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/popen_stdout_stderr.log",
+    "sha256": "0844792e9e6dc6e77b7269a6a338cacaa77d5d29a8f5eb9bf7220315e982ca11",
+    "bytes": 1245003
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/metrics/test_per_sample_metrics.csv",
+    "sha256": "0aa1338ed7e8f185766a60b4b56dbbcf1e33277be1c8c9609c0d9fe921589b76",
+    "bytes": 110968
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/artifacts_best_energy/summary.json",
+    "sha256": "7bc164ab686c300753259b3f591bf52aac17e4041feb496874b4cf568716f7c2",
+    "bytes": 49186
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "297269717cbd70354f301d53a26a32f5ee184ac503762674cdc31af60eab824c",
+    "bytes": 110984
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/complex_coupling_model_best_energy.safetensors",
+    "sha256": "880d6205b77744eb5978516e649fb1b314be410f9bd5b9b692e04c46a0c8b977",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k10_seed1/tangent_response_context.json",
+    "sha256": "97699441d0ee210b42b74fd929a42dd75fa4f28682c14971f066de3a11d76699",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/config_used.json",
+    "sha256": "06698a8195caf50c0999c7ad3252946fe965ef0c78e80a8a034550c8cb86a3b8",
+    "bytes": 6120
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/complex_training_metrics.csv",
+    "sha256": "d4da2bcd44c6164c69d3c77c2eae36852e87b47031bf704d9bbffe5755d679d5",
+    "bytes": 51756
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/training.log",
+    "sha256": "4dbec50f539e8701196237e63ef8ff3446cc2fee51858df2271d2cbea1c02dd3",
+    "bytes": 119447
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/popen_stdout_stderr.log",
+    "sha256": "3fe55c3941a7f13cc069c74fa619e16ed7fa7ea7ac01363ed16abb038676f6e3",
+    "bytes": 257048
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "6c89a1b821d6b51bda612816a8409b012bc293a4a1bd4725b0c5e35728c332df",
+    "bytes": 30230
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/artifacts_best_energy/summary.json",
+    "sha256": "fa722bd401e396038cceaf0d686dc08a80bb1de7135d6c3296e6e2509964af56",
+    "bytes": 37501
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "540fb4fb4303c0b199efbc7b311d53eca71a73b67d51deb66caf60b676f6b075",
+    "bytes": 30218
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k0_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "e64bb10c380f707fb63c57a558b98e0c7fcba123234aa08f49ad610c5a86818c",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/config_used.json",
+    "sha256": "bcc8dab3a30299d6e49e2589e95e81888bf99c6fd4dd8b3fe1070e7132b20481",
+    "bytes": 6397
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/complex_training_metrics.csv",
+    "sha256": "0b80e4b18adb5f7c9372dcda406f026c3ee7d437ea5ae5237e03619b4fc74542",
+    "bytes": 99751
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/training.log",
+    "sha256": "76e87ab4410adc7a402180808025b0ffdfe94bbcec08a5af88fdadb2c52f380b",
+    "bytes": 222903
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/popen_stdout_stderr.log",
+    "sha256": "351d9ec1be75503c382f915403df6df2c57441eaca195f4c729b685e5a883d3d",
+    "bytes": 480888
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "fe384e4c20264916e667c7e5375c5b5314e67098439ebaaeafe44961d33ba43f",
+    "bytes": 54147
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/artifacts_best_energy/summary.json",
+    "sha256": "41d3c5d60f72ef1c5aac2a04c988111a1cd7eef375901dffecbb3ab8e448f14f",
+    "bytes": 40959
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "70afd561ca4236f9f0ddf850bb0f63a401301f9ac441a13be394ecad905a215f",
+    "bytes": 54149
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "52ebf0820694bf6f43ed44a5baffe273ce2ef87bb59a8e8ca306c266675abdb9",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k1_seed3/tangent_response_context.json",
+    "sha256": "e9d2be9b240ba8b581d112f79f1a323ba9f3349575088df8c42b48766f74cd67",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/config_used.json",
+    "sha256": "feae82bc9fa3dd613dd3de47e96f0f3f020c5a454713c49d901e5d844438e534",
+    "bytes": 6397
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/complex_training_metrics.csv",
+    "sha256": "246b175b8130a2772a39d8aceb324c5b741e61f07da0ecdc89a24618ddd15dfc",
+    "bytes": 110368
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/training.log",
+    "sha256": "2fbfe84dabac35405aa26c09c33d3e7004824803082b2e78e3266ac8ee39e385",
+    "bytes": 263432
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/popen_stdout_stderr.log",
+    "sha256": "812cfa49fa92c5b15ed52c4cca59cef103afd273ec54782e01f2f78be2cdaa75",
+    "bytes": 569429
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "e551e5c448074dae28b81d6242d74649549bbcf79772524923d2dc4ec39aee40",
+    "bytes": 58993
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/artifacts_best_energy/summary.json",
+    "sha256": "d1a9641f4a11f4a95ef1a4d14a6a8e2b1852867553d3b1d0fec894daa2525cf0",
+    "bytes": 42483
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "3b618e3028862e4a49bff0ad7e8686641031449c34c0f4821fc2231c015519a7",
+    "bytes": 59082
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "337b28ece70d0ca08393241bf75e3ef6fd72ac3ee84474c862ea45b63a1f6538",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k2_seed3/tangent_response_context.json",
+    "sha256": "a15d51207e380e125364ab4d84a21573d086bd803873045e4d8f985f38ca2dd4",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/config_used.json",
+    "sha256": "6a4687424b3c2911f38019a77a397d6897df4e3e5a3c6642a84c9552e535cd7c",
+    "bytes": 6397
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/complex_training_metrics.csv",
+    "sha256": "a138700ff3d6bc82b1719fcd5c1e21dfa77a057f8ae0f657f2299accead6cd87",
+    "bytes": 123941
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/training.log",
+    "sha256": "369c65091fae27c2d4796efa656e32d1e7a0722b01c4a30acd23bbf49707b758",
+    "bytes": 299785
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/popen_stdout_stderr.log",
+    "sha256": "dd88f905b84db3f79a723a8d12d3f97e127965aa604c8a45f4229b34b9d59dc7",
+    "bytes": 661307
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "45355607fbd4185f8c60b2c9e9407cfd804b04532e4f5b1946419defe7e7a94b",
+    "bytes": 65609
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/artifacts_best_energy/summary.json",
+    "sha256": "cf2b273adb844c95fb024558d361f583555a2d3760963a7b7e3bfd2b58480636",
+    "bytes": 43464
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "08ff8104a119566e4d1984219ae19ca82ffeb7d4d64a14d63a2f4994edfcfc67",
+    "bytes": 65571
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "cd0ed2ef3cd8761a0f7749981372a93ce3c797b8c4288d8520fae0c09eee0e8f",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k3_seed3/tangent_response_context.json",
+    "sha256": "d7992f65aa516fd00e0a9eec1209b2afc464236c8fe8eb081f703a7083bf3aef",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/config_used.json",
+    "sha256": "582cefc5725a7d67ffe17d5ca57420759fe32530b89f43c926687005728a088d",
+    "bytes": 6397
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/complex_training_metrics.csv",
+    "sha256": "c24ab3ddd072cfa9708163f6b04c1696ec6c1b509f6c29d4cd633e5ce040beb6",
+    "bytes": 137121
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/training.log",
+    "sha256": "0472d20f02c15d1f4bcf6699e1ff01b83ebe30af8caab6c1910ef89acbacd958",
+    "bytes": 335636
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/popen_stdout_stderr.log",
+    "sha256": "2f5dda6e3ad3387c6a24406d24d024aa23d1892b31b29e01bffde8a1d2bf9bec",
+    "bytes": 752441
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "4921b0e31600dd0ee789e6062709a3bbb66c128374be7ba65fcf4cad6d2ba3df",
+    "bytes": 71984
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/artifacts_best_energy/summary.json",
+    "sha256": "5b9c217478cdee03a6ed5668a5415f17cf6d68e80a998ce8e3b811d0c89dafab",
+    "bytes": 44293
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "16add87ff73f2f855b2ce9c678a461734268126d759d8e6a7afd408b805c0950",
+    "bytes": 72041
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "3e840a0464fe1fea421cd8493ef0b003a11f272a21f2c45d52558d08177f7fa2",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k4_seed3/tangent_response_context.json",
+    "sha256": "9543e82e8bac432c488becb9a85550ba16617564223a52ee4f3fce328dc98f19",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/config_used.json",
+    "sha256": "5d915c54907f94ea2cc15ffd31341bbd26c8e1f21b18dee19c31046a39bbdce0",
+    "bytes": 6397
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/complex_training_metrics.csv",
+    "sha256": "693f3d08e03b88154228fa3feb67bd76679412d8c96136db10b10a4ba2abe9fb",
+    "bytes": 150670
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/training.log",
+    "sha256": "48232d8709f112d599bac96a2bd046675a7daabc4c156ab45cab18f8f56b6a13",
+    "bytes": 370985
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/popen_stdout_stderr.log",
+    "sha256": "cc471784f5eedd5516eeeab015e097526faa333ada40202d0c2bf30cef481e12",
+    "bytes": 812388
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "da1fd2822b88d2a21bad9618ae81aaa9c586488e42021374c625e1396e3e6b21",
+    "bytes": 78443
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/artifacts_best_energy/summary.json",
+    "sha256": "c41732cb10de64cd682bad3dd342ba7482bef26b246b46142a29b53e231878b8",
+    "bytes": 45074
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "df1d8f8c78dcc84fe414a5a9641f56d74488c8af66e3eb407bed2c36a490ec45",
+    "bytes": 78479
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "4739117c6f1f697ae5b21b1c483f9ee833bd332806eaee5812164ac7cfb2ad17",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k5_seed3/tangent_response_context.json",
+    "sha256": "f3ea7e6c727f6ae5c11460ced77fe44c24340a9bfc6db61aa50150606ae16961",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/config_used.json",
+    "sha256": "eb683873047085b366321f2e53ec66513c9559684344c5269edbdcd33f8efa20",
+    "bytes": 6397
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/complex_training_metrics.csv",
+    "sha256": "500d4891ecf6ad426a8f191bbc3f1278e21519be5bc6394328eade701e426f59",
+    "bytes": 203085
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/training.log",
+    "sha256": "47d7aef36a4d93415fa02e3b74346ae568c6233f8fc5f6a01505aa0a2a4feae9",
+    "bytes": 517401
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/popen_stdout_stderr.log",
+    "sha256": "e50dacbf2e1bb13899601a40a7833f1332e02e476e0a97a4d1cd609091af7b67",
+    "bytes": 1121555
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "ee2612cf6d08488d915e95818784ea695c7e6b0cf05e0bee28160d424b4bef87",
+    "bytes": 104295
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/artifacts_best_energy/summary.json",
+    "sha256": "96695b39fc46ce4c1901e7ba69ea1c35102fd4d304e5cdcea797a996d6b79d4c",
+    "bytes": 48319
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "9f7773e57ac7c3146d14590d8f5517ffd5e4509641ae67a75ee675ca928641d9",
+    "bytes": 104405
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "7878d10dde83013e9d64b783759d56402f2e0189cdce2fd45a804dc632705508",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3/tangent_response_context.json",
+    "sha256": "1bdf172e74063dd03c0cd8abe76fd02bb5b8fd03ce7c232ffa5f5cd4cb8b1a1a",
+    "bytes": 1421
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/config_used.json",
+    "sha256": "3607773f8e5e047a7ef5314be8728de64ac128b1c0f89f67c267ab6a4bcfe5f5",
+    "bytes": 6402
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/complex_training_metrics.csv",
+    "sha256": "a5641497256e7bbfe60a578ab06faf3cd63b5acb6f592eb4bbdf85bf1d129c47",
+    "bytes": 216433
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/training.log",
+    "sha256": "4d2052c7377672ccf770757091f3d61165cd6f560d902c7bc229de6f8c8579e9",
+    "bytes": 553725
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/popen_stdout_stderr.log",
+    "sha256": "f306d155f86deb7aabb60e7831a498e7aeb199b654e4cf78b9730895d13b493a",
+    "bytes": 1242959
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/metrics/test_per_sample_metrics.csv",
+    "sha256": "3799ad620e09ac74f089ee685d94905474de19e87f37956125694f3b32078980",
+    "bytes": 111006
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/artifacts_best_energy/summary.json",
+    "sha256": "f35cc4b66851626a63339ba66d54f9fb4810e7cbb1fb2fd901e4914c1c1dd468",
+    "bytes": 49156
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/artifacts_best_energy/metrics/per_sample_metrics.csv",
+    "sha256": "7643f78ed4b2cfb7e83c5ef12d450dcb470c98a0ab78684657338e1514e3bc70",
+    "bytes": 110930
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/complex_coupling_model_best_energy.safetensors",
+    "sha256": "dbaf746a4386af061f0acdee23f88066bc1f28d96636cb31677c30ca762e9858",
+    "bytes": 11871192
+  },
+  {
+    "path": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k10_seed3/tangent_response_context.json",
+    "sha256": "076ebafd4b7c6d0c24a81322ccd909a60d1da46032eb04d79bb4c21d4e23282c",
+    "bytes": 1421
+  }
+]

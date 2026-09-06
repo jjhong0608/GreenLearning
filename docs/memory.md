@@ -2824,6 +2824,42 @@ coefficient 의미, 실험 설계 기준, 논문용 데이터/figure 생성 기�
 
 ## Open Planning Items
 
+- `cli/audit_frozen_tangent_csv.py` is the CSV-only sequential frozen best-energy
+  audit. It defaults to baseline K=10 and all K through 64 on one explicit
+  CPU/CUDA device, float64 Eager, batch size 10, and four intra-op threads.
+  Training K must equal the baseline. Paths can be overridden after moving files
+  between Linux and Mac; resolved content hashes and original configs are saved.
+- The audit verifies every baseline sample against both the production evaluator
+  and `artifacts_best_energy/metrics/per_sample_metrics.csv` before sweeping K.
+  Final-model `metrics/` are never substituted. It reuses the original symmetric
+  proposal and production recurrence, not a restarted corrected K10 state.
+  Existing context sidecars are read-only and validated; missing ones are built
+  in memory. Matching static contexts are reused across checkpoints.
+- Accuracy reuses nested prefixes, but optional timing independently recomputes
+  each K. One repetition is a full test pass summed over timed batch calls.
+  Transfer/setup/reference metrics/writes are excluded. `tangent_only` begins
+  with prepared mismatch/gradient; `prediction_forward` includes network and
+  configured weak blend. Production MGS/safety/small-Gram diagnostics remain.
+  CPU peak memory is NA; CUDA reports synchronized time and allocated memory.
+- CSV response cost has no half factor. Step/baseline ratio-of-means and mean
+  sample ratios are distinct; zero denominators are NA. Seed summaries use
+  equally weighted seed statistics and sample SD, not pooled test replicas.
+  JSON metadata and verification must both say `complete` before paper use.
+  Failure preserves partial evidence, not completed aggregate tables. No figures,
+  raw field NPZ, original checkpoint/config changes, or automatic best-K choice.
+
+- Paper K-sweep reports distinguish geometry-only structural reach saturation
+  from numerical subspace convergence. Report realized global, lower-5%, and
+  minimum pointwise reach alongside K; full reach does not guarantee optimal
+  solution accuracy or imply that an additional direction is inactive.
+- In multi-device paired studies, summarize each seed's test mean first and
+  report sample SD across seed means. Shared test samples are not independent
+  replicates across seeds; hardware effects cannot be isolated when each seed
+  is assigned to only one device. Keep best-energy artifacts separate from
+  final-model evaluation, and label log-derived epoch time as including
+  validation. K=0's uncached reconstruction and K>=1's response-block reuse
+  must be disclosed when interpreting their runtime difference.
+
 - 논문용 coefficient family 목록 확정.
 - 각 family별 dataset 규모와 random seed 확정.
 - GreenONet baseline config와 CouplingNet baseline config 확정.
