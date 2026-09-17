@@ -100,7 +100,14 @@ def test_zero_denominator_is_missing_not_a_fake_gain() -> None:
     assert result["response_cost_gain_baseline"] is None
 
 
-def _make_runs(tmp_path: Path, *, k: int = 10, count: int = 2) -> tuple[Path, ...]:
+def _make_runs(
+    tmp_path: Path,
+    *,
+    k: int = 10,
+    count: int = 2,
+    normalization="legacy",
+    variant="separable",
+) -> tuple[Path, ...]:
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     config, checkpoint, green, geometry, test, coefficients = _write_fixture(inputs)
@@ -112,6 +119,8 @@ def _make_runs(tmp_path: Path, *, k: int = 10, count: int = 2) -> tuple[Path, ..
         enabled=True,
         mode="symmetric_tangent_green_response",
         symmetric_tangent_green_response=dict(
+            direction_normalization=normalization,
+            preconditioner_variant=variant,
             subspace_dimension=k,
             max_subspace_dimension=max(k, 8),
             eta_strategy="closed_loop_exact_line_search",
@@ -187,10 +196,17 @@ def _read(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+@pytest.mark.parametrize(
+    "normalization,variant",
+    [("legacy", "separable"), ("response", "separable"), ("response", "identity")],
+)
 def test_sequential_checkpoints_baseline_csv_and_read_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    normalization,
+    variant,
 ) -> None:
-    runs = _make_runs(tmp_path)
+    runs = _make_runs(tmp_path, normalization=normalization, variant=variant)
     snapshots = {
         path: path.read_bytes()
         for run in runs

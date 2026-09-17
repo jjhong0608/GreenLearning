@@ -1328,8 +1328,20 @@ def test_complex_stationarity_objective_uses_uncapped_eta_and_reference_free_tar
     ).is_file()
 
 
+@pytest.mark.parametrize(
+    "normalization,variant,k",
+    [
+        ("legacy", "separable", 1),
+        ("response", "identity", 1),
+        ("response", "identity", 2),
+        ("response", "separable", 4),
+    ],
+)
 def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
     tmp_path,
+    normalization,
+    variant,
+    k,
 ):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
@@ -1346,6 +1358,10 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
                 mode="symmetric_tangent_green_response",
                 symmetric_tangent_green_response={
                     "eta": 1.0,
+                    "direction_normalization": normalization,
+                    "preconditioner_variant": variant,
+                    "subspace_dimension": k,
+                    "eta_cap_enabled": normalization == "legacy",
                     "eta_strategy": "closed_loop_exact_line_search",
                     "line_search_relative_eps": 1.0e-15,
                     "relative_lambda": 0.01,
@@ -1390,17 +1406,22 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
     )
     batch = complex_coupling_collate_fn([dataset[0]])
 
-    result = trainer._forward_batch(batch, symmetric_tangent_eta_cap=1.0e-12)
+    cap = 1.0e-12 if normalization == "legacy" else None
+    result = trainer._forward_batch(batch, symmetric_tangent_eta_cap=cap)
     tangent = result.projection.symmetric_tangent_diagnostics
     response = result.objective.response_trust
     stationarity = result.objective.post_line_search_stationarity
     context = trainer.symmetric_tangent_green_response_context
     assert tangent is not None
-    assert tangent.eta_star is not None
     assert response is not None
     assert stationarity is not None
     assert context is not None
-    assert torch.all(tangent.eta_applied < tangent.eta_star)
+    if normalization == "legacy":
+        assert tangent.eta_star is not None
+        assert torch.all(tangent.eta_applied < tangent.eta_star)
+    else:
+        assert tangent.eta_star is None
+        assert tangent.subspace_result is not None
     expected_source = context.response_operator.forward_pair(
         torch.stack((0.5 * batch.rhs_valid, 0.5 * batch.rhs_valid), dim=1)
     )
@@ -1432,7 +1453,7 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
         result.projection.projected_physical[:, 0]
         + result.projection.projected_physical[:, 1],
         batch.rhs_valid,
-        atol=0.0,
+        atol=0.0 if normalization == "legacy" else 1e-14,
         rtol=0.0,
     )
 
@@ -1443,7 +1464,7 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
     )
     changed = trainer._forward_batch(
         changed_targets,
-        symmetric_tangent_eta_cap=1.0e-12,
+        symmetric_tangent_eta_cap=cap,
     )
     torch.testing.assert_close(result.loss, changed.loss)
     result.loss.backward()
@@ -1453,7 +1474,9 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
         for parameter in model.parameters()
     )
 
-    final_cap_result = trainer._forward_batch(batch, symmetric_tangent_eta_cap=1.0)
+    final_cap_result = trainer._forward_batch(
+        batch, symmetric_tangent_eta_cap=1.0 if normalization == "legacy" else None
+    )
     evaluator = ComplexCouplingEvaluator(
         model=model,
         green_model=ConstantGreen(1.0),
@@ -1472,7 +1495,11 @@ def test_complex_response_trust_and_stationarity_form_exact_joint_objective(
 
     log_text = (tmp_path / "response_trust_training" / "training.log").read_text()
     assert "response-trust enabled=True" in log_text
-    assert "eta_source=capped_eta_applied" in log_text
+    assert (
+        "eta_source=capped_eta_applied"
+        if normalization == "legacy"
+        else "eta_source=not_applicable"
+    ) in log_text
     assert "stationarity_diagnostic_when_enabled=True" in log_text
     assert "uses_reference_targets=false" in log_text
 
@@ -1652,10 +1679,24 @@ def test_tangent_context_sidecar_build_save_and_required_evaluator_load(
     torch.testing.assert_close(loaded.objective.loss, built.loss)
 
 
-@pytest.mark.parametrize("subspace_dimension", [2, 3, 4, 5])
+@pytest.mark.parametrize(
+    "subspace_dimension,normalization,variant",
+    [
+        (2, "legacy", "separable"),
+        (3, "legacy", "separable"),
+        (4, "legacy", "separable"),
+        (5, "legacy", "separable"),
+        (1, "response", "identity"),
+        (2, "response", "identity"),
+        (1, "response", "separable"),
+        (4, "response", "separable"),
+    ],
+)
 def test_complex_k2_plus_trainer_disables_eta_schedule_and_logs_subspace_metrics(
     tmp_path,
     subspace_dimension,
+    normalization,
+    variant,
 ):
     geometry = load_complex_geometry(write_geometry_npz(tmp_path / "geometry.npz"))
     coeffs = load_coefficient_functions(write_coefficients(tmp_path / "coeffs.py"))
@@ -1672,6 +1713,9 @@ def test_complex_k2_plus_trainer_disables_eta_schedule_and_logs_subspace_metrics
                 mode="symmetric_tangent_green_response",
                 symmetric_tangent_green_response={
                     "subspace_dimension": subspace_dimension,
+                    "direction_normalization": normalization,
+                    "preconditioner_variant": variant,
+                    "eta_cap_enabled": normalization == "legacy",
                     "eta": 0.01,
                     "eta_strategy": "closed_loop_exact_line_search",
                     "line_search_relative_eps": 1.0e-12,
@@ -1727,7 +1771,9 @@ def test_complex_k2_plus_trainer_disables_eta_schedule_and_logs_subspace_metrics
             assert f"tangent_coefficient_{direction_index}_mean" in row
             assert f"tangent_direction_{direction_index}_active_fraction" in row
             assert f"tangent_response_cost_k{direction_index + 1}_mean" in row
-        assert "tangent_second_direction_active_fraction" in row
+        assert ("tangent_second_direction_active_fraction" in row) == (
+            subspace_dimension >= 2
+        )
         assert "tangent_response_orthogonality_max" in row
         assert "tangent_eta_cap" not in row
         assert "tangent_eta_star_mean" not in row

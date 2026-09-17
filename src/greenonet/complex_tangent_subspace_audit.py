@@ -418,7 +418,13 @@ class ComplexTangentSubspaceAudit(
         tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             projection.symmetric_tangent_green_response
         )
-        diagnostic_tangent = replace(tangent, subspace_dimension=1)
+        diagnostic_tangent = replace(
+            tangent,
+            subspace_dimension=1,
+            eta_cap_enabled=False
+            if tangent.direction_normalization == "response"
+            else tangent.eta_cap_enabled,
+        )
         checkpoint = validate_complex_tangent_context_checkpoint_config(
             training=self._configs.coupling_training,
             balance_projection=projection,
@@ -507,7 +513,9 @@ class ComplexTangentSubspaceAudit(
         production_step = context.tangent_step(
             mismatch=prepared.mismatch,
             gradient=prepared.gradient,
-            eta_cap=context.eta,
+            eta_cap=None
+            if context.direction_normalization == "response"
+            else context.eta,
         )
         krylov = matrix_free_krylov_subspace_audit(
             context=context,
@@ -517,16 +525,39 @@ class ComplexTangentSubspaceAudit(
             relative_eps=self.request.subspace_relative_eps,
             monotonicity_relative_tol=self.request.monotonicity_relative_tol,
         )
-        if (
-            production_step.eta_star is None
-            or production_step.eta_applied is None
-            or production_step.eta_capped is None
-            or production_step.line_search_numerator is None
-            or production_step.line_search_denominator is None
-        ):
-            raise RuntimeError(
-                "The configured production tangent step did not return "
-                "closed-loop line-search diagnostics."
+        closed_loop: tuple[ClosedLoopTangentBatchDiagnostics, ...] = ()
+        if context.direction_normalization == "legacy":
+            if (
+                production_step.eta_star is None
+                or production_step.eta_applied is None
+                or production_step.eta_capped is None
+                or production_step.line_search_numerator is None
+                or production_step.line_search_denominator is None
+            ):
+                raise RuntimeError(
+                    "The production step did not return closed-loop diagnostics."
+                )
+            closed_loop = (
+                ClosedLoopTangentBatchDiagnostics(
+                    method_id="k1_production",
+                    eta_cap=context.eta,
+                    eta_star=production_step.eta_star,
+                    eta_applied=production_step.eta_applied,
+                    eta_capped=production_step.eta_capped,
+                    line_search_numerator=production_step.line_search_numerator,
+                    line_search_denominator=production_step.line_search_denominator,
+                ),
+                ClosedLoopTangentBatchDiagnostics(
+                    method_id="k1_uncapped",
+                    eta_cap=None,
+                    eta_star=krylov.coefficients[0],
+                    eta_applied=krylov.coefficients[0],
+                    eta_capped=torch.zeros_like(
+                        krylov.coefficients[0], dtype=torch.bool
+                    ),
+                    line_search_numerator=krylov.line_search_numerator_0,
+                    line_search_denominator=krylov.line_search_denominator_0,
+                ),
             )
         tangent_delta = torch.stack(
             (
@@ -615,31 +646,7 @@ class ComplexTangentSubspaceAudit(
                     method_count,
                     batch_count,
                 ),
-                closed_loop=(
-                    ClosedLoopTangentBatchDiagnostics(
-                        method_id="k1_production",
-                        eta_cap=context.eta,
-                        eta_star=production_step.eta_star,
-                        eta_applied=production_step.eta_applied,
-                        eta_capped=production_step.eta_capped,
-                        line_search_numerator=(production_step.line_search_numerator),
-                        line_search_denominator=(
-                            production_step.line_search_denominator
-                        ),
-                    ),
-                    ClosedLoopTangentBatchDiagnostics(
-                        method_id="k1_uncapped",
-                        eta_cap=None,
-                        eta_star=krylov.coefficients[0],
-                        eta_applied=krylov.coefficients[0],
-                        eta_capped=torch.zeros_like(
-                            krylov.coefficients[0],
-                            dtype=torch.bool,
-                        ),
-                        line_search_numerator=krylov.line_search_numerator_0,
-                        line_search_denominator=krylov.line_search_denominator_0,
-                    ),
-                ),
+                closed_loop=closed_loop,
             ),
             krylov,
         )
@@ -1268,6 +1275,11 @@ class ComplexTangentSubspaceAudit(
             "configured_eta_cap": tangent.eta,
             "configured_relative_lambda": tangent.relative_lambda,
             "configured_preconditioner_variant": tangent.preconditioner_variant,
+            "direction_normalization": tangent.direction_normalization,
+            "direction_independence_relative_eps": tangent.direction_independence_relative_eps,
+            "coefficient_basis": "unit_response"
+            if tangent.direction_normalization == "response"
+            else "legacy",
             "frozen_training_subspace_dimension": tangent.subspace_dimension,
             "maximum_audited_subspace_dimension": (self.request.max_subspace_dimension),
             "subspace_relative_eps": self.request.subspace_relative_eps,

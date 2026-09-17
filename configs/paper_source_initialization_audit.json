@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "runs": [
+    {
+      "example": "unit_square",
+      "seed": 0,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/unit_square/coupling/unit_square_trunk_on_seed0",
+      "generation_summary": "data/complex_samples/unit_square_h_1_128_poisson/generation_summary.json"
+    },
+    {
+      "example": "unit_square",
+      "seed": 1,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/unit_square/coupling/unit_square_trunk_on_seed1",
+      "generation_summary": "data/complex_samples/unit_square_h_1_128_poisson/generation_summary.json"
+    },
+    {
+      "example": "unit_square",
+      "seed": 2,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/unit_square/coupling/unit_square_trunk_on_seed2",
+      "generation_summary": "data/complex_samples/unit_square_h_1_128_poisson/generation_summary.json"
+    },
+    {
+      "example": "unit_square",
+      "seed": 3,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/unit_square/coupling/unit_square_trunk_on_seed3",
+      "generation_summary": "data/complex_samples/unit_square_h_1_128_poisson/generation_summary.json"
+    },
+    {
+      "example": "disk",
+      "seed": 0,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/disk_diffusion/coupling/disk_separable_seed0",
+      "generation_geometry_override": "data/geometry/disk_radius_05_1_128.npz",
+      "generation_summary": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/generation_summary.json"
+    },
+    {
+      "example": "disk",
+      "seed": 1,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/disk_diffusion/coupling/disk_separable_seed1",
+      "generation_geometry_override": "data/geometry/disk_radius_05_1_128.npz",
+      "generation_summary": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/generation_summary.json"
+    },
+    {
+      "example": "disk",
+      "seed": 2,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/disk_diffusion/coupling/disk_separable_seed2",
+      "generation_geometry_override": "data/geometry/disk_radius_05_1_128.npz",
+      "generation_summary": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/generation_summary.json"
+    },
+    {
+      "example": "disk",
+      "seed": 3,
+      "native_k": 2,
+      "run_dir": "checkpoints/numerical_examples/disk_diffusion/coupling/disk_separable_seed3",
+      "generation_geometry_override": "data/geometry/disk_radius_05_1_128.npz",
+      "generation_summary": "data/complex_samples/circle_radius_05_1_128_sinusoidal_diffusion/generation_summary.json"
+    },
+    {
+      "example": "annulus",
+      "seed": 0,
+      "native_k": 4,
+      "run_dir": "checkpoints/numerical_examples/annulus/coupling_sequential/annulus_reconstruction_seed0",
+      "generation_summary": "data/complex_samples/annulus_02_05_1_128_reaction_diffusion/generation_summary.json"
+    },
+    {
+      "example": "annulus",
+      "seed": 1,
+      "native_k": 4,
+      "run_dir": "checkpoints/numerical_examples/annulus/coupling_sequential/annulus_reconstruction_seed1",
+      "generation_summary": "data/complex_samples/annulus_02_05_1_128_reaction_diffusion/generation_summary.json"
+    },
+    {
+      "example": "annulus",
+      "seed": 2,
+      "native_k": 4,
+      "run_dir": "checkpoints/numerical_examples/annulus/coupling_sequential/annulus_reconstruction_seed2",
+      "generation_summary": "data/complex_samples/annulus_02_05_1_128_reaction_diffusion/generation_summary.json"
+    },
+    {
+      "example": "annulus",
+      "seed": 3,
+      "native_k": 4,
+      "run_dir": "checkpoints/numerical_examples/annulus/coupling_sequential/annulus_reconstruction_seed3",
+      "generation_summary": "data/complex_samples/annulus_02_05_1_128_reaction_diffusion/generation_summary.json"
+    },
+    {
+      "example": "pentagram",
+      "seed": 0,
+      "native_k": 9,
+      "run_dir": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed0/pentagram_k9_seed0",
+      "generation_summary": "data/complex_samples/pentagram_r05_h00078125/generation_summary.json"
+    },
+    {
+      "example": "pentagram",
+      "seed": 1,
+      "native_k": 9,
+      "run_dir": "checkpoints/numerical_examples/pentagram/mac_studio/seed1/pentagram_k9_seed1",
+      "generation_summary": "data/complex_samples/pentagram_r05_h00078125/generation_summary.json"
+    },
+    {
+      "example": "pentagram",
+      "seed": 2,
+      "native_k": 9,
+      "run_dir": "checkpoints/numerical_examples/pentagram/nvidia_a40/seed2/pentagram_k9_seed2",
+      "generation_summary": "data/complex_samples/pentagram_r05_h00078125/generation_summary.json"
+    },
+    {
+      "example": "pentagram",
+      "seed": 3,
+      "native_k": 9,
+      "run_dir": "checkpoints/numerical_examples/pentagram/mac_studio/seed3/pentagram_k9_seed3",
+      "generation_summary": "data/complex_samples/pentagram_r05_h00078125/generation_summary.json"
+    }
+  ]
+}

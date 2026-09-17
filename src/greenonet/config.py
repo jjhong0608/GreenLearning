@@ -699,9 +699,12 @@ class SymmetricTangentGreenResponseProjectionConfig:
     eta_cap_enabled: bool = True
     eta_strategy: Literal["fixed", "closed_loop_exact_line_search"] = "fixed"
     line_search_relative_eps: float = 1.0e-12
+    direction_normalization: Literal["legacy", "response"] = "legacy"
+    direction_independence_relative_eps: float = 1.0e-12
     relative_lambda: float = 0.01
     denominator_relative_eps: float = 1.0e-12
     preconditioner_variant: Literal[
+        "identity",
         "separable",
         "exact_diagonal",
         "absolute_cross_axis",
@@ -781,6 +784,31 @@ class SymmetricTangentGreenResponseProjectionConfig:
             "line_search_relative_eps",
             self.line_search_relative_eps,
         )
+        if self.direction_normalization not in ("legacy", "response"):
+            raise ValueError("direction_normalization must be 'legacy' or 'response'.")
+        self._validate_positive(
+            "direction_independence_relative_eps",
+            self.direction_independence_relative_eps,
+        )
+        if self.direction_independence_relative_eps >= 1:
+            raise ValueError(
+                "direction_independence_relative_eps must be less than one."
+            )
+        if self.direction_normalization == "response" and self.subspace_dimension == 1:
+            if (
+                self.eta_strategy != "closed_loop_exact_line_search"
+                or self.eta_cap_enabled
+            ):
+                raise ValueError(
+                    "Response-normalized K=1 requires uncapped closed-loop line search."
+                )
+        if (
+            self.preconditioner_variant == "identity"
+            and self.direction_normalization != "response"
+        ):
+            raise ValueError(
+                "identity preconditioning requires direction_normalization='response'."
+            )
         self._validate_nonnegative("relative_lambda", self.relative_lambda)
         self._validate_positive(
             "denominator_relative_eps",
@@ -792,6 +820,7 @@ class SymmetricTangentGreenResponseProjectionConfig:
                 "preconditioner_variant must be a string."
             )
         allowed = {
+            "identity",
             "separable",
             "exact_diagonal",
             "absolute_cross_axis",
@@ -800,7 +829,7 @@ class SymmetricTangentGreenResponseProjectionConfig:
         if self.preconditioner_variant not in allowed:
             raise ValueError(
                 "balance_projection.symmetric_tangent_green_response."
-                "preconditioner_variant must be 'separable', 'exact_diagonal', "
+                "preconditioner_variant must be 'identity', 'separable', 'exact_diagonal', "
                 "'absolute_cross_axis', or 'normalized_quadratic_cross_axis'."
             )
         self._validate_positive(
@@ -855,6 +884,8 @@ class SymmetricTangentGreenResponseProjectionConfig:
                     "eta_cap_enabled",
                     "eta_strategy",
                     "line_search_relative_eps",
+                    "direction_normalization",
+                    "direction_independence_relative_eps",
                     "relative_lambda",
                     "denominator_relative_eps",
                     "preconditioner_variant",
@@ -872,6 +903,12 @@ class SymmetricTangentGreenResponseProjectionConfig:
             return cls(geometry_k_selection=geometry_k_selection, **data)
         raise TypeError(
             "balance_projection.symmetric_tangent_green_response must be an object."
+        )
+
+    @property
+    def uses_subspace_solver(self) -> bool:
+        return (
+            self.subspace_dimension >= 2 or self.direction_normalization == "response"
         )
 
 
@@ -1307,8 +1344,17 @@ class CouplingModelConfig:
     cross_axis_reconstruction: ComplexCrossAxisReconstructionConfig | dict[str, Any] = (
         field(default_factory=ComplexCrossAxisReconstructionConfig)
     )
+    primary_trunk_hidden_dim: int | None = None
 
     def __post_init__(self) -> None:
+        if self.primary_trunk_hidden_dim is not None and (
+            isinstance(self.primary_trunk_hidden_dim, bool)
+            or not isinstance(self.primary_trunk_hidden_dim, int)
+            or self.primary_trunk_hidden_dim <= 0
+        ):
+            raise ValueError(
+                "primary_trunk_hidden_dim must be a positive integer or null."
+            )
         self.balance_projection = BalanceProjectionConfig.from_raw(
             self.balance_projection
         )

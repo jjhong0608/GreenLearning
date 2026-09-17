@@ -296,6 +296,13 @@ class TrainCLI:
                 ).as_dict()
 
         if materialize_complex_coupling:
+            if coupling_model_cfg.primary_trunk_hidden_dim is not None:
+                coupling_model = payload.setdefault("coupling_model", {})
+                if not isinstance(coupling_model, dict):
+                    raise TypeError("coupling_model must be an object.")
+                coupling_model["primary_trunk_hidden_dim"] = (
+                    coupling_model_cfg.primary_trunk_hidden_dim
+                )
             coupling_training = payload["coupling_training"]
             assert isinstance(coupling_training, dict)
             factory = ComplexCouplingOptimizerFactory(coupling_training_cfg)

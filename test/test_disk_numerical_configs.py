@@ -11,7 +11,7 @@ from greenonet.coefficients import load_coefficient_functions
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DISK_DIR = ROOT / "numerical_examples" / "disk"
+DISK_DIR = ROOT / "numerical_examples" / "disk_old2"
 DISK_OLD_DIR = ROOT / "numerical_examples" / "disk_old"
 SEEDS = range(4)
 FREQUENCY_VARIANTS = {

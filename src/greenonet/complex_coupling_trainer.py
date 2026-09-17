@@ -755,7 +755,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
-        if tangent_config.subspace_dimension >= 2:
+        if tangent_config.uses_subspace_solver:
             self.logger.info(
                 "tangent-eta schedule disabled subspace_dimension=%d "
                 "eta_applicability=k1_only_not_applied",
@@ -941,7 +941,17 @@ class ComplexCouplingTrainer(LoggingMixin):
         tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
-        subspace = tangent.subspace_dimension >= 2
+        subspace = tangent.uses_subspace_solver
+        self.logger.info(
+            "tangent direction_normalization=%s direction_independence_relative_eps=%.6e "
+            "line_search_relative_eps=%.6e coefficient_basis=%s",
+            tangent.direction_normalization,
+            tangent.direction_independence_relative_eps,
+            tangent.line_search_relative_eps,
+            "unit_response"
+            if tangent.direction_normalization == "response"
+            else "legacy",
+        )
         residual_source = (
             f"post_k{tangent.subspace_dimension}_residual_gradient"
             if subspace
@@ -971,8 +981,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             tangent.subspace_dimension,
             residual_source,
             forward_source,
-            tangent.subspace_dimension == 1
-            and (config.enabled or self.response_trust_config.enabled),
+            not subspace and (config.enabled or self.response_trust_config.enabled),
             config.enabled and self.response_trust_config.enabled,
         )
 
@@ -981,7 +990,7 @@ class ComplexCouplingTrainer(LoggingMixin):
         tangent = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
-        subspace = tangent.subspace_dimension >= 2
+        subspace = tangent.uses_subspace_solver
         correction_source = (
             f"unconstrained_k{tangent.subspace_dimension}_coefficients"
             if subspace
@@ -1008,7 +1017,7 @@ class ComplexCouplingTrainer(LoggingMixin):
             correction_source,
             config.enabled,
             config.enabled,
-            tangent.subspace_dimension == 1 and config.enabled,
+            not subspace and config.enabled,
             config.enabled and self.post_line_search_stationarity_config.enabled,
             config.enabled and self.post_line_search_stationarity_config.enabled,
         )

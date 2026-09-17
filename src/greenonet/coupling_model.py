@@ -46,8 +46,15 @@ class MLP(nn.Module, ActivationFactoryMixin):
         use_bias: bool,
         dropout: float,
         last_activation: bool = False,
+        output_dim: int | None = None,
     ) -> None:
         super().__init__()
+        if output_dim is not None and (
+            isinstance(output_dim, bool)
+            or not isinstance(output_dim, int)
+            or output_dim <= 0
+        ):
+            raise ValueError("output_dim must be a positive integer or null.")
         layers: List[nn.Module] = []
         in_dim = input_dim
         for _ in range(depth):
@@ -56,7 +63,11 @@ class MLP(nn.Module, ActivationFactoryMixin):
             if dropout > 0:
                 layers.append(nn.Dropout(dropout))
             in_dim = hidden_dim
-        layers.append(nn.Linear(in_dim, hidden_dim, bias=use_bias))
+        layers.append(
+            nn.Linear(
+                in_dim, hidden_dim if output_dim is None else output_dim, bias=use_bias
+            )
+        )
         if last_activation:
             layers.append(self.build_activation(activation))
         self.net = nn.Sequential(*layers)
@@ -313,6 +324,10 @@ class CouplingNet(nn.Module, ActivationFactoryMixin):
 
     def __init__(self, config: CouplingModelConfig) -> None:
         super().__init__()
+        if config.primary_trunk_hidden_dim is not None:
+            raise ValueError(
+                "primary_trunk_hidden_dim is available only for ComplexCouplingNet."
+            )
         torch.set_default_dtype(config.dtype)
         pre_projection_fusion = ComplexPreProjectionFusionConfig.from_raw(
             config.pre_projection_fusion

@@ -1,89 +1,136 @@
-# Sequential Frozen-Checkpoint CSV Post-Hoc Audit 구현 계획
+# 네 수치예제의 Reference Source 진단과 학습된 초기값 효용 검증
 
-**1. 합의 사항**
-- 목적은 **동일한 frozen checkpoint에서 K를 증가시켰을 때, structural reach 포화 이후에도 response mismatch와 실제 solution error가 얼마나 개선되는지** 확인하는 것이다. 새로운 학습이나 최적 K의 자동 선택은 수행하지 않는다.
-- 첫 적용 대상은 Pentagram의 **K=10으로 학습한 seed 0·1·2·3의 best-energy checkpoint**다. 여러 checkpoint를 명시적으로 지정한 하나의 장비에서 순차 평가한다.
-- 기본 평가 범위는 `K=10,11,...,64`다. 각 sample의 **원래 symmetric-balanced proposal에서 1부터 K까지** 계산한다. 이미 보정된 K=10 결과에서 추가 correction을 시작하지 않는다.
-- 사용자 선택에 따라 **모든 평가와 시간 측정을 Eager, float64로 통일**한다. 학습 당시 compile 설정은 기록만 한다. 모델, Green response, preconditioner, loss, weak reconstruction 설정과 checkpoint는 변경하지 않는다.
-- “CSV 전용”은 **그림과 pointwise field archive를 생성하지 않는다**는 의미다. 재현성을 위한 JSON metadata, 검증 기록, 로그와 출력 설명서는 함께 저장한다. 이번에는 계획만 제공하며 `PLAN.md`는 사용자가 작성한다.
+## 1. 목표와 확정 범위
 
-**2. 입력과 출력**
-새 CLI는 `--run-dirs`의 순서대로 실행한다. 학습 config에 새로운 옵션은 추가하지 않는다.
+**순서 1도 네 예제 모두에서 수행한다.** FEniCSx reference source의 balance 위반을 측정하고, 원본 및 balance 보정 source를 동일한 학습 Green 연산자로 재구성하여 정확도를 비교한다. :codex-annotation{index="1"}
 
-| 입력 | 기본값과 동작 |
-|---|---|
-| `--run-dirs PATH...` | 필수. 각 폴더의 `config_used.json`과 `complex_coupling_model_best_energy.safetensors`를 사용한다. |
-| `--outdir`, `--device` | 모두 필수. 장비는 `cpu` 또는 명시적인 CUDA device이며 자동 fallback하지 않는다. |
-| `--baseline-k`, `--max-k` | 각각 `10`, `64`. `2 ≤ baseline_k ≤ max_k`이며 각 checkpoint의 학습 K는 baseline과 일치해야 한다. |
-| `--batch-size`, `--num-threads` | 각각 `10`, `4`. 모든 run과 K에 동일하게 적용하고 실제 thread 설정을 기록한다. |
-| `--benchmark` | 기본 off. 지정하면 정확도 평가와 별도로 각 K의 독립적인 시간 측정을 수행한다. |
-| `--warmup-repeats`, `--timing-repeats` | 각각 `3`, `5`. 한 반복은 같은 순서의 전체 testset을 한 번 처리하는 것이다. |
-| 경로 override | `--green-checkpoint`, `--geometry`, `--test-path`, `--coefficients`. 생략하면 config를 따른다. |
-| `--overwrite` | 기본 off. 이전에 이 CLI가 생성한 출력만 명시적으로 덮어쓸 수 있다. |
+**순서 2는 learned 모델을 원래 학습 \(K\)에서 고정한다.** \(f/2\) 초기값만 \(K=0,\ldots,64\)로 확장하여 learned 기준 정확도에 도달하는 최소 \(K\)와 온라인 비용을 측정한다.
 
-| 출력 | 내용과 행 단위 |
-|---|---|
-| `posthoc_per_sample.csv` | checkpoint × K × sample. `run_id`, seed, 학습 K, 평가 K, sample ID와 file stem을 포함한다. |
-| `posthoc_per_seed.csv` | checkpoint × K. sample 평균·중앙값·p95·최댓값, baseline 대비 개선량과 개선 sample 비율. |
-| `posthoc_summary.csv` | K별 seed 평균들의 평균과 표본 표준편차. 사용 seed 수를 기록하며 seed가 하나이면 표준편차는 NA. |
-| `posthoc_timing.csv` | checkpoint × K × 측정 범위 × 반복. 초 단위 시간과 측정 가능한 메모리. Benchmark off이면 header-only. |
-| `metadata.json`, `verification.json` | 입력 hash, 실행 환경, 정의·단위, context provenance, baseline 재현 및 수치 검증 결과. |
-| `run.log`, `README.md` | 터미널과 동일한 실행 로그, CSV column·집계 방식·해석상 주의사항. |
+| 예제 | 기준 checkpoint 그룹 | 학습·기준 평가 \(K\) | Seed | Test |
+|---|---|---:|---|---:|
+| Unit square | `unit_square_trunk_on_seed*` | 2 | 0–3 | 100 |
+| Disk | `disk_separable_seed*` | 2 | 0–3 | 50 |
+| Annulus | `annulus_reconstruction_seed*` | 4 | 0–3 | 100 |
+| Pentagram | `pentagram_k9_seed*` | 9 | 0–3 | 100 |
 
-핵심 response cost는 **half factor 없는 물리적 squared norm**으로 유지한다.
+현재 16개 best-energy checkpoint와 tangent context, 네 dataset의 `generation_summary.json` 및 reference 배열을 확인했다. Pentagram은 **K9-trained checkpoint**를 사용하며 기존 K10 audit를 덮어쓰지 않는다.
+
+사용자가 선택한 실행 조건은 **GPU:1에서 순차 실행**, 산출물은 **CSV·Markdown 보고서·Plotly 그림**이다. GPU:0, 새 학습, ODE 비교, 다른 결합 solver, 해상도 변경은 이번 범위에서 제외한다. `PLAN.md`는 사용자가 작성하며 이 계획 단계에서는 수정하지 않는다.
+
+## 2. 구현과 입력 검증
+
+1. **공통 audit 모듈과 CLI를 추가한다.** `src/greenonet/complex_source_initialization_audit.py`, `cli/audit_source_initialization.py`에 typed request/dataclass와 단계별 audit 클래스를 둔다. 기존 frozen CSV audit의 모델 로딩·context 검증·독립 시간 측정 패턴, production tangent·reconstruction을 재사용한다. 기존 equal-split CLI의 K10 전용 검증이나 첫 batch 전용 benchmark를 복제하지 않는다.
+2. **명시적인 16-run manifest를 작성한다.** Run 경로, 예제·seed, 기준 \(K\), checkpoint·GreenNet·geometry·계수·test·원본 artifact 경로를 기록한다. CLI는 `--manifest`, `--outdir`, `--stage preflight|reference|initialization|all`, `--device`, `--batch-size`, `--max-k`, `--warmup-repeats`, `--timing-repeats`를 받는다.
+3. **기본값은 고정한다.** `cuda:1`, float64, eager/no-grad, batch 5, CPU threads 4, 최대 \(K=64\), warm-up 3회·측정 5회로 실행한다. 기존 모델의 preconditioner·epsilon·정규화를 유지한다. Disk의 response 정규화를 다른 세 예제의 legacy 정규화로 바꾸거나 그 반대로 바꾸지 않는다.
+4. **Preflight에서 전체 입력을 검증한다.** Test 파일 전체의 필수 배열·shape·finite valid values·active-point 순서, source/solution 단위, CDR 항 분배와 경계조건을 확인한다. 생성 metadata의 과거 경로와 현재 경로가 다르면 명시적 대응을 기록하며 파일명 유사성만으로 대체하지 않는다.
+5. **현재 생성 코드와 과거 provenance를 구분한다.** 현재 FEniCSx 코드는 방향별 미분식에 반응항 절반을 더해 별도 projection 후 axial point에서 평가한다. 당시 생성 설정과의 일치를 확인하되, 현재 코드가 당시 실행 코드와 동일했다는 보증은 하지 않는다. Disk 생성 요약의 전체 train/valid/test 통계를 test 통계로 사용하지 않는다.
+6. **입력은 읽기 전용으로 보호한다.** Checkpoint·context·config·GreenNet·geometry·계수·test·생성 요약·비교 artifact의 SHA256을 전후 확인한다. Context는 기존 검증 경로로 재사용하고, 장비 차이로 재구성이 필요하면 메모리 또는 새 출력 디렉터리에서만 수행한다. 손상·의미 불일치를 조용히 fallback하지 않는다.
+
+출력 루트는 `docs/analysis/paper_source_initialization_audit/`로 한다. 기존 디렉터리가 있으면 덮어쓰지 않고 실패한다. 수정된 실행은 별도의 `--outdir`로 남기며 예전 결과와 섞지 않는다.
+
+## 3. 단계별 실험과 판정
+
+### A. 순서 1: Reference source 진단
+
+네 예제의 전체 test에서 다음 두 조건을 **tangent와 초기값 네트워크 없이** 평가한다.
+
 \[
-J_{b,K}=h_xh_y\sum_p\bigl(u_{\phi,b,K}(p)-u_{\psi,b,K}(p)\bigr)^2,\qquad
-\Delta_{s,K}=1-\frac{\overline J_{s,K}}{\overline J_{s,K-1}},\qquad
-G_{s,K}=1-\frac{\overline J_{s,K}}{\overline J_{s,K_0}}.
+r=\phi_{\rm ref}+\psi_{\rm ref}-f,\qquad
+(\phi_{\rm bal},\psi_{\rm bal})
+=(\phi_{\rm ref}-r/2,\ \psi_{\rm ref}-r/2).
 \]
-- `response_cost`, 이전 단계 대비 ratio·개선율, baseline 대비 ratio·개선율을 저장한다. **Ratio of means와 mean of per-sample ratios를 구분**하며 논문용 기본값은 seed 내부 ratio of means다. Baseline 단계의 직전 cost도 내부 계산에서 확보하고, 분모가 0이면 ratio는 NA로 기록한다.
-- `rel_sol`은 config의 최종 weak prediction 기준이며, `rel_sol_equal_mean`, `rel_u_phi`, `rel_u_psi`, `rel_flux`, bulk/boundary/optimized energy도 함께 저장한다. `rel_flux`는 기존 directional-source pair 오차 정의를 유지한다.
-- Correction norm, symmetric pair 대비 correction ratio, 단계별 coefficient·active 여부, effective dimension, balance 최대 오차와 response orthogonality를 기록한다. Geometry-only global·lower-5%·minimum reach와 full-reach K도 기존 topology helper로 한 번 계산한다.
-- CSV의 오차·개선율은 fraction으로 저장한다. 공유 testset을 seed 수만큼 독립 표본으로 취급하지 않으며, reference error가 가장 낮은 K를 자동으로 추천하지 않는다.
 
-**3. 단계별 구현**
-1. **입력 및 provenance 검증:** 새 request dataclass와 순차 runner를 추가한다. 중복 run/seed, checkpoint 누락, 서로 다른 test sample·Green checkpoint·geometry·coefficient·모델 설정을 검증한다. Seed와 원래 학습 장비 등 허용된 차이는 분리 기록한다. Linux/Mac 경로 변경은 override로 처리하고 실제 파일 hash를 남긴다.
-2. **기존 계산 재사용:** [기존 subspace audit](/home/jjhong0608/Documents/GreenNetResearch/ComplexGeometry/src/greenonet/complex_tangent_subspace_audit.py)의 준비·metric 계산에서 필요한 비시각화 부분만 공통화한다. Production `matrix_free_krylov_subspace_step`과 reconstruction helper를 재사용하며, 기존 그림 생성 CLI의 동작은 보존한다.
-3. **Context 보호 및 baseline 재현:** 검증된 기존 sidecar는 읽기 전용으로 사용한다. 없으면 메모리에 build하고, 존재하지만 무결성 검증에 실패하면 중단한다. 동일한 static operator identity에서는 checkpoint 간에도 재사용한다. 각 run의 baseline을 production evaluator 및 `artifacts_best_energy`의 동일 sample 지표와 대조한 뒤 sweep을 진행한다. 학습 종료 모델의 `metrics/`를 대신 사용하지 않는다.
-4. **정확도 sweep:** Batch별로 frozen model forward와 초기 proposal을 한 번 계산하고 Kmax까지의 nested 결과를 얻는다. 각 K의 reconstruction과 metric은 순차 처리해 큰 candidate field 복제를 피한다. Reference는 metric 계산에만 사용하며, inactive direction 처리·두 번의 MGS·기존 epsilon 규칙을 변경하지 않는다.
-5. **독립 benchmark:** 각 K를 처음부터 다시 실행한다. `tangent_only`는 준비된 mismatch·gradient부터 correction까지, `prediction_forward`는 장비에 준비된 입력부터 network·projection·reconstruction·weak blend까지 측정한다. 데이터 읽기·전송·context setup·reference metric·CSV 쓰기는 제외한다. CUDA에서는 지정 device를 측정 전후 동기화하며 warmup을 제외한다. [PyTorch benchmark 원칙](https://docs.pytorch.org/docs/2.14/benchmark_utils.html)
-6. **시간·메모리 집계:** 전체 test pass의 batch별 측정 시간을 합산하고 반복별 원자료 및 median/p95를 저장한다. Production helper 내부의 MGS·안전 검사·작은 K×K 직교성 진단 비용은 포함한다. CUDA peak allocated memory와 측정 시작 시 allocation을 기록하고 CPU peak memory는 미측정 NA로 표시한다. 서로 다른 평가 장비의 시간을 합치지 않는다.
-7. **저장 및 문서:** 실패 시 부분 결과와 실패 사유는 남기되 완료 aggregate로 표시하지 않는다. 모든 검증을 통과한 뒤 완료 상태를 기록한다. 입력 checkpoint/config/sidecar/artifact는 수정하지 않는다. 신규 파일은 `cli/audit_frozen_tangent_csv.py`, `src/greenonet/complex_frozen_tangent_csv.py`, 대응 focused test이며, 프로젝트 `README.md`와 `docs/memory.md`에 실행·해석 convention을 추가한다.
+- 원본과 보정본 각각에 동일한 Green response·적분·weak reconstruction을 적용하고, directional/equal/weak solution error의 sample별 값과 mean·P95·maximum을 기록한다.
+- Balance 절대 \(L^2_M\) norm, 상대 norm, 최대 절대 residual, pair 보정 norm, directional mismatch와 energy를 보고한다. 상대 분모 norm이 \(10^{-12}\) 이하이면 NA와 명시적 사유를 기록하고 절대값은 유지한다.
+- \(\|r\|_M/\sqrt2\)는 전제 조건이 맞을 때 source-pair 오차의 하한이며 solution-error 하한이 아님을 보고서에 명시한다. 원본 source가 balance를 만족해야 한다는 assertion은 두지 않는다.
+- 동일한 Green·geometry·계수·적분·reconstruction·test fingerprint는 한 번만 평가하고 해당 run들과 연결한다. 다른 fingerprint를 seed만 같다는 이유로 공유하지 않는다.
+- 큰 residual 자체는 실패 조건이 아니다. Source 계약 불일치나 비유한 결과는 해당 조건을 오류로 보고하며, 자동으로 dataset을 재생성하거나 정의를 바꾸지 않는다.
 
-**4. 테스트와 롤백**
-- **수학·동등성:** 작은 float64 fixture에서 Kmax prefix와 각 K 독립 실행의 일치, K=10 baseline 재현, K=64의 finite 출력, exact balance tolerance, J의 tolerance 내 비증가, 퇴화 direction과 effective dimension을 검증한다. `rel_sol`과 energy의 단조 감소는 요구하지 않는다.
-- **CLI·CSV:** 여러 checkpoint의 순차 실행, 동일 sample pairing, batch 크기 변경 시 정확도 일치, seed별 집계, ratio 정의, NA 처리, benchmark on/off, 그림·raw NPZ 부재, 입력 hash 불변을 검증한다. Reference 변경이 correction을 바꾸지 않는지도 검사한다.
-- **실패·시간:** 잘못된 경로·서로 다른 입력·누락된 reference/기준 artifact·손상 sidecar·중복 seed·baseline 불일치·부적절한 overwrite가 명확히 실패하는지 확인한다. Fake clock과 CUDA mock으로 warmup·동기화·측정 제외 범위를 검증하고, 실제 CUDA smoke는 사용 가능할 때만 수행한다.
-- **검증 순서:** 신규 focused tests → 기존 tangent subspace/projection/context 및 artifact tests → 전체 `pytest test` → `ruff check src cli test` → `ruff format src cli test` → `mypy src` → `git diff --check`. 구현 검증 중 실제 네 checkpoint의 K=10..64 본 실험은 실행하지 않는다.
-- **롤백:** 새 CLI와 runner 사용을 중단하면 기존 workflow로 즉시 복귀한다. 공통화한 helper에 regression이 있으면 해당 추출만 되돌린다. Model migration, training config 변경, 원본 실험 결과의 복원 작업은 필요 없어야 한다.
-- **확신도:** 구현 계획 **0.97**. 실행 모드와 분석 목적은 명확하다. 남은 불확실성은 다른 장비로 복사된 파일의 완전성 및 실제 장비에서의 고차 K 시간·메모리에 관한 **정보 부족**이며, 규칙의 모호성은 아니다.
+### B. 순서 2: Learned 기준 정확도까지의 보정 비용
 
-**5. 실행 가능한 `/goal`**
+각 checkpoint를 원래 \(K\)의 production 경로로 재평가하고 기존 best-energy artifact를 재현하는지 먼저 확인한다. Learned 평가는 기준 \(K\)에서 고정하며 \(f/2\)만 전체 \(K\)를 확장한다.
+
+\[
+K_{\rm match}
+=\min\{K:\overline E_{f/2}(K)\le\overline E_{\rm learned}(K_{\rm base})\}.
+\]
+
+- 주 지표는 weak solution 평균 상대 \(L^2\) error이다. 같은 \(K_{\rm match}\)의 P95·maximum을 함께 제시하고, **평균과 P95를 동시에 만족하는 최소 \(K\)**도 별도 기록한다.
+- 전체 \(K\)의 curve를 보존해 도달 후 악화를 표시한다. 비교식은 저장된 float64 원시값으로 계산하고 반올림된 표 값으로 판정하지 않는다.
+- 범위 내 미도달은 `not_reached`로 기록한다. \(K>64\) 자동 확장, threshold 변경, 안정화 변경은 하지 않는다. 수치 오류는 미도달과 구분한다.
+- 정확도 sweep은 nested prefix를 사용하되, learned 기준 \(K\) 및 모든 도달 \(K\)에서 독립 호출과의 일치를 확인한다. K0은 보정 없음, K1은 기존 uncapped 보정 의미를 유지한다.
+- Actual active dimension과 방향별 activity를 기록한다. 방향 탈락은 있는 그대로 보고하며 configured \(K\)만으로 유효 차원을 주장하지 않는다.
+- 동일 fingerprint의 \(f/2\) 경로는 재사용하되 seed마다 다른 learned 목표값과 대응시킨다. 복제된 baseline을 독립 관측으로 세지 않는다.
+
+### C. 독립적인 온라인 시간 측정
+
+예제별로 learned 기준 \(K\), \(f/2\)의 기준 \(K\), \(K=64\), 모든 seed의 mean-match·mean+P95-match \(K\)의 합집합을 측정한다.
+
+- 전체 test를 batch 5로 순회하는 prediction-forward를 warm-up 3회 후 5회 측정한다. 조건 순서는 반복마다 반전하며 CUDA를 전후 동기화한다.
+- 입력 batch는 사전 준비한다. Network inference·physical 변환·balance projection·보정·response 재구성·weak blend를 포함하고, 데이터 I/O·context/model loading·setup·metric 계산·학습은 제외했다고 명시한다.
+- 각 \(K\)는 처음부터 독립 실행한다. Prefix sweep 시간을 분할하거나 저장된 최종 correction을 가져오는 시간을 benchmark로 쓰지 않는다.
+- 원시 반복 시간, median·범위, sample당 시간, GPU peak allocated/reserved memory와 측정 직전 baseline을 기록한다. 초기값·보정·재구성 단계별 시간은 이번 필수 산출물에서 제외한다.
+- GPU:1에 다른 연산 작업이 있거나 OOM이 발생하면 시간 측정을 중단하고 보고한다. GPU:0·CPU로 자동 전환하거나 batch를 조용히 줄이지 않는다.
+- Test로 찾은 도달 \(K\)는 사후 비교 지표일 뿐 reference-free stopping rule이나 배포용 선택값이 아니다. 실제 시간 이득이 없으면 정확도 또는 보정 차원의 이점으로만 결론을 제한한다.
+
+## 4. 산출물·테스트·완료 기준
+
+**산출물:** 입력 manifest와 hash/provenance, effective evaluation 설정, `run.log`, preflight·검증 JSON, reference sample/summary CSV, learned baseline CSV, \(f/2\) 전체-K sample/summary CSV, seed별 도달-K CSV, timing 원시·요약 CSV를 생성한다. CSV 오차는 fraction으로 저장하고 보고서에서 %로 변환한다.
+
+Plotly는 예제별 정확도–K, 정확도–시간, reference 원본/보정본 비교를 만든다. Learned 기준선과 도달점을 표시하고 서로 다른 예제의 오차를 하나의 평균으로 합치지 않는다. Markdown 보고서는 수행 범위·결과·예외·해석 한계·남은 질문을 포함한다.
+
+**영향 파일:** 신규 audit 모듈·CLI·manifest 및 전용 `test/` 테스트를 추가한다. 공통 production helper는 재사용을 우선하고 필요한 경우에만 동작 보존형으로 최소 수정한다. Storyline에 후속 결과 문서와 링크를 추가하고 README·`docs/memory.md`를 갱신한다. 기존 paper CSV·provenance·checkpoint는 변경하지 않는다.
+
+**테스트 순서와 내용:**
+- 먼저 합성 fixture로 원본 source 보존, symmetric projection·보정 norm, 불균형 원본 허용, \(f/2\)의 network 우회, K0/K1, nonmonotone 최초 도달·미도달·mean/tail 분리, 중복 baseline 연결을 검증한다.
+- Legacy/response 정규화, mask·배열 순서, fingerprint 불일치, zero denominator, 누락·손상 입력, 독립 timing이 매 호출 재계산하는지 검사한다.
+- 구현 시도마다 가장 작은 관련 테스트부터 실행한 다음 전체 `pytest`를 실행한다. `ruff check src`, `ruff format --check src`, `mypy src`, 문서 링크 및 diff 검사를 수행한다.
+- 예제당 seed0의 소규모 smoke 검증 후 네 예제 전체 reference 진단, 16개 learned 기준 평가와 \(f/2\) sweep, 시간 측정 순으로 실행한다.
+- Native metric과 독립 prefix의 일치는 기본 `rtol=1e-8, atol=1e-12`, balanced source 합은 `rtol=atol=1e-12`로 검증한다. Response cost의 비증가는 기존 production audit의 허용오차를 재사용한다. 불일치 시 tolerance를 자동 완화하지 않는다.
+- 모든 run/test coverage, 누락·중복 부재, hash 불변, 도달-K 재계산과 완료 상태를 확인한다. 일반 미도달은 정상 결과지만 수치·입력 오류가 남은 작업을 완료로 표시하지 않는다.
+
+**롤백:** 새 코드·manifest·결과 디렉터리와 이번 문서 변경만 개별적으로 되돌린다. 기존 dirty worktree를 reset하지 않는다. 실패 결과는 삭제·성공 표시 대신 실패 상태로 보존하고, 재실행은 새 출력 디렉터리에 남긴다. Checkpoint 계약 변경이 필요하면 구현을 중단하고 tensor/key 불일치, 영향 checkpoint, 최소 migration 방안을 보고한다.
+
+**확신도:** 약 **90%**. 16개 checkpoint와 reference 입력의 존재, 기존 재사용 경로는 확인했다. 남은 불확실성은 과거 데이터 생성과 현재 계수·geometry의 의미적 일치, 큰 \(K\)의 실제 수치 동작 및 실행시간에 관한 정보 부족이다. 범위와 판단 규칙의 모호함은 아니다.
+
+## 5. 실행 가능한 `/goal` 초안
+
 ```text
 /goal
 
-프로젝트 루트 PLAN.md의
-"Sequential Frozen-Checkpoint CSV Post-Hoc Audit 구현 계획"을 기준으로,
-여러 frozen best-energy checkpoint를 같은 장비에서 순차 평가하는
-CSV 전용 post-hoc CLI를 끝까지 구현한다.
+프로젝트 루트의 PLAN.md를 읽고 그 계획에 따라 순서 1과 순서 2를 구현·실행·분석하라.
 
-완료는 다음 조건으로 검증한다.
-- 동일한 입력·float64·Eager 환경에서 checkpoint를 순차 평가할 것,
-- 기본 K=10..64를 원래 symmetric-balanced proposal부터 계산할 것,
-- baseline이 production evaluator와 기존 best-energy artifact를 재현할 것,
-- response cost, 단계별 개선량, solution/directional error와 reach를 기록할 것,
-- sample별·seed별·seed 간 집계와 optional 독립 benchmark가 정확할 것,
-- active direction, balance, finite 결과와 response-cost 비증가를 검증할 것,
-- reference는 정확도 metric에만 사용하고 그림이나 raw field NPZ를 만들지 않을 것,
-- focused tests, 전체 pytest, Ruff, mypy와 git diff check가 통과할 것.
+순서 1은 Unit square, Disk, Annulus, Pentagram 전체 test에서
+FEniCSx reference source의 정의와 balance를 확인하고,
+원본 및 symmetric balance 보정 source를 같은 학습 Green 연산자로
+재구성하여 정확도를 비교하는 작업이다.
 
-수정은 새 CSV CLI/runner, 필요한 audit helper 공통화, tests와 관련 문서로 제한한다.
-Model, training, tangent 수식, checkpoint key, 기존 artifact behavior는 보존한다.
-실제 네 checkpoint의 본 평가와 재학습은 실행하지 않는다. 실행은 사용자가 한다.
-각 단계에서 가장 작은 관련 테스트를 먼저 실행한 뒤 regression 검증을 진행한다.
+순서 2는 네 예제의 네 seed best-energy checkpoint를 각각 학습 당시
+K=2,2,4,9로 평가한 정확도를 고정 기준으로 삼고,
+physical phi=psi=f/2를 K=0..64로 보정하여 그 기준에 도달하는
+최소 K와 온라인 prediction 시간을 비교하는 작업이다.
+Pentagram은 반드시 K9-trained checkpoint를 사용하라.
 
-Baseline 수치 또는 입력 provenance를 보존할 수 없다면 중단하고 보고한다.
-1. 충돌하는 checkpoint, 입력 또는 metric contract,
-2. 영향을 받는 run과 CSV 항목,
-3. 기존 수치와 원본 파일을 보존하는 가장 작은 수정 또는 롤백 전략.
+GPU:1에서 float64 eager로 한 작업씩 순차 실행하라.
+GPU:0, 재학습, ODE 비교, 다른 결합 solver, 해상도 변경은 수행하지 마라.
+각 checkpoint의 preconditioner와 정규화 설정을 보존하라.
+
+완료는 다음으로 검증한다:
+- 네 예제 전체 reference 진단과 16개 learned 기준 평가 완료
+- 기준 metric 재현 및 prefix와 독립 평가의 일치
+- 평균 도달 K, 평균과 P95 동시 도달 K, 미도달·실패의 명확한 구분
+- inference와 projection을 포함한 독립 전체-test 온라인 시간 측정
+- CSV, Plotly 그림, 상세 Markdown 보고서와 provenance 생성
+- 기존 checkpoint, context, config, dataset과 결과 hash 불변
+- 관련 테스트, 전체 pytest, 린트·타입 검사 통과
+
+각 구현 시도 후 가장 작은 관련 테스트부터 실행하고 전체 회귀 테스트를 실행하라.
+PLAN.md는 수정하지 말고 README와 docs/memory.md에는 최종 결정과 결과를 기록하라.
+기존 결과를 덮어쓰거나 유리한 결과만 선택하지 마라.
+
+Checkpoint 호환성을 유지할 수 없으면 중단하고
+정확한 tensor/key 계약 불일치, 영향 checkpoint, 최소 migration 방안을 보고하라.
+입력 계약 불일치나 native 재현 실패는 숨기지 말고 해당 평가를 중단하라.
+K64 내 정확도 미도달은 정상 결과로 보고하되 자동 범위 확장은 하지 마라.
+결과를 확인한 뒤 실제 근거에 맞게 주장 수준을 정리하라.
 ```

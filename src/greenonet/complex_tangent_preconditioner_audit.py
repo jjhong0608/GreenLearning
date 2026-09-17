@@ -31,7 +31,7 @@ from greenonet.complex_projection_response_audit import (
 )
 from greenonet.complex_symmetric_tangent_audit import TangentMethod
 from greenonet.complex_tangent_preconditioner import (
-    TANGENT_PRECONDITIONER_VARIANTS,
+    TANGENT_GAIN_PRECONDITIONER_VARIANTS as TANGENT_PRECONDITIONER_VARIANTS,
     TangentPreconditionerVariant,
 )
 from greenonet.complex_tangent_projection import (

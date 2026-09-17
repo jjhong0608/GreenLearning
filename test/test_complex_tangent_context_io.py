@@ -77,6 +77,8 @@ def _config(
         max_subspace_dimension=max(8, subspace_dimension),
         eta=0.1,
         eta_strategy="closed_loop_exact_line_search",
+        direction_normalization="response" if variant == "identity" else "legacy",
+        eta_cap_enabled=variant != "identity",
         relative_lambda=0.01,
         denominator_relative_eps=1.0e-12,
         preconditioner_variant=variant,  # type: ignore[arg-type]
@@ -187,7 +189,7 @@ def test_schema_v2_round_trip_is_shared_by_all_variants_and_k(tmp_path: Path) ->
                 gradient=loaded_gradient,
             )
             assert torch.equal(loaded_step.delta, reference_step.delta)
-            if dimension == 1:
+            if dimension == 1 and variant != "identity":
                 assert loaded_step.residual_gradient_post is None
                 assert reference_step.residual_gradient_post is None
             else:
@@ -197,6 +199,43 @@ def test_schema_v2_round_trip_is_shared_by_all_variants_and_k(tmp_path: Path) ->
                     loaded_step.residual_gradient_post,
                     reference_step.residual_gradient_post,
                 )
+
+
+def test_identity_save_preserves_static_tensor_schema_and_runtime_options(
+    tmp_path: Path,
+):
+    legacy_path, response_path = (
+        tmp_path / "legacy.safetensors",
+        tmp_path / "response.safetensors",
+    )
+    for path, variant in ((legacy_path, "separable"), (response_path, "identity")):
+        TangentResponseContextStore.save(
+            path=path, context=_context(variant=variant), identity=_identity()
+        )
+    legacy_manifest, legacy_tensors = _load_manifest_and_tensors(legacy_path)
+    response_manifest, response_tensors = _load_manifest_and_tensors(response_path)
+    assert legacy_manifest["schema_version"] == response_manifest["schema_version"] == 2
+    assert legacy_tensors.keys() == response_tensors.keys()
+    for key in legacy_tensors:
+        assert torch.equal(legacy_tensors[key], response_tensors[key]), key
+    config = replace(
+        _config(variant="identity"), direction_independence_relative_eps=1e-8
+    )
+    loaded = TangentResponseContextStore.load(
+        path=response_path,
+        identity=_identity(),
+        config=config,
+        device=torch.device("cpu"),
+    )
+    context = SymmetricTangentGreenResponseContext.from_preconditioner_terms(
+        response_operator=loaded.response_operator,
+        point_mass=loaded.point_mass,
+        terms=loaded.terms,
+        config=config,
+    )
+    assert context.direction_normalization == "response"
+    assert context.direction_independence_relative_eps == 1e-8
+    assert torch.equal(context.denominator, torch.ones_like(context.denominator))
 
 
 def test_sidecar_rejects_identity_and_static_config_mismatch(tmp_path: Path) -> None:

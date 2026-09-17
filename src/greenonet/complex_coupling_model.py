@@ -136,7 +136,12 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
             self.branch_geometry = None
         self.trunk = MLP(
             input_dim=1,
-            hidden_dim=config.hidden_dim,
+            hidden_dim=(
+                config.primary_trunk_hidden_dim
+                if config.primary_trunk_hidden_dim is not None
+                else config.hidden_dim
+            ),
+            output_dim=config.hidden_dim,
             depth=config.depth,
             activation=config.activation,
             use_bias=config.use_bias,
@@ -867,6 +872,13 @@ class ComplexCouplingNet(nn.Module, ActivationFactoryMixin):
                 trunk_fuser_features.append("elementwise_product")
         return {
             "active_branch_components": list(self.active_branch_components),
+            "primary_trunk_hidden_dim_configured": self.config.primary_trunk_hidden_dim,
+            "primary_trunk_hidden_dim_resolved": (
+                self.config.primary_trunk_hidden_dim
+                if self.config.primary_trunk_hidden_dim is not None
+                else self.config.hidden_dim
+            ),
+            "primary_trunk_output_dim": self.config.hidden_dim,
             "branch_component_count": branch_component_count,
             "branch_fusion_configured": self.branch_fusion_mode,
             "branch_fusion_effective": effective_branch_fusion,

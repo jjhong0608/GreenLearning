@@ -271,6 +271,8 @@ class SymmetricTangentGreenResponseContext:
     exact_roundoff_clamp_mask: torch.Tensor
     exact_roundoff_clamp_count: int
     eta_cap_enabled: bool = True
+    direction_normalization: Literal["legacy", "response"] = "legacy"
+    direction_independence_relative_eps: float = 1.0e-12
 
     @classmethod
     def from_response_operator(
@@ -329,6 +331,10 @@ class SymmetricTangentGreenResponseContext:
             eta_cap_enabled=config.eta_cap_enabled,
             eta_strategy=config.eta_strategy,
             line_search_relative_eps=float(config.line_search_relative_eps),
+            direction_normalization=config.direction_normalization,
+            direction_independence_relative_eps=float(
+                config.direction_independence_relative_eps
+            ),
             relative_lambda=float(config.relative_lambda),
             denominator_relative_eps=float(config.denominator_relative_eps),
             preconditioner_variant=config.preconditioner_variant,
@@ -356,6 +362,12 @@ class SymmetricTangentGreenResponseContext:
     def num_points(self) -> int:
         return self.response_operator.point_count
 
+    @property
+    def uses_subspace_solver(self) -> bool:
+        return (
+            self.subspace_dimension >= 2 or self.direction_normalization == "response"
+        )
+
     def with_preconditioner_variant(
         self,
         variant: TangentPreconditionerVariant,
@@ -364,13 +376,17 @@ class SymmetricTangentGreenResponseContext:
 
         if variant not in TANGENT_PRECONDITIONER_VARIANTS:
             raise ValueError(f"Unsupported tangent preconditioner variant: {variant}.")
+        if variant == "identity" and self.direction_normalization != "response":
+            raise ValueError("identity requires response normalization.")
         bases = {
+            "identity": torch.ones_like(self.denominator),
             "separable": self.separable_preconditioner_base,
             "exact_diagonal": self.exact_preconditioner_base,
             "absolute_cross_axis": self.absolute_preconditioner_base,
             "normalized_quadratic_cross_axis": self.quadratic_preconditioner_base,
         }
         denominators = {
+            "identity": torch.ones_like(self.denominator),
             "separable": self.separable_denominator,
             "exact_diagonal": self.exact_denominator,
             "absolute_cross_axis": self.absolute_denominator,
@@ -423,9 +439,16 @@ class SymmetricTangentGreenResponseContext:
     ) -> SymmetricTangentStepResult:
         self.validate_for(mismatch)
         self.validate_for(gradient)
-        if self.subspace_dimension >= 2:
+        if self.uses_subspace_solver:
             if eta_cap is not None:
-                raise ValueError("eta_cap is not applicable to subspace_dimension>=2.")
+                raise ValueError("eta_cap is not applicable to the subspace solver.")
+            if self.subspace_dimension == 1 and (
+                self.eta_cap_enabled
+                or self.eta_strategy != "closed_loop_exact_line_search"
+            ):
+                raise ValueError(
+                    "Response-normalized K=1 requires uncapped closed-loop line search."
+                )
             result = matrix_free_krylov_subspace_step(
                 context=self,
                 mismatch=mismatch,
@@ -438,18 +461,30 @@ class SymmetricTangentGreenResponseContext:
                 delta=result.final_delta,
                 subspace_dimension=self.subspace_dimension,
                 direction_0=result.directions[0],
-                direction_1=result.directions[1],
+                direction_1=result.directions[1]
+                if self.subspace_dimension >= 2
+                else None,
                 response_direction_0=result.response_directions[0],
-                response_direction_1=result.response_directions[1],
+                response_direction_1=result.response_directions[1]
+                if self.subspace_dimension >= 2
+                else None,
                 directional_response_0=result.directional_responses[0],
-                directional_response_1=result.directional_responses[1],
+                directional_response_1=result.directional_responses[1]
+                if self.subspace_dimension >= 2
+                else None,
                 coefficient_0=result.coefficients[0],
-                coefficient_1=result.coefficients[1],
-                second_direction_active=result.direction_active[1],
+                coefficient_1=result.coefficients[1]
+                if self.subspace_dimension >= 2
+                else None,
+                second_direction_active=result.direction_active[1]
+                if self.subspace_dimension >= 2
+                else None,
                 mismatch_k1=result.mismatches[0],
-                mismatch_k2=result.mismatches[1],
+                mismatch_k2=result.mismatches[1]
+                if self.subspace_dimension >= 2
+                else None,
                 cost_k1=result.costs[0],
-                cost_k2=result.costs[1],
+                cost_k2=result.costs[1] if self.subspace_dimension >= 2 else None,
                 residual_gradient_post=result.residual_gradient_post,
                 subspace_result=result,
             )
@@ -517,11 +552,16 @@ class SymmetricTangentGreenResponseContext:
         y_stats = self.response_operator.y.statistics()
         return {
             "subspace_dimension": self.subspace_dimension,
+            "direction_normalization": self.direction_normalization,
+            "direction_independence_relative_eps": self.direction_independence_relative_eps,
+            "coefficient_basis": "unit_response"
+            if self.direction_normalization == "response"
+            else "legacy",
             "eta": self.eta,
             "eta_cap_enabled": self.eta_cap_enabled,
             "eta_applicability": (
                 "k1_only_not_applied"
-                if self.subspace_dimension >= 2
+                if self.uses_subspace_solver
                 else (
                     "applied"
                     if self.eta_strategy == "fixed" or self.eta_cap_enabled
@@ -732,6 +772,144 @@ def matrix_free_krylov_k2_step(
     )
 
 
+def response_normalized_subspace_step(
+    *,
+    context: SymmetricTangentGreenResponseContext,
+    mismatch: torch.Tensor,
+    gradient: torch.Tensor,
+    max_dimension: int,
+    relative_eps: float,
+    monotonicity_relative_tol: float | None = None,
+    inverse_preconditioner: Callable[[torch.Tensor], torch.Tensor] | None = None,
+) -> KrylovSubspaceStepResult:
+    """Paired response-normalized MGS with a squared independence test."""
+    if (
+        isinstance(max_dimension, bool)
+        or not isinstance(max_dimension, int)
+        or max_dimension < 1
+    ):
+        raise ValueError("max_dimension must be a positive integer.")
+    if not math.isfinite(relative_eps) or relative_eps <= 0:
+        raise ValueError("relative_eps must be finite and positive.")
+    context.validate_for(mismatch)
+    context.validate_for(gradient)
+    independence_eps = context.direction_independence_relative_eps
+    if mismatch.ndim != 2 or gradient.shape != mismatch.shape:
+        raise ValueError(
+            "Mismatch and gradient must have identical (batch, point) shape."
+        )
+    if not 0 < independence_eps < 1:
+        raise ValueError("Squared independence threshold must be between zero and one.")
+    mass = context.point_mass
+    residual, grad = mismatch, gradient
+    delta = torch.zeros_like(gradient)
+    directions: list[torch.Tensor] = []
+    pairs: list[torch.Tensor] = []
+    responses: list[torch.Tensor] = []
+    coefficients: list[torch.Tensor] = []
+    activities: list[torch.Tensor] = []
+    deltas: list[torch.Tensor] = []
+    residuals: list[torch.Tensor] = []
+    costs: list[torch.Tensor] = []
+    initial_cost = mass * mismatch.square().sum(-1)
+    for _ in range(max_dimension):
+        source = (
+            grad / context.denominator
+            if inverse_preconditioner is None
+            else inverse_preconditioner(grad)
+        )
+        if (
+            source.shape != grad.shape
+            or source.dtype != grad.dtype
+            or source.device != grad.device
+            or not torch.isfinite(source).all()
+        ):
+            raise ValueError("Invalid preconditioned candidate.")
+        # Both rescalings act on source and response; the represented space is unchanged.
+        source_scale = source.abs().amax(-1)
+        valid = source_scale > 0
+        safe = torch.where(valid, source_scale, torch.ones_like(source_scale))
+        source = source / safe[:, None]
+        pair = context.response_operator.forward_pair(torch.stack((source, source), 1))
+        response = pair.sum(1)
+        energy = mass * response.square().sum(-1)
+        valid = valid & (energy > torch.finfo(energy.dtype).tiny)
+        norm = torch.sqrt(torch.where(valid, energy, torch.ones_like(energy)))
+        source, pair, response = (
+            source / norm[:, None],
+            pair / norm[:, None, None],
+            response / norm[:, None],
+        )
+        before_energy = mass * response.square().sum(-1)
+        for _pass in range(2):
+            for old_source, old_pair, old_response in zip(
+                directions, pairs, responses, strict=True
+            ):
+                cross = mass * (response * old_response).sum(-1)
+                source = source - cross[:, None] * old_source
+                pair = pair - cross[:, None, None] * old_pair
+                response = response - cross[:, None] * old_response
+        after_energy = mass * response.square().sum(-1)
+        active = valid & (after_energy > independence_eps * before_energy)
+        norm = torch.sqrt(
+            torch.where(active, after_energy, torch.ones_like(after_energy))
+        )
+        source = torch.where(active[:, None], source / norm[:, None], 0.0)
+        pair = torch.where(active[:, None, None], pair / norm[:, None, None], 0.0)
+        response = torch.where(active[:, None], response / norm[:, None], 0.0)
+        numerator = mass * (residual * response).sum(-1)
+        response_energy = mass * response.square().sum(-1)
+        denominator = torch.where(active, response_energy * (1 + relative_eps), 1.0)
+        coefficient = numerator / denominator
+        delta = delta - coefficient[:, None] * source
+        residual = residual - coefficient[:, None] * response
+        cost = mass * residual.square().sum(-1)
+        previous = costs[-1] if costs else initial_cost
+        if monotonicity_relative_tol is not None and torch.any(
+            cost
+            > previous
+            + monotonicity_relative_tol * initial_cost
+            + torch.finfo(cost.dtype).tiny
+        ):
+            raise RuntimeError("Normalized response cost increased.")
+        grad = context.tangent_gradient(residual)
+        for value in (source, pair, response, coefficient, delta, residual, grad):
+            if not torch.isfinite(value).all():
+                raise RuntimeError("Nonfinite normalized correction.")
+        directions.append(source)
+        pairs.append(pair)
+        responses.append(response)
+        coefficients.append(coefficient)
+        activities.append(active)
+        deltas.append(delta)
+        residuals.append(residual)
+        costs.append(cost)
+    response_stack = torch.stack(responses)
+    gram = mass * torch.einsum("kbp,lbp->bkl", response_stack, response_stack)
+    off = gram.abs().masked_fill(
+        torch.eye(max_dimension, dtype=torch.bool, device=gram.device)[None], 0
+    )
+    return KrylovSubspaceStepResult(
+        directions=torch.stack(directions),
+        directional_responses=torch.stack(pairs),
+        response_directions=response_stack,
+        coefficients=torch.stack(coefficients),
+        direction_active=torch.stack(activities),
+        deltas=torch.stack(deltas),
+        mismatches=torch.stack(residuals),
+        costs=torch.stack(costs),
+        residual_gradient_post=grad,
+        response_gram=gram,
+        response_orthogonality_max=torch.stack(
+            [off[:, :k, :k].amax((1, 2)) for k in range(1, max_dimension + 1)]
+        ),
+        line_search_numerator_0=mass * (mismatch * responses[0]).sum(-1),
+        line_search_denominator_0=torch.where(
+            activities[0], gram[:, 0, 0] * (1 + relative_eps), 1.0
+        ),
+    )
+
+
 def matrix_free_krylov_subspace_step(
     *,
     context: SymmetricTangentGreenResponseContext,
@@ -743,6 +921,17 @@ def matrix_free_krylov_subspace_step(
     inverse_preconditioner: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> KrylovSubspaceStepResult:
     """Extend the unchanged K=2 seed with nested response-orthogonal directions."""
+
+    if context.direction_normalization == "response":
+        return response_normalized_subspace_step(
+            context=context,
+            mismatch=mismatch,
+            gradient=gradient,
+            max_dimension=max_dimension,
+            relative_eps=relative_eps,
+            monotonicity_relative_tol=monotonicity_relative_tol,
+            inverse_preconditioner=inverse_preconditioner,
+        )
 
     if (
         isinstance(max_dimension, bool)

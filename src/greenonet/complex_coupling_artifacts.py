@@ -2263,7 +2263,7 @@ class ComplexCouplingArtifactExporter(
                                 tangent.eta_cap,
                                 dtype=np.float64,
                             )
-                    if tangent.subspace_dimension >= 2:
+                    if tangent.subspace_result is not None:
                         subspace = tangent.subspace_result
                         if subspace is None:
                             raise RuntimeError(
@@ -2317,13 +2317,6 @@ class ComplexCouplingArtifactExporter(
                                     .cpu()
                                     .numpy()
                                 ),
-                                "tangent_second_direction_active": np.asarray(
-                                    subspace.direction_active[1, 0]
-                                    .detach()
-                                    .cpu()
-                                    .item(),
-                                    dtype=np.bool_,
-                                ),
                                 "tangent_mismatch_k1": (
                                     subspace.mismatches[0, 0].detach().cpu().numpy()
                                 ),
@@ -2335,6 +2328,11 @@ class ComplexCouplingArtifactExporter(
                                 ),
                             }
                         )
+                        if tangent.subspace_dimension >= 2:
+                            arrays["tangent_second_direction_active"] = np.asarray(
+                                subspace.direction_active[1, 0].detach().cpu().item(),
+                                dtype=np.bool_,
+                            )
                         for direction_index in range(tangent.subspace_dimension):
                             arrays[f"tangent_direction_{direction_index}"] = (
                                 subspace.directions[direction_index, 0]
@@ -2861,7 +2859,15 @@ class ComplexCouplingArtifactExporter(
                 dtype=np.float64,
             ),
         }
-        if context.subspace_dimension >= 2:
+        if context.direction_normalization == "response":
+            payload.update(
+                direction_normalization=np.asarray("response"),
+                direction_independence_relative_eps=np.asarray(
+                    context.direction_independence_relative_eps
+                ),
+                coefficient_basis=np.asarray("unit_response"),
+            )
+        if context.uses_subspace_solver:
             payload["subspace_dimension"] = np.asarray(
                 context.subspace_dimension,
                 dtype=np.int64,
@@ -2936,7 +2942,7 @@ class ComplexCouplingArtifactExporter(
             parameter_label = (
                 f"K={context.subspace_dimension}, "
                 f"variant={context.preconditioner_variant}"
-                if context.subspace_dimension >= 2
+                if context.uses_subspace_solver
                 else f"eta={context.eta:g}, variant={context.preconditioner_variant}"
             )
             figure = self._scatter_figure(
@@ -2973,7 +2979,16 @@ class ComplexCouplingArtifactExporter(
             tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
                 projection.symmetric_tangent_green_response
             )
-            if tangent_config.subspace_dimension >= 2:
+            if tangent_config.direction_normalization == "response":
+                update = (
+                    "z=paired_response_normalize(D^-1*g); "
+                    "z=two_pass_response_MGS(z); "
+                    "active=norm_M(S*z_after)^2/norm_M(S*z_before)^2>independence_eps; "
+                    "z=paired_response_normalize(z); "
+                    "c=<m,S*z>_M/((1+line_search_relative_eps)*norm_M(S*z)^2); "
+                    "delta=-sum(c*z); "
+                )
+            elif tangent_config.subspace_dimension >= 2:
                 dimension = tangent_config.subspace_dimension
                 update = (
                     "z0=D^-1*g; c0=argmin_c ||m0-c*S*z0||_M^2; "
@@ -3015,6 +3030,8 @@ class ComplexCouplingArtifactExporter(
     def _tangent_preconditioner_formula(
         config: SymmetricTangentGreenResponseProjectionConfig,
     ) -> str:
+        if config.preconditioner_variant == "identity":
+            return "D=I (exact ones; no damping or gain rescaling)"
         base = {
             "separable": "B=a+b",
             "exact_diagonal": "B=a+b+2*c",
@@ -3094,12 +3111,14 @@ class ComplexCouplingArtifactExporter(
         geometry_k_selection = GeometryKSelectionConfig.from_raw(
             config.geometry_k_selection
         )
-        subspace = config.subspace_dimension >= 2
+        subspace = config.uses_subspace_solver
         configured_lr_schedule = CouplingLearningRateSchedule.configured_config(
             training_config
         )
         adaptive = config.eta_strategy == "closed_loop_exact_line_search"
-        if subspace:
+        if config.direction_normalization == "response":
+            update = self._projection_formula(projection)
+        elif subspace:
             update = (
                 "z0=D^-1*g0; c0=(g0^T*z0)/(<S*z0,S*z0>_M+eps0); "
                 "r1=g0-c0*S^T*M*S*z0; z1_raw=D^-1*r1; "
@@ -3208,6 +3227,11 @@ class ComplexCouplingArtifactExporter(
             ),
             "eta_strategy": config.eta_strategy,
             "line_search_relative_eps": config.line_search_relative_eps,
+            "direction_normalization": config.direction_normalization,
+            "direction_independence_relative_eps": config.direction_independence_relative_eps,
+            "coefficient_basis": "unit_response"
+            if config.direction_normalization == "response"
+            else "legacy",
             "relative_lambda": config.relative_lambda,
             "denominator_relative_eps": config.denominator_relative_eps,
             "preconditioner_variant": config.preconditioner_variant,
@@ -3238,7 +3262,9 @@ class ComplexCouplingArtifactExporter(
             "full_gram_solve": False,
             "linear_solve_used": False,
             "direction_contract": (
-                "two_jacobi_preconditioned_response_orthogonal_directions"
+                f"{config.subspace_dimension}_paired_unit_response_orthogonal_directions"
+                if config.direction_normalization == "response"
+                else "two_jacobi_preconditioned_response_orthogonal_directions"
                 if config.subspace_dimension == 2
                 else (
                     f"{config.subspace_dimension}_jacobi_preconditioned_"
@@ -3248,7 +3274,9 @@ class ComplexCouplingArtifactExporter(
                 )
             ),
             "orthogonalization": (
-                "existing_k2_seed_then_two_pass_modified_gram_schmidt"
+                "paired_response_normalization_two_pass_MGS_squared_independence"
+                if config.direction_normalization == "response"
+                else "existing_k2_seed_then_two_pass_modified_gram_schmidt"
                 if config.subspace_dimension >= 3
                 else ("existing_k2_response_orthogonalization" if subspace else None)
             ),

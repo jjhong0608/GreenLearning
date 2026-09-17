@@ -171,7 +171,17 @@ class ComplexCouplingEvaluator(LoggingMixin):
         tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
             self.balance_projection.symmetric_tangent_green_response
         )
-        tangent_subspace = tangent_config.subspace_dimension >= 2
+        tangent_subspace = tangent_config.uses_subspace_solver
+        self.logger.info(
+            "tangent direction_normalization=%s direction_independence_relative_eps=%.6e "
+            "line_search_relative_eps=%.6e coefficient_basis=%s",
+            tangent_config.direction_normalization,
+            tangent_config.direction_independence_relative_eps,
+            tangent_config.line_search_relative_eps,
+            "unit_response"
+            if tangent_config.direction_normalization == "response"
+            else "legacy",
+        )
         stationarity_residual_source = (
             f"post_k{tangent_config.subspace_dimension}_residual_gradient"
             if tangent_subspace
@@ -222,7 +232,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             tangent_config.subspace_dimension,
             stationarity_residual_source,
             tangent_forward_source,
-            tangent_config.subspace_dimension == 1
+            not tangent_subspace
             and (
                 self.post_line_search_stationarity_config.enabled
                 or self.response_trust_config.enabled
@@ -249,8 +259,7 @@ class ComplexCouplingEvaluator(LoggingMixin):
             tangent_forward_source,
             self.response_trust_config.enabled,
             self.response_trust_config.enabled,
-            tangent_config.subspace_dimension == 1
-            and self.response_trust_config.enabled,
+            not tangent_subspace and self.response_trust_config.enabled,
             self.response_trust_config.enabled
             and self.post_line_search_stationarity_config.enabled,
             self.response_trust_config.enabled
@@ -611,7 +620,16 @@ class ComplexCouplingEvaluator(LoggingMixin):
                 )
                 if tangent.eta_cap is not None:
                     row["tangent_eta_cap"] = tangent.eta_cap
-            if tangent.subspace_dimension >= 2:
+            if tangent.subspace_result is not None:
+                tangent_config = SymmetricTangentGreenResponseProjectionConfig.from_raw(
+                    self.balance_projection.symmetric_tangent_green_response
+                )
+                if tangent_config.direction_normalization == "response":
+                    row["tangent_direction_normalization"] = "response"
+                    row["tangent_direction_independence_relative_eps"] = (
+                        tangent_config.direction_independence_relative_eps
+                    )
+                    row["tangent_coefficient_basis"] = "unit_response"
                 subspace = tangent.subspace_result
                 if subspace is None:
                     raise RuntimeError(
@@ -637,9 +655,10 @@ class ComplexCouplingEvaluator(LoggingMixin):
                             f"tangent_response_cost_k{direction_index + 1}_over_k"
                             f"{direction_index}"
                         ] = float(ratio.item())
-                row["tangent_second_direction_active"] = int(
-                    subspace.direction_active[1, sample_offset].item()
-                )
+                if tangent.subspace_dimension >= 2:
+                    row["tangent_second_direction_active"] = int(
+                        subspace.direction_active[1, sample_offset].item()
+                    )
                 row["tangent_response_orthogonality_max"] = float(
                     subspace.response_orthogonality_max[-1, sample_offset].item()
                 )

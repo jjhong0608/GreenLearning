@@ -187,7 +187,7 @@ def apply_complex_balance_projection(
             eta_cap=symmetric_tangent_eta_cap,
         )
         delta = tangent_step.delta
-        if tangent_step.subspace_dimension >= 2:
+        if tangent_step.subspace_result is not None:
             subspace = tangent_step.subspace_result
             if subspace is None:
                 raise RuntimeError("K>=2 tangent subspace diagnostics are incomplete.")
@@ -398,7 +398,7 @@ def symmetric_tangent_metric_tensors(
             metrics["tangent_eta_cap"] = tangent.mismatch_pre.new_tensor(
                 tangent.eta_cap
             )
-    if tangent.subspace_dimension >= 2:
+    if tangent.subspace_result is not None:
         subspace = tangent.subspace_result
         if subspace is None:
             raise RuntimeError("K>=2 tangent metric diagnostics are incomplete.")
@@ -423,9 +423,10 @@ def symmetric_tangent_metric_tensors(
                     f"tangent_response_cost_k{direction_index + 1}_over_k"
                     f"{direction_index}"
                 ] = subspace.costs[direction_index].mean() / previous.clamp_min(eps)
-        metrics["tangent_second_direction_active_fraction"] = (
-            subspace.direction_active[1].to(tangent.mismatch_pre.dtype).mean()
-        )
+        if tangent.subspace_dimension >= 2:
+            metrics["tangent_second_direction_active_fraction"] = (
+                subspace.direction_active[1].to(tangent.mismatch_pre.dtype).mean()
+            )
         metrics["tangent_response_orthogonality_max"] = (
             subspace.response_orthogonality_max[-1].max()
         )
@@ -460,7 +461,7 @@ def post_line_search_stationarity_from_projection(
             context=context,
             rhs_phys=projection.projected_physical.sum(dim=1),
         )
-    if tangent.subspace_dimension >= 2:
+    if tangent.subspace_result is not None:
         if tangent.residual_gradient_post is None:
             raise RuntimeError(
                 "K>=2 post-subspace residual gradient is missing for stationarity."
@@ -530,7 +531,7 @@ def response_trust_from_projection(
         )
     tangent = projection.symmetric_tangent_diagnostics
     if tangent is None or (
-        tangent.subspace_dimension == 1 and tangent.eta_star is None
+        tangent.subspace_result is None and tangent.eta_star is None
     ):
         raise RuntimeError(
             "Closed-loop tangent diagnostics are incomplete for response-trust."

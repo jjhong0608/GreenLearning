@@ -113,6 +113,7 @@ def test_tangent_preconditioner_variants_match_reference(variant: str) -> None:
     q = c.square() / (separable + 1.0e-12 * separable.mean())
     quadratic = separable + 4.0 * q
     expected = {
+        "identity": torch.ones_like(separable),
         "separable": separable,
         "exact_diagonal": exact,
         "absolute_cross_axis": absolute,
@@ -121,7 +122,9 @@ def test_tangent_preconditioner_variants_match_reference(variant: str) -> None:
     damping = (0.1 + 1.0e-12) * separable.mean()
 
     torch.testing.assert_close(terms.selected_base, expected)
-    torch.testing.assert_close(terms.denominator, expected + damping)
+    torch.testing.assert_close(
+        terms.denominator, expected if variant == "identity" else expected + damping
+    )
     torch.testing.assert_close(terms.q, q)
     torch.testing.assert_close(terms.rho, c / torch.sqrt(a * b))
     assert terms.exact_roundoff_clamp_count == 0

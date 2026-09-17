@@ -3,12 +3,293 @@
 Axial-inspired neural solver for the 2D Poisson equation with Dirichlet boundaries. The project follows the AGENTS guidelines: class-first design, rich logging mirrored to disk, Plotly visualizations, and TDD.
 
 ## Setup
+The [mixed L2/energy fixed-space audit](docs/analysis/mixed_l2_energy_fixed_space_v2/analysis_ko.md)
+evaluates both learned and f/2 initializations, four seeds per square/disk,
+eight K prefixes and five predeclared objectives (48000 rows). Normalized
+lambda1 improves mean/P95/max over L2 in all four problem/initialization groups
+at K4, but does not give a general large-K accuracy improvement. All weights
+are reported; no test-selected deployment weight or production change is made.
+
+Combining L2 consistency and the previous interior-edge energy mismatch is a
+valid proposed mixed metric, not a Green-bias correction. Both terms use the
+same learned directional mismatch; common-mode solution error remains invisible.
+The audit above records the now-completed diagnostic experiment.
+
+The next weak-residual discussion targets estimation of the directional Green
+response error, not another residual-norm minimization objective. For
+learned H=G+E, directional defects satisfy L e=r under compatible boundary and
+discretization contracts; estimating e permits bias-corrected consistency.
+This is a proposed diagnostic direction, not an implemented or validated correction.
+Small learned consistency alone does not guarantee small solution error; this
+does not imply that further consistency optimization can never improve accuracy.
+Its feasibility depends on a boundary-complete, load-consistent residual-to-error
+map. The previous rectangular interior-only Q1 residual cannot uniquely identify
+the full reconstruction error. Exact directional correction would amount to a
+numerical directional solve, so cost and the role of GreenNet must be assessed.
+
+The [fixed-space weak PDE objective comparison](docs/analysis/weak_pde_fixed_space_audit/analysis_ko.md)
+keeps learned Green operators, initial sources, and tangent spaces fixed across
+consistency, independent interior-Q1 PDE residual, and joint coefficient fits.
+Four seeds per square/disk, eight K prefixes through64,14400 rows: Disk K64
+mean weak error is0.2118734% /0.8943436% /0.2314879%, respectively.
+Residual minimization does not reliably improve solution accuracy in this audit.
+This is diagnostic-only; production objectives and checkpoints remain unchanged.
+See its methodology for excluded boundary tests and separate equal-mean evaluation.
+
+The [full-test weak Green diagnostic](docs/analysis/weak_green_residual_audit/analysis_ko.md)
+evaluates LL/LR/RR at K0..64 for square/disk, four seeds each (117000 rows).
+Disk K64 own-axis indicator falls from 0.14936 to 0.04359 by replacing only the
+reconstruction kernel. However, the indicator is not a solution-error estimator:
+exact Poisson reference defects reproduce a quadrature/consistent-P1-load mismatch.
+No weak-residual source correction or GreenNet retraining is introduced.
+
+The [weak-residual reuse inspection](docs/analysis/weak_residual_module_inspection.md)
+locates existing P1 directional residuals behind the reliability blend, distinguishes
+own-axis defects from candidate full residuals, and records quadrature/boundary
+limitations. It does not change GreenNet or the tangent objective.
+
+Reference-Green **reoptimization** is now separately implemented in
+`cli/audit_reference_green_reoptimization.py`. The
+[full-test comparison](docs/analysis/reference_green_reoptimization/analysis_ko.md)
+uses the same archived learned K0 initial sources, rebuilds the reference response
+and preconditioner, and evaluates K0..64 without retraining. Disk K64 weak mean
+error falls from 0.2118734% (learned optimization/reconstruction) through
+0.1193507% (reference reconstruction only) to 0.0521388% (reference optimization
+and reconstruction). Unit square changes only from 0.0583642% to 0.0583336%.
+Existing checkpoints and prior audit outputs are preserved.
+
+The fixed-source reference Green reconstruction comparison is implemented in
+`cli/audit_reference_green_reconstruction.py`. Its verified square/disk results
+and Korean interpretation are in
+`docs/analysis/reference_green_fixed_sources/analysis_ko.md`. It holds directional
+sources fixed, preserves source quadrature and length scaling, and checks
+diffusion-kernel integration refinement against an independent physical-coordinate
+Gauss reference; it does not optimize sources with the reference operator.
+
+Reference Green kernels used by GreenNet diagnostics are implemented in
+`src/greenonet/greens.py` (`ExactGreenFunction` and
+`exact_green_kernel_from_unit_coefficients`). Diffusion kernels use cumulative
+trapezoidal integration of `1/a`; the kernel-error integration rule does not
+change that construction. Constant-diffusion Poisson kernels are exact up to
+roundoff, but variable-diffusion references require quadrature convergence checks.
+
+The four-example frozen source-initialization audit is implemented by
+`cli/audit_source_initialization.py`, with the explicit 16-run manifest
+`configs/paper_source_initialization_audit.json`. It preserves native learned
+K=2/2/4/9 and compares reference-source reconstruction and physical equal-split
+K0..64 corrections. The paper protocol uses GPU:1 only, sequential float64 eager
+evaluation and separate full-test prediction timings. Outputs are new directories;
+existing checkpoints, sidecars, data and metrics are hash-protected. Evaluation
+results are available in the completed
+[four-example audit](docs/analysis/paper_source_initialization_audit_v2/analysis_ko.md)
+and [storyline evidence note](docs/paper/storyline/009_reference_and_initialization_evidence.md).
+All 16 native checkpoints reproduce; f/2 mean-match K is 13/9/23/58-60,
+with measured prediction-time ratios of about 1.90/1.41/2.91/6.11-6.37 versus
+learned native K. Pentagram does not meet the joint mean/P95 target within K64.
+The audit verifies 24,850 sample rows and unchanged hashes of 465 input files.
+Reference balance correction does not universally improve solution error;
+neither reference reconstruction is a GreenNet error floor. The first failed
+attempt remains separate. Numerical solver/ODE superiority and training-inclusive
+cost claims are not established by this comparison.
+
+`cli/audit_learned_k_extension.py` extends the existing Unit square/Disk
+K2-trained initializers through K0..64, without retraining. The separate
+[extension protocol](docs/analysis/learned_k_extension_square_disk_v2/protocol.md)
+defines whole-test mean/P95/max selection and independent production checks.
+It compares all four seeds with the preserved reference-source and f/2 evidence;
+post-hoc minimum selection is not a deployment stopping rule or timing benchmark.
+The [completed extension analysis](docs/analysis/learned_k_extension_square_disk_v2/analysis_ko.md)
+reports learned minimum mean errors of 0.058364% (square, all K64) and
+0.209417% (disk, seed-wise K39/41/39/42), averaged over four seeds. Square
+improves slightly on f/2 and both reference reconstructions; Disk remains above
+the reference reconstructions and slightly above the f/2 minimum. All 39,000
+sample rows, independent prediction checks and preserved input hashes verify.
+
+[The directional-source objective comparison](docs/analysis/source_objective_comparison/analysis_ko.md)
+derives `J = response_cost / 2` from those saved sample metrics. Disk learned
+K64 has about 19.47 times smaller mean J than raw reference-source reconstruction,
+but larger solution error on every test sample in each of four seeds, also versus
+balanced references. J is directional consistency, not reference solution accuracy.
+
+Sequential paper story-line work is recorded in
+[the story-line workspace](docs/paper/storyline/README.md).
+The current paper narrative is defined by
+[independent formulation and online evaluation](docs/paper/storyline/008_independent_formulation_and_online_scope.md):
+explain the problem representation, computational structure and purpose of learning
+on their own terms, citing AGM as background rather than framing the paper as its
+improvement. Online timing includes initialization inference, physical scaling and
+balance projection. Training-inclusive total-cost superiority and amortization are
+outside the paper's claims; offline training remains disclosed separately.
+The first background note covers
+[AGM's core principle](docs/paper/storyline/001_agm_core_principle.md): axial
+decomposition, Green representations and coupling to a common solution.
+The second approved note covers
+[axial geometry representation](docs/paper/storyline/002_agm_geometry_representation.md),
+separating common properties from extensions not used in the current method.
+The third approved note covers
+[Green function roles and research motivation](docs/paper/storyline/003_agm_green_function_role.md):
+existence versus tractable kernel construction, axial kernel approximation,
+and the directional-source coupling that remains even with exact kernels.
+The fourth approved note records
+[coupling, learned initialization and validation principles](docs/paper/storyline/004_coupling_initialization_and_validation.md):
+balance and consistency, shared-operator accuracy/cost comparisons, and
+reference-source reconstruction as a diagnostic rather than an error floor.
+No new experiments accompanied that note; the later four-example audit supplies
+the within-tangent initialization comparison, not general solver superiority.
+The fifth note explains
+[why learning and numerical correction are combined](docs/paper/storyline/005_why_learning_and_numerical_correction.md),
+including structure-preserving ODE alternatives, initialization versus convergence,
+and offline training versus online cost claims, before the later evidence audit.
+The sixth note records
+[scope and axial-resolution reuse](docs/paper/storyline/006_scope_and_axial_resolution_reuse.md):
+GreenNet as an evaluable representation without assumed cost superiority,
+coefficient generalization outside the central claim, and unverified model reuse
+on added axial lines. Runtime response caching is distinct from model representation.
+The seventh note maps
+[numerical examples to claims and reference-source diagnostics](docs/paper/storyline/007_numerical_examples_claims_and_reference_sources.md):
+component evidence, the existing single-checkpoint f/2 audit, and then-pending raw/balance-corrected
+FEM-source reconstructions, now addressed by note 009. Balance violation constrains source-pair accuracy but does not
+establish a solution-error floor or identify the dominant reconstruction error.
+
+The [K9-target transfer comparison](docs/analysis/pentagram_training_k_transfer_k9/report.md)
+compares K4/K5 post-hoc extension against direct K9 training across four seeds.
+K5->9 slightly improves weak mean error, while direct K9 retains lower tails
+and directional errors. Use `cli/audit_training_k_transfer.py --target-k 9`.
+
+The [training-K transfer audit](docs/analysis/pentagram_training_k_transfer/report.md)
+compares all four seeds of frozen Pentagram K4/K5/K10 training at evaluation K10
+on one GPU. K5 post-hoc extension nearly matches the direct-K10 mean error,
+while direct K10 retains better tail and directional consistency.
+
+The [fixed-subspace f/2 audit](docs/analysis/pentagram_fixed_subspace/report.md)
+separates direction-space construction from L2/energy coefficient fitting.
+It reuses identical cached bases, verifies same-space objective dominance, and
+reports all 100 Pentagram test samples over K=0..64 without training.
+
+Pentagram frozen L2-versus-energy tangent results, including a matched
+energy-separable preconditioner, are available in
+[the tangent objective audit](docs/analysis/pentagram_tangent_energy_objective/report.md).
+The isolated CLI compares both learned and physical f/2 initializations without
+changing production defaults; energy-diagonal setup and warmed prediction costs
+are recorded separately.
+
+Pentagram frozen learned-versus-equal-split initialization results are available in
+[the initialization audit report](docs/analysis/pentagram_equal_split_initialization/report.md).
+The no-training CLI `cli/audit_equal_split_initialization.py` compares physical
+`phi=psi=f/2` with the frozen learned proposal over K=0..64, preserving the Green
+operator and weak reconstruction; full-test accuracy and independent forward
+timings are recorded separately.
+
+Paper-writing evidence for Disk Example 2 is organized in
+[the Example 2 preparation bundle](docs/paper/numerical_examples/example_02_disk/writing_brief.md).
+Its CSV-only builder independently checks the eight best-energy exports and
+preserves the distinction between current dependency hashes and historical runtime evidence.
+Default `python -m pytest` collection uses `test/`; historical Disk frequency
+tests read the archived configurations in `numerical_examples/disk_old2/`.
+
+Completed Disk Example 2 identity/separable paired-run analysis is available in
+[the comparison report](docs/analysis/disk_preconditioner_comparison/report.md),
+with reproducible best-energy test CSV tables and source hashes. It separates
+full-test metrics from selected-only directional diagnostics.
+
+An isolated response-normalized tangent prototype resolves the frozen identity
+guard issue; see [prototype results](docs/analysis/disk_normalized_tangent_frozen_seed0/report.md).
+`cli/audit_normalized_tangent.py` is post-hoc only (`PYTHONPATH=src:.`), not a
+production config option. It includes source-pair backward diagnostics, not training.
+
+Direct `D=I` versus separable screening, including the scale-dependent numerical
+guard finding, is documented in
+[the identity audit](docs/analysis/disk_identity_separable_frozen_seed0/report.md).
+Use `cli/audit_uniform_tangent.py --include-identity`; the optional
+`--subspace-relative-eps` is an audit-only sensitivity control, not a training recommendation.
+
+Frozen Disk preconditioner screening is documented in
+[the uniform/separable audit](docs/analysis/disk_uniform_separable_frozen_seed0/report.md).
+`cli/audit_uniform_tangent.py` compares the same checkpoint with a uniform
+mean-denominator override and separable scaling, without changing training configs.
+
+Example 1 paper preparation is available in
+[the Unit-square writing brief](docs/paper/numerical_examples/example_01_unit_square/writing_brief.md).
+The frozen full-test CPU audit compares all twelve best-energy trunk checkpoints;
+`cli/audit_unit_square_trunk.py --help` lists its read-only evaluation options.
+Rebuild evidence tables without inference using
+`python docs/paper/numerical_examples/example_01_unit_square/build_tables.py`.
+
 - Activate the virtual environment: `source .venv/bin/activate`
 - Install runtime deps: `pip install -e .`
 - On Linux `x86_64` with CPython `3.14`, the editable install now pins Torch to the official PyTorch `2.11.0+cu126` wheel from `download.pytorch.org`. Other environments fall back to `torch>=2.11.0`, so install a different PyTorch CUDA build manually if you need one.
 - See dev tools (ruff/mypy/pytest): `pip install -e .[dev]`
 - Ensure `PYTHONPATH` includes `src` when running commands in this repo.
 - FEniCSx sample generation is intentionally isolated from the main `green_net` training environment. Create the optional solver environment with `conda env create -f environment-fenicsx.yml`, then verify it with `conda run -n green_fenicsx python -c "import dolfinx, gmsh, petsc4py, torch"`. Do not add FEniCSx to the main `pyproject.toml` dependencies.
+
+## Pentagram Frozen K10-to-K64 Results
+
+The verified four-seed CSV analysis is in
+[`docs/analysis/pentagram_posthoc_k10_k64/report.md`](docs/analysis/pentagram_posthoc_k10_k64/report.md).
+Both completed audits cover K=10..64: A40 seeds 0/2 and Mac CPU seeds 1/3.
+They are not the same checkpoints evaluated on both devices. Response squared
+cost falls 95.30% from K10 to K64, while weak solution error falls only 6.77%
+and largely plateaus beyond K24. All directions remain active through K64.
+Full geometry reach (K9) is structural coverage, not numerical convergence.
+The folder includes all-K/seed tables, paired sample comparisons, separate
+device timing tables, input hashes, and a CSV-only reproduction script. No
+retraining, additional model inference, or original artifact changes were made.
+
+## Annulus Reconstruction Results
+
+The full-test directional/transition audit is available through
+`cli/audit_annulus_reconstruction.py`. Pass the four run directories with
+`--run-dirs`, a new `--outdir`, explicit `--device cuda:1`, `--batch-size 10`,
+and `--num-threads 4`. It reuses production best-energy predictions sequentially,
+never trains or writes to source runs, and rejects nonempty output directories.
+The canonical [full-test report](docs/analysis/annulus_full_test_reconstruction/report.md)
+contains all 100 shared test sources across four seeds, directional errors,
+predeclared h/2h/4h bands, reference-only weight diagnostics, paired CSVs and hashes.
+Use this full-test evidence rather than selected-field averages for Example 3.
+
+The four-seed best-energy reconstruction audit is documented in
+[the Annulus results report](docs/analysis/annulus_reconstruction_20260909/report.md).
+It separates the 400 paired test evaluations from the 20 selected raw fields,
+compares equal mean with weak-residual reconstruction, and records late-training
+validation rebound. CSV evidence and a read-only audit accompany the report.
+
+## Annulus Reconstruction Experiment Configs
+
+Run the four Annulus seeds sequentially on the configured `cuda:1`; concurrent
+training exhausted device memory. Use direct shell commands, wait for each
+training/artifact process, and stop on failure. Stop older queues before starting
+a new one and use fresh output directories to preserve previous results.
+
+The matching radius-0.2/0.5 visualization cache is now available at
+`data/visualization_mesh/annulus_02_05_1_128_mesh.npz` (10,788 valid vertices,
+189 boundary vertices, 21,765 triangles, no auxiliary interpolation vertices).
+It was generated from `data/geometry/annulus_02_05_1_128.npz` with
+`examples/annulus_gmsh.py`. All four Annulus reconstruction configs select this
+cache for automatic best-energy mesh figures alongside existing scatter output.
+For manual export, pass the same path through `--visualization-mesh`.
+Circular boundaries are represented by piecewise-straight mesh edges.
+
+`numerical_examples/annulus/annulus_reconstruction_seed{0,1,2,3}.json` contains
+four shared-checkpoint diffusion-reaction experiment configs: radius-0.2/0.5
+Annulus, fixed K=4, C-trunk/concat fusion, energy-only training, and automatic
+best-energy artifacts with both weak and equal-mean solution metrics. Only the
+training seed varies; indexed-GP sources stay fixed at seed zero (4800/300).
+The configs preserve the paper's 2400 optimizer-call budget and use `cuda:1`.
+The confirmed coefficient is `coefficients/Smooth_Variable_Diffusion_Reaction.py`;
+the GreenNet path is `checkpoints/numerical_examples/annulus/green/model.safetensors`
+and test path is
+`data/complex_samples/annulus_02_05_1_128_reaction_diffusion/test`.
+**Configuration is finalized, but the new GreenNet and test data must be generated
+before launch.** No mismatched Poisson/CDR or radius-0.5/1.0 inputs are substituted.
+The standalone GreenNet config is `numerical_examples/annulus/annulus_green.json`.
+It needs only the existing geometry and coefficient, uses seed 0 on `cuda:1`,
+and follows SOAP (200 epochs, 20-step warmup, validation every step) with LBFGS
+(100 epochs). Run `cli/train.py` with that config and
+`--work-dir checkpoints/numerical_examples/annulus/green` to produce the shared
+`model.safetensors` expected by all four CouplingNet configs. This Green-only
+pipeline does not require the pending reference test data or run CouplingNet.
+See `numerical_examples/annulus/README.md` for the coefficient and experiment
+contract. The optional visualization mesh is null until a matching mesh exists.
 
 ## Sequential Frozen-Checkpoint CSV Audit
 
@@ -1440,8 +1721,103 @@ or use reference test errors to select a new production K automatically.
   the transition animation to avoid capturing an in-between frame; the rendered
   presentation keeps its configured Reveal.js transitions.
 
+## Unit-Square Transverse-Trunk Experiment
+
+- Twelve-run evidence analysis (final and best-energy checkpoints kept separate):
+  [report and reproducible CSV builder](docs/analysis/unit_square_trunk_comparison/report.md).
+  All twelve best-energy test tables are now available, including the separately
+  exported wide/off seed2. Selected directional fields are not full-test statistics.
+
+- Optional complex-only `coupling_model.primary_trunk_hidden_dim` changes the
+  primary trunk's internal width, not its latent output (`hidden_dim`). Omitted
+  or null preserves the original architecture and checkpoint keys/initialization.
+  Positive integers are accepted; a changed width needs its matching checkpoint.
+  The legacy unit-square model rejects this option when non-null.
+- Four `unit_square_primary_w428_trunk_off_seedN.json` controls supplement the
+  original eight configs. They retain source/output width 256 and use primary
+  internal width 428: 958,018 parameters versus 955,994 for the original on model.
+  Geometry, K=2, training settings and original configs remain unchanged.
+  `test/test_primary_trunk_width.py` covers dimensions, initialization, checkpoint
+  loading, config propagation, gradients and exact parameter counts.
+
+- Eight Example 1 configs are documented in
+  [numerical_examples/unit_square](numerical_examples/unit_square/README.md).
+  A40 uses seeds 0/2 on cuda:1; Mac uses seeds 1/3 on CPU. Each seed has a
+  transverse-trunk off/on pair with only the enabled flag changed.
+- Common settings are explicit K=2, separable preconditioning, bulk-energy-only
+  training, 4800/300 fixed sources, SOAP and 2400 optimizer calls. Best-energy
+  artifact export and per-run tangent-context storage are enabled.
+- Validate without running an experiment:
+  `python -m pytest test/test_unit_square_trunk_configs.py`.
+  Previous source-count configs remain under `numerical_examples/unit_square_old/`.
+
+## Tangent Compatibility Audit
+
+- Example 2's eight identity/separable K=2 training configs are in
+  [numerical_examples/disk](numerical_examples/disk/README.md), split by A40
+  seeds 0/2 and Mac CPU seeds 1/3. Both conditions use response normalization,
+  the same fixed source dataset, C-trunk, and energy-only training protocol.
+  Static validation is in `test/test_disk_preconditioner_configs.py`.
+
+- Optional response-normalized tangent correction is documented in
+  [the implementation guide](docs/response_normalized_tangent.md). Set
+  `direction_normalization="response"` for paired unit-response normalization
+  and squared relative-independence testing. Legacy remains the default.
+  Exact identity preconditioning is available only with this new mode;
+  Example 2 should use the same stabilization for identity and separable.
+  Normalized K=1 requires uncapped closed-loop line search, and reports basis
+  coefficients rather than legacy raw-direction eta. Sidecar tensor schema and
+  model checkpoint keys are unchanged; existing experiment configs are untouched.
+- `--production-normalized --max-runs-per-example 1` selects a bounded production
+  replay in the compatibility CLI. The separate
+  [production replay report](docs/analysis/production_normalized_tangent_compatibility/report.md)
+  checks all 100 test sources for one active checkpoint in each of Examples 1,
+  3 and 4, without overwriting the earlier prototype evidence.
+
+- Frozen compatibility checks for paper Examples 1, 3 and 4 are isolated from
+  production training in `cli/audit_paper_tangent_compatibility.py`. Run from the
+  project root with `PYTHONPATH=src:.` and a new `--outdir`. They compare legacy
+  tangent output against the response-normalized prototype on every test source,
+  preserving input hashes and per-sample/stage CSVs. `--example example4
+  --posthoc-k 64` separately checks the four trained K10 models at K64.
+  `docs/analysis/paper_normalized_tangent_compatibility/summarize.py` regenerates
+  comparison tables. These checks do not retrain or change the production default;
+  K0 is recorded as a bypass, not as a newly executed inference comparison.
+  [The compatibility report](docs/analysis/paper_normalized_tangent_compatibility/report.md)
+  covers 44 active checkpoints (4,400 sample pairs) and four K10-to-K64 supplement
+  checks (400 pairs). Existing numerical evidence can be retained; this does not
+  establish identical future training trajectories or device-level timing.
+
+## Annulus Paper Preparation
+
+- Example 3 preparation documents start at
+  [the Annulus writing brief](docs/paper/numerical_examples/example_03_annulus/writing_brief.md).
+  They separate segment-length scaling facts, transition error observations,
+  and unproven causal explanations. Four frozen best-energy models use the same
+  100 test sources for paired equal/weak reconstruction comparisons.
+- Rebuild independently reconciled tables without inference or new figures:
+  `~/.conda/envs/green_net/bin/python docs/paper/numerical_examples/example_03_annulus/build_tables.py`.
+  Input hashes and summary comparisons are recorded in `verification.json`;
+  `test/test_annulus_paper_documents.py` checks the evidence and documents.
+- Seed0 equal-median sample 1 is the primary figure candidate but its predicted
+  fields are not in the existing selected archive. Equal-worst sample 34 has
+  saved fields. Composite figures and their layout QA remain future work.
+
 ## Pentagram Paper Experiment Analysis
 
+- The paper-writing preparation workspace starts at
+  [docs/paper/README.md](docs/paper/README.md). Example 4 has Korean setup,
+  results/interpretation, provenance, and English claim/caption candidates in
+  [example_04_pentagram](docs/paper/numerical_examples/example_04_pentagram/writing_brief.md).
+  Trained K comparisons and frozen K10-to-K64 extension remain separate.
+- The preparation notes correct the historical report's `rel_flux` formula:
+  saved values are the arithmetic mean of the two directional relative errors,
+  not the joint-pair norm. Original results and figures are unchanged; see
+  [the metric audit](docs/paper/numerical_examples/example_04_pentagram/provenance.md).
+- Rebuild paper tables without model execution or figure generation with
+  `PYTHONPATH=src ~/.conda/envs/green_net/bin/python docs/paper/numerical_examples/example_04_pentagram/build_tables.py`.
+  Its `verification.json` must be complete with no holds before using the tables.
+  Source hashes, seed-level sample SD, geometry reach, and timing scope are retained.
 - The four-seed, 32-run A40/Mac comparison is documented in
   [the Pentagram paper report](docs/analysis/pentagram_paper_20260905/report.md),
   with per-run tables, paired effects, geometry reach, training-time estimates,
@@ -1455,9 +1831,41 @@ or use reference test errors to select a new production K automatically.
 
 ## Development
 
+### Numerical Examples Meeting
+
+- [Four-example presentation](docs/meeting/numerical_examples/numerical_examples.html):
+  45 offline Quarto Reveal.js slides with English content and Korean speaker notes.
+  Eight reference/prediction mesh comparisons precede the unchanged error slides;
+  paired solution panels share color limits, including both Pentagram comparisons.
+  Example 2 separates column-gain definitions from D-based correction-space comparisons.
+  Example 3 defines the local hat test function visually before revealing the blend equations.
+  Its regional RMS slide defines B as valid evaluation points in the indicated region, not a batch.
+  Presentation hardware labels use GPU; archived hardware identifiers remain unchanged.
+- Covers transverse-trunk parameter controls, Disk identity/separable preconditioning,
+  Annulus paired reconstruction and Pentagram tangent-subspace/reach experiments.
+- [Slide plan](docs/meeting/numerical_examples_slide_plan.md),
+  [Korean script](docs/meeting/numerical_examples/speaker_notes_ko.md) and
+  [rebuild/QA guide](docs/meeting/numerical_examples/README.md).
+- Existing paper evidence and checkpoints remain unchanged. Only missing agreed
+  sample fields are replayed; presentation rendering is separate from inference.
+- Spatial meeting figures reuse artifact triangle meshes and verified saved mesh
+  payloads; missing panels are rendered from frozen fields without new inference.
+- All spatial error comparisons use YlOrRd and shared weak-error-based color ranges;
+  larger errors saturate visually without changing data or hover values. The two
+  Pentagram slides keep one common range across all displayed K values.
+
 - Tests first: `PYTHONPATH=src pytest test`
 - Lint/format/type-check: `ruff check src`, `ruff format src`, `mypy src`
 - Key dirs: `src/` core code (including axial-line sampler and cleaned runner), `cli/` CLIs, `configs/` JSON configs, `checkpoints/` outputs, `test/` tests.
 
 ## References
+- `/docs/` is local-only and ignored by Git. Previously tracked documents have been removed from the index without deleting local files. Fresh clones will need these research documents separately for workflows that depend on them.
+- The [GMRES matched-accuracy pilot](docs/analysis/gmres_accuracy_budget_pilot/analysis_ko.md) is complete: on the same five sources, Square5/Disk4 iterations meet native K2 mean+P95 at .06094/.05387s versus .22972/.19472s. Early-stopped GMRES is faster here. Threshold crossings are retrospective diagnostics, not deployment rules or full-test claims. See [storyline 013](docs/paper/storyline/013_gmres_matched_accuracy_pilot.md).
+- GMRES comparison interpretation: native K2 is 3.15x/12.40x shorter in measured latency than converged scaled GMRES on the five-source Square/Disk pilot, but is less accurate. These ratios are not matched-accuracy speedups; the subsequent early-stopping pilot finds GMRES faster at the native accuracy targets. Full-test curves remain unmeasured.
+- The [GPU right-scaling pilot](docs/analysis/right_scaled_solver_pilot/analysis_ko.md) is complete for Square/Disk seed0, first5 sources, batch5. Scaling reduces GMRES times and Square LSMR time; Disk LSMR still hits its cap. Reusable LU/QR is faster and more accurate than native K2 in this pilot. This is not a full-test or matched-accuracy benchmark. See [storyline 012](docs/paper/storyline/012_right_scaling_timing_pilot.md).
+- Step 3 timing/preconditioning contract is approved: GPU1/float64, batch5, prepared inputs through final weak reconstruction, reusable setup separated, and existing D-based right scaling as a first controlled comparison. See the [right-scaling pilot protocol](docs/analysis/right_scaled_solver_pilot/methodology.md); stronger numerical baselines and full-test matched-accuracy claims remain separate work.
+- Step 3A preparation is now executed: [solver pilot report](docs/analysis/coupling_solver_pilot/analysis_ko.md), [benchmark proposal](docs/analysis/coupling_solver_pilot/benchmark_protocol_proposal.md), and [storyline 011](docs/paper/storyline/011_coupling_solver_pilot.md). Direct LU/QR and GMRES agree on three Square/Disk sources; unpreconditioned Disk LSMR reaches its iteration limit. Pilot timings are not a speed benchmark.
+- Full Step 3 benchmark remains under discussion after the pilot: compare equation/weighted-least-squares and direct/matrix-free baselines with reusable setup; finalize preconditioning and matched-accuracy timing before full-test claims.
+- Current-method Step 1/2 evidence is consolidated in [storyline 010](docs/paper/storyline/010_current_method_evidence_summary.md): four-example reference-source diagnostics, learned-versus-equal-split accuracy/timing, tails, and large-K limits. Unadopted objective variants are archived rather than included in the main claims; further optimization development is paused.
+- Mixed L2/energy audit interpretation: finite-K gains reflect coefficient selection in a fixed L2-generated correction space, not improved Krylov-space generation. Large-K plateaus are observed, not certified error floors. See `docs/analysis/mixed_l2_energy_fixed_space_v2/analysis_ko.md`.
 - Axial Green's Function Method (see `refenreces/` PDFs) as conceptual inspiration for the axial decomposition in `GreenONetModel`.

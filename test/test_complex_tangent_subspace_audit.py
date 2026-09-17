@@ -174,9 +174,15 @@ def test_tangent_subspace_request_validation(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "normalization,variant",
+    [("legacy", "separable"), ("response", "separable"), ("response", "identity")],
+)
 def test_checkpoint_backed_k1_k4_audit_writes_metrics_and_balanced_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    normalization,
+    variant,
 ) -> None:
     _patch_static_export(monkeypatch)
     (
@@ -192,6 +198,9 @@ def test_checkpoint_backed_k1_k4_audit_writes_metrics_and_balanced_fields(
         "enabled": True,
         "mode": "symmetric_tangent_green_response",
         "symmetric_tangent_green_response": {
+            "direction_normalization": normalization,
+            "preconditioner_variant": variant,
+            "eta_cap_enabled": normalization == "legacy",
             "eta": 0.015,
             "eta_strategy": "closed_loop_exact_line_search",
             "line_search_relative_eps": 1.0e-12,
@@ -256,8 +265,15 @@ def test_checkpoint_backed_k1_k4_audit_writes_metrics_and_balanced_fields(
     assert all("rel_u_phi" in row and "rel_u_psi" in row for row in rows)
     production = next(row for row in rows if row["method_id"] == "k1_production")
     uncapped = next(row for row in rows if row["method_id"] == "k1_uncapped")
-    assert float(production["eta_applied"]) <= 0.015
-    assert float(uncapped["eta_applied"]) == pytest.approx(float(uncapped["eta_star"]))
+    if normalization == "legacy":
+        assert float(production["eta_applied"]) <= 0.015
+        assert float(uncapped["eta_applied"]) == pytest.approx(
+            float(uncapped["eta_star"])
+        )
+    else:
+        assert not production.get("eta_applied")
+        assert not uncapped.get("eta_star")
+        assert '"direction_normalization": "response"' in json.dumps(summary)
 
     raw_path = outdir / "data" / "selected_k1_k4_tangent_subspace.npz"
     with np.load(raw_path, allow_pickle=False) as raw:

@@ -188,6 +188,9 @@ class TangentResponseContextStore:
                 path=temporary,
                 identity=identity,
                 config=SymmetricTangentGreenResponseProjectionConfig(
+                    eta_strategy="closed_loop_exact_line_search",
+                    eta_cap_enabled=False,
+                    direction_normalization=context.direction_normalization,
                     relative_lambda=context.relative_lambda,
                     denominator_relative_eps=context.denominator_relative_eps,
                     preconditioner_variant=context.preconditioner_variant,
@@ -415,12 +418,14 @@ class TangentResponseContextStore:
             return tensors[key].to(device=device)
 
         bases = {
+            "identity": torch.ones_like(get("separable_preconditioner_base")),
             "separable": get("separable_preconditioner_base"),
             "exact_diagonal": get("exact_preconditioner_base"),
             "absolute_cross_axis": get("absolute_preconditioner_base"),
             "normalized_quadratic_cross_axis": get("quadratic_preconditioner_base"),
         }
         denominators = {
+            "identity": torch.ones_like(get("separable_denominator")),
             "separable": get("separable_denominator"),
             "exact_diagonal": get("exact_denominator"),
             "absolute_cross_axis": get("absolute_denominator"),

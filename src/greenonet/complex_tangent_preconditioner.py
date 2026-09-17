@@ -8,6 +8,7 @@ import torch
 from greenonet.complex_axial_response_operator import TangentColumnGramTerms
 
 TangentPreconditionerVariant = Literal[
+    "identity",
     "separable",
     "exact_diagonal",
     "absolute_cross_axis",
@@ -15,6 +16,14 @@ TangentPreconditionerVariant = Literal[
 ]
 
 TANGENT_PRECONDITIONER_VARIANTS: tuple[TangentPreconditionerVariant, ...] = (
+    "identity",
+    "separable",
+    "exact_diagonal",
+    "absolute_cross_axis",
+    "normalized_quadratic_cross_axis",
+)
+
+TANGENT_GAIN_PRECONDITIONER_VARIANTS: tuple[TangentPreconditionerVariant, ...] = (
     "separable",
     "exact_diagonal",
     "absolute_cross_axis",
@@ -52,6 +61,7 @@ class TangentPreconditionerTerms:
 
     def base_for(self, variant: TangentPreconditionerVariant) -> torch.Tensor:
         return {
+            "identity": torch.ones_like(self.a),
             "separable": self.separable_base,
             "exact_diagonal": self.exact_base,
             "absolute_cross_axis": self.absolute_base,
@@ -60,6 +70,7 @@ class TangentPreconditionerTerms:
 
     def denominator_for(self, variant: TangentPreconditionerVariant) -> torch.Tensor:
         return {
+            "identity": torch.ones_like(self.a),
             "separable": self.separable_denominator,
             "exact_diagonal": self.exact_denominator,
             "absolute_cross_axis": self.absolute_denominator,
@@ -152,8 +163,8 @@ def build_tangent_preconditioner_terms(
                 f"Tangent preconditioner denominator {name} must be finite and positive."
             )
 
-    selected_base = bases[variant]
-    denominator = denominators[variant]
+    selected_base = torch.ones_like(a) if variant == "identity" else bases[variant]
+    denominator = torch.ones_like(a) if variant == "identity" else denominators[variant]
     return TangentPreconditionerTerms(
         variant=variant,
         a=a.detach(),
